@@ -210,13 +210,8 @@
 				App/TabBarMinimizeObserver.swift,
 				App/VoryApp.swift,
 				App/VoryTabBar.swift,
-				Files/FilesView.swift,
 				Info.plist,
 				Push/LiveActivityController.swift,
-				Push/PushSetupView.swift,
-				Settings/HermesSettingsViews.swift,
-				Settings/SettingsView.swift,
-				Settings/StatusView.swift,
 				Watch/WatchSync.swift,
 			);
 			target = AA00000000000000000240 /* VoryMac */;

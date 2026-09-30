@@ -206,7 +206,14 @@ struct GatewayFormView: View {
                 Text("Checks that /api/status returns JSON (not an HTML login page), that your credentials are accepted, and that the WebSocket at /api/ws opens.")
             }
         }
-        .formStyle(.grouped)   // iOS's default; on the Mac it gives the section headers their own rows
+        #if os(macOS)
+        // A Mac preferences sheet: labels in a column, bordered fields beside them, bold headings.
+        .formStyle(.columns)
+        .headerProminence(.increased)
+        .padding(.vertical, 8)
+        #else
+        .formStyle(.grouped)
+        #endif
         .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

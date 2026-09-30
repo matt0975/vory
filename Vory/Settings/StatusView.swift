@@ -1,7 +1,18 @@
+#if os(iOS)
 import ActivityKit
+#endif
 import SwiftUI
 import UserNotifications
 import VoryCore
+
+/// Whether the system lets Vory show Live Activities; there are none on the Mac.
+private var activitiesEnabled: Bool {
+    #if os(iOS)
+    ActivityAuthorizationInfo().areActivitiesEnabled
+    #else
+    false
+    #endif
+}
 
 /// Settings › Status: one page that says, in plain words, whether each part of Vory is working:
 /// the gateway, the sign-in, the Companion, notifications, the Live Activity and approval
@@ -10,7 +21,7 @@ import VoryCore
 struct StatusView: View {
     @Environment(AppModel.self) private var model
     @State private var setup = PushSetupModel()
-    @State private var activitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled
+    @State private var activitiesAllowed = activitiesEnabled
 
     enum Light { case good, warn, bad, off
         var color: Color { switch self { case .good: .green; case .warn: .orange; case .bad: .red; case .off: .secondary } }
@@ -54,7 +65,7 @@ struct StatusView: View {
             } header: { Text("Versions") }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .task { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization(); activitiesAllowed = ActivityAuthorizationInfo().areActivitiesEnabled }
+        .task { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization(); activitiesAllowed = activitiesEnabled }
         .refreshable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization() }
     }
 

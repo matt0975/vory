@@ -4,6 +4,10 @@ import Foundation
 /// push registrar write to (`note`), so those files read the same on both platforms; the
 /// menu-bar turn reporter lands beside it later.
 enum LiveActivityController {
+    /// Settings › Status and the wizard's diagnostics ask; there is no activity here.
+    static var isEnabled: Bool { false }
+    static var lastStartedAt: Date? { nil }
+    static var lastStartError: String? { nil }
     private static let logLock = NSLock()
     nonisolated(unsafe) private static var logStorage: [String] = []
 

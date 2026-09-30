@@ -5,6 +5,12 @@ import VoryCore
 /// covers either while it is on.
 struct MacRootView: View {
     @Environment(AppModel.self) private var model
+    /// Asked once, on the first connection: the Companion on this gateway, or one to install.
+    @AppStorage("companionPromptShown") private var companionPromptShown = false
+    @AppStorage("notificationsSetupCardDone") private var setupCardDone = false
+    @State private var showCompanionPrompt = false
+    @State private var showInstaller = false
+    @State private var companionFound: String?
 
     var body: some View {
         ZStack {
@@ -17,6 +23,38 @@ struct MacRootView: View {
             if model.lock.isLocked {
                 MacLockView()
             }
+        }
+        // The first time a gateway comes up on this Mac (its own first connection, or one the
+        // keychain already held): what the Companion needs from here, if anything.
+        .onChange(of: model.runtime?.connection.id, initial: true) { _, id in
+            guard id != nil, !companionPromptShown, let rt = model.runtime else { return }
+            companionPromptShown = true
+            Task {
+                try? await Task.sleep(for: .milliseconds(700))
+                companionFound = await CompanionPromptSheet.installedVersion(on: rt)
+                showCompanionPrompt = true
+            }
+        }
+        .sheet(isPresented: $showCompanionPrompt) {
+            CompanionPromptSheet(found: companionFound, install: {
+                setupCardDone = true
+                showCompanionPrompt = false
+                showInstaller = true
+            }, allow: {
+                setupCardDone = true
+                showCompanionPrompt = false
+                Task { _ = await model.push.requestAuthorization() }
+            }, later: {
+                setupCardDone = false
+                showCompanionPrompt = false
+            })
+        }
+        .sheet(isPresented: $showInstaller) {
+            NavigationStack {
+                SetupWizardHost()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
+            }
+            .frame(minWidth: 560, minHeight: 680)
         }
     }
 }
@@ -68,12 +106,21 @@ private struct MainSplitView: View {
 
     @ViewBuilder private func page(_ tab: AppModel.AppTab) -> some View {
         switch tab {
+        case .chats: EmptyView()   // the three-column layout above
         case .bots: BotsView()
-        default:
-            ContentUnavailableView(tab.title, systemImage: tab.symbol, description: Text("Coming to the Mac in a later build."))
+        case .files: FilesView()
+        case .sessions: NavigationStack { SessionsView() }
+        case .cron: NavigationStack { CronView() }
+        case .approvals: NavigationStack { ApprovalsView() }
+        case .system: NavigationStack { SystemView() }
+        case .settings: SettingsView()
         }
     }
 }
+
+/// Vory itself, alive: the flat finish animates and keeps its colour in a background window
+/// (the live glass one took on the window's inactive look).
+private let liveVory = BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "flat")
 
 private struct Sidebar: View {
     @Environment(AppModel.self) private var model
@@ -94,7 +141,7 @@ private struct Sidebar: View {
 private struct NoChatView: View {
     var body: some View {
         VStack(spacing: 12) {
-            BotFaceView(spec: BotLookSpec.vory, size: 72, active: true, drawn: true, mood: BotFaceView.Mood(profile: "vory-mac-empty"))
+            BotFaceView(spec: liveVory, size: 72, active: true, mood: BotFaceView.Mood(profile: "vory-mac-empty", state: .guide))
             Text("No chat selected").font(.title3.weight(.semibold))
             Text("Pick one from the list, or press ⌘N for a new one.").font(.callout).foregroundStyle(.secondary)
         }
@@ -111,8 +158,7 @@ private struct GatewayFooter: View {
         VStack(alignment: .leading, spacing: 6) {
             Divider()
             HStack(spacing: 8) {
-                // Painted, not live glass: glass takes on the window's inactive look and went grey.
-                BotFaceView(spec: BotLookSpec.vory, size: 24, active: model.runtime != nil, drawn: true, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
+                BotFaceView(spec: liveVory, size: 24, active: model.runtime != nil, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.runtime?.connection.name ?? model.store.active?.name ?? "No gateway").font(.caption.weight(.semibold)).lineLimit(1)
                     Text(model.runtime.map { $0.socketState.label } ?? (model.activationError ?? "Connecting…")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)

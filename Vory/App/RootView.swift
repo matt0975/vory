@@ -16,6 +16,8 @@ struct RootView: View {
     @AppStorage("notificationsSetupCardDone") private var setupCardDone = false
     @State private var showCompanionPrompt = false
     @State private var showInstaller = false
+    /// The Companion's version when the gateway already runs one: the prompt then only asks to allow notifications.
+    @State private var companionFound: String?
 
     var body: some View {
         ZStack {
@@ -39,15 +41,25 @@ struct RootView: View {
         .onChange(of: model.hasConnections) { had, has in
             if !had, has, !companionPromptShown {
                 companionPromptShown = true
-                Task { try? await Task.sleep(for: .milliseconds(700)); showCompanionPrompt = true }
+                Task {
+                    try? await Task.sleep(for: .milliseconds(700))
+                    // A gateway set up from another device already has the Companion: no install to offer.
+                    if let rt = model.runtime { companionFound = await CompanionPromptSheet.installedVersion(on: rt) }
+                    showCompanionPrompt = true
+                }
             }
         }
         .sheet(isPresented: $showCompanionPrompt) {
-            CompanionPromptSheet(install: {
+            CompanionPromptSheet(found: companionFound, install: {
                 // Installed from here: the Settings suggestion never needs to show.
                 setupCardDone = true
                 showCompanionPrompt = false
                 showInstaller = true
+            }, allow: {
+                // Allowed: the token arrives, the device file goes up, the Companion sends here.
+                setupCardDone = true
+                showCompanionPrompt = false
+                Task { _ = await model.push.requestAuthorization() }
             }, later: {
                 setupCardDone = false
                 showCompanionPrompt = false
@@ -59,33 +71,6 @@ struct RootView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
         }
-    }
-}
-
-/// "You're connected — install the Companion now, or later?": Vory asks, once.
-struct CompanionPromptSheet: View {
-    var install: () -> Void
-    var later: () -> Void
-    var body: some View {
-        VStack(spacing: 18) {
-            BotFaceView(spec: AboutView.voryBot, size: 96, active: true)
-                .padding(.top, 26)
-            Text("Unlock Vory's full potential").font(.title2.weight(.bold)).multilineTextAlignment(.center)
-            Text("The Companion is a small plugin on your gateway. With it, replies arrive as notifications, a Live Activity follows every turn, and approval cards reach your phone the moment a bot needs a yes.")
-                .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(spacing: 10) {
-                Button(action: install) { Text("Install now").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6) }
-                    .buttonStyle(.glassProminent)
-                Button(action: later) { Text("Later").font(.subheadline) }
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.top, 6)
-            Text("Later is fine — Settings will remind you.").font(.caption).foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 28).padding(.bottom, 20)
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 }
 
@@ -170,28 +155,6 @@ struct MainTabView: View {
         case .cron: NavigationStack { CronView().navigationTitle("Scheduled Tasks").tabRoot(.cron) }
         case .approvals: NavigationStack { ApprovalsView().navigationTitle("Approvals").tabRoot(.approvals) }
         case .system: NavigationStack { SystemView().navigationTitle("System").tabRoot(.system) }
-        }
-    }
-}
-
-/// Small glass status pill used in navigation bars.
-struct ConnectionPill: View {
-    var state: SocketState
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(state.label).font(.caption).foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .glassEffect(.regular, in: .capsule)
-        .accessibilityLabel("Connection: \(state.label)")
-    }
-    private var color: Color {
-        switch state {
-        case .open: return .green
-        case .connecting, .reconnecting: return .orange
-        case .authRejected, .failed: return .red
-        case .idle: return .gray
         }
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import VoryCore
 
 struct SettingsView: View {
@@ -287,7 +288,11 @@ struct NotificationsView: View {
                 if push.authorization == .notDetermined {
                     Button("Allow Notifications") { Task { _ = await push.requestAuthorization() } }
                 } else if push.authorization == .denied {
+                    #if os(iOS)
                     Link("Open iOS Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+                    #else
+                    Link("Open System Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
+                    #endif
                 }
                 Toggle("Live Activity", isOn: $liveActivities)
                 Toggle("Haptics", isOn: $haptics)
@@ -345,12 +350,16 @@ struct SecurityView: View {
 struct BotsSettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
+    #if os(iOS)
     @AppStorage(BotMotionSource.enabledKey) private var motion = true
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
+    #endif
 
     var body: some View {
         List {
             SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: glass, motion and tilt.")
+            #if os(iOS)
+            // Motion and tilt come from the phone's gyroscope; a Mac has none.
             Section {
                 Toggle("Motion effects", isOn: $motion)
                     .onChange(of: motion) { _, _ in BotMotionSource.shared.apply() }
@@ -366,6 +375,7 @@ struct BotsSettingsView: View {
             } footer: {
                 Text("Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
             }
+            #endif
             Section {
                 NavigationLink { MotionDemoView() } label: { Label("Preview motion", systemImage: "play.circle") }
             } footer: {
@@ -405,7 +415,9 @@ struct BotsSettingsView: View {
 struct SummariesSettingsView: View {
     @AppStorage(ChatSummarizer.titlesKey) private var titles = ChatSummarizer.titlesOn
     @AppStorage(ChatSummarizer.previewsKey) private var previews = ChatSummarizer.previewsOn
+    #if os(iOS)
     @AppStorage(WatchSync.summariesToWatchKey) private var toWatch = false
+    #endif
     @State private var cleared = false
 
     var body: some View {
@@ -430,12 +442,14 @@ struct SummariesSettingsView: View {
                 Text(ChatSummarizer.unavailableReason ?? "Titles: a short name for each chat in place of the gateway's. Previews: two lines on where the chat stands in place of the last message. Either can be on alone. Nothing leaves your phone and nothing changes on the gateway; off, the list shows the gateway's own titles and previews.")
             }
             .disabled(!ChatSummarizer.isAvailable)
+            #if os(iOS)
             Section {
                 Toggle(isOn: $toWatch) { Label("Send to Apple Watch", systemImage: "applewatch") }
                     .onChange(of: toWatch) { _, _ in WatchSync.shared.refresh() }
             } header: { Text("Apple Watch") } footer: {
                 Text("The summaries this iPhone has made go to the watch, which shows them in its chat list in place of the gateway's titles and previews. The watch runs no model itself; nothing is made there.")
             }
+            #endif
             Section {
                 Button(cleared ? "Summaries forgotten" : "Forget all summaries") { ChatSummarizer.shared.forgetAll(); cleared = true }
                     .disabled(cleared)
@@ -650,7 +664,7 @@ struct SpeechBubble: View {
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 12).padding(.vertical, 8)
             .padding(.bottom, 8)
-            .background(Color(uiColor: .secondarySystemFill), in: SpeechBubbleShape())
+            .background(Color(.secondarySystemFill), in: SpeechBubbleShape())
             .fixedSize()
     }
 }

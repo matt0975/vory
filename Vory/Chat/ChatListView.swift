@@ -333,7 +333,12 @@ struct ChatListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        #if os(macOS)
+        // The search field belongs in the toolbar on a Mac; over the list it hid the top of the scroll bar.
+        .searchable(text: $searchText, placement: .toolbar, prompt: "Search chats")
+        #else
         .safeAreaInset(edge: .top, spacing: 0) { searchField }
+        #endif
         // The grouped list otherwise leaves a section's worth of empty space under the search bar.
         .contentMargins(.top, 0, for: .scrollContent)
         // Wider rows: the card hugs the screen edges and the rows their card.
