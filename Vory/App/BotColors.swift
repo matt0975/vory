@@ -1,5 +1,9 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import VoryCore
 
 /// One accent colour per bot (profile). Stored in UserDefaults as `{profile: "#RRGGBB"}` under
@@ -55,9 +59,12 @@ extension Color {
     }
 
     var hexString: String {
-        let ui = UIColor(self)
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-        ui.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #if canImport(UIKit)
+        UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
+        #else
+        (NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)).getRed(&r, green: &g, blue: &b, alpha: &a)
+        #endif
         return String(format: "#%02X%02X%02X", Int(round(r * 255)), Int(round(g * 255)), Int(round(b * 255)))
     }
 }
@@ -133,7 +140,11 @@ enum BotLooksMirror {
             avatars[p.label] = avatars[p.name]; colors[p.label] = colors[p.name]; photos[p.label] = photos[p.name]
         }
         BotLooks(colors: colors, avatars: avatars, photos: photos).save()
+        #if os(iOS)
         WatchSync.shared.refresh()
+        #endif
+        // The other devices get the same looks through the gateway (the iPhone publishes).
+        LooksSync.publishSoon()
     }
 
     private static func thumbnail(_ image: UIImage) -> Data? {

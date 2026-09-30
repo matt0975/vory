@@ -1,6 +1,10 @@
 import ImageIO
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import VoryCore
 
 /// Last known session list per gateway + profile, so the Chats tab draws instantly on launch

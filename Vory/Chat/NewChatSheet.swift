@@ -186,8 +186,10 @@ struct NewChatSheet: View {
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
                     Button { showPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+                    #if os(iOS)
                     Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                         .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    #endif
                     Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
                     Button { pasteAttachment() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
                 } label: {
@@ -225,7 +227,9 @@ struct NewChatSheet: View {
         .onAppear { focus = .to }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in stage(data, name: name, kind: .image) }.ignoresSafeArea() }
+        #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }

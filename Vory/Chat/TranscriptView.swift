@@ -173,13 +173,18 @@ struct TranscriptView: View {
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentInsets.bottom } action: { _, v in
                 metrics.reportedInsetBottom = v
                 guard autoInsetFixed == nil, dockTop > 0 else { return }
+                #if os(iOS)
                 let raw = max(0, v - (bottomInset + 8))
                 let safe = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
                 autoInsetFixed = safe > 0 && raw > safe / 2 ? safe : 0
+                #else
+                autoInsetFixed = 0   // no home indicator under a window
+                #endif
             }
             .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { _, v in
                 metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
             }
+            #if os(iOS)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
                 guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                 let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
@@ -192,6 +197,7 @@ struct TranscriptView: View {
                     if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
                 }
             }
+            #endif
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
                 metrics.offsetY = new
                 if metrics.userScrolling { BotAmbient.shared.scrolled(dy: new - old) }
@@ -211,12 +217,14 @@ struct TranscriptView: View {
                     let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
                     let overshoot = bottom - limit
                     guard overshoot > 0 else { return }
+                    #if os(iOS)
                     if let sv = metrics.scrollView {
                         let maxY = max(0, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
                         sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, sv.contentOffset.y + overshoot)), animated: true)
-                    } else {
-                        withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
+                        return
                     }
+                    #endif
+                    withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
                 }
             }
             // Insets included: the bottom margin (dock plus home indicator) is about the size of
@@ -264,7 +272,10 @@ struct TranscriptView: View {
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text) }
+            #if os(iOS)
+            // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
+            #endif
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             // Whole item, not just `.kind`: the tokens/sec footer lands after the text does and
@@ -356,6 +367,14 @@ extension TranscriptView {
     }
 }
 
+#if os(macOS)
+/// No UIKit scroll view to find here: scrolling by a measured distance falls back to the
+/// SwiftUI scroll position, which is what the probe's absence means below.
+private struct ScrollViewProbe: View {
+    let metrics: ScrollMetrics
+    var body: some View { Color.clear }
+}
+#else
 /// Finds the UIKit scroll view behind the thread and hands it to the metrics box.
 private struct ScrollViewProbe: UIViewRepresentable {
     let metrics: ScrollMetrics
@@ -371,12 +390,15 @@ private struct ScrollViewProbe: UIViewRepresentable {
         }
     }
 }
+#endif
 
 /// The figures a scroll changes every frame. Not observable on purpose (see `TranscriptView.metrics`).
 final class ScrollMetrics {
+    #if os(iOS)
     /// The UIKit scroll view under the SwiftUI one, for a scroll by a measured distance: its
     /// offset and the rows' global frames are in the same points, so a delta is just a delta.
     weak var scrollView: UIScrollView?
+    #endif
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     var stickToBottom = true
@@ -401,10 +423,13 @@ struct TimeRevealColumn<Content: View>: View {
     var body: some View {
         content
             .offset(x: -reveal * 80)
+            #if os(iOS)
             .background(TimeRevealPan(reveal: $reveal, enabled: enabled))
+            #endif
     }
 }
 
+#if os(iOS)
 private struct TimeRevealPan: UIViewRepresentable {
     @Binding var reveal: CGFloat
     var enabled = true
@@ -485,6 +510,7 @@ private struct TimeRevealPan: UIViewRepresentable {
         }
     }
 }
+#endif
 
 /// UserDefaults keys for the Appearance › Chat toggles.
 extension ChatStyle { static let headerShowsTitle = "chatHeaderShowsTitle" }

@@ -1,7 +1,76 @@
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UniformTypeIdentifiers
 
+#if os(macOS)
+/// The Mac composer: SwiftUI's own field, growing to `maxLines`. Return sends, Option-Return
+/// adds a line; Up and Down go to `onArrow` first (history recall); an image, movie or document
+/// pasted with ⌘V goes out through `onPasteData` to become a staged attachment.
+struct ComposerTextView: View {
+    @Binding var text: String
+    var placeholder: String
+    @Binding var focused: Bool
+    var maxLines = 6
+    var accessibilityID: String? = nil
+    var onSend: () -> Void = {}
+    var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
+    var onArrow: (Int) -> Bool = { _ in false }
+    @FocusState private var isFocused: Bool
+
+    static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
+    private static let attachmentTypes: [UTType] = [.image, .movie, .pdf, .audio]
+
+    var body: some View {
+        TextField(placeholder, text: $text, axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(1...maxLines)
+            .focused($isFocused)
+            .onSubmit { if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() } }
+            .onKeyPress(.upArrow) { onArrow(-1) ? .handled : .ignored }
+            .onKeyPress(.downArrow) { onArrow(1) ? .handled : .ignored }
+            // Shift-Return is a line break, as on a hardware keyboard on iOS (Option-Return too, by default).
+            .onKeyPress(.return, phases: .down) { press in
+                guard press.modifiers.contains(.shift) else { return .ignored }
+                text += "\n"
+                return .handled
+            }
+            .onPasteCommand(of: Self.attachmentTypes) { providers in paste(providers) }
+            .accessibilityIdentifier(accessibilityID ?? "composer.field")
+            .onAppear { isFocused = focused }
+            .onChange(of: focused) { _, f in if isFocused != f { isFocused = f } }
+            .onChange(of: isFocused) { _, f in if focused != f { focused = f } }
+    }
+
+    /// Same rules as the iOS paste delegate: text pastes as text; anything else is an attachment
+    /// named for its kind, with the type's extension.
+    private func paste(_ providers: [NSItemProvider]) {
+        for p in providers {
+            if p.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) || p.hasItemConformingToTypeIdentifier(UTType.text.identifier),
+               !p.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                p.loadDataRepresentation(forTypeIdentifier: UTType.plainText.identifier) { data, _ in
+                    guard let data, let s = String(data: data, encoding: .utf8) else { return }
+                    Task { @MainActor in text += s }
+                }
+                continue
+            }
+            guard let type = Self.attachmentTypes.first(where: { p.hasItemConformingToTypeIdentifier($0.identifier) }) else { continue }
+            let concrete = p.registeredTypeIdentifiers.compactMap { UTType($0) }.first { $0.conforms(to: type) } ?? type
+            let ext = concrete.preferredFilenameExtension ?? type.preferredFilenameExtension ?? "bin"
+            let stem = type == .image ? "photo" : type == .movie ? "video" : type == .pdf ? "document" : "audio"
+            let name = "\(stem)-\(Int(Date().timeIntervalSince1970)).\(ext)"
+            let handler = onPasteData
+            p.loadDataRepresentation(forTypeIdentifier: concrete.identifier) { data, _ in
+                guard let data, !data.isEmpty else { return }
+                Task { @MainActor in handler(data, name, concrete) }
+            }
+        }
+    }
+}
+#else
 /// The composer's text field as a UIKit text view. SwiftUI's TextField lost Paste on the phone
 /// and could not take an image from the pasteboard, so the keyboard never offered its
 /// "Paste from Screenshots". This one declares a paste configuration for text, images, video
@@ -179,3 +248,4 @@ final class PasteTextView: UITextView {
         }
     }
 }
+#endif

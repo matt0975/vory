@@ -191,7 +191,7 @@ struct MotionDemoView: View {
         Cell(id: "error", spec: BotLookSpec(shape: "hexagon", eyes: "round", hex: "#FF453A", finish: "glass"), state: .error, active: true),
         Cell(id: "reconnecting", spec: BotLookSpec(shape: "drop", eyes: "tiny", hex: "#2BB5A0"), state: .reconnecting, active: true),
         Cell(id: "streaming", spec: BotLookSpec(shape: "blob", eyes: "classic", hex: "#BF5AF2"), state: .streaming, active: true),
-        Cell(id: "guide (Vory)", spec: AboutView.voryBot, state: .guide, active: false),
+        Cell(id: "guide (Vory)", spec: BotLookSpec.vory, state: .guide, active: false),
         Cell(id: "idle", spec: BotLookSpec(shape: "cloud", eyes: "sleepy", hex: "#F4F4F5"), state: .idle, active: false),
         Cell(id: "idle · curious", spec: BotLookSpec(shape: "square", eyes: "curious", hex: "#30D158"), state: .idle, active: false),
     ]

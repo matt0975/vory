@@ -11,9 +11,20 @@ struct ConversationView: View {
     @State private var showProfile = false
     @State private var composerText = ""
     @State private var dockHeight: CGFloat = 60
+    /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
+    #if os(macOS)
+    @State private var headerHeight: CGFloat = 0
+    #else
     @State private var headerHeight: CGFloat = 96
+    #endif
     @State private var dockTop: CGFloat = 0
-    private var safeTop: CGFloat { UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0 }
+    private var safeTop: CGFloat {
+        #if os(iOS)
+        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0
+        #else
+        0
+        #endif
+    }
     /// The keyboard's height above the home-indicator area. Tracked by hand for the dock as the
     /// transcript does for itself: SwiftUI's own avoidance hands the inset to any scroll view in
     /// the dock (the command list) instead of lifting the dock, which left the composer under
@@ -28,10 +39,36 @@ struct ConversationView: View {
     var body: some View {
         Group {
             if let chat {
-                // The thread runs under the status bar (it ignores the top safe area) while the
-                // header sits inside it, so the thread's top margin is the header plus that inset;
-                // without it the first message starts under the pill.
-                TranscriptView(chat: chat, onEditMessage: { composerText = $0 }, dockTop: dockTop, fallbackInset: dockHeight + keyboardInset, topInset: headerHeight + safeTop)
+                // Three named stages: one chain of this many modifiers is more than the type
+                // checker will take in one go.
+                wiring(chrome(thread(chat), chat), chat)
+            } else if let loadError {
+                ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(loadError))
+            } else {
+                ProgressView("Opening…")
+            }
+        }
+        // Like Messages: inside a conversation the composer owns the bottom edge.
+        .hidesTabBar()
+        // The navigation bar is hidden, which switches off UIKit's edge-swipe back; put it back.
+        .background(InteractivePopEnabler())
+        .task { await open() }
+    }
+
+    /// The thread runs under the status bar (it ignores the top safe area) while the header sits
+    /// inside it, so the thread's top margin is the header plus that inset; without it the first
+    /// message starts under the pill. On the Mac the dock is a bottom inset, so no margins at all.
+    private func transcript(_ chat: ChatSession) -> TranscriptView {
+        #if os(macOS)
+        TranscriptView(chat: chat, onEditMessage: { composerText = $0 }, dockTop: 0, fallbackInset: 0, topInset: 0)
+        #else
+        TranscriptView(chat: chat, onEditMessage: { composerText = $0 }, dockTop: dockTop, fallbackInset: dockHeight + keyboardInset, topInset: headerHeight + safeTop)
+        #endif
+    }
+
+    /// The transcript with the dock (and, on the phone, the keyboard tracked by hand).
+    private func thread(_ chat: ChatSession) -> some View {
+                transcript(chat)
                     .overlay {
                         if let e = chat.resumeError, chat.items.isEmpty {
                             ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
@@ -39,6 +76,14 @@ struct ConversationView: View {
                                 .padding(.bottom, dockHeight + keyboardInset)
                         }
                     }
+                    #if os(macOS)
+                    // A bottom inset, not an overlay: the text still scrolls under the dock's glass,
+                    // and the scroll bar ends above it instead of running under it.
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        BottomDock(chat: chat, text: $composerText, namespace: glassNamespace)
+                            .disabled(chat.resumeError != nil && chat.items.isEmpty)
+                    }
+                    #else
                     // Like Messages: header and dock float over the thread and the text scrolls under their glass.
                     .overlay(alignment: .bottom) {
                         BottomDock(chat: chat, text: $composerText, namespace: glassNamespace)
@@ -49,7 +94,9 @@ struct ConversationView: View {
                             // own bottom edge the same way and keeps its last line above this.
                             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
                     }
+                    #endif
                     .ignoresSafeArea(.keyboard, edges: .bottom)
+                    #if os(iOS)
                     .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
                         guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                         let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
@@ -58,14 +105,43 @@ struct ConversationView: View {
                             keyboardInset = max(0, covered - safeBottom)
                         }
                     }
+                    #endif
+    }
+
+    /// The header (the floating pill on the phone, the window's title and subtitle on the Mac),
+    /// the title, and the sheets the header opens.
+    private func chrome(_ v: some View, _ chat: ChatSession) -> some View {
+                v
+                    #if os(macOS)
+                    // The window's title and subtitle are the header: the chat's name, then the bot,
+                    // its model and what it is doing. The menu is the chevron on the right.
+                    .navigationSubtitle(macSubtitle(chat))
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Menu {
+                                ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
+                                              onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
+                            } label: { Image(systemName: "chevron.down") }
+                            .help("Chat options")
+                            .accessibilityIdentifier("chat.more")
+                        }
+                    }
+                    #else
                     .overlay(alignment: .top) {
                         ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onContext: { showContext = true },
                                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
                     }
+                    #endif
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat) }
+                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName) }
+    }
+
+    /// The confirmation for an outside Approve/Deny, and the hooks that tie the chat to the model.
+    private func wiring(_ v: some View, _ chat: ChatSession) -> some View {
+                v
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil; model.approvalConfirm = nil } })) {
@@ -86,23 +162,11 @@ struct ConversationView: View {
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear { model.visibleChatID = chat.storedID }
                     .onDisappear { if model.visibleChatID == chat.storedID { model.visibleChatID = nil } }
-                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName) }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
                     // restored when the chat opens, cleared by a send (the composer empties the text).
                     .onChange(of: composerText) { _, t in ComposerDrafts.save(t, for: chat) }
-            } else if let loadError {
-                ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(loadError))
-            } else {
-                ProgressView("Opening…")
-            }
-        }
-        // Like Messages: inside a conversation the composer owns the bottom edge.
-        .hidesTabBar()
-        // The navigation bar is hidden, which switches off UIKit's edge-swipe back; put it back.
-        .background(InteractivePopEnabler())
-        .task { await open() }
     }
 
     private func open() async {
@@ -133,6 +197,18 @@ struct ConversationView: View {
         guard let runtime = model.runtime else { return }
         do { chat = try await runtime.newChat() } catch { loadError = error.localizedDescription }
     }
+
+    #if os(macOS)
+    /// "unifi · grok-4.7 · Thinking…": the bot, its model, and the status while it works.
+    private func macSubtitle(_ chat: ChatSession) -> String {
+        let bot = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
+        let model = chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName
+        var parts = [bot]
+        if !model.isEmpty { parts.append(model) }
+        if chat.isRunning { parts.append(chat.statusLine ?? "Thinking…") } else if chat.isResuming { parts.append("Syncing…") }
+        return parts.joined(separator: " · ")
+    }
+    #endif
 
     private func handle(route r: PendingRoute?, chat: ChatSession) {
         guard let r, r.storedSessionID == chat.storedID else { return }
@@ -283,16 +359,7 @@ struct ChatHeader: View {
             .accessibilityIdentifier("chat.titlePill")
             Spacer(minLength: 0)
             Menu {
-                Menu {
-                    ModelMenuContent(chat: chat)
-                } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
-                Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
-                Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-                Divider()
-                Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
-                Button { Task { await chat.loadUsage() } } label: { Label("Refresh usage", systemImage: "arrow.clockwise") }
-                Divider()
-                Button(role: .destructive, action: onClose) { Label("Close session", systemImage: "xmark.circle") }
+                ChatMenuItems(chat: chat, onProfile: onProfile, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold))
                     .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
@@ -309,6 +376,34 @@ struct ChatHeader: View {
     }
 }
 
+/// The … menu's items, shared by the iOS header's glass circle and the Mac toolbar's button.
+struct ChatMenuItems: View {
+    @Bindable var chat: ChatSession
+    var onProfile: () -> Void
+    var onContext: () -> Void
+    var onNewChat: () -> Void
+    var onClose: () -> Void
+
+    var body: some View {
+        Menu {
+            ModelMenuContent(chat: chat)
+        } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
+        Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
+        Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        Divider()
+        Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
+        Button { Task { await chat.loadUsage() } } label: { Label("Refresh usage", systemImage: "arrow.clockwise") }
+        Divider()
+        Button(role: .destructive, action: onClose) { Label("Close session", systemImage: "xmark.circle") }
+    }
+}
+
+#if os(macOS)
+/// The Mac has no pop gesture to put back; the chat sits in the split view's detail column.
+struct InteractivePopEnabler: View {
+    var body: some View { Color.clear }
+}
+#else
 /// Re-enables the navigation controller's interactive pop gesture while its bar is hidden, and
 /// lets it start anywhere on the screen (not only at the left edge) for one-handed use: a pan
 /// recognizer on the navigation view drives the same targets as the edge gesture. Put one under
@@ -376,6 +471,7 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { false }
 }
+#endif
 
 /// Unsent composer text, per session, so leaving a chat and coming back does not lose it.
 @MainActor

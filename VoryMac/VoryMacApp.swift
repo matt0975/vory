@@ -31,6 +31,8 @@ struct VoryMacApp: App {
                     LocalNotifier.isForeground = true
                     BotAmbient.shared.enabled = true
                     Task { await model.push.refreshAuthorization() }
+                    // Looks changed on the phone since: take them.
+                    if let rt = model.runtime { Task { await LooksSync.pull(runtime: rt) } }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                     LocalNotifier.isForeground = false

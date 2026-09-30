@@ -205,42 +205,18 @@
 		AA00000000000000000266 /* Exceptions for "Vory" folder in "VoryMac" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				App/BotAvatars.swift,
-				App/BotColors.swift,
 				App/BotMotionSource.swift,
 				App/RootView.swift,
 				App/TabBarMinimizeObserver.swift,
 				App/VoryApp.swift,
 				App/VoryTabBar.swift,
-				Bots/BotsView.swift,
-				Bots/NewBotSheet.swift,
-				Chat/AttachmentPickers.swift,
-				Chat/CardsView.swift,
-				Chat/ChatExtras.swift,
-				Chat/ChatListView.swift,
-				"Chat/ChatSession+BotState.swift",
-				Chat/ComposerTextView.swift,
-				Chat/ComposerView.swift,
-				Chat/ConversationView.swift,
-				Chat/FlowLayout.swift,
-				Chat/ImageTranscode.swift,
-				Chat/MessageBubbleShape.swift,
-				Chat/ModelPickerMenu.swift,
-				Chat/NewChatSheet.swift,
-				Chat/ProfileInfoSheet.swift,
-				Chat/StagedCard.swift,
-				Chat/TranscriptView.swift,
-				Chat/TypingBubble.swift,
 				Files/FilesView.swift,
 				Info.plist,
-				Projects/ProjectsView.swift,
 				Push/LiveActivityController.swift,
 				Push/PushSetupView.swift,
 				Settings/HermesSettingsViews.swift,
-				Settings/MaintenanceViews.swift,
 				Settings/SettingsView.swift,
 				Settings/StatusView.swift,
-				Vory.entitlements,
 				Watch/WatchSync.swift,
 			);
 			target = AA00000000000000000240 /* VoryMac */;
@@ -658,8 +634,8 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				AA00000000000000000063 /* Shared */,
 				AA00000000000000000060 /* Vory */,
+				AA00000000000000000063 /* Shared */,
 				AA00000000000000000260 /* VoryMac */,
 			);
 			name = VoryMac;
@@ -1338,38 +1314,6 @@
 			};
 			name = Debug;
 		};
-		AA0000000000000000012C /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ENABLE_DEBUG_DYLIB = NO;
-				CODE_SIGN_ENTITLEMENTS = VoryNotificationContent/VoryNotificationContent.entitlements;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 4PLALDQ8V8;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = VoryNotificationContent/Info.plist;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				MARKETING_VERSION = 1.1;
-				OTHER_LDFLAGS = (
-					"$(inherited)",
-					"-framework",
-					UserNotifications,
-					"-framework",
-					UserNotificationsUI,
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notificationcontent;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SKIP_INSTALL = YES;
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
 		AA00000000000000000114 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1393,6 +1337,38 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		AA0000000000000000012C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = VoryNotificationContent/VoryNotificationContent.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VoryNotificationContent/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.1;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					UserNotifications,
+					"-framework",
+					UserNotificationsUI,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notificationcontent;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
 		};
 		AA0000000000000000012D /* Release */ = {
 			isa = XCBuildConfiguration;

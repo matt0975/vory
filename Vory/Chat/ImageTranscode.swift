@@ -1,5 +1,9 @@
 import ImageIO
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UniformTypeIdentifiers
 import VoryCore
 
@@ -36,7 +40,9 @@ final class TypingHaptics {
     static let key = "chat.typingHaptics"
     static var isOn: Bool { UserDefaults.standard.bool(forKey: key) && (UserDefaults.standard.object(forKey: "hapticsEnabled") as? Bool ?? true) }
 
+    #if os(iOS)
     private let generator = UIImpactFeedbackGenerator(style: .soft)
+    #endif
     private var last = Date.distantPast
     private var pending = 0
 
@@ -57,7 +63,11 @@ final class TypingHaptics {
         last = now
         let intensity = min(1, 0.35 + CGFloat(pending) / 60)
         pending = 0
+        #if os(iOS)
         generator.impactOccurred(intensity: intensity)
         generator.prepare()
+        #else
+        _ = intensity   // no Taptic Engine under the keys
+        #endif
     }
 }

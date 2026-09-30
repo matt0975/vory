@@ -1,10 +1,15 @@
 import AVFoundation
 import Speech
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import VoryCore
 
-/// System camera capture.
+#if os(iOS)
+/// System camera capture. (The Mac imports from the iPhone through Continuity Camera later.)
 struct CameraPicker: UIViewControllerRepresentable {
     var onImage: (Data, String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -30,6 +35,7 @@ struct CameraPicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
+#endif
 
 /// Voice memo recorder (AAC .m4a).
 struct AudioRecorderSheet: View {
@@ -65,9 +71,11 @@ struct AudioRecorderSheet: View {
         Task {
             guard await AVAudioApplication.requestRecordPermission() else { error = "Microphone access denied."; return }
             do {
+                #if os(iOS)
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
                 try session.setActive(true)
+                #endif
                 let u = FileManager.default.temporaryDirectory.appendingPathComponent("memo-\(Int(Date().timeIntervalSince1970)).m4a")
                 let settings: [String: Any] = [AVFormatIDKey: Int(kAudioFormatMPEG4AAC), AVSampleRateKey: 44100, AVNumberOfChannelsKey: 1, AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]
                 let r = try AVAudioRecorder(url: u, settings: settings)
@@ -81,7 +89,9 @@ struct AudioRecorderSheet: View {
     private func stop() {
         recorder?.stop(); recorder = nil; recording = false
         timer?.invalidate(); timer = nil
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 }
 
@@ -158,9 +168,11 @@ final class DictationController {
                 error = "Speech recognizer unavailable."; return
             }
             do {
+                #if os(iOS)
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.record, mode: .measurement, options: .duckOthers)
                 try session.setActive(true, options: .notifyOthersOnDeactivation)
+                #endif
                 transcript = ""
                 let pipe = DictationPipeline()
                 pipeline = pipe
@@ -192,7 +204,9 @@ final class DictationController {
         pipeline?.stop()
         pipeline = nil
         isListening = false
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 }
 

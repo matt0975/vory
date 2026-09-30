@@ -197,11 +197,18 @@ struct ComposerView: View {
         .animation(.snappy(duration: 0.25), value: slashSuggestions.map(\.name))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
+        // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
+        .dropDestination(for: URL.self) { urls, _ in
+            for u in urls { importFile(u) }
+            return !urls.isEmpty
+        }
         // Why the mic did nothing (no permission, no recognizer): said in the banner, not swallowed.
         .onChange(of: dictation.error) { _, e in if let e { chat.banner = e; dictation.error = nil } }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
+        #if os(iOS)
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea() }
+        #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
@@ -238,8 +245,10 @@ struct ComposerView: View {
     private var attachMenu: some View {
         Menu {
             Button { showPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
+            #if os(iOS)
             Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
                 .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+            #endif
             Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
             Button { showRecorder = true } label: { Label("Record Audio", systemImage: "waveform") }
             Button { paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }

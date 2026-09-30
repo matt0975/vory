@@ -16,6 +16,9 @@ struct ChatRoute: Hashable {
 
 struct ChatListView: View {
     @Environment(AppModel.self) private var model
+    /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
+    /// and a click replaces the one showing. On the phone the list owns its own stack and pushes.
+    var detailPath: Binding<NavigationPath>? = nil
     @State private var sessions: [StoredSession] = []
     /// Bumped by a tap on the selected Chats tab: the list scrolls to its first row.
     @State private var scrollToTop = 0
@@ -25,7 +28,10 @@ struct ChatListView: View {
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
-    @State private var path = NavigationPath()
+    @State private var ownPath = NavigationPath()
+    private var path: Binding<NavigationPath> { detailPath ?? $ownPath }
+    /// The row a force click is peeking (Mac).
+    @State private var peeking: StoredSession?
     @State private var pendingDelete: StoredSession?
     @State private var lastRouted: PendingRoute?
     /// Every profile's chats in one list, newest first, with the bot's avatar on each row.
@@ -64,8 +70,26 @@ struct ChatListView: View {
 
     private var runtime: GatewayRuntime? { model.runtime }
 
+    /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
+    /// detail column shows, the way selecting a conversation does in Messages.
+    private func open(_ route: some Hashable) {
+        #if os(macOS)
+        path.wrappedValue = NavigationPath([route])
+        #else
+        path.wrappedValue.append(route)
+        #endif
+    }
+
     var body: some View {
-        NavigationStack(path: $path) {
+        #if os(macOS)
+        // A column of the split view; the detail column's stack (`detailPath`) shows the chats.
+        content
+        #else
+        NavigationStack(path: path) { content }
+        #endif
+    }
+
+    private var content: some View {
             Group {
                 if let runtime {
                     list(runtime)
@@ -78,13 +102,19 @@ struct ChatListView: View {
             .background(InteractivePopEnabler())
             // Driven by the stack's own path rather than by the pushed screen: the bar starts
             // coming back the instant a pop begins instead of after the transition settles.
-            .onChange(of: path.isEmpty, initial: true) { _, empty in model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty }
-            .onChange(of: model.popToRoot[.chats]) { _, _ in path = NavigationPath() }
+            .onChange(of: path.wrappedValue.isEmpty, initial: true) { _, empty in model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty }
+            .onChange(of: model.popToRoot[.chats]) { _, _ in path.wrappedValue = NavigationPath() }
             // A tap on the Chats tab while it is selected also brings the list back to the top.
             .onChange(of: model.tabReselected[.chats]) { _, _ in scrollToTop += 1 }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { profileMenu }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    #if os(macOS)
+                    // No pull to refresh on a trackpad.
+                    Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                        .keyboardShortcut("r", modifiers: .command)
+                        .help("Refresh (⌘R)")
+                    #endif
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
                     filterMenu
                 }
@@ -100,14 +130,17 @@ struct ChatListView: View {
                 if let runtime {
                     NewChatSheet(runtime: runtime, initialProjectID: projectFilter.isEmpty || projectFilter == "__none__" ? runtime.projects.activeID : projectFilter) { start in
                         switch start {
-                        case .chat(let profile, let text, let attachments, let cwd): path.append(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd))
-                        case .group(let room, let text): rooms.insert(room, at: 0); path.append(RoomRoute(room: room, initialText: text))
+                        case .chat(let profile, let text, let attachments, let cwd): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd))
+                        case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text))
                         }
                     }
                 }
             }
+            #if os(iOS)
+            // The Mac's destinations are on the detail column's stack.
             .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
             .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+            #endif
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             .refreshable { await load() }
             .task(id: runtime?.connection.id) { await load() }
@@ -122,7 +155,7 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                path.append(ChatRoute(storedID: r.storedSessionID, title: nil))
+                open(ChatRoute(storedID: r.storedSessionID, title: nil))
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }
@@ -132,7 +165,6 @@ struct ChatListView: View {
                 Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This removes the session and its transcript from the gateway.") }
-        }
     }
 
     private var profileMenu: some View {
@@ -438,8 +470,18 @@ struct ChatListView: View {
         }
     }
 
+    /// A row that opens `route`: a link on the phone, a button into the detail column on the Mac.
+    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, @ViewBuilder label: () -> Label) -> some View {
+        #if os(macOS)
+        Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+        #else
+        NavigationLink(value: route) { label() }
+        #endif
+    }
+
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime) -> some View {
-                NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)) {
+        let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)
+                rowLink(route) {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: allBots,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
                                project: projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
@@ -447,8 +489,15 @@ struct ChatListView: View {
                         .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: allBots ? s.profile : nil) } }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                #if os(macOS)
+                // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
+                .onForceClick { peeking = s }
+                .popover(isPresented: Binding(get: { peeking?.id == s.id }, set: { if !$0 { peeking = nil } })) {
+                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil)
+                }
+                #endif
                 .contextMenu {
-                    Button { path.append(ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)) } label: { Label("Open", systemImage: "bubble.left") }
+                    Button { open(route) } label: { Label("Open", systemImage: "bubble.left") }
                     Button { Task { await patch(s, ["pinned": .bool(!(s.pinned ?? false))]) } } label: { Label(s.pinned == true ? "Unpin" : "Pin", systemImage: s.pinned == true ? "pin.slash" : "pin") }
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))]) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     Divider()
@@ -471,7 +520,7 @@ struct ChatListView: View {
         let archived = archivedRooms.contains(room.roomId)
         let log = roomLogs[room.roomId] ?? []
         let summary = summarizer.shown(summarizer.summary(forRoom: room, events: log), title: room.name, preview: Self.lastLine(room, log) ?? "")
-                NavigationLink(value: RoomRoute(room: room, initialText: nil)) {
+                rowLink(RoomRoute(room: room, initialText: nil)) {
                     HStack(spacing: 12) {
                         HStack(spacing: -12) {
                             ForEach(Array(room.members.prefix(3).enumerated()), id: \.offset) { _, m in
@@ -500,7 +549,7 @@ struct ChatListView: View {
                     if aiSummaries, let events = roomLogs[room.roomId] { summarizer.refreshRoom(room, events: events) }
                 }
                 .contextMenu {
-                    Button { path.append(RoomRoute(room: room, initialText: nil)) } label: { Label("Open", systemImage: "bubble.left") }
+                    Button { open(RoomRoute(room: room, initialText: nil)) } label: { Label("Open", systemImage: "bubble.left") }
                     Button { setArchived(room, !archived) } label: { Label(archived ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     Divider()
                     Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
@@ -553,14 +602,16 @@ struct ChatListView: View {
         droppedIDs.insert(s.id)
         guard let runtime else { return }
         if let chat = runtime.chatForStored(s.id) { runtime.closeChat(chat) }
-        let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: runtime.selectedProfile, body: EmptyBody())
+        // The row's own bot, not the selected one: with All bots on, a chat of another bot was
+        // addressed under the wrong profile and the gateway did nothing.
+        let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: s.profile ?? runtime.selectedProfile, body: EmptyBody())
         await load()
     }
 
     private func patch(_ s: StoredSession, _ fields: [String: JSONValue]) async {
         guard let runtime else { return }
         var body = fields
-        if let p = runtime.selectedProfile { body["profile"] = .string(p) }
+        if let p = s.profile ?? runtime.selectedProfile { body["profile"] = .string(p) }
         let _: JSONValue? = try? await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body))
         await load()
     }

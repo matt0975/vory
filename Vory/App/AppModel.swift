@@ -142,6 +142,8 @@ final class AppModel {
         runtime = rt
         activationError = nil
         await rt.start()
+        // Bot looks travel with the gateway: the phone's go up, the Mac's come down.
+        Task { await LooksSync.sync(runtime: rt) }
         await push.registerForRemoteNotificationsIfAuthorized()
         #if os(iOS)
         WatchSync.shared.push(store: store)

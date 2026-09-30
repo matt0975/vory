@@ -1,6 +1,10 @@
 import PhotosUI
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 
 /// What stands in for a bot: its initial in a coloured circle, a photo the user picked, or one of
 /// the animated Vory avatars. Stored per profile in UserDefaults (`botAvatars`, `{profile: raw}`)

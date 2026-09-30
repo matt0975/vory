@@ -24,9 +24,12 @@ extension ToolbarItemPlacement {
     static var topBarLeading: ToolbarItemPlacement { .navigation }
 }
 
-extension ToolbarPlacement {
-    /// Hiding the navigation bar on iOS is hiding the window toolbar here.
-    static var navigationBar: ToolbarPlacement { .windowToolbar }
+/// `.toolbar(.hidden, for: .navigationBar)`: a chat hides the iOS bar because it draws its own
+/// header. The Mac window's toolbar stays (the sidebar toggle lives there), so this does nothing.
+enum NavigationBarToolbarPlacement { case navigationBar, tabBar }
+
+extension View {
+    func toolbar(_ visibility: Visibility, for placement: NavigationBarToolbarPlacement) -> some View { self }
 }
 
 /// Own type, not nested under `SearchFieldPlacement`: sharing SwiftUI's nested name makes the
@@ -56,6 +59,16 @@ enum IndexViewStyleShim {
 
 extension View {
     func indexViewStyle(_ style: IndexViewStyleShim) -> some View { self }
+}
+
+// MARK: - Tab bar
+//
+// The iOS tab bar's view modifiers (in `VoryTabBar.swift`, iOS-only). There is no bar to hide
+// or a tab to be the root of here; the sidebar has that job.
+
+extension View {
+    func hidesTabBar() -> some View { self }
+    func tabRoot(_ tab: AppModel.AppTab) -> some View { self }
 }
 
 // MARK: - Text input
@@ -156,6 +169,7 @@ private struct ShimSmokeTest: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .always))
             .toolbar(.hidden, for: .navigationBar)
+            .hidesTabBar()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { EditButton() }
                 ToolbarItem(placement: .topBarLeading) { Text("") }
