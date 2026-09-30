@@ -1,6 +1,8 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
 import UIKit
+#endif
 import UserNotifications
 import WidgetKit
 import VoryCore
@@ -46,10 +48,16 @@ final class AppModel {
     /// `companionUpdateAvailable`. Called when the app comes to the foreground.
     func refreshCompanionUpdateFlag() async {
         guard let rt = runtime, push.registeredAt != nil else { companionUpdateAvailable = false; return }
+        #if os(iOS)
         let probe = PushSetupModel()
         await probe.checkCompanion(runtime: rt)
         companionUpdateAvailable = probe.updateAvailable
         companionInstalledVersion = probe.installedVersion
+        #else
+        // The Mac gets the companion setup with Settings; until then there is nothing to compare.
+        _ = rt
+        companionUpdateAvailable = false
+        #endif
     }
 
     enum AppTab: String, Hashable, CaseIterable, Sendable {
@@ -125,13 +133,19 @@ final class AppModel {
         let rt = GatewayRuntime(connection: connection, store: store)
         rt.pushRegistrar = push
         rt.cardNotifier = LocalCardNotifier()
+        #if os(iOS)
         rt.activityReporterFactory = { LiveActivityController() }
+        #else
+        rt.activityReporterFactory = { NoTurnActivity() }   // the menu-bar reporter comes with the Mac's Phase 4
+        #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
         runtime = rt
         activationError = nil
         await rt.start()
         await push.registerForRemoteNotificationsIfAuthorized()
+        #if os(iOS)
         WatchSync.shared.push(store: store)
+        #endif
     }
 
     /// `vory://chat/<stored id>[?profile=<bot>]` from a widget, the Live Activity or a
@@ -166,7 +180,9 @@ final class AppModel {
         }
         store.delete(id: id)
         if let next = store.active { await activate(next) }
+        #if os(iOS)
         WatchSync.shared.push(store: store)
+        #endif
     }
 
     // MARK: Notification routing
@@ -189,8 +205,10 @@ final class AppModel {
     private func ensureConnection(for r: PendingRoute) async {
         // Launched in the background for a notification action: keep the process alive long enough
         // to connect and send, and bring the saved gateway up first.
+        #if os(iOS)
         let assertion = UIApplication.shared.beginBackgroundTask(withName: "vory.notification.route")
         defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+        #endif
         if runtime == nil { await activateSavedConnection() }
         let target: GatewayConnection? = r.connectionID.flatMap { store.connection(id: $0) }
             ?? store.connections.first { c in r.gateway.map { c.gateway.description == $0 } ?? false }
@@ -231,7 +249,8 @@ final class AppModel {
     }
 }
 
-/// UIKit delegate for APNs registration and notification taps.
+#if os(iOS)
+/// UIKit delegate for APNs registration and notification taps. The Mac's is `MacAppDelegate`.
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     static var model: AppModel? { AppModel.shared }
 
@@ -284,6 +303,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         await MainActor.run { Self.model?.route(from: info, action: action, replyText: reply) }
     }
 }
+#endif
 
 /// A second step for approvals that arrive from outside the chat (Settings › Security).
 struct ApprovalConfirm: Equatable {

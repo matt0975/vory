@@ -1,5 +1,10 @@
 import SwiftUI
 import VoryCore
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
 
 /// Vory's speech bubble, typed out a few characters at a time whenever `text` changes (by
 /// `key`). Wraps, and keeps the full text's height so the layout does not grow line by line.
@@ -8,7 +13,7 @@ struct VoryTypedBubble: View {
     var key: AnyHashable
     var reduceMotion = false
     var tint: Color = .primary
-    var fill: Color = Color(uiColor: .secondarySystemFill)
+    var fill: Color = Color(.secondarySystemFill)
     @State private var shown = ""
 
     var body: some View {
@@ -37,7 +42,13 @@ struct VoryTypedBubble: View {
 
 extension Color {
     /// Green that reads on both backgrounds: the system green is too pale on white.
+    #if canImport(UIKit)
     static let readableGreen = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? .systemGreen : UIColor(red: 0.10, green: 0.50, blue: 0.22, alpha: 1) })
+    #else
+    static let readableGreen = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .systemGreen : NSColor(red: 0.10, green: 0.50, blue: 0.22, alpha: 1)
+    })
+    #endif
 }
 
 /// Vory at the top of a guided screen: the glass cloud, a full turn whenever `turnKey` changes
@@ -54,11 +65,11 @@ struct VoryGuide: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            BotFaceView(spec: AboutView.voryBot, size: size, active: true,
+            BotFaceView(spec: BotLookSpec.vory, size: size, active: true,
                         mood: BotFaceView.Mood(profile: "vory-guide", state: .guide, squint: thinking))
             VoryTypedBubble(text: says, key: key, reduceMotion: reduceMotion,
                             tint: done ? Color.readableGreen : .primary,
-                            fill: done ? Color.green.mix(with: Color(uiColor: .secondarySystemFill), by: 0.75) : Color(uiColor: .secondarySystemFill))
+                            fill: done ? Color.green.mix(with: Color(.secondarySystemFill), by: 0.75) : Color(.secondarySystemFill))
                 .padding(.horizontal, 24)
         }
         .onChange(of: turnKey) { _, _ in BotAmbient.shared.turnFinished(profile: "vory-guide") }

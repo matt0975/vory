@@ -25,7 +25,20 @@ public enum Keychain {
                                 kSecAttrService as String: service,
                                 kSecAttrAccount as String: account]
         if let g = accessGroup { q[kSecAttrAccessGroup as String] = g }
+        return dataProtected(q)
+    }
+
+    /// On macOS `SecItem*` defaults to the legacy file keychain, where access groups and the
+    /// accessibility class mean nothing; this flag selects the iOS-style keychain instead, so the
+    /// Mac app and its extensions share items the same way the iPhone does. A no-op elsewhere.
+    private static func dataProtected(_ q: [String: Any]) -> [String: Any] {
+        #if os(macOS)
+        var q = q
+        q[kSecUseDataProtectionKeychain as String] = true
         return q
+        #else
+        return q
+        #endif
     }
 
     public static func set(_ data: Data, account: String) throws {
@@ -66,11 +79,11 @@ public enum Keychain {
     /// Runs in a few milliseconds and is a no-op once everything has moved.
     public static func migrateToAccessGroupIfNeeded() {
         guard let group = accessGroup else { return }
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                kSecAttrService as String: service,
-                                kSecReturnAttributes as String: true,
-                                kSecReturnData as String: true,
-                                kSecMatchLimit as String: kSecMatchLimitAll]
+        let q: [String: Any] = dataProtected([kSecClass as String: kSecClassGenericPassword,
+                                              kSecAttrService as String: service,
+                                              kSecReturnAttributes as String: true,
+                                              kSecReturnData as String: true,
+                                              kSecMatchLimit as String: kSecMatchLimitAll])
         var out: AnyObject?
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let items = out as? [[String: Any]] else { return }
         for item in items where (item[kSecAttrAccessGroup as String] as? String) != group {
@@ -78,7 +91,7 @@ public enum Keychain {
             if (try? set(data, account: account)) != nil {
                 var old: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
                 if let g = item[kSecAttrAccessGroup as String] as? String { old[kSecAttrAccessGroup as String] = g }
-                SecItemDelete(old as CFDictionary)
+                SecItemDelete(dataProtected(old) as CFDictionary)
             }
         }
     }

@@ -23,6 +23,8 @@ public struct BotLookSpec: Hashable, Sendable {
     public static let eyeStyles = ["classic", "tall", "sleepy", "tiny", "round", "wide", "curious", "bold"]
     public static let defaultShape = "blob"
     public static let defaultEyes = "classic"
+    /// Vory itself: the glass cloud on the icon, the guide on the first run and in About.
+    public static let vory = BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "glass")
 
     /// The avatar choice string the app stores: "studio:<shape>:<eyes>" plus ":glass" for the
     /// glass finish. Older values ("initial", "animated:<style>") map onto a shape so nothing

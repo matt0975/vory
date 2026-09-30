@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Mac App Store / TestFlight builds must be sandboxed. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Gateway sockets and HTTP. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- NativeAuth's OAuth callback listens on a loopback port. -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- Attachments: photos, voice memos, dictation. -->
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Files chosen in open/save panels and dropped into the composer. -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Remote notifications for approvals, clarify prompts, finished turns and cron results.
+	     Xcode rewrites this to "production" when archiving for TestFlight / the App Store. -->
+	<key>com.apple.developer.aps-environment</key>
+	<string>development</string>
+	<!-- Notifications from a bot are presented as messages from it (its avatar as the icon). -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
+	<!-- Same group as iOS: the notification service extension reads the gateways and bot looks. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)com.vorantx.vory.shared</string>
+	</array>
+</dict>
+</plist>

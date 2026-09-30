@@ -16,13 +16,31 @@ struct OnboardingView: View {
         let demo: TourDemoKind
     }
 
+    /// The word the pages use for the device they are on.
+    #if os(macOS)
+    private static let device = "Mac"
+    #else
+    private static let device = "phone"
+    #endif
+
     private var pages: [Page] {
         var p = Self.basePages
         if ChatSummarizer.isAvailable {
-            p.insert(Page(title: "Summaries, on your phone.", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your phone. Optional — your call.", demo: .summaries), at: 5)
+            // Before the last page, the one that connects.
+            p.insert(Page(title: "Summaries, on your \(Self.device).", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your \(Self.device). Optional — your call.", demo: .summaries), at: p.count - 1)
         }
         return p
     }
+    #if os(macOS)
+    // No Dynamic Island page: the menu bar takes that job on the Mac and gets its page with it.
+    private static let basePages: [Page] = [
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your Mac. Every bot you run lives here — step through to see what we can do together.", demo: .bots),
+        Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands right here. Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
+        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your network, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
+    ]
+    #else
     private static let basePages: [Page] = [
         Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your phone. Every bot you run lives here — swipe to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
@@ -31,6 +49,7 @@ struct OnboardingView: View {
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
         Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
     ]
+    #endif
 
     private var isLast: Bool { page == pages.count - 1 }
 
@@ -41,21 +60,31 @@ struct OnboardingView: View {
                 VoryGuide(says: pages[page].says, key: page, turnKey: page, thinking: pages[page].demo == .approval, reduceMotion: reduceMotion)
                     .padding(.top, 14)
 
+                #if os(macOS)
+                // Nothing to swipe on a Mac: the page in front, cross-faded, with the dots under it.
+                VStack(spacing: 12) {
+                    pageView(pages[page], index: page)
+                        .id(page)
+                        .transition(.opacity)
+                    HStack(spacing: 6) {
+                        ForEach(pages.indices, id: \.self) { i in
+                            Circle().fill(Color.primary.opacity(i == page ? 0.9 : 0.25)).frame(width: 7, height: 7)
+                        }
+                    }
+                    .padding(.bottom, 6)
+                }
+                .frame(maxHeight: .infinity)
+                .animation(reduceMotion ? nil : .snappy, value: page)
+                #else
                 TabView(selection: $page) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { i, p in
-                        VStack(spacing: 14) {
-                            Text(p.title).font(.title.weight(.bold)).multilineTextAlignment(.center)
-                            TourDemo(kind: p.demo, live: page == i, reduceMotion: reduceMotion)
-                                .frame(maxWidth: .infinity)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 20).padding(.top, 10)
-                        .tag(i)
+                        pageView(p, index: i).tag(i)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .always))
                 .indexViewStyle(.page(backgroundDisplayMode: .always))
                 .animation(reduceMotion ? nil : .snappy, value: page)
+                #endif
 
                 VStack(spacing: 10) {
                     Button {
@@ -82,6 +111,16 @@ struct OnboardingView: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(isPresented: $showForm) { GatewayFormView() }
         }
+    }
+
+    private func pageView(_ p: Page, index i: Int) -> some View {
+        VStack(spacing: 14) {
+            Text(p.title).font(.title.weight(.bold)).multilineTextAlignment(.center)
+            TourDemo(kind: p.demo, live: page == i, reduceMotion: reduceMotion)
+                .frame(maxWidth: .infinity)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20).padding(.top, 10)
     }
 }
 

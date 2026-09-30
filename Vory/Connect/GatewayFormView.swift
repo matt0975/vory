@@ -9,6 +9,13 @@ struct GatewayFormView: View {
     var existing: GatewayConnection?
     var onSaved: ((GatewayConnection) -> Void)?
 
+    /// The device the help text names.
+    #if os(macOS)
+    static let thisDevice = "this Mac"
+    #else
+    static let thisDevice = "this iPhone"
+    #endif
+
     /// How the phone reaches the gateway. Only changes the help and the fields shown; the URL,
     /// the auth method and the optional Access headers are what actually connect.
     enum ConnectionKind: String, CaseIterable, Identifiable {
@@ -41,7 +48,7 @@ struct GatewayFormView: View {
         var help: String {
             switch self {
             case .local: return "Same Wi‑Fi as the gateway machine. Use its LAN address and the port hermes serve prints (9119 by default). Plain http is fine here; it only works at home."
-            case .tailscale: return "Reach the gateway from anywhere over your tailnet. Install Tailscale on this iPhone and the gateway machine, then use the machine's MagicDNS name or its 100.x address. No port forwarding, no public exposure; plain http is safe inside the tailnet."
+            case .tailscale: return "Reach the gateway from anywhere over your tailnet. Install Tailscale on \(GatewayFormView.thisDevice) and the gateway machine, then use the machine's MagicDNS name or its 100.x address. No port forwarding, no public exposure; plain http is safe inside the tailnet."
             case .cloudflare: return "A public hostname behind Cloudflare Access (a Cloudflare Tunnel on the gateway machine). Enter the service token below — the app cannot use a browser login for Access. Always https."
             case .other: return "Any https address that reaches the dashboard: a reverse proxy, a VPS, your own VPN. Add Access headers only if Cloudflare sits in front."
             }
@@ -109,7 +116,7 @@ struct GatewayFormView: View {
                         if kind == .tailscale && !u.isTailscaleHost { Text("This does not look like a Tailscale address (a *.ts.net name or 100.x.x.x).").foregroundStyle(.orange) }
                         if kind == .local && !u.isPrivateHost && !u.isTailscaleHost { Text("This is not a local address; pick another connection type if the gateway is elsewhere.").foregroundStyle(.orange) }
                         if kind == .cloudflare && !u.isTLS { Text("Cloudflare Access needs https.").foregroundStyle(.orange) }
-                        if u.isTailscaleHost { Text("Tailscale must be connected on this iPhone for the test to pass.").foregroundStyle(.secondary) }
+                        if u.isTailscaleHost { Text("Tailscale must be connected on \(Self.thisDevice) for the test to pass.").foregroundStyle(.secondary) }
                     }
                 }
             }
@@ -199,6 +206,7 @@ struct GatewayFormView: View {
                 Text("Checks that /api/status returns JSON (not an HTML login page), that your credentials are accepted, and that the WebSocket at /api/ws opens.")
             }
         }
+        .formStyle(.grouped)   // iOS's default; on the Mac it gives the section headers their own rows
         .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

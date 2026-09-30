@@ -1,6 +1,10 @@
 import Foundation
 import Observation
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 import VoryCore
 
@@ -84,7 +88,7 @@ final class PushRegistrar: PushRegistrationSyncing {
         do {
             let ok = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])
             await refreshAuthorization()
-            if ok { UIApplication.shared.registerForRemoteNotifications() }
+            if ok { registerForRemote() }
             return ok
         } catch {
             lastError = error.localizedDescription
@@ -95,8 +99,32 @@ final class PushRegistrar: PushRegistrationSyncing {
     func registerForRemoteNotificationsIfAuthorized() async {
         await refreshAuthorization()
         if authorization == .authorized || authorization == .provisional {
-            UIApplication.shared.registerForRemoteNotifications()
+            registerForRemote()
         }
+    }
+
+    private func registerForRemote() {
+        #if os(iOS)
+        UIApplication.shared.registerForRemoteNotifications()
+        #else
+        NSApplication.shared.registerForRemoteNotifications()
+        #endif
+    }
+
+    /// What the device file and the relay call this platform; `hermes_push.py` knows both.
+    #if os(macOS)
+    static let platform = "macos"
+    #else
+    static let platform = "ios"
+    #endif
+
+    /// The name the gateway shows for this device.
+    static var deviceName: String {
+        #if os(iOS)
+        UIDevice.current.name
+        #else
+        Host.current().localizedName ?? "Mac"
+        #endif
     }
 
     func didRegister(token: Data) {
@@ -111,7 +139,7 @@ final class PushRegistrar: PushRegistrationSyncing {
     func registerWithRelay() async {
         guard notificationsEnabled, PushRelay.isConfigured, let token = deviceToken else { return }
         do {
-            try await PushRelay.register(deviceToken: token, platform: "ios", bundleID: Bundle.main.bundleIdentifier ?? "", environment: apnsEnvironment, liveActivityToken: nil)
+            try await PushRelay.register(deviceToken: token, platform: Self.platform, bundleID: Bundle.main.bundleIdentifier ?? "", environment: apnsEnvironment, liveActivityToken: nil)
             relayRegisteredAt = Date(); relayError = nil
         } catch { relayError = error.localizedDescription }
     }
@@ -141,7 +169,7 @@ final class PushRegistrar: PushRegistrationSyncing {
         var payload: [String: JSONValue] = [
             "schema": 1,
             "device_id": .string(installID),
-            "platform": "ios",
+            "platform": .string(Self.platform),
             "app": "Vory",
             "bundle_id": .string(Bundle.main.bundleIdentifier ?? ""),
             "apns_token": .string(token),
@@ -154,18 +182,21 @@ final class PushRegistrar: PushRegistrationSyncing {
             // while the app is closed. It fills the activity's attributes from `bots` below.
             "live_activity_push_to_start_token": pushToStartToken.map { .string($0) } ?? .null,
             "connection_id": .string(runtime.connection.id.uuidString),
-            "bots": .object(Dictionary(uniqueKeysWithValues: runtime.profiles.map { p in
-                let looks = BotLooks.load()
-                let key = looks.key(profile: p.name, label: p.label) ?? p.name
-                return (p.name, JSONValue.object(["label": .string(p.label), "hex": .string(looks.colors[key] ?? BotColors.hex(for: p.name)),
-                                                   "avatar": .string(looks.avatars[key] ?? BotAvatarStore.choice(for: p.name).raw)]))
-            })),
             "gateway": .string(runtime.connection.gateway.description),
             "connection_name": .string(runtime.connection.name),
             "profiles": .array(runtime.profiles.map { .string($0.name) }),
-            "device_name": .string(UIDevice.current.name),
+            "device_name": .string(Self.deviceName),
             "registered_at": .string(ISO8601DateFormatter().string(from: Date())),
         ]
+        #if os(iOS)
+        // The bots' looks, for the activity the companion starts by push; the Mac has no Live Activity.
+        payload["bots"] = .object(Dictionary(uniqueKeysWithValues: runtime.profiles.map { p in
+            let looks = BotLooks.load()
+            let key = looks.key(profile: p.name, label: p.label) ?? p.name
+            return (p.name, JSONValue.object(["label": .string(p.label), "hex": .string(looks.colors[key] ?? BotColors.hex(for: p.name)),
+                                               "avatar": .string(looks.avatars[key] ?? BotAvatarStore.choice(for: p.name).raw)]))
+        }))
+        #endif
         payload.merge(PushRelay.deviceFileFields()) { $1 }
         do {
             let data = try JSONEncoder().encode(JSONValue.object(payload.compactingNulls))
@@ -215,7 +246,7 @@ enum LocalNotifier {
     @MainActor static var isForeground = true
     /// Once this phone is registered with the gateway, the companion sends these; a local copy
     /// would arrive as a duplicate.
-    @MainActor static var companionDelivers: Bool { AppDelegate.model?.push.registeredAt != nil && PushRelay.isConfigured }
+    @MainActor static var companionDelivers: Bool { AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured }
     @MainActor private static func botName(_ chat: ChatSession) -> String {
         chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
     }
@@ -241,7 +272,9 @@ enum LocalNotifier {
     @MainActor
     static func cardArrived(_ card: PendingCard, chat: ChatSession) {
         // In front of the user the card is on screen: a buzz, nothing more.
+        #if os(iOS)
         if isForeground { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        #endif
         guard !isForeground, !companionDelivers else { return }
         let bot = botName(chat)
         let content = UNMutableNotificationContent()
