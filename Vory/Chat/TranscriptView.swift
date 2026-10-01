@@ -42,6 +42,8 @@ struct TranscriptView: View {
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
+    /// The card being opened and where its top was when the tap landed.
+    @State private var revealAnchor: (id: String, top: CGFloat)?
     /// Scrolling is by content edge, not by the "bottom" marker view: with the lazy stack a
     /// marker that is not yet laid out gets an estimated position, and the jump-to-bottom button
     /// overshot and bounced back up.
@@ -224,15 +226,27 @@ struct TranscriptView: View {
             // its bottom edge. Collapsing posts nothing, so the thread stays put then.
             .onReceive(NotificationCenter.default.publisher(for: .hermesRevealRow)) { n in
                 guard let bottom = n.userInfo?["bottom"] as? CGFloat, let id = n.userInfo?["id"] as? String else { return }
+                let top = n.userInfo?["top"] as? CGFloat ?? bottom
+                // While the card grows, its top stays where the finger found it: the thread is
+                // anchored at its bottom, so the growth used to push the card up by its own
+                // height and the reveal then pulled it back down, a visible jitter on every
+                // expand. Each frame of the growth is countered on the scroll view directly.
+                if revealAnchor?.id != id { revealAnchor = (id, top); metrics.stickToBottom = false }
+                else if let a = revealAnchor, let sv = metrics.scrollView, abs(top - a.top) > 0.5 {
+                    let y = max(-sv.adjustedContentInset.top, sv.contentOffset.y + (top - a.top))
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                }
+                let settledBottom = bottom - (top - (revealAnchor?.top ?? top))
                 revealTask?.cancel()
                 revealTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled else { return }
+                    revealAnchor = nil
                     // Only when the opened row runs under the composer; then its bottom edge is
                     // aligned to the visible bottom (the scroll view resolves the row itself,
                     // so no offset arithmetic across coordinate spaces).
                     let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
-                    let overshoot = bottom - limit
+                    let overshoot = settledBottom - limit
                     guard overshoot > 0 else { return }
                     if let sv = metrics.scrollView {
                         let maxY = max(0, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
@@ -914,8 +928,8 @@ struct ReasoningDisclosure: View {
                 Text(text).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { _, y in
-            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": y, "id": itemID]) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
+            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
         }
     }
 }
