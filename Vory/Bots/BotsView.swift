@@ -10,6 +10,8 @@ struct BotsView: View {
     @State private var rooms: [Room] = []
     @State private var error: String?
     @State private var showNewBot = false
+    /// A bot being edited in the same sheet that creates one.
+    @State private var editing: ProfileInfo?
     @State private var path = NavigationPath()
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
@@ -34,6 +36,7 @@ struct BotsView: View {
                                 Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
                                 Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
                                 Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
+                                Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
                                 if rt.selectedProfile != p.name {
                                     Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
                                 }
@@ -82,6 +85,7 @@ struct BotsView: View {
                 }
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt) } }
+            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p) } }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).navigationTitle("").navigationBarTitleDisplayMode(.inline) }
             .navigationDestination(for: Room.self) { RoomView(room: $0) }
