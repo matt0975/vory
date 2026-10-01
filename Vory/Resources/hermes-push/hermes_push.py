@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.33"
+VERSION = "1.0.34"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -259,15 +259,33 @@ def devices_dir() -> Path:
     return home / "push" / "devices"
 
 
+_dup_devices_logged: set = set()
+
+
 def load_devices(gateway_url: str) -> list[dict]:
-    out = []
+    """Every registered device, one per APNs token. A phone that registered again under a new
+    install id (a reinstall, a reset) leaves its old file behind with the same token, and each
+    file used to get its own copy of every push: the newest registration wins, the rest are
+    skipped and said so once."""
+    rows = []
     for f in glob.glob(str(devices_dir() / "*.json")):
         try:
             d = json.loads(Path(f).read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
         if d.get("platform") in {"ios", "macos", "watchos"} and d.get("apns_token"):
-            out.append(d)
+            rows.append((str(d.get("registered_at") or ""), os.path.getmtime(f), f, d))
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    out, seen = [], set()
+    for _, _, f, d in rows:
+        key = (d.get("platform"), d.get("apns_token"))
+        if key in seen:
+            if f not in _dup_devices_logged:
+                _dup_devices_logged.add(f)
+                log.info("device file %s repeats a token already registered under a newer id: skipped", Path(f).name)
+            continue
+        seen.add(key)
+        out.append(d)
     return out
 
 
@@ -1119,12 +1137,26 @@ class Relay:
                 _CONF.clear()
                 _load_conf()
 
+    #: (stored id, text) of the last finish pushed, with when: the same reply announced again within
+    #: a minute (the chat mirrored under two runtime ids, a replayed completion) is not pushed twice.
+    _finish_pushed: dict[tuple, float] = {}
+
     async def _finish_turn(self, sid: str, a: dict, p: dict) -> None:
         """The turn's end: finish the Live Activity and send the reply as a notification. The reply
         window (long-press) shows `text` in full, the chat under `title`, and the exchanges that led
         up to it (`thread`, fetched here with a short timeout)."""
         title = a["title"]; bot = a.get("bot") or a.get("profile", "Hermes")
         err = p.get("error")
+        stored = str(a.get("stored", sid))
+        fkey = (stored, hashlib.sha1((str(p.get("text") or "") + str(err or "")).encode("utf-8", "replace")).hexdigest())
+        now = time.time()
+        if now - self._finish_pushed.get(fkey, 0) < 60:
+            log.info("finish of %s already pushed (%s): skipped", stored[:12], sid[:8])
+            self.end_live_activities(stored, "error" if err else "done", bot=bot, runtime_id=sid, usage=p.get("usage"))
+            return
+        self._finish_pushed[fkey] = now
+        if len(self._finish_pushed) > 300:
+            self._finish_pushed = {k: t for k, t in self._finish_pushed.items() if now - t < 600}
         # The Live Activity flips to Finished at once; the thread for the reply window is fetched
         # with a short cap so the notification is not held up by a slow gateway.
         self.end_live_activities(a["stored"], "error" if err else "done", bot=bot, runtime_id=sid, usage=p.get("usage"))
@@ -1134,7 +1166,7 @@ class Relay:
             thread = []
         if err:
             self.push_all("error", f"{bot} · turn failed", f"{title}: {str(err)[:300]}",
-                          {**self.meta(sid), "title": title, "text": str(err)[:1200], "thread": thread}, collapse=f"turn-{sid}")
+                          {**self.meta(sid), "title": title, "text": str(err)[:1200], "thread": thread}, collapse=f"turn-{stored}")
         else:
             text = p.get("text") if isinstance(p.get("text"), str) else ""
             # A scheduled run's own session is named cron_<job>_<time> (the live list has no source).
@@ -1143,7 +1175,7 @@ class Relay:
             self._turn_pushed_at[str(a.get("stored", sid))] = time.time()
             self.push_all("cron" if is_cron else "turn", f"{bot} · {label}" if is_cron else bot,
                           f"{title}: {(text or 'Done')[:300]}",
-                          {**self.meta(sid), "title": title, "text": (text or "Done")[:1200], "thread": thread}, collapse=f"turn-{sid}")
+                          {**self.meta(sid), "title": title, "text": (text or "Done")[:1200], "thread": thread}, collapse=f"turn-{stored}")
 
     async def _recent_thread(self, sid: str, a: dict) -> list:
         """Up to three earlier messages of the session (user and assistant text only, shortened) for

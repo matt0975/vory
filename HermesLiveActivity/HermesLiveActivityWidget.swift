@@ -83,20 +83,22 @@ struct HermesTurnLiveActivity: Widget {
                 // The island on iPhone 18 Pro is smaller and holds three activities at once, so
                 // the compact view is the bot alone with its phase in a corner badge: one glyph
                 // per side, nothing that needs width.
-                IslandBot(attributes: context.attributes, state: context.state, size: 20)
+                IslandBot(attributes: context.attributes, state: context.state, size: 24)
+                    .padding(.leading, 2)
                     .widgetURL(context.attributes.chatURL)
             } compactTrailing: {
                 if context.state.needsAttention {
                     Image(systemName: "exclamationmark").font(.caption.weight(.bold)).foregroundStyle(.yellow)
                 } else {
                     // Ticks while the turn runs; once it ends this is the total time it took.
-                    ElapsedTimer(state: context.state).font(.caption2.monospacedDigit())
-                        .multilineTextAlignment(.trailing).frame(width: 34).minimumScaleFactor(0.6)
+                    ElapsedTimer(state: context.state).font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing).frame(width: 32).minimumScaleFactor(0.6)
+                        .padding(.trailing, 2)
                 }
             } minimal: {
                 // Minimal is what each activity gets when several share the island: the bot's
                 // face, ringed yellow when it needs you, so three bots read as three bots.
-                IslandBot(attributes: context.attributes, state: context.state, size: 20)
+                IslandBot(attributes: context.attributes, state: context.state, size: 22)
                     .widgetURL(context.attributes.chatURL)
             }
             .keylineTint(context.state.needsAttention ? .yellow : PhaseStyle.tint(context.state.phase, bot: context.attributes.tintHex))
@@ -217,11 +219,13 @@ struct IslandBot: View {
             }
             .frame(width: size, height: size)
             .overlay(Circle().strokeBorder(.yellow, lineWidth: state.needsAttention ? 1.5 : 0).padding(-1.5))
+            // The phase dot sits inside the face's own square, small, so it reads as a status
+            // light on the bot rather than a second blob beside it.
             if !state.needsAttention {
                 Circle().fill(PhaseStyle.tint(state.phase, bot: attributes.tintHex))
-                    .frame(width: size * 0.38, height: size * 0.38)
+                    .frame(width: size * 0.28, height: size * 0.28)
                     .overlay(Circle().strokeBorder(.black.opacity(0.9), lineWidth: 1))
-                    .offset(x: size * 0.12, y: size * 0.08)
+                    .offset(x: -size * 0.02, y: -size * 0.02)
             }
         }
         .frame(width: size, height: size)

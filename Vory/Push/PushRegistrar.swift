@@ -32,8 +32,16 @@ final class PushRegistrar: PushRegistrationSyncing {
     let installID: String
 
     init() {
-        if let s = UserDefaults.standard.string(forKey: Self.installIDKey) { installID = s }
-        else { let s = UUID().uuidString.lowercased(); UserDefaults.standard.set(s, forKey: Self.installIDKey); installID = s }
+        // The id names this phone's device file on the gateway, so it must outlive a reinstall:
+        // in the Keychain, with the UserDefaults copy of earlier builds carried over once (a
+        // fresh id after a reinstall left the old file behind, and the companion pushed to both).
+        if let d = Keychain.get(account: Self.installIDKey), let s = String(data: d, encoding: .utf8), !s.isEmpty { installID = s }
+        else {
+            let s = UserDefaults.standard.string(forKey: Self.installIDKey) ?? UUID().uuidString.lowercased()
+            try? Keychain.set(Data(s.utf8), account: Self.installIDKey)
+            installID = s
+        }
+        UserDefaults.standard.set(installID, forKey: Self.installIDKey)
         NotificationCenter.default.addObserver(forName: .hermesLiveActivityPushToStartToken, object: nil, queue: .main) { [weak self] n in
             let token = n.userInfo?["token"] as? String
             Task { @MainActor in
