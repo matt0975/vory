@@ -525,6 +525,8 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.compactTools) private var compactTools = false
     @AppStorage(ChatStyle.currentStepOnly) private var currentStepOnly = false
     @AppStorage(ChatStyle.wideReplies) private var wideReplies = false
+    @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
+    @AppStorage(ChatStyle.botTint) private var botTint = false
     @AppStorage(ChatStyle.textSize) private var textSize = "default"
     @Environment(\.editMode) private var editMode
 
@@ -618,6 +620,12 @@ struct AppearanceView: View {
                 Text("Only the current step keeps just the tool running now and the reasoning of the reply being written; finished steps disappear from the thread, as in ChatGPT. Everything is still kept, and turning it off brings it all back.")
             }
             Section {
+                Picker("Bubbles", selection: $bubbleStyle) {
+                    Text("Tailed").tag("tailed")
+                    Text("Rounded").tag("rounded")
+                    Text("Plain").tag("plain")
+                }
+                Toggle("Bot colour on replies", isOn: $botTint)
                 Toggle("Wide replies", isOn: $wideReplies)
                 Picker("Text size", selection: $textSize) {
                     Text("Small").tag("small")
@@ -629,7 +637,7 @@ struct AppearanceView: View {
             }
             Section {
                 Button("Clear chat list cache") { SessionCache.clearAll() }
-                Button("Reset to default") { layoutRaw = ""; scheme = "system"; showToolCalls = true; showReasoning = true; showTurnStats = true; showSystemNotes = true; collapseAfterTurn = false; showToolOutput = true; compactTools = false; currentStepOnly = false; wideReplies = false; textSize = "default" }
+                Button("Reset to default") { layoutRaw = ""; scheme = "system"; showToolCalls = true; showReasoning = true; showTurnStats = true; showSystemNotes = true; collapseAfterTurn = false; showToolOutput = true; compactTools = false; currentStepOnly = false; wideReplies = false; textSize = "default"; bubbleStyle = "tailed"; botTint = false }
             } footer: { Text("The Chats tab remembers its last list so it opens instantly; clearing it just forces a fresh fetch.") }
         }
     }

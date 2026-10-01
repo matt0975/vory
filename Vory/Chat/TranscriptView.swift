@@ -533,6 +533,10 @@ enum ChatStyle {
     static let wideReplies = "chat.wideReplies"
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
+    /// "tailed" (Messages), "rounded" (no tails) or "plain" (replies without a bubble, like a page).
+    static let bubbleStyle = "chat.bubbleStyle"
+    /// Reply bubbles take a wash of the bot's own colour instead of grey.
+    static let botTint = "chat.botTint"
 
     /// The thread's type size for a `textSize` choice, relative to the phone's own setting.
     static func stepped(_ base: DynamicTypeSize, _ choice: String) -> DynamicTypeSize {
@@ -615,6 +619,13 @@ struct TranscriptRow: View, Equatable {
     var onEdit: (String) -> Void = { _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
+    @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
+    @AppStorage(ChatStyle.botTint) private var botTint = false
+    /// The reply bubble's fill: grey, or the bot's colour at a wash.
+    private var replyFill: Color {
+        if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
+        return Color(.systemGray5)
+    }
     var reasoningOpen: Binding<Bool> = .constant(false)
     var onSelectText: (String) -> Void = { _ in }
     var toolOpen: Binding<Bool> = .constant(false)
@@ -643,7 +654,7 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown))
+                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown && bubbleStyle == "tailed"))
                             .contextMenu {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
@@ -675,7 +686,7 @@ struct TranscriptRow: View, Equatable {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
                             ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id)
                                 .padding(.horizontal, 14).padding(.vertical, 9)
-                                .background(Color(.systemGray5), in: MessageBubbleShape(side: .leading, tailed: false))
+                                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
                         TypingBubble(tool: typingTool)
                         if showStats, let s = item.stats {
@@ -694,8 +705,8 @@ struct TranscriptRow: View, Equatable {
                             .accessibilityLabel("Turn statistics: \(s.label)")
                     }
                 }
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(Color(.systemGray5), in: MessageBubbleShape(side: .leading, tailed: botShown))
+                .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
+                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
                 .contextMenu {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
