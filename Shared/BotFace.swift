@@ -266,6 +266,10 @@ public enum BotFace {
     /// in a group only one bot moves its body per block, in turn.
     /// Bots share the clock but not the phase: `seed` (shape, eyes and name) offsets each one's
     /// blocks and picks its routine, so a page of bots never moves in unison.
+    /// Motion style (Settings › Bots): lively 1, calm 0.5, still 0. The app sets it from the
+    /// stored choice; widgets and the watch leave it at 1.
+    nonisolated(unsafe) public static var motionScale: Double = 1
+
     public static func motion(time t: Double, seed: Int, spec: BotLookSpec, state: State, since: Double = 0, finishedAt: Double? = nil, tappedAt: Double? = nil, group: (index: Int, count: Int)? = nil) -> Motion {
         let sign: Double = seed % 2 == 0 ? 1 : -1
         // Per-shape flavour: the cloud keeps its flat bottom planted, the pill's wide face makes
@@ -418,6 +422,10 @@ public enum BotFace {
                 }
             }
         }
+        // The style scales the turns, leans and glances; the shapes a state takes (the squint,
+        // the stem, the "!") and the blinks stay, so a still bot still says what it is doing.
+        let scale = motionScale
+        if scale != 1 { m.yaw *= scale; m.roll *= scale; m.dx *= CGFloat(scale); m.dy *= CGFloat(scale); m.eyeX *= scale; m.eyeY *= scale; m.sheen *= scale }
         return m
     }
 

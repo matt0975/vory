@@ -9,6 +9,7 @@ struct ModelSettingsView: View {
     @State private var auxiliary: JSONValue?
     @State private var error: String?
     @State private var confirm: (message: String, provider: String, modelName: String, scope: String, task: String?)?
+    @State private var refreshing = false
 
     private var rt: GatewayRuntime? { model.runtime }
 
@@ -18,6 +19,13 @@ struct ModelSettingsView: View {
             if let o = options {
                 Section {
                     LabeledContent("Current", value: o.model?.isEmpty == false ? "\(o.provider ?? "")/\(o.model!)" : "not set")
+                    // The gateway keeps each provider's model list for an hour and serves a
+                    // stale one for up to a week while it refreshes behind; only an explicit
+                    // refresh asks every provider again (15 s or more).
+                    Button { Task { await load(refresh: true) } } label: {
+                        HStack { Label(refreshing ? "Asking the providers…" : "Refresh model list", systemImage: "arrow.clockwise"); if refreshing { Spacer(); ProgressView().controlSize(.small) } }
+                    }
+                    .disabled(refreshing)
                     modelMenu(title: "Change default model", providers: o.providers) { p, m in Task { await set(scope: "main", task: nil, provider: p, model: m, confirmed: false) } }
                 } header: { Text("Main model") } footer: { Text("Writes model.default and model.provider in this profile's config.yaml. New sessions use it; running chats keep their own model.") }
                 if let tasks = auxiliary?["tasks"]?.arrayValue {
@@ -37,7 +45,7 @@ struct ModelSettingsView: View {
                 else { Text(error).foregroundStyle(.red) }
             } else { ProgressView() }
         }
-        .refreshable { await load() }
+        .refreshable { await load(refresh: true) }
         .task(id: rt?.selectedProfile) { await load() }
         .alert("Confirm model", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
             Button("Use it anyway") { if let c = confirm { Task { await set(scope: c.scope, task: c.task, provider: c.provider, model: c.modelName, confirmed: true) } } }
@@ -49,15 +57,20 @@ struct ModelSettingsView: View {
         Menu {
             if allowAuto { Button("Auto (follow main)") { pick("auto", "") } }
             ForEach(providers) { p in
-                Section(p.name) { ForEach(p.models ?? [], id: \.self) { m in Button(m) { pick(p.slug, m) } } }
+                Section(p.name + (p.authenticated == false ? " (no key)" : p.warning != nil ? " (needs setup)" : "")) {
+                    if let w = p.warning, !w.isEmpty { Text(w) }
+                    ForEach(p.models ?? [], id: \.self) { m in Button(m) { pick(p.slug, m) } }
+                }
             }
         } label: { Text(title) }
     }
 
-    private func load() async {
+    private func load(refresh: Bool = false) async {
         guard let rt else { return }
+        if refresh { refreshing = true }
+        defer { refreshing = false }
         do {
-            options = try await rt.api.get("/api/model/options", profile: rt.selectedProfile)
+            options = try await rt.api.get("/api/model/options", query: refresh ? [URLQueryItem(name: "refresh", value: "true")] : [], profile: rt.selectedProfile)
             auxiliary = try? await rt.api.get("/api/model/auxiliary", profile: rt.selectedProfile)
             error = nil
         } catch { self.error = error.localizedDescription }
@@ -216,6 +229,10 @@ struct EnvView: View {
         List {
             SettingsHeaderSection(title: "API Keys & Environment", symbol: "key.fill", color: .orange, description: "Provider keys and environment variables the gateway uses.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
+            Section {
+                Text("These are the keys in the .env file of the bot \((rt?.selectedProfile).map { "\"\($0)\"" } ?? "selected"). Each bot has its own file. A key the gateway gets from its environment or from a login is used but not listed here.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             ForEach(grouped, id: \.0) { cat, keys in
                 Section(cat) {
                     ForEach(keys, id: \.self) { k in
@@ -224,14 +241,14 @@ struct EnvView: View {
                                 HStack {
                                     Text(k).font(.body.monospaced())
                                     Spacer()
-                                    Text(vars[k]?.set == true ? (vars[k]?.redacted ?? "set") : "Not set").font(.caption).foregroundStyle(vars[k]?.set == true ? .green : .secondary)
+                                    Text(vars[k]?.hasValue == true ? (vars[k]?.preview ?? "Set") : "Not set").font(.caption).foregroundStyle(vars[k]?.hasValue == true ? .green : .secondary)
                                 }
                                 if let d = vars[k]?.description { Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                             }
                         }
                         .tint(.primary)
                         .swipeActions {
-                            if vars[k]?.set == true { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
+                            if vars[k]?.hasValue == true { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
                         }
                     }
                 }
@@ -244,7 +261,7 @@ struct EnvView: View {
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             SecureField("Value", text: $newValue)
             Button("Save") { if let k = editing { Task { await save(k, newValue) } } }
-            if vars[editing ?? ""]?.set == true { Button("Clear", role: .destructive) { if let k = editing { Task { await clear(k) } } } }
+            if vars[editing ?? ""]?.hasValue == true { Button("Clear", role: .destructive) { if let k = editing { Task { await clear(k) } } } }
             Button("Cancel", role: .cancel) {}
         } message: { Text("The value is sent to your gateway's .env and never shown again.") }
         .alert("Add variable", isPresented: $showAdd) {
@@ -275,6 +292,8 @@ struct EnvView: View {
         do {
             let _: JSONValue = try await rt.api.send("DELETE", "/api/env", profile: rt.selectedProfile, json: ["key": .string(key)])
             await load()
+        } catch HermesAPIError.http(let status, _) where status == 404 {
+            await load()   // not in the file any more: already cleared
         } catch { self.error = error.localizedDescription }
     }
 }

@@ -10,6 +10,9 @@ struct BotsView: View {
     @State private var rooms: [Room] = []
     @State private var error: String?
     @State private var showNewBot = false
+    @State private var searchText = ""
+    /// A bot being edited in the same sheet that creates one.
+    @State private var editing: ProfileInfo?
     @State private var path = NavigationPath()
 
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
@@ -22,7 +25,7 @@ struct BotsView: View {
             ScrollView {
                 if let rt = model.runtime {
                     LazyVGrid(columns: columns, spacing: 22) {
-                        ForEach(Array(rt.profiles.enumerated()), id: \.element.id) { i, p in
+                        ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
                             NavigationLink(value: p) {
                                 BotCard(profile: p, isActive: rt.selectedProfile == p.name,
                                         working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
@@ -34,6 +37,7 @@ struct BotsView: View {
                                 Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
                                 Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
                                 Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
+                                Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
                                 if rt.selectedProfile != p.name {
                                     Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
                                 }
@@ -68,6 +72,7 @@ struct BotsView: View {
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
             .navigationTitle("Bots")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search bots")
             .tabRoot(.bots)
             .background(InteractivePopEnabler())
             .overlay {
@@ -82,6 +87,7 @@ struct BotsView: View {
                 }
             }
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt) } }
+            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p) } }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).navigationTitle("").navigationBarTitleDisplayMode(.inline) }
             .navigationDestination(for: Room.self) { RoomView(room: $0) }
@@ -134,7 +140,7 @@ struct BotCard: View {
             VStack(spacing: 2) {
                 HStack(spacing: 5) {
                     Text(profile.label).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if isActive { Circle().fill(Color.accentColor).frame(width: 6, height: 6).accessibilityLabel("active") }
+                    if isActive { Circle().fill(Color.vory).frame(width: 6, height: 6).accessibilityLabel("active") }
                 }
                 Text(profile.model.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? "no model")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -294,7 +300,7 @@ struct NewRoomSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: members.contains(p.name) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(members.contains(p.name) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(members.contains(p.name) ? Color.vory : Color.secondary)
                             }
                         }
                         .tint(.primary)
@@ -488,7 +494,7 @@ struct RoomView: View {
                                 Text(body).textSelection(.enabled)
                                     .padding(.horizontal, 14).padding(.vertical, 9)
                                     .foregroundStyle(.white)
-                                    .background(Color.accentColor, in: MessageBubbleShape(side: .trailing))
+                                    .background(Color.vory, in: MessageBubbleShape(side: .trailing))
                             }
                         case _ where ev.kind.hasPrefix("message."):
                             let member = ev.payload["member_id"]?.stringValue ?? ev.actor.id

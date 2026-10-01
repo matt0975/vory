@@ -39,7 +39,9 @@ public struct PendingCard: Identifiable, Hashable, Sendable {
 @MainActor
 @Observable
 public final class ChatSession: @MainActor Identifiable, ChatIdentity {
-    public unowned let runtime: GatewayRuntime
+    /// Strong on purpose: a chat kept by a screen must outlive a gateway switch (an unowned
+    /// reference trapped when the old runtime went away under an open conversation).
+    public let runtime: GatewayRuntime
     private let log = Logger(subsystem: "Vory", category: "chat")
 
     public private(set) var runtimeID = ""
@@ -123,14 +125,24 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var inlineAnswers: [String: CheckedContinuation<JSONValue?, Never>] = [:]
     private let activity: any TurnActivityReporting
 
-    public init(runtime: GatewayRuntime, storedID: String?, title: String?) {
+    /// The bot this chat belongs to when it is not the selected one (another bot's chat opened
+    /// read-only): every call carries it, and the header names it.
+    public let profile: String?
+
+    public init(runtime: GatewayRuntime, storedID: String?, title: String?, profile: String? = nil) {
         self.runtime = runtime
         self.activity = runtime.activityReporterFactory()
         self.storedID = storedID ?? ""
+        self.profile = profile
         self.title = title ?? "New chat"
     }
 
-    public var profileName: String { info?.profileName ?? runtime.selectedProfile ?? "default" }
+    public var profileName: String { profile ?? info?.profileName ?? runtime.selectedProfile ?? "default" }
+
+    /// The runtime's call with this chat's bot attached.
+    private func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
+        try await runtime.rpc(method, params, profile: profile, timeout: timeout)
+    }
     public var modelName: String { info?.model ?? "" }
     public var subtitle: String {
         let m = modelName.isEmpty ? "no model" : (modelName.split(separator: "/").last.map(String.init) ?? modelName)
@@ -147,7 +159,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func create(cwd: String? = nil) async throws {
         var params: [String: JSONValue] = ["cols": 80]
         if let cwd, !cwd.isEmpty { params["cwd"] = .string(cwd); params["cwd_explicit"] = .bool(true) }
-        let r = try await runtime.rpc("session.create", params)
+        let r = try await rpc("session.create", params)
         runtimeID = r["session_id"]?.stringValue ?? ""
         storedID = r["stored_session_id"]?.stringValue ?? runtimeID
         info = try? r["info"]?.decode(SessionLiveInfo.self)
@@ -157,14 +169,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func resume() async throws {
-        let r = try await runtime.rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
+        let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
         apply(snapshot: r)
         await loadUsage()
     }
 
     public func reattachAfterReconnect() async {
         do {
-            let r = try await runtime.rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
+            let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
             apply(snapshot: r)
             stale = false
             if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
@@ -302,7 +314,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The fallback the gateway offers for a missed approval frame: anything still waiting on
     /// this session becomes a card answered through `approval.respond`.
     public func pollPendingApprovals() async {
-        guard let r = try? await runtime.rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
+        guard let r = try? await rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
         let list = r["pending"]?.arrayValue ?? r["approvals"]?.arrayValue ?? (r["request_id"] != nil ? [r] : [])
         for pa in list {
             guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) else { continue }
@@ -313,11 +325,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func loadUsage() async {
-        if let u: Usage = try? (await runtime.rpc("session.usage", ["session_id": .string(runtimeID)])).decode() { usage = u }
+        if let u: Usage = try? (await rpc("session.usage", ["session_id": .string(runtimeID)])).decode() { usage = u }
     }
 
     public func contextBreakdown() async throws -> ContextBreakdown {
-        try await runtime.rpc("session.context_breakdown", ["session_id": .string(runtimeID)]).decode()
+        try await rpc("session.context_breakdown", ["session_id": .string(runtimeID)]).decode()
     }
 
     // MARK: Sending
@@ -357,7 +369,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(outgoing)]
             if queued { params["queued"] = true }
-            let r = try await runtime.rpc("prompt.submit", params)
+            let r = try await rpc("prompt.submit", params)
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
             activity.start(for: self)
@@ -374,14 +386,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         let b64 = data.base64EncodedString()
         switch a.kind {
         case .image:
-            _ = try await runtime.rpc("image.attach_bytes", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
+            _ = try await rpc("image.attach_bytes", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
             return nil
         case .pdf:
-            _ = try await runtime.rpc("pdf.attach", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
+            _ = try await rpc("pdf.attach", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
             return nil
         case .audio, .video, .file:
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let r = try await runtime.rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string("data:\(mime);base64,\(b64)"), "name": .string(a.name)])
+            let r = try await rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string("data:\(mime);base64,\(b64)"), "name": .string(a.name)])
             return r["ref_text"]?.stringValue
         }
     }
@@ -410,12 +422,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func stop() async {
-        _ = try? await runtime.rpc("session.interrupt", ["session_id": .string(runtimeID)])
+        _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
 
     public func steer(_ text: String) async {
         do {
-            let r = try await runtime.rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
+            let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
             items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: r["status"]?.stringValue ?? "queued")))
         } catch {
             banner = error.localizedDescription
@@ -433,15 +445,30 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     // MARK: Slash commands
 
+    /// The last catalog fetched for this chat (the composer asks for it); tells which commands a
+    /// phone may run.
+    public private(set) var catalogCache: CommandsCatalog?
+
     public func commandsCatalog() async -> CommandsCatalog? {
-        try? (await runtime.rpc("commands.catalog", ["session_id": .string(runtimeID)])).decode()
+        let c: CommandsCatalog? = try? (await rpc("commands.catalog", ["session_id": .string(runtimeID)])).decode()
+        if let c { catalogCache = c }
+        return c
     }
 
+    private func systemLine(_ text: String, symbol: String = "terminal") {
+        items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: text, symbol: symbol)))
+    }
+
+    /// Slash commands, the way the terminal and the desktop run them: a few are the app's own
+    /// (approve, stop, title, model…), the rest go to `slash.exec`, the gateway's general
+    /// runner for built-ins, plugins and quick commands. `command.dispatch` only knows quick,
+    /// plugin, bundle and skill commands, so it is the fallback the gateway asks for (skills)
+    /// and the whole path on a gateway too old to have `slash.exec`.
     private func dispatchSlash(_ text: String, depth: Int = 0) async -> String? {
-        let body = text.dropFirst()
+        let body = String(text.dropFirst())
         let parts = body.split(separator: " ", maxSplits: 1)
-        let name = parts.first.map(String.init) ?? ""
-        let arg = parts.count > 1 ? String(parts[1]) : nil
+        let name = parts.first.map { String($0).lowercased() } ?? ""
+        let arg = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespaces) : nil
         switch name {
         case "approve":
             if let card = cards.first(where: { $0.method == "approval" }) { await respond(card: card, result: ["choice": "once"]) }
@@ -452,12 +479,81 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             return nil
         case "stop":
             await stop(); return nil
+        case "title", "rename":
+            if let arg, !arg.isEmpty { await rename(arg); systemLine("Renamed to \(arg)", symbol: "pencil"); return nil }
+        case "model":
+            if let arg, !arg.isEmpty {
+                do { try await setModel(provider: nil, model: arg); systemLine("Model set to \(arg)", symbol: "cpu") }
+                catch { items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/model: \(error.localizedDescription)"))) }
+                return nil
+            }
+        case "reasoning", "effort":
+            if let arg, !arg.isEmpty {
+                do { try await setReasoning(arg); systemLine("Reasoning set to \(arg)", symbol: "brain") }
+                catch { items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/\(name): \(error.localizedDescription)"))) }
+                return nil
+            }
+        case "new", "reset", "clear":
+            // A fresh chat with this bot opens on top; this one stays as it is.
+            NotificationCenter.default.post(name: .hermesNewChatRequested, object: nil, userInfo: ["profile": profileName])
+            return nil
+        case "help", "commands":
+            var cat = catalogCache
+            if cat == nil { cat = await commandsCatalog() }
+            if let c = cat {
+                let lines = (c.categories ?? []).map { cat in "\(cat.name ?? "Commands")\n" + (cat.pairs ?? []).map { "  " + $0.joined(separator: "  ") }.joined(separator: "\n") }
+                systemLine(lines.isEmpty ? c.allPairs.map { "/\($0.name)  \($0.description)" }.joined(separator: "\n") : lines.joined(separator: "\n\n"), symbol: "questionmark.circle")
+            }
+            return nil
         default: break
         }
+        // Commands the gateway marks as terminal-only (or Settings-only) are said so, not run.
+        if let meta = catalogCache?.commands?["/" + name], let why = meta.desktop, why != "hidden" {
+            let reason: String
+            switch why {
+            case "terminal": reason = "it needs the terminal"
+            case "settings": reason = "use Settings instead"
+            case "composer-voice": reason = "use the mic button instead"
+            case "messaging": reason = "it belongs to the messaging setup"
+            default: reason = "it is not available in the app"
+            }
+            systemLine("/\(name): \(reason).", symbol: "info.circle")
+            return nil
+        }
+        do {
+            let r = try await rpc("slash.exec", ["session_id": .string(runtimeID), "command": .string(body)], timeout: 120)
+            if r["type"]?.stringValue != nil, let d = try? r.decode(CommandDispatchResult.self) {
+                return await apply(d, name: name, arg: arg, depth: depth)
+            }
+            var out = r["output"]?.stringValue ?? ""
+            if let w = r["warning"]?.stringValue, !w.isEmpty { out = out.isEmpty ? w : w + "\n\n" + out }
+            systemLine(out.isEmpty ? "/\(name) done" : out)
+            return nil
+        } catch let e as RPCError where e.code == 4018 && (e.message.hasPrefix("skill command: use command.dispatch") || e.message.contains("use command.dispatch for /snapshot restore")) {
+            return await dispatchViaCommand(name: name, arg: arg, depth: depth)
+        } catch let e as RPCError where e.code == RPCError.methodNotFound {
+            return await dispatchViaCommand(name: name, arg: arg, depth: depth)
+        } catch {
+            items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/\(name): \(error.localizedDescription)")))
+            return nil
+        }
+    }
+
+    private func dispatchViaCommand(name: String, arg: String?, depth: Int) async -> String? {
         do {
             var params: [String: JSONValue] = ["name": .string(name), "session_id": .string(runtimeID)]
             if let arg { params["arg"] = .string(arg) }
-            let r: CommandDispatchResult = try await runtime.rpc("command.dispatch", params).decode()
+            let r: CommandDispatchResult = try await rpc("command.dispatch", params).decode()
+            return await apply(r, name: name, arg: arg, depth: depth)
+        } catch {
+            items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/\(name): \(error.localizedDescription)")))
+        }
+        return nil
+    }
+
+    /// A typed dispatch result (from either runner) applied to the chat.
+    private func apply(_ r: CommandDispatchResult, name: String, arg: String?, depth: Int) async -> String? {
+        do {
             switch r.type {
             case "exec", "plugin":
                 items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: r.display ?? r.output ?? r.notice ?? "/\(name) done", symbol: "terminal")))
@@ -477,8 +573,6 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 if let n = r.notice ?? r.display { items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: n, symbol: "info.circle"))) }
             }
             if let notice = r.notice, r.type != "exec" { banner = notice }
-        } catch {
-            items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/\(name): \(error.localizedDescription)")))
         }
         return nil
     }
@@ -489,9 +583,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         var value = model
         if let provider, !provider.isEmpty { value += " --provider \(provider)" }
         value += " --session"
-        let r = try await runtime.rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID)])
+        let r = try await rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID)])
         if r["confirm_required"]?.boolValue == true {
-            _ = try await runtime.rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID), "confirm_expensive_model": true])
+            _ = try await rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID), "confirm_expensive_model": true])
         }
         if let i = try? r["info"]?.decode(SessionLiveInfo.self) { info = i }
         if let w = r["warning"]?.stringValue, !w.trimmingCharacters(in: .whitespaces).isEmpty { banner = w }
@@ -500,19 +594,19 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func setReasoning(_ effort: String) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
+        _ = try await rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
     }
 
     public func setFast(_ on: Bool) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "fast", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID)])
+        _ = try await rpc("config.set", ["key": "fast", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID)])
     }
 
     public func setYolo(_ on: Bool) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
+        _ = try await rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
     }
 
     public func rename(_ newTitle: String) async {
-        if let r = try? await runtime.rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
+        if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
     }
 
     // MARK: Server → client requests
@@ -521,6 +615,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard ["approval", "clarify", "sudo", "secret", "vault.unlock_prompt", "vault.save_login", "vault.code"].contains(req.method) else { return nil }
         let card = PendingCard(id: req.id, method: req.method, params: req.params)
         addCard(card)
+        // The same request id asked twice (a gateway retry): the first waiter is answered
+        // empty rather than left hanging under the new one.
+        inlineAnswers.removeValue(forKey: req.id)?.resume(returning: nil)
         return await withCheckedContinuation { (c: CheckedContinuation<JSONValue?, Never>) in
             inlineAnswers[req.id] = c
         }
@@ -532,7 +629,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         runtime.setAttention(storedID: storedID, needed: true)
         activity.update(for: self, attention: true)
         if card.method == "approval", let rid = card.approval?.requestId, !card.viaApprovalRPC {
-            Task { _ = try? await runtime.rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
+            Task { _ = try? await rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
         }
         runtime.cardNotifier?.cardArrived(card, chat: self)
     }
@@ -543,7 +640,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if card.viaApprovalRPC, let rid = card.approval?.requestId {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "request_id": .string(rid)]
             params["choice"] = result["choice"] ?? "deny"
-            _ = try? await runtime.rpc("approval.respond", params)
+            _ = try? await rpc("approval.respond", params)
             return
         }
         if let c = inlineAnswers.removeValue(forKey: card.id) { c.resume(returning: result) }

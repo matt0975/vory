@@ -15,6 +15,9 @@ public struct HermesTurnAttributes: ActivityAttributes, Sendable {
         public var contextUsed: Int?
         public var contextMax: Int?
         public var needsAttention: Bool
+        /// "approval" (Approve / Deny make sense) or "input" (a password, a secret, a question):
+        /// the widget must not offer Approve on a sudo prompt. Absent on older pushes.
+        public var attentionKind: String? = nil
         /// When the turn started, as Unix seconds; the widget renders a live elapsed timer from it.
         /// Plain numbers so the `hermes-push` companion can set them in a `liveactivity` push.
         public var startedAtUnix: Double

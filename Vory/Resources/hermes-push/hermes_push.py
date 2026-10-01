@@ -40,6 +40,7 @@ import ssl
 import subprocess
 import sys
 import time
+import re
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -53,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.32"
+VERSION = "1.0.34"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -141,7 +142,7 @@ class APNs:
         self.direct = bool(self.key_file and self.key_id and self.team_id)
         self._key = Path(self.key_file).read_text(encoding="utf-8") if self.direct else ""
         if not self.direct:
-            log.info("no APNs key configured: only devices registered with a relay will be reached")
+            log.info("relay mode: no APNs key on this gateway, pushes go through the Vory relay")
 
     def send_via_relay(self, device: dict, *, alert: dict | None = None, push_type: str = "alert", collapse_id: str | None = None,
                        token_override: str | None = None, content_state: dict | None = None, event: str | None = None,
@@ -258,15 +259,33 @@ def devices_dir() -> Path:
     return home / "push" / "devices"
 
 
+_dup_devices_logged: set = set()
+
+
 def load_devices(gateway_url: str) -> list[dict]:
-    out = []
+    """Every registered device, one per APNs token. A phone that registered again under a new
+    install id (a reinstall, a reset) leaves its old file behind with the same token, and each
+    file used to get its own copy of every push: the newest registration wins, the rest are
+    skipped and said so once."""
+    rows = []
     for f in glob.glob(str(devices_dir() / "*.json")):
         try:
             d = json.loads(Path(f).read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
             continue
         if d.get("platform") in {"ios", "macos", "watchos"} and d.get("apns_token"):
-            out.append(d)
+            rows.append((str(d.get("registered_at") or ""), os.path.getmtime(f), f, d))
+    rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+    out, seen = [], set()
+    for _, _, f, d in rows:
+        key = (d.get("platform"), d.get("apns_token"))
+        if key in seen:
+            if f not in _dup_devices_logged:
+                _dup_devices_logged.add(f)
+                log.info("device file %s repeats a token already registered under a newer id: skipped", Path(f).name)
+            continue
+        seen.add(key)
+        out.append(d)
     return out
 
 
@@ -555,7 +574,9 @@ class Relay:
         for d in load_devices(self.gw.url):
             if d.get("platform") == "watchos" or d.get("device_id") in skip:
                 continue  # the phone's alert is mirrored to the watch; a direct one would double up
-            sent += 1 if self.apns.send(d, payload, collapse_id=collapse) else 0
+            ok = self.apns.send(d, payload, collapse_id=collapse)
+            sent += 1 if ok else 0
+            log.info("push %s → %s: %s (%s)", kind, d.get("device_name") or d.get("device_id"), "sent" if ok else "FAILED", title[:60])
         self.refresh_complications()
         return sent
 
@@ -763,42 +784,83 @@ class Relay:
     session_profile: dict[str, str] = {}
     _session_profile_at = 0.0
 
+    #: profile name → its Bot Chat: {"id", "resolved_id", "message_count", "last_active"} (from profiles.list).
+    bot_chats: dict[str, dict] = {}
+
     def _refresh_session_profiles(self, profiles: list, force: bool = False) -> None:
-        """The per-profile REST list (what the app's chat list uses) decides which bot a session
-        belongs to; the live list's own profile field is the profile it was listed under."""
+        """Which bot a stored session belongs to: the gateway's all-profiles session list tags
+        every row with the store it came from (`/api/profiles/sessions?profile=all`), and each
+        profile's Bot Chat (hidden from the lists) comes from profiles.list. The map is rebuilt,
+        not merged: a session that moved stores must not keep its old bot. The live list carries
+        no profile at all, so a guess from the polling loop is never used (a wrong profile on
+        session.resume makes the gateway MOVE the chat into that profile's store)."""
         if not force and time.time() - self._session_profile_at < 60:
             return
         found: dict[str, str] = {}
+        try:
+            r = self.gw._http("GET", "/api/profiles/sessions?profile=all&order=recent&limit=200")
+            for item in r.get("sessions") or []:
+                if isinstance(item, dict) and item.get("id") and item.get("profile"):
+                    found[str(item["id"])] = str(item["profile"])
+        except Exception as exc:  # noqa: BLE001
+            log.debug("all-profiles session list failed (%s); per-profile lists instead", exc)
+            for name in profiles:
+                if not name:
+                    continue
+                try:
+                    r = self.gw._http("GET", f"/api/sessions?order=recent&limit=60&profile={urllib.parse.quote(name)}")
+                except Exception as exc2:  # noqa: BLE001
+                    log.debug("session list for %s failed: %s", name, exc2)
+                    continue
+                for item in r.get("sessions") or []:
+                    if isinstance(item, dict) and item.get("id"):
+                        found[str(item["id"])] = str(item.get("profile") or name)
+        for name, bc in self.bot_chats.items():
+            for key in ("id", "resolved_id"):
+                if bc.get(key):
+                    found[str(bc[key])] = name
+        if found:
+            self.session_profile = found
+        self._session_profile_at = time.time()
+
+    def _profile_by_probe(self, stored: str, profiles: list) -> str | None:
+        """Last resort for an id no list carries: ask each profile's store for it."""
         for name in profiles:
             if not name:
                 continue
             try:
-                r = self.gw._http("GET", f"/api/sessions?order=recent&limit=60&profile={urllib.parse.quote(name)}")
-            except Exception as exc:  # noqa: BLE001
-                log.debug("session list for %s failed: %s", name, exc)
+                r = self.gw._http("GET", f"/api/sessions/{urllib.parse.quote(stored)}?profile={urllib.parse.quote(name)}")
+                if isinstance(r, dict) and (r.get("id") or r.get("session")):
+                    return name
+            except Exception:  # noqa: BLE001
                 continue
-            for item in r.get("sessions") or []:
-                if isinstance(item, dict) and item.get("id"):
-                    found[str(item["id"])] = str(item.get("profile") or name)
-        if found:
-            self.session_profile.update(found)
-        self._session_profile_at = time.time()
+        return None
+
+    def _note_bot_chats(self, listed: list) -> None:
+        """Each profile's Bot Chat from profiles.list (`canonical_session`)."""
+        for p in listed:
+            name, cs = p.get("name"), p.get("canonical_session")
+            if name and isinstance(cs, dict) and cs.get("id"):
+                self.bot_chats[name] = {"id": cs.get("id"), "resolved_id": cs.get("resolved_id") or cs.get("id"),
+                                        "message_count": cs.get("message_count") or 0, "last_active": cs.get("last_active") or 0}
 
     async def discover(self) -> None:
         try:
             listed = (await self.gw.call("profiles.list", {})).get("profiles", [])
             self.labels = {p["name"]: p.get("display_name") or p["name"] for p in listed if p.get("name")}
             profiles = [p.get("name") for p in listed] or [None]
+            self._note_bot_chats(listed)
         except Exception:  # noqa: BLE001
             profiles = [None]
         self._refresh_session_profiles(profiles)
-        for profile in profiles:
-            params = {"profile": profile} if profile else {}
-            try:
-                live = (await self.gw.call("session.active_list", params)).get("sessions", [])
-            except Exception as exc:  # noqa: BLE001
-                log.debug("active_list failed for %s: %s", profile, exc)
-                continue
+        await self._touch_profiles(profiles)
+        # The live list is the same for every profile (the gateway ignores the param): once.
+        try:
+            live = (await self.gw.call("session.active_list", {})).get("sessions", [])
+        except Exception as exc:  # noqa: BLE001
+            log.debug("active_list failed: %s", exc)
+            live = []
+        for _once in (True,):
             seen_live = {s.get("id") for s in live}
             for s in live:
                 sid = s.get("id")
@@ -814,11 +876,18 @@ class Relay:
                 # approval.pending, none of which attach.
                 # The phone files its Live Activity token under the STORED id (the gateway's session_key).
                 stored = s.get("session_key") or s.get("stored_session_id") or sid
-                # The listing for one profile includes other profiles' sessions, so the gateway's
-                # per-profile session list decides which bot a session belongs to.
+                # Which bot: the tagged all-profiles list, then a probe of each store. Never a
+                # guess: resuming with the wrong profile moves the chat into that store.
                 if stored not in self.session_profile:
                     self._refresh_session_profiles(profiles, force=True)
-                pname = self.session_profile.get(stored) or s.get("profile") or profile or "default"
+                pname = self.session_profile.get(stored) or self._profile_by_probe(stored, profiles)
+                if pname is None:
+                    if len([p for p in profiles if p]) <= 1:
+                        pname = next((p for p in profiles if p), None) or "default"
+                    else:
+                        log.info("not mirroring %s: no profile lists it yet", stored[:12])
+                        continue
+                params = {"profile": pname}
                 self.attached[sid] = {"stored": stored, "title": s.get("title") or "Hermes", "profile": pname,
                                       "bot": self.labels.get(pname, pname), "source": s.get("source") or "",
                                       "status": s.get("status") or ""}
@@ -829,9 +898,15 @@ class Relay:
                 # fan-out), unlike `session.activate`, which rebinds the slot and used to steal the
                 # phone's approval cards. `omit_messages` skips the transcript read.
                 try:
-                    await asyncio.wait_for(self.gw.call("session.resume", {**params, "session_id": stored, "cols": 80, "omit_messages": True}), timeout=8)
+                    r = await asyncio.wait_for(self.gw.call("session.resume", {**params, "session_id": stored, "cols": 80, "omit_messages": True}), timeout=8)
                     self.attached[sid]["mirrored"] = True
                     self._note_la("mirror " + stored[:12], True)
+                    # The gateway's own word on the bot beats every list.
+                    real = ((r or {}).get("info") or {}).get("profile_name") if isinstance(r, dict) else None
+                    if real and real != pname:
+                        self.attached[sid]["profile"] = real
+                        self.attached[sid]["bot"] = self.labels.get(real, real)
+                        self.session_profile[stored] = real
                 except Exception as exc:  # noqa: BLE001
                     log.warning("could not mirror %s: %s (updates will lag until the next poll)", stored[:12], describe_error(exc))
                     if "not found" in str(exc).lower():
@@ -853,6 +928,88 @@ class Relay:
     def attached_all_idle(self) -> bool:
         """True when no tracked session reports a running status (the live list's `status`)."""
         return all((a.get("status") or "idle") in ("idle", "", "done", "finished") for a in self.attached.values())
+
+    _touched_profiles: set = set()
+
+    async def _touch_profiles(self, profiles: list) -> None:
+        """The gateway's change watcher only covers a profile's store once some request named
+        that profile: one cheap listing per profile, once, so sessions.changed fires for all."""
+        for name in profiles:
+            if not name or name in self._touched_profiles:
+                continue
+            try:
+                await asyncio.wait_for(self.gw.call("session.list", {"profile": name, "title": "Bot Chat", "limit": 1}), timeout=5)
+            except Exception:  # noqa: BLE001
+                pass
+            self._touched_profiles.add(name)
+
+    #: (bot chat id, message_count) already pushed, and when a turn push went out per stored id.
+    _bot_chat_pushed: dict[tuple, float] = {}
+    _turn_pushed_at: dict[str, float] = {}
+    _bot_chat_check_at = 0.0
+
+    async def check_bot_chats(self) -> int:
+        """A cron job delivered into a Bot Chat (`--deliver bot-chat:<profile>`) runs a turn there
+        that no event announces when the chat is not live: the Bot Chat simply grows. Compare each
+        profile's Bot Chat with the last look and push the new reply when the prompt that led to
+        it was a cron delivery. Runs after each poll and on sessions.changed."""
+        now = time.time()
+        if now - self._bot_chat_check_at < 2:
+            return 0
+        self._bot_chat_check_at = now
+        try:
+            listed = (await self.gw.call("profiles.list", {})).get("profiles", [])
+        except Exception:  # noqa: BLE001
+            return 0
+        before = dict(self.bot_chats)
+        self._note_bot_chats(listed)
+        pushed = 0
+        for name, bc in self.bot_chats.items():
+            old = before.get(name)
+            rid = str(bc.get("resolved_id") or bc.get("id"))
+            count = int(bc.get("message_count") or 0)
+            if old is None or count <= int(old.get("message_count") or 0):
+                continue
+            key = (rid, count)
+            if key in self._bot_chat_pushed or now - self._turn_pushed_at.get(rid, 0) < 20:
+                continue
+            msgs = self._messages(rid, name, 6)
+            user = next((m for m in reversed(msgs) if m["role"] == "user"), None)
+            reply = next((m for m in reversed(msgs) if m["role"] == "assistant"), None)
+            if not user or not reply or not user["text"].startswith("[Cronjob "):
+                continue
+            m = re.match(r'\[Cronjob "([^"]+)"', user["text"])
+            job = m.group(1) if m else "cron job"
+            bot = self.labels.get(name, name)
+            self._bot_chat_pushed[key] = now
+            self.push_all("cron", f"{bot} · {job}", reply["text"][:300],
+                          {"session_id": rid, "profile": name, "title": "Bot Chat", "text": reply["text"][:1200], "job": job}, collapse=f"cron-{rid}")
+            log.info("cron delivery into %s's Bot Chat (%s): pushed", name, job)
+            pushed += 1
+        if len(self._bot_chat_pushed) > 200:
+            self._bot_chat_pushed = {k: t for k, t in self._bot_chat_pushed.items() if now - t < 86400}
+        return pushed
+
+    def _messages(self, stored: str, profile: str | None, limit: int) -> list:
+        """The last `limit` user/assistant messages of a stored session, oldest first."""
+        try:
+            q = f"/api/sessions/{urllib.parse.quote(stored)}/messages?order=latest&limit={limit}"
+            if profile:
+                q += "&profile=" + urllib.parse.quote(profile)
+            snap = self.gw._http("GET", q)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("messages fetch failed for %s: %s", stored[:12], exc)
+            return []
+        out = []
+        for m in snap.get("messages") or []:
+            if not isinstance(m, dict):
+                continue
+            role, text = m.get("role"), m.get("text") or m.get("content")
+            if isinstance(text, list):   # content parts
+                text = " ".join(str(part.get("text") or "") for part in text if isinstance(part, dict)).strip()
+            if role in {"user", "assistant"} and isinstance(text, str) and text.strip():
+                out.append({"role": role, "text": text.strip()})
+        return out
 
     def meta(self, sid: str) -> dict:
         a = self.attached.get(sid, {})
@@ -901,6 +1058,10 @@ class Relay:
                             self.reap_live_activities()
                         except Exception as exc:  # noqa: BLE001
                             log.debug("reap: %s", exc)
+                        try:
+                            await self.check_bot_chats()
+                        except Exception as exc:  # noqa: BLE001
+                            log.debug("bot chats: %s", exc)
                         self._maybe_send_test()
                         last_poll = time.time()
                         self._status(connected=True, gateway=self.gw.public_url, transport=self.gw.transport, attached=len(self.attached), devices=len(load_devices(self.gw.url)))
@@ -976,12 +1137,26 @@ class Relay:
                 _CONF.clear()
                 _load_conf()
 
+    #: (stored id, text) of the last finish pushed, with when: the same reply announced again within
+    #: a minute (the chat mirrored under two runtime ids, a replayed completion) is not pushed twice.
+    _finish_pushed: dict[tuple, float] = {}
+
     async def _finish_turn(self, sid: str, a: dict, p: dict) -> None:
         """The turn's end: finish the Live Activity and send the reply as a notification. The reply
         window (long-press) shows `text` in full, the chat under `title`, and the exchanges that led
         up to it (`thread`, fetched here with a short timeout)."""
         title = a["title"]; bot = a.get("bot") or a.get("profile", "Hermes")
         err = p.get("error")
+        stored = str(a.get("stored", sid))
+        fkey = (stored, hashlib.sha1((str(p.get("text") or "") + str(err or "")).encode("utf-8", "replace")).hexdigest())
+        now = time.time()
+        if now - self._finish_pushed.get(fkey, 0) < 60:
+            log.info("finish of %s already pushed (%s): skipped", stored[:12], sid[:8])
+            self.end_live_activities(stored, "error" if err else "done", bot=bot, runtime_id=sid, usage=p.get("usage"))
+            return
+        self._finish_pushed[fkey] = now
+        if len(self._finish_pushed) > 300:
+            self._finish_pushed = {k: t for k, t in self._finish_pushed.items() if now - t < 600}
         # The Live Activity flips to Finished at once; the thread for the reply window is fetched
         # with a short cap so the notification is not held up by a slow gateway.
         self.end_live_activities(a["stored"], "error" if err else "done", bot=bot, runtime_id=sid, usage=p.get("usage"))
@@ -991,13 +1166,16 @@ class Relay:
             thread = []
         if err:
             self.push_all("error", f"{bot} · turn failed", f"{title}: {str(err)[:300]}",
-                          {**self.meta(sid), "title": title, "text": str(err)[:1200], "thread": thread}, collapse=f"turn-{sid}")
+                          {**self.meta(sid), "title": title, "text": str(err)[:1200], "thread": thread}, collapse=f"turn-{stored}")
         else:
             text = p.get("text") if isinstance(p.get("text"), str) else ""
-            label = "cron job finished" if a.get("source") == "cron" else title
-            self.push_all("cron" if a.get("source") == "cron" else "turn", f"{bot} · {label}" if a.get("source") == "cron" else bot,
+            # A scheduled run's own session is named cron_<job>_<time> (the live list has no source).
+            is_cron = a.get("source") == "cron" or str(a.get("stored", "")).startswith("cron_")
+            label = "cron job finished" if is_cron else title
+            self._turn_pushed_at[str(a.get("stored", sid))] = time.time()
+            self.push_all("cron" if is_cron else "turn", f"{bot} · {label}" if is_cron else bot,
                           f"{title}: {(text or 'Done')[:300]}",
-                          {**self.meta(sid), "title": title, "text": (text or "Done")[:1200], "thread": thread}, collapse=f"turn-{sid}")
+                          {**self.meta(sid), "title": title, "text": (text or "Done")[:1200], "thread": thread}, collapse=f"turn-{stored}")
 
     async def _recent_thread(self, sid: str, a: dict) -> list:
         """Up to three earlier messages of the session (user and assistant text only, shortened) for
@@ -1084,6 +1262,9 @@ class Relay:
             return
         if kind == "session.usage" and a:
             self._la_usage_event(sid, a, p.get("usage") if isinstance(p.get("usage"), dict) else p)
+            return
+        if kind == "sessions.changed":
+            asyncio.create_task(self.check_bot_chats())
             return
         if kind == "message.complete" and not a and sid:
             # A chat that started since the last discovery poll: attach now so its finish still

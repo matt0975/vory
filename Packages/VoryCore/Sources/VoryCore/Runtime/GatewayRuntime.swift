@@ -160,11 +160,25 @@ public final class GatewayRuntime {
         } catch { restartRequired = nil }
     }
 
+    /// Settings › Bots › Default bot: the bot the app comes back to on launch and after a chat
+    /// with another one; empty follows the gateway's own active profile.
+    public static let defaultProfileKey = "bots.defaultProfile"
+    public var defaultProfile: String? {
+        let d = UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? ""
+        return d.isEmpty || !profiles.contains(where: { $0.name == d }) ? nil : d
+    }
+    /// Back to the default bot, when one is chosen and the selection drifted (a chat opened from
+    /// another bot's list, a route from a notification).
+    public func returnToDefaultProfile() {
+        if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
+    }
+
     public func loadProfiles() async {
         do {
             let r: ProfilesResponse = try await api.get("/api/profiles")
             profiles = r.profiles
-            if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
+            if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
+            else if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
                 let active: ActiveProfileResponse? = try? await api.get("/api/profiles/active")
                 selectedProfile = active?.current ?? profiles.first(where: { $0.isDefault == true })?.name ?? profiles.first?.name
             }
@@ -194,15 +208,17 @@ public final class GatewayRuntime {
     }
 
     /// Adds `profile` to RPC params when a non-default profile is selected.
-    public func profileParams(_ base: [String: JSONValue] = [:]) -> JSONValue {
+    public func profileParams(_ base: [String: JSONValue] = [:], profile: String? = nil) -> JSONValue {
         var p = base
-        if let sp = selectedProfile, !sp.isEmpty { p["profile"] = .string(sp) }
+        if let sp = profile ?? selectedProfile, !sp.isEmpty { p["profile"] = .string(sp) }
         return .object(p.compactingNulls)
     }
 
-    public func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
+    /// `profile`: this call's bot instead of the selected one (a read-only look at another
+    /// bot's chat keeps the selection where it was).
+    public func rpc(_ method: String, _ params: [String: JSONValue] = [:], profile: String? = nil, timeout: Double = 120) async throws -> JSONValue {
         try await socket.waitUntilReady()
-        return try await socket.call(method, params: profileParams(params), timeout: timeout)
+        return try await socket.call(method, params: profileParams(params, profile: profile), timeout: timeout)
     }
 
     // MARK: Chats
@@ -213,9 +229,9 @@ public final class GatewayRuntime {
     /// Opens (or returns) the live chat for a stored session id.
     /// Returns immediately with the cached transcript; the live attach runs behind it
     /// (`ChatSession.isResuming` / `resumeError`). Pass `waitForResume` to keep the old blocking contract.
-    public func openChat(storedID: String, title: String?, waitForResume: Bool = false) async throws -> ChatSession {
+    public func openChat(storedID: String, title: String?, profile: String? = nil, waitForResume: Bool = false) async throws -> ChatSession {
         if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
-        let session = ChatSession(runtime: self, storedID: storedID, title: title)
+        let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: profile)
         registry.add(session)
         session.beginResume()
         if waitForResume {
@@ -305,8 +321,10 @@ public final class GatewayRuntime {
                                     running: chatForStored(s.id)?.isRunning ?? false, needsYou: needsAttention.contains(s.id))
             }
             let ctx = registry.all.first { $0.isRunning }?.usage?.computedContextPercent ?? registry.all.last?.usage?.computedContextPercent
+            // The overview numbers are written by Home or the widget; a rewrite here keeps them.
+            let kept = WidgetSnapshot.load()?.usage
             let snap = WidgetSnapshot(gatewayName: connection.name, connectionID: connection.id.uuidString, profile: selectedProfile ?? "default",
-                                      needsAttention: needsAttention.count, chats: chats, contextPercent: ctx, connected: socketState.isOpen)
+                                      needsAttention: needsAttention.count, chats: chats, contextPercent: ctx, connected: socketState.isOpen, usage: kept)
             snap.save()
             onSnapshotPublished?(snap)
         }
@@ -315,6 +333,8 @@ public final class GatewayRuntime {
 
 public extension Notification.Name {
     public static let hermesSessionsChanged = Notification.Name("hermesSessionsChanged")
+    /// `/new` in a chat: the app opens a fresh chat with the same bot (userInfo "profile").
+    public static let hermesNewChatRequested = Notification.Name("hermesNewChatRequested")
     /// A piece of reply text arrived for a chat (`storedID`, `count` characters).
     public static let hermesStreamDelta = Notification.Name("hermesStreamDelta")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")

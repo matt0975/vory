@@ -14,6 +14,7 @@ struct SettingsView: View {
         [
             Row(id: "profile", title: "Profile", symbol: "person.crop.circle", color: .indigo, destination: AnyView(ProfileView())),
             Row(id: "projects", title: "Projects", symbol: "folder.fill", color: .indigo, destination: AnyView(ProjectsView())),
+            Row(id: "plugins", title: "Plugins", symbol: "puzzlepiece.extension.fill", color: .orange, destination: AnyView(PluginsView())),
             Row(id: "model", title: "Model", symbol: "cpu", color: .blue, destination: AnyView(ModelSettingsView())),
             Row(id: "config", title: "Config", symbol: "slider.horizontal.3", color: .gray, destination: AnyView(ConfigFormView())),
             Row(id: "env", title: "API Keys & Environment", symbol: "key.fill", color: .orange, destination: AnyView(EnvView())),
@@ -34,6 +35,7 @@ struct SettingsView: View {
             Row(id: "security", title: "Security", symbol: "faceid", color: .green, destination: AnyView(SecurityView())),
             Row(id: "bots", title: "Bots", symbol: "cloud.fill", color: .indigo, destination: AnyView(BotsSettingsView())),
             Row(id: "appearance", title: "Appearance", symbol: "circle.lefthalf.filled", color: .black, destination: AnyView(AppearanceView())),
+            Row(id: "home", title: "Home", symbol: "house.fill", color: .blue, destination: AnyView(HomeSettingsView())),
             Row(id: "summaries", title: "Vory Summaries", symbol: "sparkles", color: .purple, destination: AnyView(SummariesSettingsView())),
             Row(id: "companion", title: "Companion", symbol: "puzzlepiece.fill", color: .blue, destination: AnyView(CompanionView())),
             Row(id: "troubleshooting", title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, destination: AnyView(TroubleshootingView())),
@@ -117,7 +119,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .tabRoot(.settings)
             .background(InteractivePopEnabler())
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search settings")
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search settings")
         }
     }
 }
@@ -210,6 +212,8 @@ struct ProfileView: View {
     @State private var newName = ""
     @State private var cloneFrom = ""
     @State private var error: String?
+    @State private var pendingDelete: ProfileInfo?
+    @State private var deleting = false
 
     var body: some View {
         List {
@@ -229,6 +233,17 @@ struct ProfileView: View {
                             }
                         }
                         .tint(.primary)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            // The default profile is the gateway's own home; Hermes refuses to delete it.
+                            if p.isDefault != true, p.name != "default" {
+                                Button(role: .destructive) { pendingDelete = p } label: { Label("Delete", systemImage: "trash") }
+                            }
+                        }
+                        .contextMenu {
+                            if p.isDefault != true, p.name != "default" {
+                                Button(role: .destructive) { pendingDelete = p } label: { Label("Delete profile…", systemImage: "trash") }
+                            }
+                        }
                     }
                 }
                 Section {
@@ -238,12 +253,32 @@ struct ProfileView: View {
             }
         }
         .refreshable { await model.runtime?.loadProfiles() }
+        .alert("Delete \(pendingDelete?.label ?? "profile")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
+            Button(deleting ? "Deleting…" : "Delete", role: .destructive) { if let p = pendingDelete { Task { await delete(p) } } }.disabled(deleting)
+            Button("Cancel", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("This removes the profile's folder on the gateway: its config, skills, chats and API keys. Its gateway and bots are stopped first. This cannot be undone.")
+        }
         .alert("New profile", isPresented: $showCreate) {
             TextField("Name", text: $newName)
             TextField("Clone from (optional)", text: $cloneFrom)
             Button("Create") { Task { await create() } }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    private func delete(_ p: ProfileInfo) async {
+        guard let rt = model.runtime else { return }
+        deleting = true; defer { deleting = false; pendingDelete = nil }
+        do {
+            // Stopping the profile's gateway and backends can take ten seconds or more.
+            let r: JSONValue = try await rt.api.send("DELETE", "/api/profiles/\(p.name)", json: .object([:]))
+            if r["ok"]?.boolValue == false { throw HermesAPIError.transport(r["error"]?.stringValue ?? "The gateway refused") }
+            for chat in rt.chats where chat.profileName == p.name { rt.closeChat(chat) }
+            if rt.selectedProfile == p.name { rt.selectedProfile = "default" }
+            await rt.loadProfiles()
+            error = nil
+        } catch { self.error = "Could not delete \(p.label): \(error.localizedDescription)" }
     }
 
     private func create() async {
@@ -300,7 +335,7 @@ struct NotificationsView: View {
                     HStack(spacing: 6) {
                         Text("Typing haptics")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .disabled(!haptics)
@@ -349,31 +384,55 @@ struct SecurityView: View {
 /// Studio (Bots tab › bot › Profile).
 struct BotsSettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     #if os(iOS)
     @AppStorage(BotMotionSource.enabledKey) private var motion = true
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
+    @AppStorage(BotMotionSource.styleKey) private var style = "lively"
     #endif
+    @AppStorage(GatewayRuntime.defaultProfileKey) private var defaultProfile = ""
 
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: glass, motion and tilt.")
+            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: the default bot, glass, motion and tilt.")
+            if let rt = model.runtime {
+                Section {
+                    Picker("Default bot", selection: $defaultProfile) {
+                        Text("Follow the gateway").tag("")
+                        ForEach(rt.profiles) { p in
+                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                        }
+                    }
+                    .onChange(of: defaultProfile) { _, _ in rt.returnToDefaultProfile() }
+                } footer: {
+                    Text("The bot the app comes back to: on launch, and after a chat with another bot. Chats from other bots still open; the selection just does not stay on them. Follow the gateway keeps whatever bot is active there.")
+                }
+            }
             #if os(iOS)
             // Motion and tilt come from the phone's gyroscope; a Mac has none.
             Section {
                 Toggle("Motion effects", isOn: $motion)
                     .onChange(of: motion) { _, _ in BotMotionSource.shared.apply() }
+                Picker("Style", selection: $style) {
+                    Text("Lively").tag("lively")
+                    Text("Calm").tag("calm")
+                    Text("Still").tag("still")
+                }
+                .pickerStyle(.segmented)
+                .disabled(!motion)
+                .onChange(of: style) { _, _ in BotMotionSource.shared.apply() }
                 Toggle(isOn: $tilt) {
                     HStack(spacing: 6) {
                         Text("Tilt with the phone")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .disabled(!motion)
                 .onChange(of: tilt) { _, _ in BotMotionSource.shared.apply() }
             } footer: {
-                Text("Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
             }
             #endif
             Section {
@@ -386,7 +445,7 @@ struct BotsSettingsView: View {
                     HStack(spacing: 6) {
                         Text("Liquid Glass for all bots")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .accessibilityIdentifier("settings.bots.glassAll")
@@ -428,14 +487,14 @@ struct SummariesSettingsView: View {
                     HStack(spacing: 6) {
                         Text("Titles")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 Toggle(isOn: $previews) {
                     HStack(spacing: 6) {
                         Text("Previews")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
             } header: { Text("What the model writes") } footer: {
@@ -468,6 +527,14 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.showSystemNotes) private var showSystemNotes = true
     @AppStorage(ChatStyle.showBots) private var showBots = false
     @AppStorage(ChatStyle.timeReveal) private var timeReveal = true
+    @AppStorage(ChatStyle.collapseAfterTurn) private var collapseAfterTurn = false
+    @AppStorage(ChatStyle.showToolOutput) private var showToolOutput = true
+    @AppStorage(ChatStyle.compactTools) private var compactTools = false
+    @AppStorage(ChatStyle.currentStepOnly) private var currentStepOnly = false
+    @AppStorage(ChatStyle.wideReplies) private var wideReplies = false
+    @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
+    @AppStorage(ChatStyle.botTint) private var botTint = false
+    @AppStorage(ChatStyle.textSize) private var textSize = "default"
     @Environment(\.editMode) private var editMode
 
     private var layout: TabLayout { TabLayout.parse(layoutRaw) }
@@ -476,12 +543,16 @@ struct AppearanceView: View {
     var body: some View {
         List {
             SettingsHeaderSection(title: "Appearance", symbol: "circle.lefthalf.filled", color: .black, description: "Theme, tabs, the chat header and what the transcript shows.")
+
             Section {
                 Picker("Chat header shows", selection: $headerShowsTitle) {
                     Text("Bot name").tag(false)
                     Text("Chat title").tag(true)
                 }
             } footer: { Text("What the pill under the bot leads with in a chat; the other is shown beneath it while the bot is idle.") }
+            Section {
+                AccentPicker()
+            } header: { Text("Accent") } footer: { Text("Buttons, the selected tab, links and your bubbles take this colour. Bots keep their own.") }
             Section {
                 Picker("Theme", selection: $scheme) {
                     Text("System").tag("system")
@@ -494,11 +565,9 @@ struct AppearanceView: View {
             }
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
-                    HStack {
-                        Label(tab.title, systemImage: tab.symbol)
-                        if TabLayout.required.contains(tab) { Spacer(); Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary) }
-                    }
-                    .deleteDisabled(TabLayout.required.contains(tab))
+                    // Chats and Settings stay: no delete control, and no lock badge either.
+                    Label(tab.title, systemImage: tab.symbol)
+                        .deleteDisabled(TabLayout.required.contains(tab))
                 }
                 .onMove { from, to in var l = layout; l.move(fromOffsets: from, toOffset: to); layoutRaw = l.encoded }
                 .onDelete { offsets in
@@ -510,7 +579,7 @@ struct AppearanceView: View {
                 HStack { Text("Tab bar · \(layout.tabs.count) of \(TabLayout.maxTabs)"); Spacer(); EditButton().font(.caption) }
             } footer: {
                 Text(editMode?.wrappedValue.isEditing == true
-                     ? "Drag to reorder, swipe or − to remove. Chats and Settings stay."
+                     ? "Drag to reorder, swipe or − to remove. Chats and Settings can move but not go."
                      : "Tap Edit to reorder or add tabs. Four fit on the bar; New Chat floats beside it.")
             }
             // Hidden tabs only appear while editing, like the Messages/Music tab editors.
@@ -550,8 +619,32 @@ struct AppearanceView: View {
                 Text("Hidden rows are still received and kept; this only changes what the transcript draws. Approval cards are always shown. Pull left for times slides the thread aside to show when each message arrived; off, the thread never moves sideways.")
             }
             Section {
+                Toggle("Fold tool cards and reasoning after the turn", isOn: $collapseAfterTurn)
+                Toggle("Show tool output", isOn: $showToolOutput)
+                Toggle("Compact tool cards", isOn: $compactTools)
+                Toggle("Only the current step", isOn: $currentStepOnly)
+            } header: { Text("Tool calls and reasoning") } footer: {
+                Text("Only the current step keeps just the tool running now and the reasoning of the reply being written; finished steps disappear from the thread, as in ChatGPT. Everything is still kept, and turning it off brings it all back.")
+            }
+            Section {
+                Picker("Bubbles", selection: $bubbleStyle) {
+                    Text("Tailed").tag("tailed")
+                    Text("Rounded").tag("rounded")
+                    Text("Plain").tag("plain")
+                }
+                Toggle("Bot colour on replies", isOn: $botTint)
+                Toggle("Wide replies", isOn: $wideReplies)
+                Picker("Text size", selection: $textSize) {
+                    Text("Small").tag("small")
+                    Text("Default").tag("default")
+                    Text("Large").tag("large")
+                }
+            } header: { Text("Reading") } footer: {
+                Text("Wide replies let a reply run to the right edge instead of leaving a margin. Text size is one step down or up from your iPhone's own text size, in chats only.")
+            }
+            Section {
                 Button("Clear chat list cache") { SessionCache.clearAll() }
-                Button("Reset to default") { layoutRaw = ""; scheme = "system"; showToolCalls = true; showReasoning = true; showTurnStats = true; showSystemNotes = true }
+                Button("Reset to default") { layoutRaw = ""; scheme = "system"; showToolCalls = true; showReasoning = true; showTurnStats = true; showSystemNotes = true; collapseAfterTurn = false; showToolOutput = true; compactTools = false; currentStepOnly = false; wideReplies = false; textSize = "default"; bubbleStyle = "tailed"; botTint = false }
             } footer: { Text("The Chats tab remembers its last list so it opens instantly; clearing it just forces a fresh fetch.") }
         }
     }

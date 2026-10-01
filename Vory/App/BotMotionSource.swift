@@ -11,6 +11,16 @@ final class BotMotionSource {
     static let enabledKey = "bots.motion"
     /// The gyroscope lean is its own switch (beta, off by default): it is easy to find twitchy.
     static let tiltKey = "bots.tilt"
+    /// How much the bots move: lively (every turn and lean), calm (half of it), still (the
+    /// poses and blinks only). Settings › Bots.
+    static let styleKey = "bots.motionStyle"
+    static var styleScale: Double {
+        switch UserDefaults.standard.string(forKey: styleKey) ?? "lively" {
+        case "calm": return 0.5
+        case "still": return 0
+        default: return 1
+        }
+    }
 
     private let manager = CMMotionManager()
     private var restRoll = 0.0, restPitch = 0.0
@@ -25,6 +35,7 @@ final class BotMotionSource {
     /// Starts or stops with the setting and the scene phase.
     func apply(active: Bool = true) {
         BotAmbient.shared.enabled = enabled
+        BotFace.motionScale = Self.styleScale
         guard enabled, tiltEnabled, active, manager.isDeviceMotionAvailable, !UIAccessibility.isReduceMotionEnabled else {
             manager.stopDeviceMotionUpdates()
             BotAmbient.shared.tilt = .zero

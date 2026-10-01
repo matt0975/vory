@@ -107,8 +107,11 @@ private struct MainSplitView: View {
     @ViewBuilder private func page(_ tab: AppModel.AppTab) -> some View {
         switch tab {
         case .chats: EmptyView()   // the three-column layout above
+        case .dashboard: DashboardView()
         case .bots: BotsView()
         case .files: FilesView()
+        case .projects: NavigationStack { ProjectsView() }
+        case .status: NavigationStack { StatusView() }
         case .sessions: NavigationStack { SessionsView() }
         case .cron: NavigationStack { CronView() }
         case .approvals: NavigationStack { ApprovalsView() }

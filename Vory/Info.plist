@@ -43,12 +43,13 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- The gateway URL is user supplied. Plain http:// is allowed so LAN
-		     installs (http://host:9119) work; the Connect form warns when the
-		     scheme is http and the host is not on a private network. -->
+		<!-- The gateway URL is user supplied. Plain http:// is allowed so LAN,
+		     Tailscale and other private installs (http://host:9119) work; the
+		     Connect form warns when the scheme is http and the host is public.
+		     Only this key: with NSAllowsLocalNetworking beside it iOS ignores
+		     NSAllowsArbitraryLoads and refuses http to anything but the LAN,
+		     which is what testers on Tailscale hit in 1.1 (17). -->
 		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>

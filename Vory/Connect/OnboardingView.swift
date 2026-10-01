@@ -253,7 +253,7 @@ private struct ChatDemo: View {
         Text(t).font(.subheadline)
             .padding(.horizontal, 13).padding(.vertical, 9)
             .foregroundStyle(user ? .white : .primary)
-            .background(user ? Color.accentColor : Color(.systemGray5), in: .rect(cornerRadius: 17))
+            .background(user ? Color.vory : Color(.systemGray5), in: .rect(cornerRadius: 17))
     }
 }
 
@@ -281,13 +281,13 @@ private struct ApprovalDemo: View {
                 ForEach(["Once", "Session", "Always", "Deny"], id: \.self) { c in
                     Text(c).font(.subheadline.weight(.medium))
                         .padding(.horizontal, 13).padding(.vertical, 8)
-                        .background(picked && c == "Once" ? Color.accentColor : Color(.systemGray5), in: .capsule)
+                        .background(picked && c == "Once" ? Color.vory : Color(.systemGray5), in: .capsule)
                         .foregroundStyle(picked && c == "Once" ? .white : .primary)
                         .scaleEffect(pressing && c == "Once" ? 0.88 : 1)
                         .overlay {
                             // The tap itself: a ring that blooms out of the button.
                             if pressing && c == "Once" {
-                                Circle().stroke(Color.accentColor, lineWidth: 2).frame(width: 30, height: 30)
+                                Circle().stroke(Color.vory, lineWidth: 2).frame(width: 30, height: 30)
                                     .scaleEffect(2.2).opacity(0)
                                     .animation(.easeOut(duration: 0.5), value: pressing)
                             }
@@ -498,7 +498,7 @@ private struct SummariesDemo: View {
                 HStack(spacing: 6) {
                     Text("Vory Summaries").font(.subheadline.weight(.medium))
                     Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                        .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 10)

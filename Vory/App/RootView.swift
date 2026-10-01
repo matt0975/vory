@@ -13,6 +13,8 @@ struct RootView: View {
     }()
     /// Shown once, right after the first gateway is saved: install the Companion now or later.
     @AppStorage("companionPromptShown") private var companionPromptShown = false
+    @AppStorage("launchTab") private var launchTab = "chats"
+    @AppStorage(TabLayout.storageKey) private var rootLayoutRaw = ""
     @AppStorage("notificationsSetupCardDone") private var setupCardDone = false
     @State private var showCompanionPrompt = false
     @State private var showInstaller = false
@@ -32,7 +34,17 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        // The bar steps aside for the keyboard (a name field in Settings had it floating on top).
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in model.keyboardUp = true }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in model.keyboardUp = false }
         .onAppear {
+            // Once per phone: the bar becomes Home, Chats, Bots, Settings. It can be changed after.
+            if !UserDefaults.standard.bool(forKey: TabLayout.homeFirstAppliedKey) {
+                rootLayoutRaw = TabLayout.default.encoded
+                UserDefaults.standard.set(true, forKey: TabLayout.homeFirstAppliedKey)
+            }
+            // The chosen first screen (Settings › Home), when it is still on the bar.
+            if let tab = AppModel.AppTab(rawValue: launchTab), TabLayout.parse(rootLayoutRaw).visible().contains(tab) { model.selectedTab = tab }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-vory-show-companion-prompt") { showCompanionPrompt = true }
             if ProcessInfo.processInfo.arguments.contains("-vory-show-setup") { showInstaller = true }
@@ -115,7 +127,7 @@ struct MainTabView: View {
             // is never removed from the tree: an insert/remove transition got stuck on the first
             // chat opened after launch (the bar stayed, tappable, over the composer). It slides
             // and fades instead, and its reserved height collapses to nothing.
-            VoryTabBar(tabs: tabs) { compose() }
+            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() })
                 .offset(y: model.tabBarHidden ? 140 : 0)
                 .opacity(model.tabBarHidden ? 0 : 1)
                 // The slide and fade animate; the reserved height below does not. Animating the
@@ -144,6 +156,10 @@ struct MainTabView: View {
         if model.selectedTab != .bots || model.composeProfile == nil { model.selectedTab = .chats }
         model.newChatRequest = UUID()
     }
+    private func composeFull() {
+        model.selectedTab = .chats
+        model.newChatSheetRequest = UUID()
+    }
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
         switch tab {
@@ -155,6 +171,9 @@ struct MainTabView: View {
         case .cron: NavigationStack { CronView().navigationTitle("Scheduled Tasks").tabRoot(.cron) }
         case .approvals: NavigationStack { ApprovalsView().navigationTitle("Approvals").tabRoot(.approvals) }
         case .system: NavigationStack { SystemView().navigationTitle("System").tabRoot(.system) }
+        case .dashboard: NavigationStack { DashboardView().tabRoot(.dashboard) }
+        case .projects: NavigationStack { ProjectsView().tabRoot(.projects) }
+        case .status: NavigationStack { StatusView().tabRoot(.status) }
         }
     }
 }

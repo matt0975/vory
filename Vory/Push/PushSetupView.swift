@@ -138,6 +138,12 @@ struct PushSetupView: View {
             if setup.teamID.isEmpty { setup.teamID = ProvisioningProfile.teamID ?? "" }
             guard let rt else { return }
             await setup.prepare(runtime: rt)
+            // The check needs the profile's folder, known once the socket is up: a second
+            // phone opening the wizard right after connecting would otherwise see nothing installed.
+            if rt.profileHome == nil {
+                for _ in 0..<6 where rt.profileHome == nil { try? await Task.sleep(for: .seconds(1)) }
+                if rt.profileHome != nil { await setup.checkCompanion(runtime: rt) }
+            }
             // Always from the first step: done steps show their green state and Continue moves on.
         }
         .onChange(of: isDone(.overview)) { _, now in
@@ -172,8 +178,8 @@ struct PushSetupView: View {
         switch s {
         case .apple: return setup.appleReady(push: model.push)
         case .address: return setup.addressValid
-        case .signIn: if case .needsSignIn = setup.credential(for: rt) { return false } else { return true }
-        case .install: return setup.installedOnGateway && !setup.restartPending
+        case .signIn: if setup.alreadyServing { return true }; if case .needsSignIn = setup.credential(for: rt) { return false } else { return true }
+        case .install: return (setup.installedOnGateway || setup.alreadyServing) && !setup.restartPending
         case .start: return setup.companionHealthy
         case .overview: return setup.companionHealthy && setup.testPassed
         }
@@ -358,11 +364,15 @@ struct PushSetupView: View {
 
     @ViewBuilder private func installStep(_ rt: GatewayRuntime) -> some View {
         Section {
+            if setup.alreadyServing, !setup.installedOnGateway, let v = setup.installedVersion {
+                Label("Already on the gateway: companion v\(v) is running and connected. Nothing to install and no restart; this phone only needs to register (step 1).", systemImage: "checkmark.circle.fill")
+                    .font(.footnote).foregroundStyle(Color.readableGreen)
+            }
             Button {
                 Task { await setup.installOnGateway(runtime: rt) }
             } label: {
                 if setup.installing { Label { Text("Installing…") } icon: { ProgressView() } }
-                else { Label(setup.installedOnGateway ? "Install again" : "Install on the gateway", systemImage: "arrow.up.doc") }
+                else { Label(setup.installedOnGateway || setup.alreadyServing ? "Install again" : "Install on the gateway", systemImage: "arrow.up.doc") }
             }
             .disabled(setup.installing)
             if !setup.installedFiles.isEmpty {
@@ -383,7 +393,7 @@ struct PushSetupView: View {
             Section {
                 RestartCountdownRows(setup: setup, runtime: rt)
             } header: { sectionHeader("Restart") }
-        } else if !setup.installedOnGateway {
+        } else if !setup.installedOnGateway, !setup.alreadyServing {
             Section {
                 Label("A Gateway restart finishes the install — you'll get a 90-second countdown. Running turns pause for a few seconds.", systemImage: "info.circle")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -584,7 +594,29 @@ struct RestartCountdownRows: View {
 
     var body: some View {
         if setup.restarting {
-            Label { Text("Restarting the gateway…") } icon: { ProgressView() }
+            VStack(alignment: .leading, spacing: 8) {
+                Label { Text("Restarting the gateway…") } icon: { ProgressView() }
+                if let began = setup.restartBegan {
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        let secs = Int(ctx.date.timeIntervalSince(began))
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(setup.restartStage.isEmpty ? "Working" : setup.restartStage) · \(secs / 60):\(String(format: "%02d", secs % 60))")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if secs >= 60 {
+                                Text("Still waiting. A gateway is usually back in under a minute; this gives it up to three. You can check now or finish later, and the files stay installed either way.")
+                                    .font(.footnote).foregroundStyle(.orange)
+                                HStack {
+                                    Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Text("Check now").frame(maxWidth: .infinity) }
+                                        .buttonStyle(.bordered)
+                                    Button { withAnimation(.snappy) { setup.stopWaitingForRestart() } } label: { Text("Finish later").frame(maxWidth: .infinity) }
+                                        .buttonStyle(.bordered)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
         } else if let end = setup.restartCountdownEnd {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -615,6 +647,7 @@ struct RestartCountdownRows: View {
             Label(setup.restartError.map { "The restart failed: \($0)" } ?? "Restart needed: the files are on the Gateway, but nothing works until it restarts.", systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote).foregroundStyle(.orange)
             Button { Task { await setup.restartNow(runtime: runtime) } } label: { Label("Restart Gateway now", systemImage: "arrow.clockwise") }
+            Button { Task { await setup.checkRestartNow(runtime: runtime) } } label: { Label("Check now", systemImage: "waveform.path.ecg") }
             if setup.restartError?.localizedCaseInsensitiveContains("expired") == true || setup.restartError?.localizedCaseInsensitiveContains("401") == true {
                 NavigationLink { GatewayFormView(existing: runtime.connection) } label: { Label("Sign in again", systemImage: "person.badge.key") }
                 Text("If the gateway already came back, Settings › Companion will show it running; sign in again and the restart is not needed.")
@@ -979,6 +1012,10 @@ final class PushSetupModel {
         return scheme == "http" || scheme == "https"
     }
     var installedOnGateway: Bool { uploadedAt != nil && pluginInstalledAt != nil && error == nil }
+    /// This build's companion is already on the gateway, running and connected (installed from
+    /// another phone, or before a reinstall of the app): nothing to upload, nothing to restart;
+    /// this phone only registers itself.
+    var alreadyServing: Bool { installedVersion == Self.bundledPluginVersion && installedScriptMatches && companionHealthy && !needsRestart }
     /// Heartbeat fresh, connected, and running exactly the code this build ships.
     var companionHealthy: Bool {
         guard let hb = heartbeat, hb.connected == true, !runningOlderCode, installedScriptMatches else { return false }
@@ -995,9 +1032,12 @@ final class PushSetupModel {
         registering = true; registerOutcome = nil
         defer { registering = false }
         _ = await push.requestAuthorization()
+        // The APNs token lands a moment after the permission; without it the publish is skipped.
+        for _ in 0..<10 where push.deviceToken == nil { try? await Task.sleep(for: .milliseconds(500)) }
         await push.syncRegistration(runtime: rt)
         await push.registerWithRelay()
         if let e = push.lastError ?? push.relayError { registerOutcome = "Failed: \(e)" }
+        else if push.registeredAt == nil { registerOutcome = "Failed: the phone has no push token yet. Try again in a moment." }
         else { registerOutcome = "Registered \(Date().formatted(date: .omitted, time: .shortened)): device file published to the gateway" + (PushRelay.isConfigured ? " and the phone registered with the relay." : ".") }
     }
 
@@ -1010,11 +1050,22 @@ final class PushSetupModel {
     func installOnGateway(runtime rt: GatewayRuntime) async {
         installing = true; defer { installing = false }
         installedAt = nil; pluginInstalledAt = nil; pluginResult = nil; installedFiles = []
+        // A companion already running (from another phone) reloads new files by itself
+        // (1.0.12 and later); it must not be told to restart the gateway for nothing.
+        let selfReloads = runningCanSelfReload && heartbeat?.connected == true
         await upload(runtime: rt)
         guard error == nil else { return }
         await installPlugin(runtime: rt)
-        if pluginResult?.hasPrefix("Installed") == true { pluginInstalledAt = Date(); installedAt = Date(); urlInUse = gatewayURL; scheduleRestartCountdown(runtime: rt) }
-        else { error = pluginResult ?? "The plugin could not be installed." }
+        guard pluginResult?.hasPrefix("Installed") == true else { error = pluginResult ?? "The plugin could not be installed."; return }
+        pluginInstalledAt = Date(); installedAt = Date(); urlInUse = gatewayURL
+        if selfReloads {
+            for _ in 0..<10 {
+                try? await Task.sleep(for: .seconds(3))
+                await checkCompanion(runtime: rt)
+                if companionHealthy { return }   // picked the files up in place; no restart
+            }
+        }
+        scheduleRestartCountdown(runtime: rt)
     }
     struct InstalledFile: Hashable {
         var name: String
@@ -1083,6 +1134,13 @@ final class PushSetupModel {
     var restartPending = false
     var restarting = false
     var restartError: String?
+    /// What the restart wait is doing right now, and since when: the page says so instead of
+    /// spinning (a tester sat on a bare "Restarting the gateway…" and reported a hang).
+    var restartStage = ""
+    var restartBegan: Date?
+    private var restartWait: Task<Void, Never>?
+    /// Stop waiting and leave the page usable; the restart may still land, and Check now says so.
+    func stopWaitingForRestart() { restartWait?.cancel(); restartWait = nil }
     private var restartTask: Task<Void, Never>?
 
     func scheduleRestartCountdown(runtime rt: GatewayRuntime, seconds: TimeInterval = 90) {
@@ -1106,7 +1164,16 @@ final class PushSetupModel {
         restartTask?.cancel(); restartTask = nil
         restartCountdownEnd = nil
         guard !restarting else { return }
-        restarting = true; defer { restarting = false }
+        // The wait runs as its own task so the page can abandon it (Finish later) without the
+        // button's task being torn down under it.
+        let wait = Task { await self.waitForRestart(runtime: rt) }
+        restartWait = wait
+        await wait.value
+    }
+
+    private func waitForRestart(runtime rt: GatewayRuntime) async {
+        restarting = true; restartBegan = Date(); restartStage = "Asking the gateway to restart"
+        defer { restarting = false; restartBegan = nil; restartStage = "" }
         restartError = nil
         if updateNeedsRestart {
             await finishUpdateAfterRestart(runtime: rt)
@@ -1119,12 +1186,15 @@ final class PushSetupModel {
         // side, and what ends the wait is the companion's first heartbeat written AFTER the
         // restart began; failing that, the action's own short deadline says what happened.
         let began = Date().timeIntervalSince1970
+        _restartAskedAt = Date()
         let profile = heartbeat?.profile == "default" ? nil : heartbeat?.profile
         var action = Task { await rt.maintenance.restartGateway(runtime: rt, profile: profile) }
         var back = false
         var refreshed = false
+        restartStage = "Waiting for the companion to report back after the restart"
         for _ in 0..<40 {   // up to two minutes
             try? await Task.sleep(for: .seconds(3))
+            if Task.isCancelled { restartStage = ""; return }
             if case .failed(let why) = rt.maintenance.phase {
                 // The gateway said the session had expired (a tester hit this seven minutes after
                 // a successful install): renew it once and go again before asking for a sign-in.
@@ -1143,8 +1213,10 @@ final class PushSetupModel {
         if !back, case .failed = rt.maintenance.phase {
             // The call failed, but the restart may still have gone through (the session dies
             // with the old process): give the companion a minute to report back.
+            restartStage = "The restart call failed; checking whether the gateway came back anyway"
             for _ in 0..<20 {
                 try? await Task.sleep(for: .seconds(3))
+                if Task.isCancelled { restartStage = ""; return }
                 await checkCompanion(runtime: rt)
                 if companionHealthy, let hb = heartbeat, hb.updatedAt > began + 2 { back = true; break }
             }
@@ -1153,11 +1225,51 @@ final class PushSetupModel {
             rt.maintenance.finishEarly("Restarting gateway: back up")
             await rt.reconnectNow()
         } else {
-            _ = await action.value
+            // The action's own deadline usually ends it; a dashboard that never answers must
+            // not keep the page on a spinner, so this is the last stretch the wait allows.
+            restartStage = "Giving the gateway a last half minute"
+            let lastCall = Date().addingTimeInterval(30)
+            while Date() < lastCall, case .running = rt.maintenance.phase {
+                try? await Task.sleep(for: .seconds(1))
+                if Task.isCancelled { restartStage = ""; return }
+            }
+            if case .running = rt.maintenance.phase {
+                action.cancel()
+                rt.maintenance.finishEarly("Restarting gateway: no answer yet")
+                restartError = "The gateway has not reported back. It may still be restarting: Check now looks again, or finish later and come back."
+                return
+            }
+        }
+        // The last word is the companion's: if it is reporting in now, the restart happened,
+        // whatever the restart call said about itself (a tester saw "did not report completion
+        // in time" under a companion connected five seconds earlier).
+        await checkCompanion(runtime: rt)
+        if companionHealthy, let hb = heartbeat, Date().timeIntervalSince1970 - hb.updatedAt < 90 {
+            if case .failed = rt.maintenance.phase { rt.maintenance.finishEarly("Restarting gateway: back up") }
+            restartError = nil
+            restartPending = false
+            return
         }
         if case .failed(let why) = rt.maintenance.phase { restartError = why; return }
         restartPending = false
     }
+
+    /// Check now: one look at the companion; if it is back since the restart began, finish.
+    func checkRestartNow(runtime rt: GatewayRuntime) async {
+        await checkCompanion(runtime: rt)
+        if companionHealthy, let hb = heartbeat, let began = restartBegan ?? lastRestartAsked, hb.updatedAt > began.timeIntervalSince1970 + 2 {
+            stopWaitingForRestart()
+            rt.maintenance.finishEarly("Restarting gateway: back up")
+            await rt.reconnectNow()
+            restartError = nil
+            restartPending = false
+        } else {
+            restartError = "Not back yet. The companion has not reported since the restart began."
+        }
+    }
+    private var lastRestartAsked: Date? { restartBegan ?? restartAskedAt }
+    private var restartAskedAt: Date? { _restartAskedAt }
+    private var _restartAskedAt: Date?
 
     // MARK: Companion update
 

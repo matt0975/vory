@@ -518,12 +518,31 @@ public struct SkillInfo: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+/// One row of `GET /api/env`. The gateway sends `is_set` and `redacted_value` (snake case, so
+/// `isSet` / `redactedValue` after the shared decoder); the older names stay for any gateway
+/// that still sends them.
 public struct EnvVarInfo: Codable, Hashable, Sendable {
+    public var isSet: Bool?
+    public var redactedValue: String?
     public var set: Bool?
     public var redacted: String?
     public var description: String?
     public var category: String?
     public var docsUrl: String?
+    public var url: String?
+    public var isPassword: Bool?
+    public var provider: String?
+    public var providerLabel: String?
+
+    /// Whether the gateway has a value, whichever field it used.
+    public var hasValue: Bool { isSet ?? set ?? false }
+    /// The preview without the gateway's `«redacted:…»` wrapper.
+    public var preview: String? {
+        guard var p = redactedValue ?? redacted, !p.isEmpty else { return nil }
+        if p.hasPrefix("«redacted:") { p = String(p.dropFirst("«redacted:".count)) }
+        if p.hasSuffix("»") { p = String(p.dropLast()) }
+        return p
+    }
 
     public init(set: Bool? = nil, redacted: String? = nil, description: String? = nil, category: String? = nil, docsUrl: String? = nil) {
         self.set = set
@@ -755,9 +774,16 @@ public struct GroupsCapabilities: Codable, Sendable { public var driver: Bool?; 
 
 public struct CommandCategory: Codable, Hashable, Sendable { public var name: String; public var pairs: [[String]]? }
 public struct CommandsCatalog: Codable, Hashable, Sendable {
+    /// Per command ("/name"): how it takes arguments and whether a non-terminal client may run
+    /// it (`desktop` nil = yes, "hidden" = yes but not listed, anything else = the reason not).
+    public struct Meta: Codable, Hashable, Sendable {
+        public var argumentMode: String?
+        public var desktop: String?
+    }
     public var pairs: [[String]]?
     public var categories: [CommandCategory]?
     public var canon: [String: String]?
+    public var commands: [String: Meta]?
     public var warning: String?
     public var allPairs: [(name: String, description: String)] {
         var out: [(String, String)] = []
@@ -798,4 +824,68 @@ public extension Usage {
         guard let max = contextMax, max > 0 else { return nil }
         return contextPercent ?? Int(Double(contextUsed ?? total ?? 0) / Double(max) * 100)
     }
+}
+
+
+/// `GET /api/analytics/usage?days=N`: the gateway's own usage numbers for one bot.
+public struct UsageAnalytics: Codable, Sendable {
+    public struct Day: Codable, Sendable, Hashable {
+        public var day: String
+        public var inputTokens: Int?
+        public var outputTokens: Int?
+        public var cacheReadTokens: Int?
+        public var reasoningTokens: Int?
+        public var estimatedCost: Double?
+        public var actualCost: Double?
+        public var sessions: Int?
+        public var apiCalls: Int?
+    }
+    public struct Model: Codable, Sendable, Hashable {
+        public var model: String?
+        public var inputTokens: Int?
+        public var outputTokens: Int?
+        public var estimatedCost: Double?
+        public var sessions: Int?
+        public var apiCalls: Int?
+    }
+    public struct Totals: Codable, Sendable, Hashable {
+        public var totalInput: Int?
+        public var totalOutput: Int?
+        public var totalCacheRead: Int?
+        public var totalReasoning: Int?
+        public var totalEstimatedCost: Double?
+        public var totalActualCost: Double?
+        public var totalSessions: Int?
+        public var totalApiCalls: Int?
+    }
+    public var daily: [Day]?
+    public var byModel: [Model]?
+    public var totals: Totals?
+    public var periodDays: Int?
+}
+
+// MARK: Plugins (GET /api/dashboard/plugins/hub)
+
+/// The gateway's plugins as the dashboard's hub lists them: agent plugins (from the plugins
+/// folder, bundled with Hermes, or disabled) and dashboard extensions.
+public struct PluginsHub: Codable, Sendable {
+    public struct Plugin: Codable, Sendable, Identifiable, Hashable {
+        public var name: String
+        public var version: String?
+        public var description: String?
+        /// Where it came from: "user", "bundled", "git"…
+        public var source: String?
+        /// "enabled", "disabled", "bundled" or "".
+        public var runtimeStatus: String?
+        public var path: String?
+        public var hasDashboardManifest: Bool?
+        public var userHidden: Bool?
+        public var authRequired: Bool?
+        public var authCommand: String?
+        public var canRemove: Bool?
+        public var canUpdateGit: Bool?
+        public var removedReason: String?
+        public var id: String { name }
+    }
+    public var plugins: [Plugin]
 }

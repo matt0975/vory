@@ -9,8 +9,12 @@ the `/api/ws` JSON-RPC socket. Nothing is hardcoded: on first launch you enter t
 - Stock Liquid Glass only (`glassEffect`, `GlassEffectContainer`, glass button styles, system bars).
 - Streams tokens as Hermes writes them, tool cards, approvals/clarify/secret cards, model picker, live token chip.
 - Attachments (Photos, camera, Files, voice memos, paste) round-trip through your gateway.
+- A Home tab: your month in numbers, your bots, the chats to pick back up and what changed while you were away,
+  as cards you can order, size, hide and drag; the same numbers in a widget and on the watch face.
+- Hermes Projects, a Files browser, a Bots tab, slash commands with completions, todo checklists, and
+  bot-to-bot messages shown as "Messaged X" notices you can tap to read the other bot's chat.
 - Settings mirrors the web dashboard: model, config, env/API keys, tools, skills, MCP, approvals, cron, sessions,
-  channels, system — all scoped to the selected profile with `?profile=`.
+  plugins, channels, system — all scoped to the selected profile with `?profile=`.
 - Any number of saved gateways (home, office, travel). One gateway covers every profile on that machine.
 - Cloudflare Access service-token headers are optional and off unless both values are set.
 - Face ID lock, Keychain storage, redacted logs, reconnect with backoff.
@@ -115,16 +119,25 @@ Plain `http://` is permitted (needed for LAN installs); the form warns when the 
   bot's avatar above the title and its live status, an … circle) sits over the thread, which scrolls under it and
   under the composer. Tap the pill for the bot's info sheet (`/api/profiles` entry + `GET /api/profiles/{name}/soul`);
   model picker, context breakdown and bot info live in the … menu.
-- **Tab bar**: four tabs (Chats and Settings fixed, two customizable) and a detached glass New Chat button, like
-  Messages. Connection status lives in the profile switcher menu.
+- **Tab bar**: four tabs, Home, Chats, Bots and Settings by default, every one of them movable and all but Chats
+  and Settings removable (Appearance › Tab bar offers Files, Projects and Status too), plus a detached glass New
+  Chat button, like Messages. The bar hides under the keyboard. Settings › Home picks the tab the app opens on.
+  Connection status lives in the profile switcher menu.
 - **Per-turn stats**: each finished reply shows `tokens · tok/s · seconds`, exact when `session.usage` gave an
   output count before and after the turn, estimated (`~`) from streamed characters otherwise. Appearance › Chat
   toggles tool calls, reasoning, stats and system notes.
 - **Composer** matches the Messages bar: round attach button outside, one thin field with the mic / send / stop
   control inside its trailing edge. Long-press a chat row for a preview with Open / Pin / Archive / Delete.
-- **Transcript** reads like Messages: grey bot bubbles, time separators after a 15-minute pause, drag left to
-  peek at per-message times, long-press a bubble for Copy / Edit & resend / Share, and the tab bar hides
-  inside a chat. Tool cards show the command and output as capped code blocks.
+- **Transcript** reads like Messages: grey bot bubbles, your bubbles in the accent you chose, time separators
+  after a 15-minute pause, drag left to peek at per-message times, long-press a bubble for Reply / Copy /
+  Edit & resend / Share, and the tab bar hides inside a chat. Reply quotes the bubble above your next message.
+  Tool cards show the command and output as capped code blocks; a `todo` tool call draws as a checklist.
+  Appearance › Chat has the display options: fold tool cards after the turn, hide tool output, compact cards,
+  current step only, wide replies and a text size.
+- **Bot-to-bot messages**: when a bot messages another (a quiet `hermes -p <bot> chat … -q "Message from …"`
+  run through the terminal tool, or the `message_agent` tool), the chat shows a centred "Messaging X…", then
+  "Messaged X", then "Message from X" with the answer folded under it, instead of a shell transcript. Inbound
+  "Message from 🤖 X:" rows show the same way. Tap a notice to open X's own Bot Chat read-only.
 - **Bot colours** (Appearance › Bot colours, or the bot's card): one accent per profile, used for the avatar in
   the title pill, the Bots list and that bot's Live Activity. Stored on the device only.
 - **Profile card** (tap the title pill › Profile): colour, description (`PUT /api/profiles/{name}/description`)
@@ -137,17 +150,44 @@ Plain `http://` is permitted (needed for LAN installs); the form warns when the 
 - **Approvals** arrive as gateway→client JSON-RPC requests. The card offers Once / Session / Always / Deny and
   answers with `{"choice": …}` on the same request id (or `approval.respond` for queued approvals). Clarify, sudo,
   secret and vault prompts are handled the same way; secrets use `SecureField` and are never logged.
-- Slash commands use `commands.catalog` for suggestions and `command.dispatch` to run; `/approve`, `/deny`,
-  `/stop` are handled locally.
+- Slash commands use `commands.catalog` for suggestions (on the word being typed) and `slash.exec` to run, with
+  `command.dispatch` as the fallback on older gateways; `/approve`, `/deny`, `/stop`, `/new`, `/title`, `/model`
+  and `/reasoning` are handled locally, and commands the catalog marks desktop-only say so.
 - Attachments: images → `image.attach_bytes`, PDFs → `pdf.attach`, everything else → `file.attach` (data URL) and
   the returned `@file:` reference is appended to your message. Hold the mic button for on-device dictation.
+
+## Home
+
+The Home tab is a dashboard of cards: a greeting by name (Settings › Home), the **Overview** (sessions, messages,
+tokens, active days, peak hour and top model for 7, 30 or 90 days, with thirteen weeks of activity blocks and the
+gateway's cost estimate, from `GET /api/analytics/usage?days=`), **Bots** with their status, **Pick up where you
+left off** and **Since you were here**, which sums up on the phone what changed while you were away. Cards can be
+reordered, resized and hidden from Settings › Home, by pressing and holding a card, or by dragging one card onto
+another on Home itself. The chats cards show the current bot's chats or every bot's. An **Overview** widget and
+watch complications carry the same numbers and refresh themselves every half hour.
+
+## Projects, Files and Bots
+
+- **Projects** are the gateway's (`projects.list`, `projects.create`, `projects.tree`): Chats filters by project,
+  every chat shows its project chip, new chats can start inside one, and Settings › Projects manages them. A
+  gateway without projects answers `-32601` and the app hides the feature.
+- **Files** browses the gateway's folders (`GET /api/files`, downloads, uploads), hides dot files behind an eye
+  button, loads big folders in pages and recovers when a listing stalls.
+- **Bots** lists the gateway's profiles with their faces, status, SOUL.md and model; each bot has a colour, a
+  face and a finish of its own, and Settings › Bots sets how much they move (lively, calm or still) and whether
+  they tilt with the phone.
+- **Plugins** (Settings › Plugins) lists what the gateway loads, Vory's own companion first, from
+  `GET /api/dashboard/plugins/hub`.
 
 ## Settings API map
 
 | Screen | Endpoints |
 |---|---|
 | Gateways | app-local (Keychain) + Test: `/api/status`, `/api/auth/me`, `/api/auth/ws-ticket`, `/api/ws` |
-| Profile | `GET /api/profiles`, `GET /api/profiles/active`, `POST /api/profiles` |
+| Profile | `GET /api/profiles`, `GET /api/profiles/active`, `POST /api/profiles`, `DELETE /api/profiles/{name}` |
+| Projects | `projects.list`, `projects.create`, `projects.update`, `projects.delete`, `projects.tree` (JSON-RPC) |
+| Plugins | `GET /api/dashboard/plugins/hub` (read-only) |
+| Home | `GET /api/analytics/usage?days=`, `GET /api/sessions?order=recent&limit=100` |
 | Model | `GET /api/model/options`, `GET /api/model/auxiliary`, `POST /api/model/set` |
 | Config | `GET /api/config`, `GET /api/config/schema`, `PUT /api/config {config:{…}}` (deep-merge) |
 | API keys & env | `GET /api/env`, `PUT /api/env {key,value}`, `DELETE /api/env {key}` |
@@ -160,7 +200,8 @@ Plain `http://` is permitted (needed for LAN installs); the form warns when the 
 | Channels | `GET /api/messaging/platforms` (read-only) |
 | System | `GET /api/status`, `GET /api/logs` (grouped into entries, 5 shown + *Show more*), `POST /api/ops/doctor` |
 | System › Maintenance | `GET /api/hermes/update/check`, `POST /api/hermes/update`, `POST /api/gateway/restart`, tailed via `GET /api/actions/{hermes-update\|gateway-restart}/status` |
-| Appearance (app) | app-local: theme override and which tabs sit in the bottom bar, in what order (`tabLayout` in UserDefaults) |
+| Appearance (app) | app-local: accent, light/dark override, chat display options, which tabs sit in the bottom bar and in what order (`tabLayout` in UserDefaults) |
+| Home (app) | app-local: your name, the tab the app opens on, the cards' order, size and visibility (`home.layout`) |
 | Files tab | `GET /api/files`, `GET /api/files/download`, `POST /api/files/upload-stream` |
 
 Every request carries `?profile=<selected profile>`; writes re-GET afterwards and 4xx bodies are shown verbatim.
@@ -224,8 +265,10 @@ gateway restart (one tap in the same screen). The systemd/launchd installer rema
   carry the same Approve once / Deny / Reply actions.
 - **Complications** (`VoryWatchComplications/`, WidgetKit): *Needs you* (waiting approvals), *Current chat*
   (what the agent is working on) and *Context* (gauge), in circular, rectangular, inline and corner families.
-- **iPhone widgets**: the same three, as lock-screen accessories and home-screen small/medium widgets, shipped
-  inside the existing `HermesLiveActivity` extension. Both read `Widgets/VoryWidgets.swift`.
+- **iPhone widgets**: the same three plus **Overview** (the month's sessions and tokens with the activity blocks),
+  as lock-screen accessories and home-screen small/medium widgets, shipped inside the existing
+  `HermesLiveActivity` extension. Both read `Widgets/VoryWidgets.swift`. The Overview widget fetches fresh
+  numbers itself every half hour.
 - **Data path**: the running app writes a `WidgetSnapshot` (attention count, recent chats, context %) into a
   Keychain access group shared by the app, its widgets and the watch app (`…com.vorantx.vory.shared`), so no
   App Group is needed. Providers refresh the session list themselves when the snapshot is older than ten

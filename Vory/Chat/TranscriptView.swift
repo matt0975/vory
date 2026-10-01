@@ -7,6 +7,11 @@ struct TranscriptView: View {
     @Bindable var chat: ChatSession
     /// Long-press › "Edit & resend" hands the text back to the composer.
     var onEditMessage: (String) -> Void = { _ in }
+    /// A "Messaged X" or "Message from X" notice was tapped: open X's chat.
+    var onOpenBot: (String) -> Void = { _ in }
+    /// Reply on a bubble: the composer quotes it above the next message.
+    var onReply: (String) -> Void = { _ in }
+    @State private var showModelSheet = false
     /// The dock's top edge in screen coordinates (0 = unknown). The thread's bottom margin is the
     /// distance from its own bottom edge to this: measured, not derived from a dock height added
     /// onto some inset, which left a blank band under the last reply on some phones.
@@ -38,6 +43,8 @@ struct TranscriptView: View {
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
+    /// The card being opened and where its top was when the tap landed.
+    @State private var revealAnchor: (id: String, top: CGFloat)?
     /// Scrolling is by content edge, not by the "bottom" marker view: with the lazy stack a
     /// marker that is not yet laid out gets an estimated position, and the jump-to-bottom button
     /// overshot and bounced back up.
@@ -66,15 +73,30 @@ struct TranscriptView: View {
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
     @AppStorage(ChatStyle.showSystemNotes) private var showSystemNotes = true
     @AppStorage(ChatStyle.showBots) private var showBots = false
+    @AppStorage(ChatStyle.collapseAfterTurn) private var collapseAfterTurn = false
+    @AppStorage(ChatStyle.showToolOutput) private var showToolOutput = true
+    @AppStorage(ChatStyle.compactTools) private var compactTools = false
+    @AppStorage(ChatStyle.currentStepOnly) private var currentStepOnly = false
+    @AppStorage(ChatStyle.wideReplies) private var wideReplies = false
+    @AppStorage(ChatStyle.textSize) private var textSize = "default"
+    @Environment(\.dynamicTypeSize) private var phoneTypeSize
+    /// Tool cards that are open, keyed by item id: lifted out of the card so a recycled row
+    /// keeps it and the turn's end can fold them all.
+    @State private var openTools: Set<String> = []
 
     private var visibleItems: [TranscriptItem] {
         chat.items.filter { item in
             switch item.kind {
-            case .tool, .subagent: return showToolCalls
+            case .tool(let act): return showToolCalls && (!currentStepOnly || act.status == .running)
+            case .subagent: return showToolCalls
             case .system: return showSystemNotes
             default: return true
             }
         }
+    }
+    private static func isStreaming(_ item: TranscriptItem) -> Bool {
+        if case .assistant(_, _, let streaming) = item.kind { return streaming }
+        return false
     }
 
     private var rows: [TranscriptRowModel] { TranscriptRowModel.build(visibleItems) }
@@ -106,32 +128,7 @@ struct TranscriptView: View {
                         }
                         .frame(maxWidth: .infinity).padding(.top, 80)
                     }
-                    ForEach(rows) { row in
-                        if let sep = row.separator {
-                            Text(sep).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity).padding(.vertical, 6)
-                        }
-                        TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
-                                      typingTool: typingTool,
-                                      showReasoning: showReasoning, showStats: showTurnStats, onEdit: onEditMessage,
-                                      reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
-                                                             set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
-                                      onSelectText: { selectText = $0 })
-                            // Equatable on what it draws (the closures and the binding are
-                            // compared by value): a row whose message did not change is not
-                            // rebuilt when the thread re-evaluates for a scroll or a token.
-                            .equatable()
-                            .id(row.item.id)
-                            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
-                            // The time waits just past the right edge; the column slides left to show it.
-                            .overlay(alignment: .trailing) {
-                                Text(row.item.timestamp, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                    // Its leading edge sits 20 pt past the row (beyond the screen's
-                                    // 16 pt margin), so nothing of it shows until the column slides.
-                                    .fixedSize().alignmentGuide(.trailing) { d in d[.leading] - 20 }
-                                    .accessibilityHidden(true)
-                            }
-                    }
+                    ForEach(rows) { row in rowView(row) }
                     // Working with no bubble to fill (between parts, during a tool): the typing
                     // bubble stands on its own, dark with the badge while a tool runs.
                     if chat.isRunning, !lastIsEmptyStreamingReply {
@@ -148,15 +145,16 @@ struct TranscriptView: View {
                     if let s = chat.statusLine, chat.isRunning {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
-                            Text(s).font(.caption).foregroundStyle(.secondary)
+                            Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                         }
                         // Clear of the bot column when the pinned working bot sits there.
                         .padding(.leading, showBots ? 38 : 4).padding(.trailing, 4)
                     }
                     Color.clear.frame(height: 0).id("bottom")
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
+                .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
                 .animation(.snappy(duration: 0.28), value: chat.items.count)
                 .background(ScrollViewProbe(metrics: metrics))
                 }
@@ -207,15 +205,29 @@ struct TranscriptView: View {
             // its bottom edge. Collapsing posts nothing, so the thread stays put then.
             .onReceive(NotificationCenter.default.publisher(for: .hermesRevealRow)) { n in
                 guard let bottom = n.userInfo?["bottom"] as? CGFloat, let id = n.userInfo?["id"] as? String else { return }
+                let top = n.userInfo?["top"] as? CGFloat ?? bottom
+                // While the card grows, its top stays where the finger found it: the thread is
+                // anchored at its bottom, so the growth used to push the card up by its own
+                // height and the reveal then pulled it back down, a visible jitter on every
+                // expand. Each frame of the growth is countered on the scroll view directly.
+                if revealAnchor?.id != id { revealAnchor = (id, top); metrics.stickToBottom = false }
+                #if os(iOS)
+                if let a = revealAnchor, a.id == id, let sv = metrics.scrollView, abs(top - a.top) > 0.5 {
+                    let y = max(-sv.adjustedContentInset.top, sv.contentOffset.y + (top - a.top))
+                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+                }
+                #endif
+                let settledBottom = bottom - (top - (revealAnchor?.top ?? top))
                 revealTask?.cancel()
                 revealTask = Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(80))
                     guard !Task.isCancelled else { return }
+                    revealAnchor = nil
                     // Only when the opened row runs under the composer; then its bottom edge is
                     // aligned to the visible bottom (the scroll view resolves the row itself,
                     // so no offset arithmetic across coordinate spaces).
                     let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
-                    let overshoot = bottom - limit
+                    let overshoot = settledBottom - limit
                     guard overshoot > 0 else { return }
                     #if os(iOS)
                     if let sv = metrics.scrollView {
@@ -272,6 +284,7 @@ struct TranscriptView: View {
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text) }
+            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat) }
             #if os(iOS)
             // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
@@ -305,7 +318,8 @@ struct TranscriptView: View {
             }
             // The turn ending takes the typing bubble and status line out from under the last
             // reply; a locked thread follows so no blank band is left there.
-            .onChange(of: chat.isRunning) { _, _ in
+            .onChange(of: chat.isRunning) { _, running in
+                if !running, collapseAfterTurn { withAnimation(.snappy) { openReasoning = []; openTools = [] } }
                 if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The dock changing height (an approval card arriving or leaving) moves the bottom
@@ -327,6 +341,40 @@ struct TranscriptView: View {
 }
 
 extension TranscriptView {
+    /// One row of the thread: the time separator before it when there is one, and the message
+    /// with the time waiting past its right edge. Its own function: inside the thread's body
+    /// this call tipped the type checker over its limit.
+    @ViewBuilder private func rowView(_ row: TranscriptRowModel) -> some View {
+                if let sep = row.separator {
+                    Text(sep).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                }
+                TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
+                              typingTool: typingTool,
+                              showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply, onChooseModel: { showModelSheet = true },
+                              reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
+                                                     set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
+                              onSelectText: { selectText = $0 },
+                              toolOpen: Binding(get: { openTools.contains(row.item.id) },
+                                                set: { if $0 { openTools.insert(row.item.id) } else { openTools.remove(row.item.id) } }),
+                              showToolOutput: showToolOutput, compactTools: compactTools, wide: wideReplies)
+                    // Equatable on what it draws (the closures and the binding are
+                    // compared by value): a row whose message did not change is not
+                    // rebuilt when the thread re-evaluates for a scroll or a token.
+                    .equatable()
+                    .id(row.item.id)
+                    .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+                    // The time waits just past the right edge; the column slides left to show it.
+                    .overlay(alignment: .trailing) {
+                        Text(row.item.timestamp, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            // Its leading edge sits 20 pt past the row (beyond the screen's
+                            // 16 pt margin), so nothing of it shows until the column slides.
+                            .fixedSize().alignmentGuide(.trailing) { d in d[.leading] - 20 }
+                            .accessibilityHidden(true)
+                    }
+            
+    }
+
     private func scheduleOverscrollFix() {
         guard overscrollTask == nil else { return }
         overscrollTask = Task { @MainActor in
@@ -347,13 +395,20 @@ extension TranscriptView {
         let far = metrics.distanceFromBottom > 900
         jumpTask = Task { @MainActor in
             if far {
-                // A fast scroll, not a fade: from far away the thread first jumps (unanimated,
-                // before the next frame draws) to one screen short of the end, worked out from
-                // the geometry rather than by landing first, then scrolls the last stretch.
-                let end = metrics.contentHeight + metrics.reportedInsetBottom - metrics.containerHeight
-                scrollPosition.scrollTo(y: max(0, end - 900))
-                try? await Task.sleep(for: .milliseconds(16))
-                guard !Task.isCancelled else { return }
+                // From far away (a chat that grew while the app was away) the lazy stack's
+                // height is an estimate, so no animated glide: land flat at the end, then keep
+                // landing as rows lay out and the end moves, until the thread stops short of
+                // nothing. A tester's arrow did nothing after a few hours away.
+                scrollPosition.scrollTo(edge: .bottom)
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(70))
+                    guard !Task.isCancelled else { return }
+                    if metrics.userScrolling { return }
+                    if metrics.distanceFromBottom <= 24 { break }
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+                if metrics.distanceFromBottom > 24 { scrollPosition.scrollTo(id: "bottom", anchor: .bottom) }
+                return
             }
             withAnimation(.easeOut(duration: 0.35)) { scrollPosition.scrollTo(edge: .bottom) }
             // If it did not land (a lazy row laid out late, an older iOS), finish the job flat.
@@ -523,6 +578,33 @@ enum ChatStyle {
     static let showBots = "chat.showBots"
     /// Pull the thread left to see message times.
     static let timeReveal = "chat.timeReveal"
+    /// Tool cards and reasoning fold up when the turn ends.
+    static let collapseAfterTurn = "chat.collapseAfterTurn"
+    /// The Output block inside an opened tool card.
+    static let showToolOutput = "chat.showToolOutput"
+    /// One-line tool cards.
+    static let compactTools = "chat.compactTools"
+    /// Only the step running now: finished tool cards and the reasoning of finished replies are hidden.
+    static let currentStepOnly = "chat.currentStepOnly"
+    /// Reply bubbles run to the edge instead of leaving a margin on the right.
+    static let wideReplies = "chat.wideReplies"
+    /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
+    static let textSize = "chat.textSize"
+    /// "tailed" (Messages), "rounded" (no tails) or "plain" (replies without a bubble, like a page).
+    static let bubbleStyle = "chat.bubbleStyle"
+    /// Reply bubbles take a wash of the bot's own colour instead of grey.
+    static let botTint = "chat.botTint"
+
+    /// The thread's type size for a `textSize` choice, relative to the phone's own setting.
+    static func stepped(_ base: DynamicTypeSize, _ choice: String) -> DynamicTypeSize {
+        let all = DynamicTypeSize.allCases
+        guard let i = all.firstIndex(of: base) else { return base }
+        switch choice {
+        case "small": return all[max(0, i - 1)]
+        case "large": return all[min(all.count - 1, i + 1)]
+        default: return base
+        }
+    }
 }
 
 /// A transcript item plus the "Tue, Sep 22 at 6:30 PM" separator that precedes it when the
@@ -578,6 +660,8 @@ struct TranscriptRow: View, Equatable {
         a.item == b.item && a.profile == b.profile && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
+            && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
+            && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
     }
     var item: TranscriptItem
     /// The bot beside its bubble, as in a group chat; nil for none. Only the last bubble of a
@@ -590,13 +674,37 @@ struct TranscriptRow: View, Equatable {
     var showReasoning = true
     var showStats = true
     var onEdit: (String) -> Void = { _ in }
+    var onOpenBot: (String) -> Void = { _ in }
+    var onReply: (String) -> Void = { _ in }
+    var onChooseModel: () -> Void = {}
+    @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
+    @AppStorage(ChatStyle.botTint) private var botTint = false
+    /// The reply bubble's fill: grey, or the bot's colour at a wash.
+    private var replyFill: Color {
+        if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
+        return Color(.systemGray5)
+    }
     var reasoningOpen: Binding<Bool> = .constant(false)
     var onSelectText: (String) -> Void = { _ in }
+    var toolOpen: Binding<Bool> = .constant(false)
+    var showToolOutput = true
+    var compactTools = false
+    /// Reply bubbles run to the right edge.
+    var wide = false
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let _ = Perf.tick("row")
         switch item.kind {
+        case .user(let text, let attachments) where attachments.isEmpty && InjectedNote.parse(text) != nil:
+            // The gateway speaking in the user's seat (a background process reporting in): a
+            // folded notice, not a blue bubble of the person's own words.
+            InjectedNoteRow(note: InjectedNote.parse(text)!)
+        case .user(let text, let attachments) where attachments.isEmpty && AgentMessage.parse(text) != nil:
+            // Another bot wrote in: a compact notice with the words folded under it, not a
+            // bubble of ours.
+            let m = AgentMessage.parse(text)!
+            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot)
         case .user(let text, let attachments):
             HStack {
                 Spacer(minLength: 56)
@@ -608,11 +716,12 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .background(Color.accentColor, in: MessageBubbleShape(side: .trailing, tailed: botShown))
+                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown && bubbleStyle == "tailed"))
                             .contextMenu {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                                 ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                             }
                     }
@@ -639,7 +748,7 @@ struct TranscriptRow: View, Equatable {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
                             ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id)
                                 .padding(.horizontal, 14).padding(.vertical, 9)
-                                .background(Color(.systemGray5), in: MessageBubbleShape(side: .leading, tailed: false))
+                                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
                         TypingBubble(tool: typingTool)
                         if showStats, let s = item.stats {
@@ -648,7 +757,7 @@ struct TranscriptRow: View, Equatable {
                                 .accessibilityLabel("Turn statistics: \(s.label)")
                         }
                     }
-                    Spacer(minLength: 40)
+                    Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id) }
@@ -658,14 +767,15 @@ struct TranscriptRow: View, Equatable {
                             .accessibilityLabel("Turn statistics: \(s.label)")
                     }
                 }
-                .padding(.horizontal, 14).padding(.vertical, 9)
-                .background(Color(.systemGray5), in: MessageBubbleShape(side: .leading, tailed: botShown))
+                .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
+                .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
                 .contextMenu {
+                    Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                     Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                 }
-                Spacer(minLength: 24)
+                Spacer(minLength: wide ? 0 : 24)
                 }
             }
         case .steer(let text, let status):
@@ -685,8 +795,17 @@ struct TranscriptRow: View, Equatable {
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
+        case .tool(let act) where act.delivery != nil:
+            // A message to another bot: "Messaging X…", then "Messaged X", then X's answer.
+            let d = act.delivery!
+            VStack(spacing: 4) {
+                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot)
+                if let reply = act.deliveryReply {
+                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot)
+                }
+            }
         case .tool(let act):
-            ToolCardView(activity: act, itemID: item.id)
+            ToolCardView(activity: act, itemID: item.id, open: toolOpen, showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol):
             HStack(spacing: 6) {
                 Image(systemName: symbol)
@@ -695,6 +814,8 @@ struct TranscriptRow: View, Equatable {
             .font(.caption).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 2)
+        case .error(let text) where StartFailure.parse(text) != nil:
+            StartFailureCard(failure: StartFailure.parse(text)!, raw: text, onChooseModel: onChooseModel)
         case .error(let text):
             Label(text, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
@@ -714,6 +835,144 @@ struct TranscriptRow: View, Equatable {
             .padding(10)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
         }
+    }
+}
+
+/// The bot's model could not start on the gateway (a provider whose CLI or key is not there):
+/// what is wrong in plain words, a way to carry on with another model, and the gateway fix.
+struct StartFailureCard: View {
+    var failure: StartFailure
+    var raw: String
+    var onChooseModel: () -> Void
+    @State private var showRaw = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("This bot's model could not start", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.red)
+            if let p = failure.provider {
+                Text("The bot is set to the provider \(p), which needs its command-line tool installed and configured on the gateway machine. That is not something the app can do from here.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text(failure.reason).font(.footnote).foregroundStyle(.secondary)
+            }
+            Text("Pick another model for this chat, or set the provider up on the gateway with hermes setup, or in Settings › Model.")
+                .font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button(action: onChooseModel) { Label("Choose another model", systemImage: "cpu") }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                Button { withAnimation(.snappy) { showRaw.toggle() } } label: { Text(showRaw ? "Hide details" : "Details").font(.caption) }
+                    .buttonStyle(.borderless)
+            }
+            if showRaw {
+                Text(raw).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.10), in: .rect(cornerRadius: 12))
+    }
+}
+
+/// A gateway note that arrived in the user's seat: one quiet line, the words folded under it.
+struct InjectedNoteRow: View {
+    var note: InjectedNote
+    @State private var open = false
+    var body: some View {
+        VStack(spacing: 6) {
+            Button { withAnimation(.snappy) { open.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : "gearshape.2")
+                    Text(note.title).font(.caption)
+                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
+            if open {
+                Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+    }
+}
+
+/// The whole tool call on its own page: the command or arguments and the output, as text you
+/// can select by range and share.
+struct ToolCallSheet: View {
+    var activity: ToolActivity
+    var fullCall: String?
+    @Environment(\.dismiss) private var dismiss
+    private var text: String {
+        var parts: [String] = []
+        if let c = fullCall, !c.isEmpty { parts.append((activity.name == "terminal" || activity.name == "bash" ? "# Command\n" : "# Arguments\n") + c) }
+        if let r = activity.resultText, !r.isEmpty { parts.append("# Output\n" + r) }
+        if let s = activity.summary, !s.isEmpty, parts.isEmpty { parts.append(s) }
+        return parts.joined(separator: "\n\n")
+    }
+    var body: some View {
+        NavigationStack {
+            SelectableText(text: text, monospaced: true)
+                .navigationTitle(activity.displayName).navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) { ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") } }
+                }
+        }
+    }
+}
+
+/// A centred, quiet line for bot-to-bot traffic ("Messaged work", "Message from work") with the
+/// other bot's face; the words fold under it, and a tap opens that bot's own chat.
+struct BotMessageNotice: View {
+    var handle: String
+    var label: String
+    var headline: String
+    var body_: String?
+    var pending: Bool
+    var onOpen: (String) -> Void
+    @State private var open = false
+
+    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void) {
+        self.handle = handle; self.label = label; self.headline = headline; self.body_ = body; self.pending = pending; self.onOpen = onOpen
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Button { onOpen(handle) } label: {
+                HStack(spacing: 6) {
+                    BotAvatar(profile: handle, size: 18, active: pending)
+                    Text(headline).font(.caption).foregroundStyle(.secondary)
+                    if pending { ProgressView().controlSize(.mini) }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(headline). Opens \(label)'s chat")
+            if let text = body_, !text.isEmpty {
+                Button { withAnimation(.snappy) { open.toggle() } } label: {
+                    Text(open ? "hide message" : "show message").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                if open {
+                    Text(text).font(.footnote).textSelection(.enabled)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .frame(maxWidth: 360, alignment: .leading)
+                        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
     }
 }
 
@@ -743,8 +1002,8 @@ struct ReasoningDisclosure: View {
                 Text(text).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { _, y in
-            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": y, "id": itemID]) }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
+            if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
         }
     }
 }
@@ -840,47 +1099,82 @@ struct ToolCardView: View {
     var activity: ToolActivity
     /// The transcript row this card is, for the reveal after it opens.
     var itemID: String? = nil
-    @State private var expanded = false
+    /// Open state owned by the thread (so a recycled row keeps it and the turn's end can fold it).
+    var open: Binding<Bool> = .constant(false)
+    /// The Output block when open (Appearance › Chat).
+    var showOutput = true
+    /// One line: name, time and chevron; the context and summary lines only when open.
+    var compact = false
     /// Set while the card opens: its frame changes are reported so the thread can reveal it.
     @State private var revealing = false
+    @State private var showFull = false
+    private var expanded: Bool { open.wrappedValue }
+    /// What the tool was asked: the command out of the args when they are JSON with one, the
+    /// args as sent, or the context line.
+    private var fullCall: String? {
+        if let a = activity.argsText, !a.isEmpty {
+            if let m = a.firstMatch(of: /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/) {
+                return String(m.1).replacingOccurrences(of: "\\n", with: "\n").replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\t", with: "\t")
+            }
+            return a
+        }
+        return activity.context
+    }
+    /// The todo tool's items, when this card is one: drawn as a checklist, not as JSON.
+    private var todos: [TodoItem]? { TodoItem.parse(name: activity.name, argsText: activity.argsText) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: compact ? 4 : 6) {
             HStack(spacing: 8) {
                 statusIcon
-                Text(activity.displayName).font(.subheadline.weight(.medium))
+                Text(activity.displayName).font(compact ? .caption.weight(.medium) : .subheadline.weight(.medium))
                 if let risk = activity.risk { Text(risk).font(.caption2).padding(.horizontal, 6).padding(.vertical, 2).background(.orange.opacity(0.2), in: .capsule) }
+                if compact, !expanded, let c = activity.context, !c.isEmpty {
+                    Text(c).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer()
                 if let d = activity.durationSeconds { Text(String(format: "%.1fs", d)).font(.caption2).foregroundStyle(.secondary) }
                 Image(systemName: expanded ? "chevron.up" : "chevron.down").font(.caption).foregroundStyle(.secondary)
             }
-            if let c = activity.context, !c.isEmpty, !expanded {
+            if let todos {
+                TodoChecklist(items: todos, all: expanded || compact == false && todos.count <= 4)
+            }
+            if todos == nil, let c = activity.context, !c.isEmpty, !expanded, !compact {
                 Text(c).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
-            if let s = activity.summary, !s.isEmpty, !expanded {
+            if todos == nil, let s = activity.summary, !s.isEmpty, !expanded, !compact {
                 Text(s).font(.caption).lineLimit(2)
             }
             if expanded {
-                if let a = activity.argsText, !a.isEmpty {
+                if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
+                // The whole call: the args when the gateway sent them, else the context line in
+                // full (a tester opened a card and got a few more characters of a cut preview).
+                if todos == nil, let a = fullCall, !a.isEmpty {
                     Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: a, lineCap: 40)
                 }
-                if let r = activity.resultText, !r.isEmpty {
+                if showOutput, let r = activity.resultText, !r.isEmpty {
                     Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: r, lineCap: 30)
                 }
+                Button { showFull = true } label: {
+                    Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.borderless)
+                .padding(.top, 2)
             }
         }
-        .padding(12)
+        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall) }
+        .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass
         // layer is composited every frame while the thread scrolls (the stutter on device).
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: compact ? 10 : 14))
+        .overlay(RoundedRectangle(cornerRadius: compact ? 10 : 14, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
         .contentShape(.rect)
         .onTapGesture {
             if !expanded { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
-            withAnimation(.snappy) { expanded.toggle() }
+            withAnimation(.snappy) { open.wrappedValue.toggle() }
         }
         .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { _, y in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": y, "id": itemID]) }
@@ -965,5 +1259,62 @@ struct CopyButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
+    }
+}
+
+
+/// One line of the todo tool's list.
+struct TodoItem: Identifiable, Hashable {
+    var id: String
+    var content: String
+    var status: String
+
+    /// The tool's arguments as items, for the todo tool only ({"todos": [{content, id, status}]}).
+    static func parse(name: String, argsText: String?) -> [TodoItem]? {
+        guard name.lowercased().hasPrefix("todo"), let a = argsText, let data = a.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = obj["todos"] as? [[String: Any]], !list.isEmpty else { return nil }
+        return list.enumerated().map { i, t in
+            TodoItem(id: (t["id"] as? String) ?? String(describing: t["id"] ?? i), content: (t["content"] as? String) ?? (t["title"] as? String) ?? "",
+                     status: ((t["status"] as? String) ?? "pending").lowercased())
+        }
+    }
+}
+
+/// The todo tool as a checklist: done, in progress, pending. Collapsed, the first four and a count.
+struct TodoChecklist: View {
+    var items: [TodoItem]
+    var all: Bool
+
+    private func symbol(_ s: String) -> (String, Color) {
+        switch s {
+        case "completed", "done": return ("checkmark.circle.fill", .green)
+        case "in_progress", "in-progress", "active", "doing": return ("arrow.right.circle.fill", .blue)
+        case "cancelled", "canceled", "skipped": return ("xmark.circle", .secondary)
+        default: return ("circle", .secondary)
+        }
+    }
+
+    var body: some View {
+        let shown = all ? items : Array(items.prefix(4))
+        let done = items.filter { ["completed", "done"].contains($0.status) }.count
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(shown) { t in
+                let (sym, color) = symbol(t.status)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: sym).foregroundStyle(color).font(.caption)
+                    Text(t.content).font(.caption)
+                        .strikethrough(["completed", "done"].contains(t.status), color: .secondary)
+                        .foregroundStyle(["completed", "done"].contains(t.status) ? .secondary : .primary)
+                        .lineLimit(all ? nil : 2)
+                }
+            }
+            if items.count > shown.count || !all {
+                Text("\(done) of \(items.count) done" + (items.count > shown.count ? ", \(items.count - shown.count) more" : ""))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Todo list, \(done) of \(items.count) done")
     }
 }

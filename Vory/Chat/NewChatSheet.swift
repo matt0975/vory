@@ -75,7 +75,7 @@ struct NewChatSheet: View {
                             Text(p.label).font(.subheadline).lineLimit(1)
                         }
                         .padding(.leading, 4).padding(.trailing, 10).padding(.vertical, 4)
-                        .background(Color.accentColor.opacity(0.15), in: .capsule)
+                        .background(Color.vory.opacity(0.15), in: .capsule)
                         // The whole chip, bot included: the face is not hit-testable on its own.
                         .contentShape(.capsule)
                         .onTapGesture { remove(p) }
@@ -209,7 +209,7 @@ struct NewChatSheet: View {
                         .disabled(chosen.isEmpty)
                     Button { Task { await start() } } label: {
                         Image(systemName: busy ? "ellipsis" : "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
-                            .frame(width: 28, height: 28).background(canSend ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary), in: .circle)
+                            .frame(width: 28, height: 28).background(canSend ? AnyShapeStyle(Color.vory) : AnyShapeStyle(.tertiary), in: .circle)
                     }
                     .buttonStyle(.plain).disabled(!canSend)
                     .padding(.trailing, 4).padding(.bottom, 4)

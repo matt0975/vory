@@ -12,6 +12,8 @@ struct ProjectsView: View {
     @State private var pendingDelete: Project?
     @State private var error: String?
 
+    @State private var searchText = ""
+
     var body: some View {
         List {
             SettingsHeaderSection(title: "Projects", symbol: "folder.fill", color: .indigo,
@@ -26,11 +28,11 @@ struct ProjectsView: View {
                         if store.open.isEmpty {
                             Text(store.available == nil ? "Loading…" : "No projects yet. Tap + to make one.").foregroundStyle(.secondary)
                         }
-                        ForEach(store.open) { p in row(p, store: store) }
+                        ForEach(store.open.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) }) { p in row(p, store: store) }
                     } header: { Text("Projects") } footer: {
                         if !store.open.isEmpty { Text("Swipe a project to archive it. Press and hold for more.") }
                     }
-                    let archived = store.projects.filter(\.isArchived)
+                    let archived = store.projects.filter { $0.isArchived && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                     if !archived.isEmpty {
                         Section("Archived") { ForEach(archived) { p in row(p, store: store) } }
                     }
@@ -40,6 +42,7 @@ struct ProjectsView: View {
             }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { showCreate = true } label: { Label("New project", systemImage: "plus") }

@@ -12,7 +12,9 @@ struct TabLayout: Equatable, Sendable {
     static let maxTabs = 4
 
     var isFull: Bool { tabs.count >= Self.maxTabs }
-    static let `default` = TabLayout(tabs: [.chats, .bots, .files, .settings])
+    static let `default` = TabLayout(tabs: [.dashboard, .chats, .bots, .settings])
+    /// Set once the one-time switch to the Home-first default has run on this phone.
+    static let homeFirstAppliedKey = "tabLayout.homeFirstApplied"
 
     private(set) var tabs: [AppModel.AppTab]
 
@@ -51,12 +53,11 @@ struct TabLayout: Equatable, Sendable {
         tabs = Self.normalize(tabs)
     }
 
-    /// De-duplicates, keeps Chats first and Settings present.
+    /// De-duplicates and keeps Chats and Settings present; any order is fine, theirs included.
     private static func normalize(_ input: [AppModel.AppTab]) -> [AppModel.AppTab] {
         var seen = Set<AppModel.AppTab>()
         var out = input.filter { seen.insert($0).inserted }
-        out.removeAll { $0 == .chats }
-        out.insert(.chats, at: 0)
+        if !out.contains(.chats) { out.insert(.chats, at: 0) }
         if !out.contains(.settings) { out.append(.settings) }
         // A layout saved by an earlier build could hold five; drop optional tabs from the end
         // until it fits, keeping Chats and Settings.

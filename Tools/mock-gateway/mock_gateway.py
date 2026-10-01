@@ -99,6 +99,11 @@ STORED_SESSIONS: list[dict] = [
      "source": "tui", "model": MODEL, "started_at": time.time() - 29000,
      "last_active": time.time() - 27600, "message_count": 24, "is_active": False,
      "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"},
+    {"id": "20260930_221000_work01", "title": "Bot Chat",
+     "preview": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.",
+     "source": "cli", "model": MODEL, "started_at": time.time() - 90000,
+     "last_active": time.time() - 4900, "message_count": 4, "is_active": False,
+     "archived": False, "pinned": False, "profile": "work", "cwd": "/srv/export"},
     {"id": "20260920_221014_99aabb", "title": "Weekly dependency audit",
      "preview": "Three advisories this week, one of them reachable from our code path.",
      "source": "cron", "model": MODEL, "started_at": time.time() - 100000,
@@ -134,12 +139,13 @@ CONFIG_SCHEMA = {
 }
 
 ENV_VARS = {
-    "ANTHROPIC_API_KEY": {"set": True, "redacted": "sk-ant-…9f2c", "description": "Anthropic API key", "category": "LLM Providers"},
-    "OPENAI_API_KEY": {"set": False, "description": "OpenAI API key", "category": "LLM Providers"},
-    "OPENROUTER_API_KEY": {"set": False, "description": "OpenRouter API key", "category": "LLM Providers"},
-    "TAVILY_API_KEY": {"set": True, "redacted": "tvly-…a13b", "description": "Tavily search API key", "category": "Tool API Keys"},
-    "BRAVE_API_KEY": {"set": False, "description": "Brave Search API key", "category": "Tool API Keys"},
-    "TELEGRAM_BOT_TOKEN": {"set": False, "description": "Telegram bot token", "category": "Messaging"},
+    # The real gateway's row shape (is_set, redacted_value with the «redacted:…» wrapper).
+    "ANTHROPIC_API_KEY": {"is_set": True, "redacted_value": "«redacted:sk-a...9f2c»", "description": "Anthropic API key", "category": "LLM Providers", "is_password": True, "provider": "anthropic"},
+    "OPENAI_API_KEY": {"is_set": False, "redacted_value": None, "description": "OpenAI API key", "category": "LLM Providers", "is_password": True, "provider": "openai"},
+    "OPENROUTER_API_KEY": {"is_set": False, "redacted_value": None, "description": "OpenRouter API key", "category": "LLM Providers", "is_password": True, "provider": "openrouter"},
+    "TAVILY_API_KEY": {"is_set": True, "redacted_value": "«redacted:tvly...a13b»", "description": "Tavily search API key", "category": "Tool API Keys", "is_password": True},
+    "BRAVE_API_KEY": {"is_set": False, "redacted_value": None, "description": "Brave Search API key", "category": "Tool API Keys"},
+    "TELEGRAM_BOT_TOKEN": {"is_set": False, "redacted_value": None, "description": "Telegram bot token", "category": "Messaging"},
 }
 
 TOOLSETS = [
@@ -189,6 +195,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base == "/api/profiles/active":
         return 200, {"active": "default", "current": "default"}
     if base == "/api/sessions":
+        # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
+        if int(query.get("limit") or 20) > 100:
+            return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
         return 200, {"sessions": STORED_SESSIONS, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
     if base == "/api/sessions/search":
         q = (query.get("q") or "").lower()
@@ -201,6 +210,15 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         if not row:
             return 404, {"detail": "session not found"}
         iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+        if row["title"] == "Bot Chat":
+            msgs = [
+                {"id": 1, "role": "user", "content": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": iso(row["started_at"])},
+                {"id": 2, "role": "assistant", "content": "Noted. The export runs at 2 AM; I'll leave the schedule alone until you're done.", "timestamp": iso(row["started_at"] + 30)},
+                {"id": 3, "role": "user", "content": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": iso(row["last_active"] - 20)},
+                {"id": 4, "role": "assistant", "content": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": iso(row["last_active"])},
+            ]
+            return 200, {"session_id": sid, "profile": "work", "messages": msgs,
+                         "pagination": {"limit": 60, "offset": 0, "order": "latest", "returned": len(msgs)}}
         msgs = [
             {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look?", "timestamp": iso(row["started_at"])},
             {"id": 2, "role": "assistant", "content": [{"type": "text", "text": REPLY_PART_1 + REPLY_PART_2}], "timestamp": iso(row["last_active"]),
@@ -228,6 +246,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
                      "lines": ["=== hermes gateway restart ===", "stopping gateway (pid 4242)", "starting gateway"] + ([] if running else ["gateway up (pid 4243)"])}
     if base == "/api/model/options":
         return 200, {"model": MODEL, "provider": PROVIDER, "providers": [
+            {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
+             "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
+             "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
             {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
              "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
              "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
@@ -245,6 +266,44 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         return 200, {"config": CONFIG}
     if base == "/api/config/schema":
         return 200, CONFIG_SCHEMA
+    if base == "/api/analytics/usage":
+        days = int(query.get("days") or 30)
+        import datetime, random
+        rnd = random.Random(7)
+        daily = []
+        for i in range(days - 1, -1, -1):
+            d = datetime.date.today() - datetime.timedelta(days=i)
+            if d.weekday() == 6 and rnd.random() < 0.7:
+                continue
+            n = rnd.randint(1, 6)
+            daily.append({"day": d.isoformat(), "input_tokens": n * rnd.randint(9000, 40000), "output_tokens": n * rnd.randint(1500, 6000),
+                          "cache_read_tokens": n * rnd.randint(40000, 120000), "reasoning_tokens": 0, "estimated_cost": round(n * 0.31, 2),
+                          "actual_cost": 0, "sessions": n, "api_calls": n * rnd.randint(4, 15)})
+        tot = lambda k: sum(x[k] for x in daily)
+        return 200, {"daily": daily, "period_days": days,
+                     "by_model": [{"model": MODEL, "input_tokens": tot("input_tokens"), "output_tokens": tot("output_tokens"), "estimated_cost": tot("estimated_cost"), "sessions": tot("sessions"), "api_calls": tot("api_calls")},
+                                  {"model": "openai/gpt-5.5", "input_tokens": 120000, "output_tokens": 9000, "estimated_cost": 1.2, "sessions": 3, "api_calls": 20}],
+                     "totals": {"total_input": tot("input_tokens"), "total_output": tot("output_tokens"), "total_cache_read": tot("cache_read_tokens"), "total_reasoning": 0,
+                                "total_estimated_cost": tot("estimated_cost"), "total_actual_cost": 0, "total_sessions": tot("sessions"), "total_api_calls": tot("api_calls")},
+                     "skills": {}, "tools": {}}
+    if base == "/api/dashboard/plugins/hub":
+        return 200, {"plugins": [
+            {"name": "vory-push", "version": "1.0.33", "description": "Vory's companion: push notifications, Live Activities and the Bot Chat watch.",
+             "source": "user", "runtime_status": "enabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/vory-push",
+             "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "kanban", "version": "0.4.2", "description": "A board of the agent's tasks on the dashboard.",
+             "source": "bundled", "runtime_status": "bundled", "has_dashboard_manifest": True, "path": "/opt/hermes/plugins/kanban",
+             "can_remove": False, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "dispatcher", "version": "1.2.0", "description": "Routes cron deliveries and channel messages to the right profile.",
+             "source": "git", "runtime_status": "enabled", "has_dashboard_manifest": True, "path": "/home/hermes/.hermes/plugins/dispatcher",
+             "can_remove": True, "can_update_git": True, "auth_required": False, "user_hidden": False},
+            {"name": "memory-sqlite", "version": "0.9.0", "description": "Long-term memory in a local SQLite file.",
+             "source": "user", "runtime_status": "disabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/memory-sqlite",
+             "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "github", "version": "2.1.0", "description": "Pull requests, issues and reviews through the GitHub API.",
+             "source": "user", "runtime_status": "enabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/github",
+             "can_remove": True, "can_update_git": True, "auth_required": True, "auth_command": "hermes plugins auth github", "user_hidden": False},
+        ], "orphan_dashboard_plugins": [], "providers": {"memory_provider": "memory-sqlite", "memory_options": [], "context_engine": "default", "context_options": []}}
     if base == "/api/env":
         return 200, ENV_VARS
     if base == "/api/tools/toolsets":
@@ -262,6 +321,10 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             {"id": "telegram", "label": "Telegram", "status": "not configured", "enabled": False},
             {"id": "discord", "label": "Discord", "status": "not configured", "enabled": False}]}
     if base == "/api/files":
+        # MOCK_FILES_FAIL=1: the home listing fails the way a broken symlink makes the real
+        # gateway fail (a tester's report); folders opened by path still list.
+        if os.environ.get("MOCK_FILES_FAIL") and not query.get("path"):
+            return 500, {"detail": "Could not stat path: [Errno 2] No such file or directory: '~/.local/share/Steam/linux32/steam'"}
         return 200, {"path": "/home/hermes", "parent": None, "root": None, "locked_root": None, "entries": [
             {"name": ".git", "path": "/home/hermes/.git", "is_directory": True, "modified_at": time.time() - 9000},
             {"name": ".env", "path": "/home/hermes/.env", "is_directory": False, "size": 212, "modified_at": time.time() - 9000, "mime_type": "text/plain"},
@@ -425,6 +488,13 @@ class Gateway:
 
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        if prompt.strip().lower().startswith("fail"):
+            # The bot's provider needs a CLI the gateway does not have (a tester's Claude
+            # subscription plugin): the gateway cannot start the turn.
+            await self.event("error", s.sid, {"message": "Hermes could not start the assistant for this session. Details: Could not find the "
+                             "'claude-subscription-directsdk-experimental' CLI command '(none configured)'. Install it.. "
+                             "Check the model and provider with /model, or run `hermes setup` in a terminal to reconfigure."})
+            return
         await self.event("message.start", s.sid)
         await self.stream_words(s, REPLY_PART_1)
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
@@ -439,6 +509,29 @@ class Gateway:
             "summary": "10 entries, 4.2 GB total",
             "result_text": "2.1G\t/var/log/nginx\n1.4G\t/var/log/postgres\n0.7G\t/var/log/app\n"
                            "12M\t/var/log/syslog\n4.0M\t/var/log/auth.log\n"})
+
+        # A todo list, as the todo tool files one: the app draws it as a checklist.
+        todo_id = f"t-{uuid.uuid4().hex[:8]}"
+        todos = {"todos": [{"id": "1", "content": "Measure /var/log and find the big rotated files", "status": "completed"},
+                           {"id": "2", "content": "Propose the cleanup command and wait for approval", "status": "in_progress"},
+                           {"id": "3", "content": "Run the cleanup and confirm the space is back", "status": "pending"},
+                           {"id": "4", "content": "Add a logrotate rule so it does not grow again", "status": "pending"},
+                           {"id": "5", "content": "Write the summary", "status": "pending"}]}
+        await self.event("tool.start", s.sid, {"tool_id": todo_id, "name": "todo_list", "context": "5 items", "args": todos})
+        await asyncio.sleep(0.3)
+        await self.event("tool.complete", s.sid, {"tool_id": todo_id, "name": "todo_list", "duration_s": 0.0, "summary": "1 of 5 done", "result_text": ""})
+
+        # A word to the other bot, the Bot Mode way: a quiet run of its CLI through the terminal
+        # tool. The app shows it as "Messaged work", then "Message from work" when the reply lands.
+        d_id = f"t-{uuid.uuid4().hex[:8]}"
+        d_cmd = ("/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery "
+                 "--author '{\"id\":\"default\"}' local /home/hermes/.hermes/profiles/default/cache/bot_dm/dm-hold-export.md "
+                 "/home/hermes/.hermes/venv/bin/hermes -p work chat --in ~ -c 'Bot Chat' --create-if-missing -Q")
+        await self.event("tool.start", s.sid, {"tool_id": d_id, "name": "terminal", "context": d_cmd[:120], "args": {"command": d_cmd, "background": True}})
+        await asyncio.sleep(1.2)
+        await self.event("tool.complete", s.sid, {
+            "tool_id": d_id, "name": "terminal", "duration_s": 1.2, "summary": "Messaged work",
+            "result_text": "session_id: 20260930_221000_work01\nGot it. The export is paused until you say go; I'll hold the 2 AM run too.\n"})
 
         await self.stream_words(s, REPLY_PART_2)
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
@@ -510,7 +603,9 @@ class Gateway:
         if method == "ping":
             return ok({"pong": True})
         if method == "profiles.list":
-            return ok({"profiles": [{"name": "default", "is_default": True}, {"name": "work", "is_default": False}]})
+            return ok({"profiles": [{"name": "default", "is_default": True},
+                                    {"name": "work", "is_default": False,
+                                     "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}]})
         if method == "session.active_list":
             return ok({"sessions": [{"id": l.sid, "session_key": l.stored, "title": l.title, "source": "ios",
                                      "status": "streaming" if l.running else "idle", "current": False}
@@ -578,7 +673,26 @@ class Gateway:
                 sid = uuid.uuid4().hex[:8]
                 row = next((r for r in STORED_SESSIONS if r["id"] == stored), None)
                 live = Session(sid, stored, row["title"] if row else "Chat", profile)
-                if row:
+                if row and row["title"] == "Bot Chat":
+                    # The other bot's own thread: what the first bot sent it, and what it said back.
+                    live.profile = row["profile"]
+                    live.history = [
+                        {"role": "user", "text": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": row["started_at"], "row_id": 1},
+                        {"role": "assistant", "text": "Noted. The export runs at 2 AM; I'll leave the schedule alone until you're done.", "timestamp": row["started_at"] + 30, "row_id": 2},
+                        {"role": "user", "text": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": row["last_active"] - 20, "row_id": 3},
+                        {"role": "assistant", "text": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": row["last_active"], "row_id": 4},
+                    ]
+                elif row and row["id"] == "20260921_093355_d4e5f6":
+                    # The export chat: a background job reported in while nobody was looking (the
+                    # gateway puts that in the user's seat), and a cut tool preview.
+                    live.history = [
+                        {"role": "user", "text": "Why is the nightly export timing out?", "timestamp": row["started_at"], "row_id": 1},
+                        {"role": "assistant", "text": REPLY_PART_1, "timestamp": row["started_at"] + 20, "row_id": 2},
+                        {"role": "tool", "name": "terminal", "context": "python3 - <<'EOF'\nimport json, shutil\nrows=json.load(open('downloads.json'))\nfor r in rows: ...", "text": "39 of 40 remuxed", "timestamp": row["started_at"] + 60, "row_id": 3},
+                        {"role": "user", "text": "[IMPORTANT: Background process proc_bb0091529c2c completed normally (exit code 0).\nCommand: cd /srv/app/_meta && python3 convert_to_mp4.py 2>&1 | tee convert_run.log\nOutput:\n...(first 1910 characters cut)\nremux 39/40 ok\nverify 39/40 ok]", "timestamp": row["last_active"] - 30, "row_id": 4},
+                        {"role": "assistant", "text": REPLY_PART_3, "timestamp": row["last_active"], "row_id": 5},
+                    ]
+                elif row:
                     live.history = [
                         {"role": "user", "text": "The log host is at 94% disk. Can you take a look?",
                          "timestamp": row["started_at"], "row_id": 1},
@@ -683,8 +797,16 @@ class Gateway:
             return ok({"pairs": [["new", "Start a new chat"], ["model", "Switch the model"],
                                  ["approve", "Approve the waiting command"], ["compress", "Compress the context"],
                                  ["status", "Show session status"], ["usage", "Show token usage"],
-                                 ["agents", "Show the delegation tree"], ["rollback", "Restore a checkpoint"]],
-                       "categories": [], "canon": {}, "commands": {}, "skills": {}, "skill_count": 3, "warning": ""})
+                                 ["agents", "Show the delegation tree"], ["rollback", "Restore a checkpoint"], ["cron", "Scheduled jobs"], ["academic-paper-acquisition", "Find and fetch papers"]],
+                       "categories": [], "canon": {}, "commands": {"/cron": {"argument_mode": "text", "desktop": "terminal"}, "/usage": {"argument_mode": "text", "desktop": None}}, "skills": {"/academic-paper-acquisition": {"usage": 2}}, "skill_count": 3, "warning": ""})
+        if method == "slash.exec":
+            cmd = (p.get("command") or "").lstrip("/")
+            name = cmd.split(" ", 1)[0]
+            if name == "usage":
+                return ok({"output": "Session Token Usage\n  input   12,480\n  output   3,112\n  cache    9,004\n  context  21.3k / 200k (10.6%)"})
+            if name in ("my-skill", "academic-paper-acquisition"):
+                return err(4018, f"skill command: use command.dispatch for /{name}")
+            return ok({"output": f"(mock) /{cmd} ran on the gateway", "warning": "" if name != "personality" else "mirrored onto the live session"})
         if method == "command.dispatch":
             return ok({"type": "exec", "output": f"(mock) ran /{p.get('name', '')}"})
         if method == "prompt.submit":

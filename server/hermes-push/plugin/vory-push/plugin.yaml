@@ -1,5 +1,5 @@
 name: vory-push
-version: "1.0.32"
+version: "1.0.34"
 description: "Background notifications for the Vory apps: watches this gateway's sessions and relays approvals, questions, finished turns and errors to the phone (encrypted) through the Vory push relay, or straight to APNs with your own key. Installed by Vory › Settings › Notifications."
 author: "Vorantx"
 hooks: []

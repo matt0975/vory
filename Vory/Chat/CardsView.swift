@@ -180,6 +180,14 @@ struct ValuePromptCardView: View {
     var onValue: (String) -> Void
     @State private var value = ""
     @State private var identifier = ""
+    @FocusState private var focused: Bool
+
+    /// The keyboard goes first: the card leaves the dock the moment it answers, and a focused
+    /// secure field being torn out mid-morph is a crash candidate on a sudo prompt.
+    private func submit(_ v: String) {
+        focused = false
+        Task { @MainActor in try? await Task.sleep(for: .milliseconds(50)); onValue(v) }
+    }
 
     private var title: String {
         switch method {
@@ -201,14 +209,17 @@ struct ValuePromptCardView: View {
             if method == "vault.save_login" {
                 TextField("Username / identifier", text: $identifier).textFieldStyle(.roundedBorder).textContentType(.username)
             }
-            SecureField(method == "vault.code" ? "Code" : "Value", text: $value).textFieldStyle(.roundedBorder).textContentType(method == "vault.code" ? .oneTimeCode : .password)
+            SecureField(method == "vault.code" ? "Code" : "Value", text: $value).textFieldStyle(.roundedBorder)
+                .textContentType(method == "vault.code" ? .oneTimeCode : (method == "sudo" ? nil : .password))
+                .focused($focused)
+                .onSubmit { if !value.isEmpty { submit(value) } }
             HStack {
-                Button("Skip", role: .cancel) { onValue("") }.buttonStyle(.glass)
+                Button("Skip", role: .cancel) { submit("") }.buttonStyle(.glass)
                 Button("Submit") {
                     if method == "vault.save_login" {
                         let json = RPCFrames.encode(["identifier": .string(identifier), "password": .string(value)])
-                        onValue(json)
-                    } else { onValue(value) }
+                        submit(json)
+                    } else { submit(value) }
                 }
                 .buttonStyle(.glassProminent).disabled(value.isEmpty)
             }

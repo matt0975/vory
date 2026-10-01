@@ -7,6 +7,8 @@ import VoryCore
 struct ComposerView: View {
     @Bindable var chat: ChatSession
     @Binding var text: String
+    /// The bubble being replied to; sent as a quote block above the message.
+    @Binding var quote: String
     /// The dock's morph namespace: the text capsule (alone, not the whole stack — the steer strip
     /// and the command list come and go under it) is what an approval card morphs from.
     var namespace: Namespace.ID
@@ -24,6 +26,8 @@ struct ComposerView: View {
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
+    @State private var showAttach = false
+    @State private var attachPanelHeight: CGFloat = 356
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var model
 
@@ -54,9 +58,17 @@ struct ComposerView: View {
     }
 
     /// Every command the gateway lists, narrowed by what follows the "/" (a bare "/" shows all).
+    /// The word being typed, when it starts with "/": the first word, or a later one (a skill
+    /// that takes another command as its argument, say). Nil otherwise.
+    private var slashWord: Substring? {
+        guard text.hasPrefix("/") else { return nil }
+        let last = text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
+        return last.hasPrefix("/") ? last : nil
+    }
+
     private var slashSuggestions: [(name: String, description: String)] {
-        guard text.hasPrefix("/"), !text.contains(" "), let catalog else { return [] }
-        let q = text.dropFirst().lowercased()
+        guard let word = slashWord, let catalog else { return [] }
+        let q = word.dropFirst().lowercased()
         // Some gateways list the names with their slash already.
         return catalog.allPairs
             .map { (name: $0.name.hasPrefix("/") ? String($0.name.dropFirst()) : $0.name, description: $0.description) }
@@ -74,7 +86,13 @@ struct ComposerView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(slashSuggestions, id: \.name) { s in
-                            Button { text = "/" + s.name + " " } label: {
+                            Button {
+                                // Replace the word being typed, not the whole line.
+                                var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+                                if words.isEmpty { words = [""] }
+                                words[words.count - 1] = "/" + s.name
+                                text = words.joined(separator: " ") + " "
+                            } label: {
                                 HStack(spacing: 10) {
                                     Text("/" + s.name).font(.subheadline.monospaced().weight(.medium)).lineLimit(1)
                                     Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -151,6 +169,25 @@ struct ComposerView: View {
                 }
                 .quickLookPreview($stagedPreview)
             }
+            if !quote.isEmpty {
+                // What the reply answers: the first lines of the bubble, with a way out.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                // The bar beside the words is flexible in height; without this the strip took
+                // the whole screen.
+                .fixedSize(horizontal: false, vertical: true)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             // Same shape as the Messages app: a round attach button outside the field, and one
             // thin capsule holding the text with the mic or send control inside its trailing edge.
             HStack(alignment: .bottom, spacing: 8) {
@@ -194,6 +231,26 @@ struct ComposerView: View {
                 .padding(.horizontal, 8)
             }
         }
+        // The attach panel grows out of the + button and sits above the whole composer, the reply
+        // strip included (anchored to the button it overlapped the strip).
+        .overlay(alignment: .topLeading) {
+            if showAttach {
+                attachPanel
+                    .glassEffectID("attach", in: namespace)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachPanelHeight = $0 }
+                    .offset(y: -(attachPanelHeight + 10))
+                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        // Anything tapped outside the panel closes it: a clear catcher far larger than the
+        // composer, under the panel.
+        .background {
+            if showAttach {
+                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+            }
+        }
         .animation(.snappy(duration: 0.25), value: slashSuggestions.map(\.name))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
@@ -207,7 +264,9 @@ struct ComposerView: View {
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
+        #if os(iOS)
         .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea() }
+        #endif
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
@@ -233,7 +292,7 @@ struct ComposerView: View {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
-                    .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.accentColor), in: .circle)
+                    .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.vory), in: .circle)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
@@ -242,33 +301,71 @@ struct ComposerView: View {
         }
     }
 
+    /// The + button, and the panel it opens: a tall glass sheet of big round icons like the one
+    /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
-        Menu {
-            Button { showPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
-            #if os(iOS)
-            Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-            #endif
-            Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-            Button { showRecorder = true } label: { Label("Record Audio", systemImage: "waveform") }
-            Button { paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
-            Divider()
-            Button { showHistory = true } label: { Label("Message History", systemImage: "clock.arrow.circlepath") }
-                .disabled(chat.composerHistory.isEmpty)
+        Button {
+            withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
             // and grew past the bar.
             Image(systemName: "plus").font(.body.weight(.semibold))
+                .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
+                .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .accessibilityLabel("Attach")
+        .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
+    }
+
+    private var attachPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            #if os(iOS)
+            attachRow("Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true }
+            #endif
+            attachRow("Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true }
+            attachRow("Files", symbol: "folder.fill", color: .blue) { showFiles = true }
+            attachRow("Audio", symbol: "waveform", color: .red) { showRecorder = true }
+            attachRow("Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() }
+            attachRow("Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true }
+        }
+        .padding(.vertical, 10)
+        .frame(width: 272)
+        // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
+        // its own size the glass was drawn for less than the rows and the last one poked out.
+        .fixedSize()
+        .glassEffect(.regular, in: .rect(cornerRadius: 30))
+    }
+
+    private func attachRow(_ title: String, symbol: String, color: Color, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.28)) { showAttach = false }
+            action()
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 40, height: 40).background(color, in: .circle)
+                Text(title).font(.title3).foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 8)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
     }
 
     private func send() async {
-        let t = text
+        var t = text
+        if !quote.isEmpty {
+            // A Markdown quote the bot reads as context; the quoted bubble is left out of the
+            // app's own history recall.
+            let q = quote.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
+            t = q + "\n\n" + t
+            quote = ""
+        }
         text = ""
         focused = true
         historyCursor = nil

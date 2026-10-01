@@ -10,6 +10,8 @@ struct ChatRoute: Hashable {
     var initialText: String? = nil
     /// Files picked in the compose sheet; staged into the chat and sent with the first message.
     var initialAttachments: [AttachmentPreview] = []
+    /// Another bot's chat opened from a "Messaged X" notice: the transcript, no composer, no cards.
+    var readOnly: Bool = false
     /// A new chat's working folder on the gateway: the project it starts in.
     var cwd: String? = nil
 }
@@ -59,7 +61,7 @@ struct ChatListView: View {
     @AppStorage("chats.archivedRooms") private var archivedRoomsRaw = ""
     @State private var pendingRoomDelete: Room?
     private var archivedRooms: Set<String> { Set(archivedRoomsRaw.split(separator: ",").map(String.init)) }
-    private var filtering: Bool { pinnedOnly || needsYouOnly || liveOnly || groupsOnly || !showArchived || sortKey != "recent" || !projectFilter.isEmpty }
+    private var filtering: Bool { pinnedOnly || needsYouOnly || liveOnly || groupsOnly || !showArchived || !projectFilter.isEmpty }
     /// The profile menu's icons are rendered images; UIKit keeps the built menu, so it is given a
     /// new identity whenever a bot's colour or look changes.
     @AppStorage(BotColors.storageKey) private var botColorsRaw = ""
@@ -116,11 +118,15 @@ struct ChatListView: View {
                         .help("Refresh (⌘R)")
                     #endif
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
+                    sortMenu
                     filterMenu
                 }
             }
-            // Compose: the Messages-style sheet (To: bots, first message).
-            .onChange(of: model.newChatRequest) { _, r in
+            // Compose: one tap is a fresh chat with the current bot, straight in (a tester:
+            // "I shouldn't have to name it or choose appearance"); a long press is the
+            // Messages-style sheet (To: bots, project, first message, files).
+            .onChange(of: model.newChatRequest) { _, r in if r != nil { openFreshChat() } }
+            .onChange(of: model.newChatSheetRequest) { _, r in
                 guard r != nil, model.selectedTab == .chats, runtime != nil else { return }
                 showNewChat = true
             }
@@ -155,7 +161,7 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                open(ChatRoute(storedID: r.storedSessionID, title: nil))
+                open(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.kind == "readonly" ? r.profile : nil, readOnly: r.kind == "readonly"))
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }
@@ -165,6 +171,16 @@ struct ChatListView: View {
                 Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This removes the session and its transcript from the gateway.") }
+    }
+
+    /// The compose circle's tap: a fresh chat with the current bot, in the project the list is
+    /// narrowed to, with nothing to fill in first.
+    private func openFreshChat() {
+        guard model.selectedTab == .chats, let runtime else { return }
+        let profile = model.composeProfile ?? runtime.selectedProfile
+        var cwd: String? = nil
+        if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
+        open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd))
     }
 
     private var profileMenu: some View {
@@ -204,6 +220,23 @@ struct ChatListView: View {
         .id("\(botColorsRaw)|\(botAvatarsRaw)|\(glassAll)|\(colorScheme == .light)")
     }
 
+    /// Sort on its own button: inside the filter menu it sat under every project, a long
+    /// scroll away once there were many.
+    private var sortMenu: some View {
+        Menu {
+            Picker("Sort by", selection: $sortKey) {
+                Label("Recent", systemImage: "clock").tag("recent")
+                Label("Title", systemImage: "textformat").tag("title")
+                Label("Bot", systemImage: "person").tag("bot")
+                Label("Model", systemImage: "cpu").tag("model")
+            }
+        } label: {
+            Image(systemName: sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
+                .accessibilityLabel("Sort: \(sortKey)")
+        }
+        .accessibilityIdentifier("chats.sort")
+    }
+
     private var filterMenu: some View {
         Menu {
             Section("Show") {
@@ -223,14 +256,8 @@ struct ChatListView: View {
                     Button { showProjects = true } label: { Label("Manage projects…", systemImage: "folder.badge.gearshape") }
                 }
             }
-            Picker("Sort by", selection: $sortKey) {
-                Label("Recent", systemImage: "clock").tag("recent")
-                Label("Title", systemImage: "textformat").tag("title")
-                Label("Bot", systemImage: "person").tag("bot")
-                Label("Model", systemImage: "cpu").tag("model")
-            }
             if filtering {
-                Button { pinnedOnly = false; needsYouOnly = false; liveOnly = false; groupsOnly = false; showArchived = true; sortKey = "recent"; projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
+                Button { pinnedOnly = false; needsYouOnly = false; liveOnly = false; groupsOnly = false; showArchived = true; projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
             }
         } label: {
             Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
@@ -337,10 +364,10 @@ struct ChatListView: View {
         // The search field belongs in the toolbar on a Mac; over the list it hid the top of the scroll bar.
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search chats")
         #else
-        .safeAreaInset(edge: .top, spacing: 0) { searchField }
+        // The system drawer: out of sight until the list is pulled down, like Mail.
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
         #endif
-        // The grouped list otherwise leaves a section's worth of empty space under the search bar.
-        .contentMargins(.top, 0, for: .scrollContent)
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
         // The bots in the rows look where the list is going.
@@ -393,12 +420,10 @@ struct ChatListView: View {
             // started moments ago (or one still running) could vanish from the list on the way
             // back from it. They stay listed from the live session until the gateway has them.
             let listed = Set(all.map(\.id))
-            // A pin is an explicit keep: a pinned row the gateway's page happened to leave out
-            // (a lineage that moved to a new tip, a listing window) stays from the last load
-            // until the gateway lists it again unpinned, or the user deletes it here.
-            for old in sessions where old.pinned == true && old.archived != true && !listed.contains(old.id) && !droppedIDs.contains(old.id) {
-                all.append(old)
-            }
+            // No local "keep" of pinned rows the gateway left out: the gateway lists every
+            // pinned chat itself, so the only rows such a keep held were stale ones (a chat
+            // compressed onto a new id, one deleted elsewhere), and those could never be
+            // unpinned or archived again (the row was the app's own copy).
             let now = Date().timeIntervalSince1970
             for chat in runtime.chats where !listed.contains(chat.storedID) && !chat.storedID.isEmpty
                 && (chat.isRunning || !chat.items.isEmpty)
@@ -607,8 +632,8 @@ struct ChatListView: View {
         droppedIDs.insert(s.id)
         guard let runtime else { return }
         if let chat = runtime.chatForStored(s.id) { runtime.closeChat(chat) }
-        // The row's own bot, not the selected one: with All bots on, a chat of another bot was
-        // addressed under the wrong profile and the gateway did nothing.
+        sessions.removeAll { $0.id == s.id }
+        // The chat's own bot, not the selected one: with All bots on, rows come from every profile.
         let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/sessions/\(s.id)", profile: s.profile ?? runtime.selectedProfile, body: EmptyBody())
         await load()
     }
@@ -616,8 +641,28 @@ struct ChatListView: View {
     private func patch(_ s: StoredSession, _ fields: [String: JSONValue]) async {
         guard let runtime else { return }
         var body = fields
-        if let p = s.profile ?? runtime.selectedProfile { body["profile"] = .string(p) }
-        let _: JSONValue? = try? await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body))
+        if let p = s.profile ?? runtime.selectedProfile, !p.isEmpty { body["profile"] = .string(p) }
+        // Archiving a pinned chat unpins it too: the gateway lists every pinned chat, archived
+        // or not, so an archived pin would stay at the top as if nothing happened.
+        if case .bool(true)? = body["archived"], s.pinned == true { body["pinned"] = .bool(false) }
+        // Shown at once; the gateway's answer decides whether it stays that way.
+        let before = sessions
+        if let i = sessions.firstIndex(where: { $0.id == s.id }) {
+            if case .bool(let v)? = body["pinned"] { sessions[i].pinned = v }
+            if case .bool(let v)? = body["archived"] { sessions[i].archived = v }
+        }
+        do {
+            let _: JSONValue? = try await runtime.api.send("PATCH", "/api/sessions/\(s.id)", json: .object(body))
+        } catch HermesAPIError.http(let status, _) where status == 404 {
+            // The gateway no longer has this id (compressed onto a new one, deleted elsewhere):
+            // the row was stale, and the gateway's list is the truth.
+            sessions.removeAll { $0.id == s.id }
+            droppedIDs.insert(s.id)
+        } catch {
+            sessions = before
+            errorText = "Could not update the chat: \(error.localizedDescription)"
+            return
+        }
         await load()
     }
 }
@@ -639,6 +684,7 @@ struct SessionRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if session.pinned == true { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
+                    if session.archived == true { Image(systemName: "archivebox").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Archived") }
                     Text(summary?.title ?? session.displayTitle).font(.body.weight(.medium)).lineLimit(1)
                     if summary != nil { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Summarized on device") }
                 }
@@ -691,7 +737,7 @@ struct SessionPreview: View {
                             Text(m.text ?? "").font(.footnote).lineLimit(4)
                                 .padding(.horizontal, 10).padding(.vertical, 6)
                                 .foregroundStyle(m.role == "user" ? .white : .primary)
-                                .background(m.role == "user" ? Color.accentColor : Color(.systemGray5), in: .rect(cornerRadius: 12))
+                                .background(m.role == "user" ? Color.vory : Color(.systemGray5), in: .rect(cornerRadius: 12))
                             if m.role != "user" { Spacer(minLength: 40) }
                         }
                     }
@@ -744,7 +790,7 @@ struct RoomPreview: View {
                         Text(ev.payload["text"]?.stringValue ?? "").font(.footnote).lineLimit(3)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .foregroundStyle(user ? .white : .primary)
-                            .background(user ? Color.accentColor : Color(.systemGray5), in: .rect(cornerRadius: 12))
+                            .background(user ? Color.vory : Color(.systemGray5), in: .rect(cornerRadius: 12))
                         if !user { Spacer(minLength: 40) }
                     }
                 }

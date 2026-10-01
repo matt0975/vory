@@ -11,9 +11,25 @@ public struct ToolActivity: Hashable, Sendable, Identifiable {
     public var resultText: String?
     public var durationSeconds: Double?
     public var risk: String?
+    /// Set when this call carried a message to another bot: the row reads "Messaged X" instead
+    /// of a terminal transcript.
+    public var delivery: BotDelivery?
 
     public var displayName: String {
         name.replacingOccurrences(of: "_", with: " ")
+    }
+
+    /// The other bot's answer, when the quiet run brought one back: the result without its
+    /// session bookkeeping lines, unwrapped from a JSON {"output": …} if the terminal wrapped it,
+    /// and without a "Message from X:" prefix the recipient may have echoed.
+    public var deliveryReply: String? {
+        guard delivery != nil, var raw = resultText?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        if raw.hasPrefix("{"), let data = raw.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let out = obj["output"] as? String { raw = out }
+        let body = raw.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("session_id:") }
+            .joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.isEmpty { return nil }
+        return AgentMessage.parse(body)?.body ?? body
     }
 
     public init(id: String, name: String, context: String? = nil, argsText: String? = nil, status: Status = .running, summary: String? = nil, resultText: String? = nil, durationSeconds: Double? = nil, risk: String? = nil) {
@@ -26,7 +42,95 @@ public struct ToolActivity: Hashable, Sendable, Identifiable {
         self.resultText = resultText
         self.durationSeconds = durationSeconds
         self.risk = risk
+        self.delivery = BotDelivery.parse(name: name, context: context, argsText: argsText)
     }
+}
+
+/// A message one bot sent another. The Bot Mode convention is a quiet run of the other bot:
+/// `hermes -p <bot> chat … -q "Message from 🤖 <sender>: …"` through the terminal tool; newer
+/// gateways have a `message_agent` tool with a target. Either way the user-facing truth is
+/// "Messaged X", not a shell transcript.
+public struct BotDelivery: Hashable, Sendable {
+    public var target: String
+    public var message: String?
+
+    public init(target: String, message: String? = nil) { self.target = target; self.message = message }
+
+    public static func parse(name: String, context: String?, argsText: String?) -> BotDelivery? {
+        // The preview the gateway sends is cut short; the full command is in the args.
+        var command = context ?? ""
+        if let a = argsText, let m = a.firstMatch(of: /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/) {
+            command = String(m.1).replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\n", with: "\n")
+        }
+        // The Bot Mode DM runner wraps the CLI: `python bot_mode_dm.py --run-delivery [--author …]
+        // <mode> <file> [--profile-home …] hermes -p <bot> chat …`, or `… hermes -p <me> peer dm
+        // <peer>/<bot>`. The peer form carries the sender's own -p, so it is read first.
+        if let m = command.firstMatch(of: /\bpeer\s+dm\s+("?)([A-Za-z0-9][A-Za-z0-9_\/.-]{0,80})\1/) {
+            return BotDelivery(target: Self.key(String(m.2)), message: nil)
+        }
+        if command.contains("--run-delivery"),
+           let m = command.firstMatch(of: /(?:^|[\s;&|])-p[\s=]+("?)([a-z0-9][a-z0-9_-]{0,63})\1(?=\s|$)/.ignoresCase()) {
+            return BotDelivery(target: String(m.2).lowercased(), message: nil)
+        }
+        // A quiet run of another bot's CLI is the delivery, however the binary is spelled before
+        // it (hermes, $HERMES_BIN, an env assignment, a path) and however the words travel:
+        // `-q "…"` inline, `-Q --query-file <tmp>` from a file (the Bot Mode DM transport the
+        // bot falls back to outside its Bot Chat), or `-c "Bot Chat"` into the other bot's
+        // thread. A peer DM, `hermes peer dm <peer>/<bot>`, is one too.
+        let quiet = command.firstMatch(of: /(?:^|\s)(?:-q|-Q|--quiet|--query-file)(?:\s|=|$)/) != nil
+        let botChat = command.firstMatch(of: /-c\s+["']?Bot Chat/.ignoresCase()) != nil
+        if quiet || botChat || command.contains("Message from"),
+           command.firstMatch(of: /\bchat\b/) != nil,
+           let m = command.firstMatch(of: /(?:^|[\s;&|])(?:-p|--profile)[\s=]+("?)([a-z0-9][a-z0-9_-]{0,63})\1(?=\s|$)/.ignoresCase()) {
+            return BotDelivery(target: String(m.2).lowercased(), message: Self.quoted(after: "-q", in: command))
+        }
+        if name == "message_agent" || name == "send_message_to_agent" {
+            let args = argsText ?? ""
+            if let t = args.firstMatch(of: /"target"\s*:\s*"([^"]+)"/) { return BotDelivery(target: Self.key(String(t.1)), message: args.firstMatch(of: /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/).map { String($0.1) }) }
+            if let c = context, !c.isEmpty { return BotDelivery(target: Self.key(c)) }
+        }
+        return nil
+    }
+
+    /// `@Dr. Foo`, `scribe@laptop`, `peer/scribe` → `dr. foo` / `scribe`: the routing alias.
+    public static func key(_ value: String) -> String {
+        var v = value.trimmingCharacters(in: .whitespaces)
+        if v.hasPrefix("@") { v.removeFirst() }
+        if let at = v.lastIndex(of: "@") { v = String(v[..<at]) }
+        return (v.split(separator: "/").last.map(String.init) ?? v).lowercased()
+    }
+
+    private static func quoted(after flag: String, in command: String) -> String? {
+        guard let r = command.range(of: flag + " ") else { return nil }
+        let rest = command[r.upperBound...].trimmingCharacters(in: .whitespaces)
+        guard let q = rest.first, q == "\"" || q == "'" else { return nil }
+        let body = rest.dropFirst()
+        guard let end = body.firstIndex(of: q) else { return String(body) }
+        let text = String(body[..<end])
+        return AgentMessage.parse(text)?.body ?? text
+    }
+}
+
+/// An inbound row from another bot: "Message from 🤖 Sender (@handle): body" or
+/// "[Message from agent 'Sender'] body".
+public struct AgentMessage: Hashable, Sendable {
+    public var sender: String
+    public var handle: String?
+    public var body: String
+
+    public static func parse(_ text: String) -> AgentMessage? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let m = t.firstMatch(of: /^Message from (?:🤖\s*)?([^:\n(]{1,64}?)(?:\s*\(@([a-z0-9][a-z0-9_-]{0,63})(?:@[a-zA-Z0-9][a-zA-Z0-9_-]{0,63})?\))?:\s*([\s\S]*)$/) {
+            return AgentMessage(sender: String(m.1).trimmingCharacters(in: .whitespaces), handle: m.2.map(String.init), body: String(m.3))
+        }
+        if let m = t.firstMatch(of: /^\[Message from agent '([^']{1,64})'\]\s*([\s\S]*)$/) {
+            return AgentMessage(sender: String(m.1), handle: nil, body: String(m.2))
+        }
+        return nil
+    }
+
+    /// The routing alias for the sender, the way a delivery target is written.
+    public var key: String { BotDelivery.key(handle ?? sender) }
 }
 
 public struct AttachmentPreview: Hashable, Sendable, Identifiable {
@@ -178,5 +282,50 @@ public struct TurnStats: Hashable, Sendable {
         self.outputTokens = outputTokens
         self.seconds = seconds
         self.exact = exact
+    }
+}
+
+/// A note the gateway put in the user's seat: a background process reporting in, a scheduled run's
+/// prompt, a system line. Drawn as a quiet folded notice, not as the person's own bubble.
+public struct InjectedNote: Hashable, Sendable {
+    public var title: String
+    public var body: String
+
+    public static func parse(_ text: String) -> InjectedNote? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("[") else { return nil }
+        let lower = t.lowercased()
+        if lower.hasPrefix("[important: background process") || lower.hasPrefix("[background process") {
+            let ok = lower.contains("completed normally") || lower.contains("exit code 0")
+            let failed = lower.contains("failed") || lower.contains("non-zero") || lower.contains("exit code") && !ok
+            return InjectedNote(title: failed ? "Background process failed" : "Background process finished", body: t)
+        }
+        if lower.hasPrefix("[cronjob") {
+            let name = t.firstMatch(of: /\[Cronjob "([^"]+)"/).map { String($0.1) }
+            return InjectedNote(title: name.map { "Scheduled run: \($0)" } ?? "Scheduled run", body: t)
+        }
+        if lower.hasPrefix("[important:") || lower.hasPrefix("[system") || lower.hasPrefix("[note") {
+            return InjectedNote(title: "Note from the gateway", body: t)
+        }
+        return nil
+    }
+}
+
+/// The gateway could not start the bot's model: a provider whose CLI or key is missing on the
+/// gateway machine. Named so the chat can say what is wrong and offer another model.
+public struct StartFailure: Hashable, Sendable {
+    public var provider: String?
+    public var reason: String
+
+    public static func parse(_ text: String) -> StartFailure? {
+        let lower = text.lowercased()
+        guard lower.contains("could not start the assistant") || lower.contains("cli command") && lower.contains("could not find") else { return nil }
+        let provider = text.firstMatch(of: /[Cc]ould not find the '([^']+)' CLI command/).map { String($0.1) }
+            ?? text.firstMatch(of: /provider '([^']+)'/).map { String($0.1) }
+        var reason = text
+        if let r = text.range(of: "Details:") { reason = String(text[r.upperBound...]) }
+        if let r = reason.range(of: "Check the model") { reason = String(reason[..<r.lowerBound]) }
+        reason = reason.replacingOccurrences(of: "..", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        return StartFailure(provider: provider, reason: reason)
     }
 }

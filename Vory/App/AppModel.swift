@@ -60,18 +60,22 @@ final class AppModel {
         #endif
     }
 
-    enum AppTab: String, Hashable, CaseIterable, Sendable {
-        case chats, bots, files, sessions, cron, approvals, system, settings
+    enum AppTab: String, Hashable, CaseIterable, Sendable, Identifiable {
+        var id: String { rawValue }
+        case chats, dashboard, bots, files, sessions, cron, approvals, system, projects, status, settings
 
         var title: String {
             switch self {
             case .chats: return "Chats"
+            case .dashboard: return "Home"
             case .bots: return "Bots"
             case .files: return "Files"
             case .sessions: return "Sessions"
             case .cron: return "Tasks"
             case .approvals: return "Approvals"
             case .system: return "System"
+            case .projects: return "Projects"
+            case .status: return "Status"
             case .settings: return "Settings"
             }
         }
@@ -79,12 +83,15 @@ final class AppModel {
         var symbol: String {
             switch self {
             case .chats: return "bubble.left.and.bubble.right"
+            case .dashboard: return "house.fill"
             case .bots: return "person.2.wave.2"
             case .files: return "folder"
             case .sessions: return "list.bullet.rectangle"
             case .cron: return "calendar.badge.clock"
             case .approvals: return "checkmark.shield"
             case .system: return "server.rack"
+            case .projects: return "folder.fill"
+            case .status: return "waveform.path.ecg"
             case .settings: return "gear"
             }
         }
@@ -93,6 +100,8 @@ final class AppModel {
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.
     var newChatRequest: UUID?
+    /// The compose circle held down: the full New Message sheet instead of a fresh chat.
+    var newChatSheetRequest: UUID?
     /// The bot's page in front, if any, so compose there starts a chat with that bot.
     var composeProfile: String?
     /// The custom tab bar hides while a chat is open on the Chats tab (path-driven, instant)…
@@ -107,7 +116,9 @@ final class AppModel {
     var popToRoot: [AppTab: Int] = [:]
     /// Bumped on every tap of the already-selected tab (root or not): lists scroll to the top.
     var tabReselected: [AppTab: Int] = [:]
-    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 }
+    /// A keyboard is up somewhere: the bar hides rather than floating over it.
+    var keyboardUp = false
+    var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
 
     init() {
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
@@ -154,6 +165,11 @@ final class AppModel {
     /// complication; `vory://chats` just lands on the list.
     func open(_ url: URL) {
         guard url.scheme == "vory" else { return }
+        if url.host == "home" {
+            // From the Overview widget: Home when it is on the bar, else Chats.
+            selectedTab = TabLayout.parse(UserDefaults.standard.string(forKey: TabLayout.storageKey)).visible().contains(.dashboard) ? .dashboard : .chats
+            return
+        }
         selectedTab = .chats
         if url.host == "chat", let id = url.pathComponents.dropFirst().first {
             let profile = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "profile" }?.value
@@ -168,6 +184,44 @@ final class AppModel {
             pendingRoute = r
             Task { await ensureConnection(for: r) }
         }
+    }
+
+    /// A "Messaged X" notice was tapped: X's own chat (its Bot Chat session) opens read-only.
+    /// X is a routing alias; it matches a profile by name or display name. The session is the
+    /// one titled Bot Chat among X's recent chats, the newest if there are several.
+    func openBotChat(_ handle: String) async -> String? {
+        guard let rt = runtime else { return "Not connected." }
+        let key = BotDelivery.key(handle)
+        guard let profile = rt.profiles.first(where: { BotDelivery.key($0.name) == key || BotDelivery.key($0.label) == key }) else {
+            return "No bot called \(handle) on this gateway."
+        }
+        do {
+            // The gateway names each profile's Bot Chat itself (profiles.list → canonical_session,
+            // the live tip of the lineage), which is how the companion finds it too. The recent
+            // list is the fallback for a gateway without that field, then a title search.
+            var storedID: String?
+            if let r = try? await rt.rpc("profiles.list"), let rows = r["profiles"]?.arrayValue {
+                for row in rows where row["name"]?.stringValue == profile.name {
+                    if let cs = row["canonical_session"], !cs.isNull {
+                        storedID = cs["resolved_id"]?.stringValue ?? cs["id"]?.stringValue
+                    }
+                }
+            }
+            if storedID == nil {
+                let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
+                let own = r.sessions.filter { ($0.profile ?? profile.name) == profile.name }
+                storedID = (own.first { $0.title == "Bot Chat" } ?? own.first { ($0.title ?? "").localizedCaseInsensitiveContains("bot chat") })?.id
+            }
+            if storedID == nil, let r: SessionListResponse = try? await rt.api.get("/api/sessions/search", query: [URLQueryItem(name: "q", value: "Bot Chat")], profile: profile.name) {
+                storedID = r.sessions.first { $0.title == "Bot Chat" }?.id
+            }
+            guard let sid = storedID else { return "\(profile.label) has no Bot Chat yet. Its first bot-to-bot message creates one." }
+            var route = PendingRoute(connectionID: rt.connection.id, storedSessionID: sid, profile: profile.name)
+            route.kind = "readonly"
+            selectedTab = .chats
+            pendingRoute = route
+            return nil
+        } catch { return "Could not list \(profile.label)'s chats: \(error.localizedDescription)" }
     }
 
     func deactivate() async {

@@ -218,21 +218,24 @@ final class LiveActivityController: TurnActivityReporting {
 
     func update(for chat: ChatSession, attention: Bool, detail: String?) {
         guard let handle else { return }
-        let text = detail ?? (attention ? (chat.firstCard?.approval?.description ?? "Needs your answer") : (chat.statusLine ?? "Thinking…"))
+        let card = chat.firstCard
+        let inputKind = attention && card != nil && card?.method != "approval"
+        let text = detail ?? (attention ? (card?.method == "sudo" ? "sudo password needed" : (card?.approval?.description ?? (inputKind ? "Your input is needed" : "Needs your answer"))) : (chat.statusLine ?? "Thinking…"))
         // brain while it reasons, speech bubble while it writes, wrench while a tool runs
         let phase = attention ? "waiting"
             : (detail ?? chat.statusLine ?? "").hasPrefix("Running") || (chat.statusLine ?? "").hasPrefix("Preparing") ? "tool"
             : (chat.statusLine ?? "Thinking…").hasPrefix("Thinking") || (chat.statusLine ?? "").hasPrefix("Sending") || (chat.statusLine ?? "").hasPrefix("Queued") ? "thinking"
             : "streaming"
-        let state = HermesTurnAttributes.ContentState(phase: phase, detail: text, outputTokens: chat.usage?.output ?? 0,
+        var state = HermesTurnAttributes.ContentState(phase: phase, detail: text, outputTokens: chat.usage?.output ?? 0,
                                                        contextPercent: chat.usage?.contextPercent, needsAttention: attention, startedAt: startedAt,
                                                        contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
+        state.attentionKind = attention ? (inputKind ? "input" : "approval") : nil
         // Away from the app the alert (the Island expanding, the buzz) comes from the
         // companion's push when one is installed; only without it does the app raise its own.
         if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
             alertedAttention = true
             let botName = handle.activity.attributes.botName ?? chat.profileName
-            handle.alert(state, title: botName, body: "Approval needed — tap to answer. It waits for you.")
+            handle.alert(state, title: botName, body: inputKind ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
             Self.note("approval alert from the app (background)")
             return
         }

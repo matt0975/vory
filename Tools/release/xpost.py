@@ -29,14 +29,16 @@ def font(size, bold=False):
 
 def sections(notes: str) -> dict:
     """{'Fixed in this build': [bullet, …], 'Changed in this build': [...]}."""
+    # A heading is any non-bullet line; bullets belong to the last heading. Blank lines mean
+    # nothing (the notes keep one between bullets for legibility).
     out, current = {}, None
     for line in notes.splitlines():
         s = line.strip()
         if not s:
-            current = None; continue
+            continue
         if s.startswith("•"):
             if current is not None: out.setdefault(current, []).append(s.lstrip("• ").strip())
-        elif current is None:
+        else:
             current = s
     return out
 

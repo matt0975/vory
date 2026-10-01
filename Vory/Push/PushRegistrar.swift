@@ -36,8 +36,16 @@ final class PushRegistrar: PushRegistrationSyncing {
     let installID: String
 
     init() {
-        if let s = UserDefaults.standard.string(forKey: Self.installIDKey) { installID = s }
-        else { let s = UUID().uuidString.lowercased(); UserDefaults.standard.set(s, forKey: Self.installIDKey); installID = s }
+        // The id names this phone's device file on the gateway, so it must outlive a reinstall:
+        // in the Keychain, with the UserDefaults copy of earlier builds carried over once (a
+        // fresh id after a reinstall left the old file behind, and the companion pushed to both).
+        if let d = Keychain.get(account: Self.installIDKey), let s = String(data: d, encoding: .utf8), !s.isEmpty { installID = s }
+        else {
+            let s = UserDefaults.standard.string(forKey: Self.installIDKey) ?? UUID().uuidString.lowercased()
+            try? Keychain.set(Data(s.utf8), account: Self.installIDKey)
+            installID = s
+        }
+        UserDefaults.standard.set(installID, forKey: Self.installIDKey)
         NotificationCenter.default.addObserver(forName: .hermesLiveActivityPushToStartToken, object: nil, queue: .main) { [weak self] n in
             let token = n.userInfo?["token"] as? String
             Task { @MainActor in
@@ -267,6 +275,21 @@ enum LocalNotifier {
         let enc = UNNotificationCategory(identifier: "HERMES_ENC", actions: [], intentIdentifiers: [], options: [])
         let test = UNNotificationCategory(identifier: "HERMES_TEST", actions: [], intentIdentifiers: [], options: [])
         UNUserNotificationCenter.current().setNotificationCategories([approval, clarify, turn, err, enc, test])
+    }
+
+    /// Removes the delivered notifications that belong to one chat: its thread, or a push whose
+    /// payload names its session.
+    static func clearDelivered(for storedID: String) {
+        guard !storedID.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let ids = delivered.filter { n in
+                let c = n.request.content
+                if c.threadIdentifier == storedID { return true }
+                return ((c.userInfo["hermes"] as? [String: Any])?["session_id"] as? String) == storedID
+            }.map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
     }
 
     @MainActor

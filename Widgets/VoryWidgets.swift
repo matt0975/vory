@@ -64,6 +64,14 @@ struct SnapshotProvider: TimelineProvider {
             snap.connected = true
             snap.save()
         }
+        // The overview numbers refresh on their own, every half hour the widget is scheduled,
+        // so the Overview widget stays current without the app being opened.
+        if snap.usage.map({ Date().timeIntervalSince($0.updatedAt) > 1800 }) ?? true,
+           let a: UsageAnalytics = try? await api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "91")], profile: snap.profile) {
+            let list: SessionListResponse? = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: snap.profile)
+            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list?.sessions, previous: snap.usage)
+            snap.save()
+        }
         return snap
     }
 }
@@ -369,5 +377,151 @@ struct ContextView: View {
             .gaugeStyle(.accessoryCircular)
             .widgetAccentable()
         }
+    }
+}
+
+
+// MARK: Overview
+
+/// The Home tab's numbers on the Home Screen, the Lock Screen and the watch: sessions and tokens
+/// for the week and the month, and the activity blocks. Refreshes itself from the gateway.
+struct OverviewWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "vory.overview", provider: SnapshotProvider()) { entry in
+            OverviewView(entry: entry)
+                .containerBackground(.fill.tertiary, for: .widget)
+                .widgetURL(URL(string: "vory://home"))
+        }
+        .configurationDisplayName("Overview")
+        .description("Sessions and tokens this week and this month, with your activity blocks.")
+        .supportedFamilies(Self.families)
+    }
+
+    static var families: [WidgetFamily] {
+        #if os(watchOS)
+        [.accessoryRectangular, .accessoryCircular, .accessoryInline, .accessoryCorner]
+        #else
+        [.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular, .accessoryInline]
+        #endif
+    }
+}
+
+struct OverviewView: View {
+    var entry: SnapshotEntry
+    @Environment(\.widgetFamily) private var family
+    private var usage: WidgetSnapshot.Usage? { entry.snapshot?.usage }
+    private var fmt: (Int) -> String { WidgetSnapshot.Usage.tokens }
+
+    var body: some View {
+        switch family {
+        case .accessoryInline:
+            Label(usage.map { "7d: \($0.sessions7) chats · \(fmt($0.tokens7)) tokens" } ?? "Open Vory to fill this in", systemImage: "chart.bar.fill")
+        case .accessoryCircular:
+            VStack(spacing: 0) {
+                Text(usage.map { "\($0.sessions7)" } ?? "—").font(.system(.title3, design: .rounded).weight(.bold))
+                Text("week").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+            .widgetAccentable()
+        #if os(watchOS)
+        case .accessoryCorner:
+            Text(usage.map { "\($0.sessions7)" } ?? "—").font(.title3.weight(.semibold))
+                .widgetCurvesContent()
+                .widgetLabel { Text(usage.map { "\(fmt($0.tokens7)) tokens" } ?? "sessions this week") }
+                .widgetAccentable()
+        #endif
+        case .accessoryRectangular:
+            VStack(alignment: .leading, spacing: 2) {
+                Label("This week", systemImage: "chart.bar.fill").font(.caption.weight(.semibold)).widgetAccentable()
+                if let u = usage {
+                    Text("\(u.sessions7) chats · \(fmt(u.tokens7)) tokens").font(.caption)
+                    Text("Month: \(u.sessions30) chats, \(u.activeDays30) active days").font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("Open Vory's Home tab once to fill this in.").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        default:
+            homeScreen
+        }
+    }
+
+    #if os(iOS)
+    private var isMedium: Bool { family == .systemMedium }
+    #else
+    private var isMedium: Bool { false }
+    #endif
+
+    private var homeScreen: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(isMedium ? "Overview · 30 days" : "This week", systemImage: "chart.bar.fill").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer()
+                if let u = usage, isMedium, let m = u.topModel { Text(m).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
+            }
+            if let u = usage {
+                if isMedium {
+                    HStack(spacing: 10) {
+                        stat("Sessions", "\(u.sessions30)")
+                        stat("Messages", u.messages30.map { "\($0)" } ?? "—")
+                        stat("Tokens", fmt(u.tokens30))
+                        stat("Active days", "\(u.activeDays30)")
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        stat("Sessions", "\(u.sessions7)")
+                        stat("Tokens", fmt(u.tokens7))
+                    }
+                }
+                UsageBlocks(days: u.days, weeks: isMedium ? 13 : 6)
+            } else {
+                Text("Open Vory's Home tab once to fill this in.").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+    }
+
+    private func stat(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.system(.title3, design: .rounded).weight(.bold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One column per week, one row per weekday, darker for busier days.
+struct UsageBlocks: View {
+    var days: [WidgetSnapshot.Usage.Day]
+    var weeks: Int
+
+    private var counts: [Date: Int] {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = .current
+        return Dictionary(days.compactMap { d in f.date(from: d.day).map { (cal.startOfDay(for: $0), d.sessions) } }, uniquingKeysWith: +)
+    }
+
+    var body: some View {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let weekday = cal.component(.weekday, from: today)
+        let daysBack = weeks * 7 - (7 - weekday)
+        let start = cal.date(byAdding: .day, value: -(daysBack - 1), to: today)!
+        let counts = counts
+        let peak = max(1, counts.values.max() ?? 1)
+        HStack(alignment: .top, spacing: 2) {
+            ForEach(0..<weeks, id: \.self) { w in
+                VStack(spacing: 2) {
+                    ForEach(0..<7, id: \.self) { d in
+                        let day = cal.date(byAdding: .day, value: w * 7 + d, to: start)!
+                        let n = counts[day] ?? 0
+                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                            .fill(day > today ? Color.clear : (n == 0 ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.3 + 0.7 * min(1, Double(n) / Double(peak)))))
+                            .aspectRatio(1, contentMode: .fit)
+                    }
+                }
+            }
+        }
+        .widgetAccentable()
     }
 }
