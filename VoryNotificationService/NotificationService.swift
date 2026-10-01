@@ -1,6 +1,10 @@
 import Intents
 import SwiftUI
+#if canImport(UIKit)
 import UIKit
+#else
+import AppKit
+#endif
 import UserNotifications
 import VoryCore
 
@@ -84,7 +88,9 @@ final class NotificationService: UNNotificationServiceExtension {
         let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText, content: content.body,
                                          speakableGroupName: nil, conversationIdentifier: conversation, serviceName: nil,
                                          sender: sender, attachments: nil)
+        #if os(iOS)
         if let png { intent.setImage(INImage(imageData: png), forParameterNamed: \.sender) }
+        #endif
         let interaction = INInteraction(intent: intent, response: nil)
         interaction.direction = .incoming
         interaction.donate(completion: nil)
@@ -115,24 +121,51 @@ enum AvatarRender {
     @MainActor
     static func image(profile: String, name: String, looks: BotLooks) -> Data? {
         let choice = looks.avatars[profile] ?? ""
-        if choice == "photo", let data = looks.photos[profile], let ui = UIImage(data: data) {
-            // Round it like a contact photo.
-            let side: CGFloat = 256
-            let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
-            let img = renderer.image { ctx in
-                ctx.cgContext.addEllipse(in: CGRect(x: 0, y: 0, width: side, height: side)); ctx.cgContext.clip()
-                let scale = side / min(ui.size.width, ui.size.height)
-                let w = ui.size.width * scale, h = ui.size.height * scale
-                ui.draw(in: CGRect(x: (side - w) / 2, y: (side - h) / 2, width: w, height: h))
-            }
-            return img.pngData()
+        if choice == "photo", let data = looks.photos[profile] {
+            return roundPhoto(data)
         }
         let spec = BotLookSpec.from(choice: choice, hex: looks.colors[profile] ?? "#7C5CFF")
         let renderer = ImageRenderer(content: BotFaceView(spec: spec, size: 128, active: false).padding(6))
         renderer.scale = 2
         renderer.isOpaque = false
+        #if canImport(UIKit)
         return renderer.uiImage?.pngData()
+        #else
+        return renderer.nsImage.flatMap(png)
+        #endif
     }
+
+    /// The photo rounded like a contact's, as PNG.
+    private static func roundPhoto(_ data: Data) -> Data? {
+        let side: CGFloat = 256
+        #if canImport(UIKit)
+        guard let ui = UIImage(data: data) else { return nil }
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side))
+        return renderer.image { ctx in
+            ctx.cgContext.addEllipse(in: CGRect(x: 0, y: 0, width: side, height: side)); ctx.cgContext.clip()
+            let scale = side / min(ui.size.width, ui.size.height)
+            let w = ui.size.width * scale, h = ui.size.height * scale
+            ui.draw(in: CGRect(x: (side - w) / 2, y: (side - h) / 2, width: w, height: h))
+        }.pngData()
+        #else
+        guard let ns = NSImage(data: data), ns.size.width > 0, ns.size.height > 0 else { return nil }
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            NSBezierPath(ovalIn: rect).addClip()
+            let scale = side / min(ns.size.width, ns.size.height)
+            let w = ns.size.width * scale, h = ns.size.height * scale
+            ns.draw(in: NSRect(x: (side - w) / 2, y: (side - h) / 2, width: w, height: h), from: .zero, operation: .sourceOver, fraction: 1)
+            return true
+        }
+        return png(img)
+        #endif
+    }
+
+    #if !canImport(UIKit)
+    private static func png(_ image: NSImage) -> Data? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return NSBitmapImageRep(cgImage: cg).representation(using: .png, properties: [:])
+    }
+    #endif
 }
 
 extension Color {

@@ -20,9 +20,18 @@
 		AA00000000000000000120 /* VoryNotificationContent.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000121 /* VoryNotificationContent.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000012E /* VoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000129 /* VoryCore */; };
 		AA00000000000000000203 /* VoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000201 /* VoryCore */; };
+		AA00000000000000000303 /* VoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000301 /* VoryCore */; };
+		AA00000000000000000310 /* VoryMacNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000321 /* VoryMacNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		AA00000000000000000304 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA00000000000000000340;
+			remoteInfo = VoryMacNotificationService;
+		};
 		AA00000000000000000030 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AA00000000000000000001 /* Project object */;
@@ -75,6 +84,17 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		AA00000000000000000350 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				AA00000000000000000310 /* VoryMacNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA00000000000000000050 /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -122,9 +142,33 @@
 		AA00000000000000000101 /* VoryNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000121 /* VoryNotificationContent.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryNotificationContent.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000220 /* Vory.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vory.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000321 /* VoryMacNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryMacNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		AA00000000000000000364 /* Exceptions for "VoryMacNotificationService" folder in "VoryMacNotificationService" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = AA00000000000000000340 /* VoryMacNotificationService */;
+		};
+		AA00000000000000000365 /* Exceptions for "Shared" folder in "VoryMacNotificationService" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				AppIcon.icon,
+				HermesTurnAttributes.swift,
+			);
+			target = AA00000000000000000340 /* VoryMacNotificationService */;
+		};
+		AA00000000000000000366 /* Exceptions for "VoryNotificationService" folder in "VoryMacNotificationService" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				VoryNotificationService.entitlements,
+			);
+			target = AA00000000000000000340 /* VoryMacNotificationService */;
+		};
 		AA00000000000000000064 /* Exceptions for "Vory" folder in "Vory" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -219,6 +263,14 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA00000000000000000360 /* VoryMacNotificationService */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000364 /* Exceptions for "VoryMacNotificationService" folder in "VoryMacNotificationService" target */,
+			);
+			path = VoryMacNotificationService;
+			sourceTree = "<group>";
+		};
 		AA00000000000000000060 /* Vory */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -248,6 +300,7 @@
 				AA0000000000000000012F /* Exceptions for "Shared" folder in "VoryNotificationService" target */,
 				AA00000000000000000130 /* Exceptions for "Shared" folder in "VoryNotificationContent" target */,
 				AA00000000000000000265 /* Exceptions for "Shared" folder in "VoryMac" target */,
+				AA00000000000000000365 /* Exceptions for "Shared" folder in "VoryMacNotificationService" target */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -282,6 +335,7 @@
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				AA00000000000000000105 /* Exceptions for "VoryNotificationService" folder in "VoryNotificationService" target */,
+				AA00000000000000000366 /* Exceptions for "VoryNotificationService" folder in "VoryMacNotificationService" target */,
 			);
 			path = VoryNotificationService;
 			sourceTree = "<group>";
@@ -305,6 +359,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		AA00000000000000000391 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000303 /* VoryCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA00000000000000000091 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -389,6 +451,7 @@
 				AA00000000000000000101 /* VoryNotificationService.appex */,
 				AA00000000000000000121 /* VoryNotificationContent.appex */,
 				AA00000000000000000220 /* Vory.app */,
+				AA00000000000000000321 /* VoryMacNotificationService.appex */,
 				AA00000000000000000022 /* VoryTests.xctest */,
 				AA00000000000000000023 /* VoryUITests.xctest */,
 			);
@@ -416,6 +479,31 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		AA00000000000000000340 /* VoryMacNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000380 /* Build configuration list for PBXNativeTarget "VoryMacNotificationService" */;
+			buildPhases = (
+				AA00000000000000000390 /* Sources */,
+				AA00000000000000000391 /* Frameworks */,
+				AA00000000000000000392 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000063 /* Shared */,
+				AA00000000000000000106 /* VoryNotificationService */,
+				AA00000000000000000360 /* VoryMacNotificationService */,
+			);
+			name = VoryMacNotificationService;
+			packageProductDependencies = (
+				AA00000000000000000301 /* VoryCore */,
+			);
+			productName = VoryMacNotificationService;
+			productReference = AA00000000000000000321 /* VoryMacNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		AA00000000000000000040 /* Vory */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AA00000000000000000080 /* Build configuration list for PBXNativeTarget "Vory" */;
@@ -623,10 +711,12 @@
 				AA00000000000000000290 /* Sources */,
 				AA00000000000000000291 /* Frameworks */,
 				AA00000000000000000292 /* Resources */,
+				AA00000000000000000350 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				AA00000000000000000311 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA00000000000000000060 /* Vory */,
@@ -683,6 +773,7 @@
 				AA00000000000000000110 /* VoryNotificationService */,
 				AA00000000000000000125 /* VoryNotificationContent */,
 				AA00000000000000000240 /* VoryMac */,
+				AA00000000000000000340 /* VoryMacNotificationService */,
 				AA00000000000000000042 /* VoryTests */,
 				AA00000000000000000043 /* VoryUITests */,
 			);
@@ -690,6 +781,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		AA00000000000000000392 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA00000000000000000092 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -756,6 +854,13 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		AA00000000000000000390 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA00000000000000000090 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -822,6 +927,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		AA00000000000000000311 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA00000000000000000340 /* VoryMacNotificationService */;
+			targetProxy = AA00000000000000000304 /* PBXContainerItemProxy */;
+		};
 		AA000000000000000000A0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = AA00000000000000000041 /* HermesLiveActivity */;
@@ -860,6 +970,59 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		AA000000000000000003B2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ENABLE_DEBUG_DYLIB = NO;
+				CODE_SIGN_ENTITLEMENTS = VoryMacNotificationService/VoryMacNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VoryMacNotificationService/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		AA000000000000000003B3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = VoryMacNotificationService/VoryMacNotificationService.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = VoryMacNotificationService/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
 		AA000000000000000000B0 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1456,6 +1619,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		AA00000000000000000380 /* Build configuration list for PBXNativeTarget "VoryMacNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000003B2 /* Debug */,
+				AA000000000000000003B3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		AA00000000000000000080 /* Build configuration list for PBXNativeTarget "Vory" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1556,6 +1728,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		AA00000000000000000301 /* VoryCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = VoryCore;
+		};
 		AA000000000000000000C1 /* VoryCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = VoryCore;
