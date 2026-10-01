@@ -593,7 +593,9 @@ class Gateway:
         if method == "ping":
             return ok({"pong": True})
         if method == "profiles.list":
-            return ok({"profiles": [{"name": "default", "is_default": True}, {"name": "work", "is_default": False}]})
+            return ok({"profiles": [{"name": "default", "is_default": True},
+                                    {"name": "work", "is_default": False,
+                                     "canonical_session": {"id": "20260930_221000_work01", "resolved_id": "20260930_221000_work01", "title": "Bot Chat", "message_count": 4}}]})
         if method == "session.active_list":
             return ok({"sessions": [{"id": l.sid, "session_key": l.stored, "title": l.title, "source": "ios",
                                      "status": "streaming" if l.running else "idle", "current": False}

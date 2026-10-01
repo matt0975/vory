@@ -178,12 +178,27 @@ final class AppModel {
             return "No bot called \(handle) on this gateway."
         }
         do {
-            let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
-            let own = r.sessions.filter { ($0.profile ?? profile.name) == profile.name }
-            guard let s = own.first(where: { $0.title == "Bot Chat" }) ?? own.first(where: { ($0.title ?? "").localizedCaseInsensitiveContains("bot chat") }) else {
-                return "\(profile.label) has no Bot Chat yet."
+            // The gateway names each profile's Bot Chat itself (profiles.list → canonical_session,
+            // the live tip of the lineage), which is how the companion finds it too. The recent
+            // list is the fallback for a gateway without that field, then a title search.
+            var storedID: String?
+            if let r = try? await rt.rpc("profiles.list"), let rows = r["profiles"]?.arrayValue {
+                for row in rows where row["name"]?.stringValue == profile.name {
+                    if let cs = row["canonical_session"], !cs.isNull {
+                        storedID = cs["resolved_id"]?.stringValue ?? cs["id"]?.stringValue
+                    }
+                }
             }
-            var route = PendingRoute(connectionID: rt.connection.id, storedSessionID: s.id, profile: profile.name)
+            if storedID == nil {
+                let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
+                let own = r.sessions.filter { ($0.profile ?? profile.name) == profile.name }
+                storedID = (own.first { $0.title == "Bot Chat" } ?? own.first { ($0.title ?? "").localizedCaseInsensitiveContains("bot chat") })?.id
+            }
+            if storedID == nil, let r: SessionListResponse = try? await rt.api.get("/api/sessions/search", query: [URLQueryItem(name: "q", value: "Bot Chat")], profile: profile.name) {
+                storedID = r.sessions.first { $0.title == "Bot Chat" }?.id
+            }
+            guard let sid = storedID else { return "\(profile.label) has no Bot Chat yet. Its first bot-to-bot message creates one." }
+            var route = PendingRoute(connectionID: rt.connection.id, storedSessionID: sid, profile: profile.name)
             route.kind = "readonly"
             selectedTab = .chats
             pendingRoute = route

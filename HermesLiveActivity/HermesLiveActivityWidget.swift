@@ -80,22 +80,23 @@ struct HermesTurnLiveActivity: Widget {
                     .widgetURL(context.attributes.chatURL)
                 }
             } compactLeading: {
-                HStack(spacing: 4) {
-                    BotMark(attributes: context.attributes, state: context.state, size: 22)
-                    PhaseGlyph(phase: context.state.phase, attention: context.state.needsAttention, botHex: context.attributes.tintHex)
-                        .font(.caption2.weight(.semibold))
-                }
-                .widgetURL(context.attributes.chatURL)
+                // The island on iPhone 18 Pro is smaller and holds three activities at once, so
+                // the compact view is the bot alone with its phase in a corner badge: one glyph
+                // per side, nothing that needs width.
+                IslandBot(attributes: context.attributes, state: context.state, size: 20)
+                    .widgetURL(context.attributes.chatURL)
             } compactTrailing: {
                 if context.state.needsAttention {
-                    Text("Approve").font(.caption2.weight(.semibold)).foregroundStyle(.yellow)
+                    Image(systemName: "exclamationmark").font(.caption.weight(.bold)).foregroundStyle(.yellow)
                 } else {
                     // Ticks while the turn runs; once it ends this is the total time it took.
                     ElapsedTimer(state: context.state).font(.caption2.monospacedDigit())
-                        .multilineTextAlignment(.trailing).frame(width: 40).minimumScaleFactor(0.7)
+                        .multilineTextAlignment(.trailing).frame(width: 34).minimumScaleFactor(0.6)
                 }
             } minimal: {
-                PhaseGlyph(phase: context.state.phase, attention: context.state.needsAttention, botHex: context.attributes.tintHex)
+                // Minimal is what each activity gets when several share the island: the bot's
+                // face, ringed yellow when it needs you, so three bots read as three bots.
+                IslandBot(attributes: context.attributes, state: context.state, size: 20)
                     .widgetURL(context.attributes.chatURL)
             }
             .keylineTint(context.state.needsAttention ? .yellow : PhaseStyle.tint(context.state.phase, bot: context.attributes.tintHex))
@@ -197,6 +198,34 @@ struct GlassDisc: View {
         }
         .frame(width: size, height: size)
         .shadow(color: .black.opacity(0.25), radius: size * 0.06, y: size * 0.03)
+    }
+}
+
+/// The bot in the island's compact and minimal slots: the face at 20 pt with a tiny phase badge
+/// on its corner, and a yellow ring while it waits on you.
+struct IslandBot: View {
+    var attributes: HermesTurnAttributes
+    var state: HermesTurnAttributes.ContentState
+    var size: CGFloat
+
+    private var spec: BotLookSpec { BotLookSpec.from(choice: attributes.avatar, hex: attributes.tintHex) }
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
+                BotFace.draw(spec, in: &ctx, size: sz, time: 0, active: false, breathe: false, idleEyes: false, move: false, motion: BotFace.widgetPose(phase: state.phase, attention: state.needsAttention))
+            }
+            .frame(width: size, height: size)
+            .overlay(Circle().strokeBorder(.yellow, lineWidth: state.needsAttention ? 1.5 : 0).padding(-1.5))
+            if !state.needsAttention {
+                Circle().fill(PhaseStyle.tint(state.phase, bot: attributes.tintHex))
+                    .frame(width: size * 0.38, height: size * 0.38)
+                    .overlay(Circle().strokeBorder(.black.opacity(0.9), lineWidth: 1))
+                    .offset(x: size * 0.12, y: size * 0.08)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
