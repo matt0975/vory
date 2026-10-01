@@ -184,10 +184,8 @@ struct DashboardView: View {
             HStack {
                 Text("Overview").font(.headline)
                 Spacer()
-                Picker("Range", selection: $rangeDays) {
-                    Text("7d").tag(7); Text("30d").tag(30); Text("90d").tag(90)
-                }
-                .pickerStyle(.segmented).frame(width: 150)
+                GlassSegments(options: [(7, "7d"), (30, "30d"), (90, "90d")], selection: $rangeDays)
+                    .accessibilityLabel("Range")
             }
             let t = usage?.totals
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
@@ -502,6 +500,39 @@ enum Format {
         case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
         case ..<1_000_000_000: return String(format: "%.1fM", Double(n) / 1_000_000)
         default: return String(format: "%.2fB", Double(n) / 1_000_000_000)
+        }
+    }
+}
+
+
+/// A small choice drawn the way the tab bar is: labels on a glass capsule, a clear lens sliding
+/// under the chosen one (the lens morphs between positions inside the container).
+struct GlassSegments<T: Hashable>: View {
+    var options: [(T, String)]
+    @Binding var selection: T
+    @Namespace private var lens
+
+    var body: some View {
+        GlassEffectContainer(spacing: 6) {
+            HStack(spacing: 0) {
+                ForEach(options, id: \.0) { option in
+                    Text(option.1).font(.caption.weight(.semibold))
+                        .foregroundStyle(selection == option.0 ? .primary : .secondary)
+                        .frame(width: 42, height: 26)
+                        .contentShape(.rect)
+                        .background {
+                            if selection == option.0 {
+                                Capsule().fill(.clear)
+                                    .glassEffect(.clear.interactive(), in: .capsule)
+                                    .glassEffectID("lens", in: lens)
+                            }
+                        }
+                        .onTapGesture { withAnimation(.snappy(duration: 0.3)) { selection = option.0 } }
+                        .accessibilityAddTraits(selection == option.0 ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            .padding(3)
+            .glassEffect(.regular, in: .capsule)
         }
     }
 }

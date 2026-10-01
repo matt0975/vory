@@ -279,6 +279,9 @@ struct ChatHeader: View {
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
     var body: some View {
+        // One glass container: the back circle, the pill and the menu circle blend when the pill
+        // grows toward them, and the pill morphs between its resting and asking shapes.
+        GlassEffectContainer(spacing: 16) {
         HStack(alignment: .top, spacing: 12) {
             Button(action: onBack) {
                 Image(systemName: "chevron.left").font(.title3.weight(.semibold))
@@ -356,6 +359,7 @@ struct ChatHeader: View {
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).
         .contentShape(.rect)
         .onTapGesture {}
+        }
     }
 }
 
