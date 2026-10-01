@@ -43,6 +43,8 @@ struct HomeLayout: Codable, Equatable {
     var items: [Item]
 
     static let storageKey = "home.layout"
+    /// The chats cards list every bot's chats, not only the current bot's.
+    static let allBotsKey = "home.allBots"
     static let `default` = HomeLayout(items: HomeCard.allCases.map { Item(card: $0, size: .full) })
 
     static func parse(_ raw: String) -> HomeLayout {
@@ -71,6 +73,7 @@ struct HomeSettingsView: View {
     @AppStorage("launchTab") private var launchTab = "chats"
     @AppStorage(TabLayout.storageKey) private var tabLayoutRaw = ""
     @AppStorage(HomeLayout.storageKey) private var layoutRaw = ""
+    @AppStorage(HomeLayout.allBotsKey) private var homeAllBots = false
     @Environment(\.editMode) private var editMode
 
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
@@ -94,6 +97,9 @@ struct HomeSettingsView: View {
                     ForEach(TabLayout.parse(tabLayoutRaw).visible()) { tab in Label(tab.title, systemImage: tab.symbol).tag(tab) }
                 }
             } footer: { Text("The tab the app opens on. Only tabs on the bar are offered; add one from Appearance › Tab bar.") }
+            Section {
+                Toggle(isOn: $homeAllBots) { Label("Chats from all bots", systemImage: "person.2") }
+            } footer: { Text("Off, the Pick up and Since cards show the current bot's chats. On, they merge every bot's recent chats, each with its bot's face.") }
             Section {
                 ForEach(layout.items) { item in
                     HStack(spacing: 12) {

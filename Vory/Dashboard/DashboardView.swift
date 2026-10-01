@@ -17,6 +17,7 @@ struct DashboardView: View {
     @AppStorage(ChatSummarizer.titlesKey) private var aiOn = ChatSummarizer.titlesOn
     @AppStorage(HomeLayout.storageKey) private var layoutRaw = ""
     @State private var usage: UsageAnalytics?
+    @AppStorage(HomeLayout.allBotsKey) private var homeAllBots = false
     @State private var sessions: [StoredSession] = []
     @State private var error: String?
     @State private var loading = false
@@ -41,6 +42,12 @@ struct DashboardView: View {
                                 Button { update { $0.set(item.card, size: .compact) } } label: { Label(item.card.sizeWords.compact, systemImage: item.size == .compact ? "checkmark" : "rectangle.compress.vertical") }
                                 Button { update { $0.set(item.card, size: .full) } } label: { Label(item.card.sizeWords.full, systemImage: item.size == .full ? "checkmark" : "rectangle.expand.vertical") }
                             }
+                            if item.card == .pickUp || item.card == .since {
+                                Section("Chats from") {
+                                    Button { homeAllBots = false } label: { Label("This bot", systemImage: homeAllBots ? "person" : "checkmark") }
+                                    Button { homeAllBots = true } label: { Label("All bots", systemImage: homeAllBots ? "checkmark" : "person.2") }
+                                }
+                            }
                             Button(role: .destructive) { withAnimation(.snappy) { update { $0.remove(item.card) } } } label: { Label("Hide from Home", systemImage: "eye.slash") }
                         }
                 }
@@ -56,8 +63,8 @@ struct DashboardView: View {
             .animation(.snappy, value: layoutRaw)
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .refreshable { await load() }
-        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)") { await load() }
+        .refreshable { await Task { await load() }.value }
+        .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)") { await load() }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart) }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
@@ -363,19 +370,54 @@ struct DashboardView: View {
 
     // MARK: Data
 
+    /// The recent chats: the current bot's page, or one page per bot merged, each row tagged
+    /// with its bot so the avatars and the chat routes know whose it is.
+    private static func chats(_ rt: GatewayRuntime, allBots: Bool) async throws -> [StoredSession] {
+        let query = [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: allBots ? "50" : "100")]
+        guard allBots, rt.profiles.count > 1 else {
+            let r: SessionListResponse = try await rt.api.get("/api/sessions", query: query, profile: rt.selectedProfile)
+            return r.sessions
+        }
+        return try await withThrowingTaskGroup(of: [StoredSession].self) { group in
+            for p in rt.profiles.map(\.name) {
+                group.addTask {
+                    let r: SessionListResponse = try await rt.api.get("/api/sessions", query: query, profile: p)
+                    return r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
+                }
+            }
+            var all: [StoredSession] = []
+            for try await part in group { all += part }
+            return all
+        }
+    }
+
+    /// The month's numbers, or nil with `keep` when the fetch was cancelled or never reached the
+    /// gateway: a refresh pulled and let go used to blank the card until the next launch, so
+    /// those keep the numbers the card has; a gateway that answers without the analytics API
+    /// clears them, which is what the footer explains.
+    private static func usage(_ rt: GatewayRuntime, days: Int) async -> (UsageAnalytics?, keep: Bool) {
+        do {
+            let a: UsageAnalytics = try await rt.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: String(days))], profile: rt.selectedProfile)
+            return (a, false)
+        } catch is CancellationError { return (nil, true) }
+        catch let e as URLError where e.code == .cancelled || e.code == .notConnectedToInternet || e.code == .timedOut { return (nil, true) }
+        catch { return (nil, false) }
+    }
+
     private func load() async {
         guard let rt = runtime else { return }
         loading = true; defer { loading = false }
         // The gateway caps a page at 100 (a larger ask is refused outright).
-        async let u: UsageAnalytics? = try? rt.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: String(rangeDays))], profile: rt.selectedProfile)
-        async let s: SessionListResponse? = try? rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: rt.selectedProfile)
+        let allBots = homeAllBots
+        async let u: (UsageAnalytics?, keep: Bool) = Self.usage(rt, days: rangeDays)
+        async let s: [StoredSession]? = try? Self.chats(rt, allBots: allBots)
         let (usageResult, list) = await (u, s)
-        usage = usageResult
-        if let list { sessions = list.sessions; error = nil }
+        if let a = usageResult.0 { usage = a } else if !usageResult.keep { usage = nil }
+        if let list { sessions = list; error = nil }
         else if sessions.isEmpty { error = "Could not load the chat list." }
         // The Overview widget and complications draw from the shared snapshot.
-        if let usageResult, var snap = WidgetSnapshot.load() {
-            snap.usage = WidgetSnapshot.Usage.make(analytics: usageResult, sessions: list?.sessions, previous: snap.usage)
+        if let a = usageResult.0, var snap = WidgetSnapshot.load() {
+            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list, previous: snap.usage)
             snap.save()
             WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
         }

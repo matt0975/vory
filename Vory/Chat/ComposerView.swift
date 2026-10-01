@@ -167,6 +167,7 @@ struct ComposerView: View {
             }
             // Same shape as the Messages app: a round attach button outside the field, and one
             // thin capsule holding the text with the mic or send control inside its trailing edge.
+            GlassEffectContainer(spacing: 14) {
             HStack(alignment: .bottom, spacing: 8) {
                 attachMenu
                 HStack(alignment: .bottom, spacing: 6) {
@@ -198,6 +199,7 @@ struct ComposerView: View {
                 // and on the phone that swallowed the taps meant for the text field's Paste menu.
                 .glassEffect(.regular, in: .rect(cornerRadius: 18))
                 .glassEffectID("dock", in: namespace)
+            }
             }
             if chat.isRunning, !text.isEmpty {
                 HStack {
@@ -266,6 +268,7 @@ struct ComposerView: View {
             Image(systemName: "plus").font(.body.weight(.semibold))
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
+                .glassEffectID("attach", in: namespace)
         }
         .menuStyle(.button)
         .buttonStyle(.plain)
