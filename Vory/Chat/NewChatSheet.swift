@@ -82,6 +82,10 @@ struct NewChatSheet: View {
                         .accessibilityLabel("\(p.label), \(DeviceWords.tap) to remove")
                     }
                     TextField(chosen.isEmpty ? "Bot name" : "", text: $query)
+                        #if os(macOS)
+                        // No boxed field inside the capsule.
+                        .textFieldStyle(.plain)
+                        #endif
                         .focused($focus, equals: .to)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .frame(minWidth: 90, minHeight: 28)

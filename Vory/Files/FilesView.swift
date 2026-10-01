@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import QuickLook
 import SwiftUI
 import UniformTypeIdentifiers
@@ -37,7 +40,7 @@ struct FilesView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 if let error {
                     Section {
                         Text(error).foregroundStyle(.red).font(.footnote)
@@ -71,8 +74,17 @@ struct FilesView: View {
                                 }
                                 .contextMenu {
                                     Button { Task { await open(e) } } label: { Label("Preview", systemImage: "eye") }
+                                    #if os(macOS)
+                                    Button { Task { await saveAs(e) } } label: { Label("Save As…", systemImage: "square.and.arrow.down") }
+                                    Button { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(e.path, forType: .string) } label: { Label("Copy path", systemImage: "doc.on.doc") }
+                                    #else
                                     ShareLink(item: e.path) { Label("Copy path", systemImage: "doc.on.doc") }
+                                    #endif
                                 }
+                                #if os(macOS)
+                                // Drag a file out to the Finder or another app: it is fetched from the gateway on the drop.
+                                .onDrag { dragProvider(for: e) }
+                                #endif
                             }
                         }
                         if allVisible.count > shownCount {
@@ -112,6 +124,14 @@ struct FilesView: View {
                 ToolbarItem(placement: .primaryAction) { Button { showImporter = true } label: { Label("Upload", systemImage: "square.and.arrow.up") } }
             }
             .reloadable { await load() }
+            #if os(macOS)
+            // Drop files from the Finder to upload them into the folder on screen.
+            .dropDestination(for: URL.self) { urls, _ in
+                guard listing != nil, !urls.isEmpty else { return false }
+                Task { await upload(urls) }
+                return true
+            }
+            #endif
             .task(id: path) { shownCount = 300; await load() }
             .task(id: model.runtime?.connection.id) { await load() }
             .quickLookPreview($previewURL)
@@ -183,6 +203,45 @@ struct FilesView: View {
         do { previewURL = try await rt.api.download("/api/files/download", query: [URLQueryItem(name: "path", value: e.path)]) }
         catch { self.error = error.localizedDescription }
     }
+
+    #if os(macOS)
+    /// Fetches the file and asks where to keep it.
+    private func saveAs(_ e: FileEntry) async {
+        guard let rt = model.runtime else { return }
+        downloading = e.path; defer { downloading = nil }
+        do {
+            let tmp = try await rt.api.download("/api/files/download", query: [URLQueryItem(name: "path", value: e.path)])
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = e.name
+            panel.canCreateDirectories = true
+            guard panel.runModal() == .OK, let dest = panel.url else { return }
+            try? FileManager.default.removeItem(at: dest)
+            try FileManager.default.copyItem(at: tmp, to: dest)
+        } catch { self.error = error.localizedDescription }
+    }
+
+    /// A drag of a gateway file: nothing is downloaded until something accepts the drop.
+    private func dragProvider(for e: FileEntry) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = e.name
+        let type = UTType(filenameExtension: (e.name as NSString).pathExtension) ?? .data
+        let api = model.runtime?.api
+        let path = e.path
+        provider.registerFileRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+            let progress = Progress(totalUnitCount: 1)
+            Task {
+                do {
+                    guard let api else { throw HermesAPIError.transport("No gateway") }
+                    let url = try await api.download("/api/files/download", query: [URLQueryItem(name: "path", value: path)])
+                    progress.completedUnitCount = 1
+                    completion(url, false, nil)
+                } catch { completion(nil, false, error) }
+            }
+            return progress
+        }
+        return provider
+    }
+    #endif
 
     private func upload(_ urls: [URL]) async {
         guard let rt = model.runtime, let dir = listing?.path else { return }

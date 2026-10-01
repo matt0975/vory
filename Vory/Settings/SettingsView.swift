@@ -615,14 +615,14 @@ struct AppearanceView: View {
                             .buttonStyle(.borderless).disabled(layout.tabs.first == tab).help("Move up")
                         Button { moveTab(tab, by: 1) } label: { Image(systemName: "chevron.down") }
                             .buttonStyle(.borderless).disabled(layout.tabs.last == tab).help("Move down")
-                        Toggle("", isOn: tabBinding(tab)).labelsHidden().disabled(TabLayout.required.contains(tab))
+                        Toggle("Show \(tab.title) in the sidebar", isOn: tabBinding(tab)).labelsHidden().disabled(TabLayout.required.contains(tab))
                     }
                 }
                 ForEach(AppModel.AppTab.allCases.filter { !layout.contains($0) }, id: \.self) { tab in
                     HStack(spacing: 10) {
                         Label(tab.title, systemImage: tab.symbol).foregroundStyle(.secondary)
                         Spacer()
-                        Toggle("", isOn: tabBinding(tab)).labelsHidden()
+                        Toggle("Show \(tab.title) in the sidebar", isOn: tabBinding(tab)).labelsHidden()
                     }
                 }
             } header: { Text("Sidebar") } footer: {

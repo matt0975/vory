@@ -19,6 +19,8 @@ enum DeviceWords {
     /// "…sends replies as notifications, [keeps the Live Activity up to date, ]and…"
     static let keepsActivity = ""
     static let isMac = true
+    /// The SF Symbol for this kind of device.
+    static let symbol = "laptopcomputer"
     #else
     static let this = "this phone"
     static let This = "This phone"
@@ -32,5 +34,6 @@ enum DeviceWords {
     static let CompanionBrings = "Notifications, Live Activities and approval cards"
     static let keepsActivity = "keeps the Live Activity up to date, "
     static let isMac = false
+    static let symbol = "iphone"
     #endif
 }

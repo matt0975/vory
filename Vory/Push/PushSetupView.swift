@@ -237,6 +237,12 @@ struct PushSetupView: View {
                 Text(" ").font(.subheadline)
             }
         }
+        #if os(macOS)
+        // A button the size of a button, under the form's column; the second one reads as a link.
+        .buttonStyle(.borderless)
+        .frame(maxWidth: 340)
+        .frame(maxWidth: .infinity)
+        #endif
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
         .background(
             // Solid behind the buttons, fading out above them so the form scrolls under.
@@ -324,14 +330,14 @@ struct PushSetupView: View {
     @ViewBuilder private func addressStep(_ rt: GatewayRuntime) -> some View {
         Section {
             HStack {
-                TextField("https://hermes.example.com", text: $setup.gatewayURL)
+                TextField("Address", text: $setup.gatewayURL, prompt: Text(verbatim: "https://hermes.example.com"))
                     .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 if !setup.gatewayURL.isEmpty {
                     Button { withAnimation(.snappy) { setup.gatewayURL = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                         .buttonStyle(.plain).accessibilityLabel("Clear")
                 }
             }
-            Button { withAnimation(.snappy) { setup.gatewayURL = rt.connection.gateway.description } } label: { Label("Use \(DeviceWords.this)'s address", systemImage: "iphone") }
+            Button { withAnimation(.snappy) { setup.gatewayURL = rt.connection.gateway.description } } label: { Label("Use \(DeviceWords.this)'s address", systemImage: DeviceWords.symbol) }
             if let inUse = setup.urlInUse, inUse != setup.gatewayURL {
                 Text("The companion is using \(inUse) right now; installing again switches it.").font(.footnote).foregroundStyle(.secondary)
             }
@@ -426,7 +432,7 @@ struct PushSetupView: View {
             overviewRow("Companion", symbol: "puzzlepiece.extension", ok: setup.companionHealthy,
                         primary: setup.installedVersion.map { "v\($0)" } ?? "not installed",
                         secondary: setup.companionHealthy ? "connected · \(setup.heartbeat?.devices ?? 0) device\(setup.heartbeat?.devices == 1 ? "" : "s")" : "not connected")
-            overviewRow("\(DeviceWords.This)", symbol: "iphone", ok: push.registeredAt != nil && push.authorization == .authorized,
+            overviewRow("\(DeviceWords.This)", symbol: DeviceWords.symbol, ok: push.registeredAt != nil && push.authorization == .authorized,
                         primary: push.registeredAt != nil ? "registered" : "not registered",
                         secondary: "notifications \(PushSetupView.statusText(push.authorization).lowercased())")
         } header: { sectionHeader("Overview") }

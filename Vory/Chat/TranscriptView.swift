@@ -1233,7 +1233,10 @@ struct ToolCardView: View {
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": y, "id": itemID]) }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Double-tap to expand the tool log")
+        // A tap gesture alone gives assistive tech nothing to press (on the Mac the card was plain text).
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { withAnimation(.snappy) { open.wrappedValue.toggle() } }
+        .accessibilityHint(DeviceWords.isMac ? "Expands the tool log" : "Double-tap to expand the tool log")
     }
 
     @ViewBuilder private var statusIcon: some View {

@@ -155,10 +155,11 @@ private struct Sidebar: View {
         }
         .padding(.top, 6).padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .navigationSplitViewColumnWidth(Self.width)
         // The rail does not fold away, so it needs no toggle (which would not fit over it anyway).
         .toolbar(removing: .sidebarToggle)
         .safeAreaInset(edge: .bottom, spacing: 0) { GatewayFooter() }
+        // Outermost, and as a closed range: set inside the toolbar modifier the column came out 144 pt wide.
+        .navigationSplitViewColumnWidth(min: Self.width, ideal: Self.width, max: Self.width)
     }
 
     private func badge(_ tab: AppModel.AppTab) -> Int {
