@@ -94,6 +94,8 @@ struct StatusWidget: Widget {
     static var families: [WidgetFamily] {
         #if os(watchOS)
         [.accessoryRectangular]
+        #elseif os(macOS)
+        [.systemSmall, .systemMedium]
         #else
         [.systemSmall, .systemMedium, .accessoryRectangular]
         #endif
@@ -206,6 +208,8 @@ struct AttentionWidget: Widget {
     static var families: [WidgetFamily] {
         #if os(watchOS)
         [.accessoryCircular, .accessoryRectangular, .accessoryInline, .accessoryCorner]
+        #elseif os(macOS)
+        [.systemSmall]
         #else
         [.accessoryCircular, .accessoryRectangular, .accessoryInline, .systemSmall]
         #endif
@@ -266,7 +270,14 @@ struct ActivityWidget: Widget {
         }
         .configurationDisplayName("Current chat")
         .description("What the agent is working on, or the last chat.")
-        .supportedFamilies(AttentionWidget.families.filter { $0 != .accessoryCircular } + Self.homeFamilies)
+        .supportedFamilies(Self.families)
+    }
+    static var families: [WidgetFamily] {
+        #if os(macOS)
+        [.systemSmall, .systemMedium]
+        #else
+        AttentionWidget.families.filter { $0 != .accessoryCircular } + homeFamilies
+        #endif
     }
     static var homeFamilies: [WidgetFamily] {
         #if os(watchOS)
@@ -341,7 +352,14 @@ struct ContextWidget: Widget {
         }
         .configurationDisplayName("Context")
         .description("How full the current chat's context window is.")
-        .supportedFamilies([.accessoryCircular, .accessoryInline] + Self.corner)
+        .supportedFamilies(Self.families)
+    }
+    static var families: [WidgetFamily] {
+        #if os(macOS)
+        [.systemSmall]
+        #else
+        [.accessoryCircular, .accessoryInline] + corner
+        #endif
     }
     static var corner: [WidgetFamily] {
         #if os(watchOS)
@@ -400,6 +418,8 @@ struct OverviewWidget: Widget {
     static var families: [WidgetFamily] {
         #if os(watchOS)
         [.accessoryRectangular, .accessoryCircular, .accessoryInline, .accessoryCorner]
+        #elseif os(macOS)
+        [.systemSmall, .systemMedium]
         #else
         [.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular, .accessoryInline]
         #endif
@@ -444,10 +464,10 @@ struct OverviewView: View {
         }
     }
 
-    #if os(iOS)
-    private var isMedium: Bool { family == .systemMedium }
-    #else
+    #if os(watchOS)
     private var isMedium: Bool { false }
+    #else
+    private var isMedium: Bool { family == .systemMedium }
     #endif
 
     private var homeScreen: some View {

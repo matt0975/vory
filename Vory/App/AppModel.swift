@@ -147,7 +147,7 @@ final class AppModel {
         #if os(iOS)
         rt.activityReporterFactory = { LiveActivityController() }
         #else
-        rt.activityReporterFactory = { NoTurnActivity() }   // the menu-bar reporter comes with the Mac's Phase 4
+        rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
         runtime = rt

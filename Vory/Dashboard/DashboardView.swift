@@ -62,6 +62,12 @@ struct DashboardView: View {
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             .animation(.snappy, value: layoutRaw)
+            #if os(macOS)
+            // A reading width in the middle of the window, not cards the width of the screen.
+            .frame(maxWidth: 640)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            #endif
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
@@ -127,9 +133,17 @@ struct DashboardView: View {
     }
 
     private func cardBackground<V: View>(_ v: V) -> some View {
+        #if os(macOS)
+        // The window is already white; the card is a faint fill with a hairline edge.
+        v.padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.07)))
+        #else
         v.padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        #endif
     }
 
     // MARK: Greeting
@@ -269,7 +283,11 @@ struct DashboardView: View {
         .contentShape(.rect)
         .onTapGesture { if let t = Self.tileNotes[title] { tileNote = (title, t) } }
         .accessibilityHint("Tap for what this counts")
+        #if os(macOS)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        #else
         .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        #endif
     }
 
     private var peakHour: String? {
@@ -535,6 +553,10 @@ struct ActivityGrid: View {
             }
         }
         .padding(.top, 4)
+        #if os(macOS)
+        // Blocks the size of a terminal's, not of a window: at most 22 pt each.
+        .frame(maxWidth: CGFloat(weeks) * 22 + CGFloat(weeks - 1) * 3, alignment: .leading)
+        #endif
     }
 }
 

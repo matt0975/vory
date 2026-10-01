@@ -6,6 +6,7 @@ import VoryCore
 struct VoryMacApp: App {
     @NSApplicationDelegateAdaptor(MacAppDelegate.self) private var delegate
     @State private var model: AppModel
+    @State private var board = TurnBoard.shared
     @AppStorage("colorSchemePreference") private var scheme = "system"
 
     init() {
@@ -44,5 +45,14 @@ struct VoryMacApp: App {
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground() }
         }
         .defaultSize(width: 980, height: 700)
+
+        // The Live Activity's job on the Mac: the turns in flight and the approvals waiting, up
+        // in the menu bar, with a badge on the Dock for what needs you.
+        MenuBarExtra {
+            TurnMenu().environment(model)
+        } label: {
+            Image(systemName: board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
+        }
+        .menuBarExtraStyle(.window)
     }
 }

@@ -139,6 +139,15 @@ struct SettingsLabel: View {
     var title: String; var symbol: String; var color: Color
     init(_ t: String, _ s: String, _ c: Color) { title = t; symbol = s; color = c }
     var body: some View {
+        #if os(macOS)
+        // A Mac list sets no gap between a label's icon and its text; this is System Settings' row.
+        HStack(spacing: 10) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+                .frame(width: 22, height: 22).background(color, in: .rect(cornerRadius: 5.5))
+            Text(title)
+        }
+        .padding(.vertical, 2)
+        #else
         Label {
             Text(title)
         } icon: {
@@ -146,6 +155,7 @@ struct SettingsLabel: View {
             Image(systemName: symbol).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
                 .frame(width: 28, height: 28).background(color, in: .rect(cornerRadius: 7))
         }
+        #endif
     }
 }
 

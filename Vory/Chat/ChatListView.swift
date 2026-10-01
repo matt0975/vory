@@ -34,6 +34,8 @@ struct ChatListView: View {
     private var path: Binding<NavigationPath> { detailPath ?? $ownPath }
     /// The row a force click is peeking (Mac).
     @State private var peeking: StoredSession?
+    /// The chat showing in the detail column (Mac), for the row's highlight.
+    @State private var selectedID: String?
     @State private var pendingDelete: StoredSession?
     @State private var lastRouted: PendingRoute?
     /// Every profile's chats in one list, newest first, with the bot's avatar on each row.
@@ -77,6 +79,7 @@ struct ChatListView: View {
     private func open(_ route: some Hashable) {
         #if os(macOS)
         path.wrappedValue = NavigationPath([route])
+        selectedID = (route as? ChatRoute)?.storedID ?? (route as? RoomRoute).map { "room:" + $0.room.roomId }
         #else
         path.wrappedValue.append(route)
         #endif
@@ -520,6 +523,7 @@ struct ChatListView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
                 #if os(macOS)
+                .listRowBackground(selectedID == s.id ? Color.accentColor.opacity(0.14) : nil)
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
                 .onForceClick { peeking = s }
                 .popover(isPresented: Binding(get: { peeking?.id == s.id }, set: { if !$0 { peeking = nil } })) {
@@ -571,6 +575,9 @@ struct ChatListView: View {
                     }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                #if os(macOS)
+                .listRowBackground(selectedID == "room:" + room.roomId ? Color.accentColor.opacity(0.14) : nil)
+                #endif
                 .task(id: "\(room.roomId)-\(room.latestSeq ?? 0)-\(aiSummaries)") {
                     if roomLogs[room.roomId] == nil || (room.latestSeq ?? 0) > (roomLogs[room.roomId]?.last?.seq ?? 0),
                        let r: GroupsLogResult = try? await runtime.rpc("groups.log", ["room_id": .string(room.roomId), "since_seq": 0, "limit": 40], timeout: 10).decode() {
