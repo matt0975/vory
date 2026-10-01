@@ -317,6 +317,9 @@ struct ComposerView: View {
         }
         .padding(.vertical, 10)
         .frame(width: 272)
+        // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
+        // its own size the glass was drawn for less than the rows and the last one poked out.
+        .fixedSize()
         .glassEffect(.regular, in: .rect(cornerRadius: 30))
     }
 
