@@ -29,8 +29,8 @@ struct StatusView: View {
 
     var body: some View {
         let push = model.push
-        List {
-            SettingsHeaderSection(title: "Status", symbol: "waveform.path.ecg", color: .green, description: "Whether each part of Vory is working right now. Tap a row for the page that fixes it.")
+        SettingsList {
+            SettingsHeaderSection(title: "Status", symbol: "waveform.path.ecg", color: .green, description: "Whether each part of Vory is working right now. \(DeviceWords.Tap) a row for the page that fixes it.")
             Section {
                 if let rt = model.runtime {
                     let s = rt.socketState
@@ -50,12 +50,14 @@ struct StatusView: View {
                     row("Companion", light: .off, detail: "Connect a gateway first") { CompanionView() }
                 }
             } header: { Text("On the gateway") } footer: {
-                Text("The Companion is the plugin on your gateway that sends notifications, approval cards and the Live Activity while Vory is closed.")
+                Text("The Companion is the plugin on your gateway that sends notifications\(DeviceWords.isMac ? " and approval cards" : ", approval cards and the Live Activity") while Vory is closed.")
             }
 
             Section {
                 row("Notifications", light: notificationsLight(push), detail: notificationsDetail(push)) { NotificationsView() }
+                #if os(iOS)
                 row("Live Activity", light: liveActivityLight(push), detail: liveActivityDetail(push)) { NotificationsView() }
+                #endif
             } header: { Text("On \(DeviceWords.this)") }
 
             Section {
@@ -66,7 +68,7 @@ struct StatusView: View {
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
         .task { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization(); activitiesAllowed = activitiesEnabled }
-        .refreshable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization() }
+        .reloadable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization() }
     }
 
     private func row<D: View>(_ title: String, light: Light, detail: String, @ViewBuilder destination: () -> D) -> some View {
@@ -122,7 +124,7 @@ struct StatusView: View {
     }
     private var companionDetail: String {
         if let e = setup.companionCheckError { return "Could not check: \(e)" }
-        guard let v = setup.installedVersion else { return "Not installed. Settings › Companion installs it in one tap." }
+        guard let v = setup.installedVersion else { return "Not installed. Settings › Companion installs it in one \(DeviceWords.tap)." }
         if setup.companionHealthy { return "Running, version \(v)" }
         if setup.needsRestart { return "Installed (\(v)) but the gateway has not restarted with it yet" }
         if setup.heartbeat == nil { return "Installed (\(v)) but it has not reported in. Restart the gateway." }

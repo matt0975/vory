@@ -18,7 +18,9 @@ struct VoryMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // One window: the app has one gateway, one selection, one open chat. Closing it leaves
+        // the menu bar item; the Dock icon, the Window menu or the menu bar item bring it back.
+        Window("Vory", id: MacWindow.main) {
             MacRootView()
                 .environment(model)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
@@ -40,9 +42,9 @@ struct VoryMacApp: App {
                 }
                 // The lock arms when the Mac sleeps or the screen locks, not on every app switch.
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.willSleepNotification)) { _ in model.lock.didEnterBackground() }
-                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidSleepNotification)) { _ in model.lock.didEnterBackground() }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidSleepNotification)) { _ in model.lock.didEnterBackground(); BotAmbient.shared.displayAsleep = true }
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification)) { _ in model.lock.willEnterForeground() }
-                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground() }
+                .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground(); BotAmbient.shared.displayAsleep = false }
         }
         .defaultSize(width: 980, height: 700)
         .commands {
@@ -53,6 +55,9 @@ struct VoryMacApp: App {
             CommandMenu("Chat") {
                 Button("New Chat") { model.selectedTab = .chats; model.newChatRequest = UUID() }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.runtime == nil)
+                Button("New Chat With…") { model.selectedTab = .chats; model.newChatSheetRequest = UUID() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.runtime == nil)
                 Divider()
                 Button("Next Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: 1) }
@@ -73,4 +78,8 @@ struct VoryMacApp: App {
         }
         .menuBarExtraStyle(.window)
     }
+}
+
+enum MacWindow {
+    static let main = "main"
 }

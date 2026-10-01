@@ -9,7 +9,12 @@ struct TabLayout: Equatable, Sendable {
     static let storageKey = "tabLayout"
     static let required: [AppModel.AppTab] = [.chats, .settings]
     /// Four on the bar, like Messages, with the compose button floating beside it.
+    #if os(macOS)
+    /// The Mac's sidebar has room for every page.
+    static let maxTabs = AppModel.AppTab.allCases.count
+    #else
     static let maxTabs = 4
+    #endif
 
     var isFull: Bool { tabs.count >= Self.maxTabs }
     static let `default` = TabLayout(tabs: [.dashboard, .chats, .bots, .settings])

@@ -271,8 +271,8 @@ struct ComposerView: View {
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
-        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) } }
-        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 } }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact) }
+        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame() }
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.

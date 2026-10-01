@@ -83,8 +83,8 @@ private struct MainSplitView: View {
                     NavigationStack(path: $chatPath) {
                         NoChatView()
                             // No back chevron: the list beside it is the way between chats.
-                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).navigationBarBackButtonHidden(true) }
-                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).navigationBarBackButtonHidden(true) }
+                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).id(route).navigationBarBackButtonHidden(true) }
+                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).id(r).navigationBarBackButtonHidden(true) }
                     }
                 }
             } else {
@@ -96,10 +96,20 @@ private struct MainSplitView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
-                                        .disabled(model.runtime == nil || model.selectedTab != .chats)
-                    .help("New Chat (⌘N)")
+            // New Chat belongs to the Chats tab; elsewhere the Chat menu (⌘N) switches there first.
+            if model.selectedTab == .chats {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
+                        Button { model.newChatSheetRequest = UUID() } label: { Label("New Chat With…", systemImage: "person.2") }
+                    } label: {
+                        Label("New Chat", systemImage: "square.and.pencil")
+                    } primaryAction: {
+                        model.newChatRequest = UUID()
+                    }
+                    .disabled(model.runtime == nil)
+                    .help("New Chat (⌘N). Hold for bots, a project and a first message (⇧⌘N).")
+                }
             }
         }
     }
@@ -146,6 +156,8 @@ private struct Sidebar: View {
         .padding(.top, 6).padding(.horizontal, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .navigationSplitViewColumnWidth(Self.width)
+        // The rail does not fold away, so it needs no toggle (which would not fit over it anyway).
+        .toolbar(removing: .sidebarToggle)
         .safeAreaInset(edge: .bottom, spacing: 0) { GatewayFooter() }
     }
 

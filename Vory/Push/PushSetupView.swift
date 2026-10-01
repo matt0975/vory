@@ -34,7 +34,7 @@ struct PushSetupView: View {
         }
         var subtitle: String {
             switch self {
-            case .apple: return "Permission, relay and this phone's device file"
+            case .apple: return "Permission, relay and \(DeviceWords.this)'s device file"
             case .address: return "Where the companion reaches Hermes"
             case .signIn: return "The companion's own login"
             case .install: return "Config, companion and plugin in one go"
@@ -82,7 +82,7 @@ struct PushSetupView: View {
 
     /// What Vory says: the step's guidance, or a nudge onward once it is done.
     private var says: String {
-        if isDone(step) { return step == .overview ? "That's it! Notifications, Live Activities and approval cards are all yours." : "That's done — tap Continue." }
+        if isDone(step) { return step == .overview ? "That's it! \(DeviceWords.CompanionBrings) are all yours." : "That's done — \(DeviceWords.tap) Continue." }
         return hint(for: step)
     }
     /// A turn on each new step, and again the moment a step completes.
@@ -120,19 +120,19 @@ struct PushSetupView: View {
             if case .success(let url) = result { setup.importKey(url) }
         }
         .sheet(isPresented: $showCompanionSignIn) {
-            if let rt { CompanionSignInSheet(runtime: rt) { secrets in setup.companionSecrets = secrets; setup.rememberCompanionSecrets(for: rt) } }
+            if let rt { CompanionSignInSheet(runtime: rt) { secrets in setup.companionSecrets = secrets; setup.rememberCompanionSecrets(for: rt) }.sheetFrame() }
         }
         .alert("Cancel setup?", isPresented: $confirmQuit) {
             Button("Cancel setup", role: .destructive) { if let rt { setup.startOver(runtime: rt) }; dismiss() }
             Button("Keep going", role: .cancel) {}
         } message: {
-            Text("This clears the address, the companion sign-in and your progress on this phone. Nothing on the gateway changes. You'll start from the first step next time.")
+            Text("This clears the address, the companion sign-in and your progress on \(DeviceWords.this). Nothing on the gateway changes. You'll start from the first step next time.")
         }
         .alert("Start over?", isPresented: $confirmStartOver) {
             Button("Start over", role: .destructive) { if let rt { setup.startOver(runtime: rt); withAnimation(.snappy) { step = .apple } } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Clears the address, the companion sign-in and this phone's progress. Nothing on the gateway changes until you install again.")
+            Text("Clears the address, the companion sign-in and \(DeviceWords.this)'s progress. Nothing on the gateway changes until you install again.")
         }
         .task {
             if setup.teamID.isEmpty { setup.teamID = ProvisioningProfile.teamID ?? "" }
@@ -164,10 +164,10 @@ struct PushSetupView: View {
     /// What the mascot says on a card that is not finished yet.
     private func hint(for s: SetupStep) -> String {
         switch s {
-        case .apple: return "Allow notifications, then tap Register."
-        case .address: return "Where the companion finds Hermes — usually this phone's URL."
+        case .apple: return "Allow notifications, then \(DeviceWords.tap) Register."
+        case .address: return "Where the companion finds Hermes — usually \(DeviceWords.this)'s URL."
         case .signIn: return "Its own login — same account as the dashboard."
-        case .install: return setup.installedOnGateway ? "Installed. Restart when the timer ends, or tap Restart now." : "One tap puts everything on the Gateway."
+        case .install: return setup.installedOnGateway ? "Installed. Restart when the timer ends, or \(DeviceWords.tap) Restart now." : "One \(DeviceWords.tap) puts everything on the Gateway."
         case .start: return locked ? "Hold on, the Gateway is restarting…" : "Waiting for the companion's first heartbeat."
         case .overview: return setup.companionHealthy ? "All set. Send a test to prove the chain." : "The companion isn't reporting in — go back a step."
         }
@@ -296,7 +296,7 @@ struct PushSetupView: View {
             LabeledContent("Approval requests") {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(rt.serverRequestsAdvertised.isEmpty ? "not acknowledged by the gateway" : "\(rt.serverRequestsReceived) received")
-                    Text(rt.lastServerRequest ?? (rt.serverRequestsAdvertised.isEmpty ? "reconnect, or update Hermes on the gateway" : "none yet on this connection; only actions the gateway's approval mode holds for a person reach the phone"))
+                    Text(rt.lastServerRequest ?? (rt.serverRequestsAdvertised.isEmpty ? "reconnect, or update Hermes on the gateway" : "none yet on this connection; only actions the gateway's approval mode holds for a person reach \(DeviceWords.the)"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .multilineTextAlignment(.trailing)
@@ -306,7 +306,7 @@ struct PushSetupView: View {
                 Task { await setup.registerPhone(push: push, runtime: rt) }
             } label: {
                 if setup.registering { Label { Text("Registering…") } icon: { ProgressView() } }
-                else { Label("Register this phone", systemImage: "arrow.up.circle") }
+                else { Label("Register \(DeviceWords.this)", systemImage: "arrow.up.circle") }
             }
             .disabled(setup.registering)
             if let r = setup.registerOutcome {
@@ -314,10 +314,10 @@ struct PushSetupView: View {
                     .font(.footnote).foregroundStyle(r.hasPrefix("Failed") ? Color.red : Color.secondary)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
-        } header: { sectionHeader("This phone") } footer: {
+        } header: { sectionHeader("\(DeviceWords.This)") } footer: {
             Text(PushRelay.isConfigured
-                 ? "Registers with Vory's relay and publishes this phone's device file to the Gateway. Content is encrypted with a key only this phone holds."
-                 : "Publishes this phone's device file to the Gateway.")
+                 ? "Registers with Vory's relay and publishes \(DeviceWords.this)'s device file to the Gateway. Content is encrypted with a key only \(DeviceWords.this) holds."
+                 : "Publishes \(DeviceWords.this)'s device file to the Gateway.")
         }
     }
 
@@ -331,7 +331,7 @@ struct PushSetupView: View {
                         .buttonStyle(.plain).accessibilityLabel("Clear")
                 }
             }
-            Button { withAnimation(.snappy) { setup.gatewayURL = rt.connection.gateway.description } } label: { Label("Use this phone's address", systemImage: "iphone") }
+            Button { withAnimation(.snappy) { setup.gatewayURL = rt.connection.gateway.description } } label: { Label("Use \(DeviceWords.this)'s address", systemImage: "iphone") }
             if let inUse = setup.urlInUse, inUse != setup.gatewayURL {
                 Text("The companion is using \(inUse) right now; installing again switches it.").font(.footnote).foregroundStyle(.secondary)
             }
@@ -339,7 +339,7 @@ struct PushSetupView: View {
                 Label("Enter a full address starting with http:// or https://.", systemImage: "exclamationmark.circle").font(.footnote).foregroundStyle(.orange)
             }
         } header: { sectionHeader("Address") } footer: {
-            Text("The companion connects to exactly this address. Loopback (http://127.0.0.1:9119) works if the dashboard listens there; otherwise use this phone's URL.")
+            Text("The companion connects to exactly this address. Loopback (http://127.0.0.1:9119) works if the dashboard listens there; otherwise use \(DeviceWords.this)'s URL.")
         }
     }
 
@@ -350,7 +350,7 @@ struct PushSetupView: View {
                 Label("Uses this gateway's session token", systemImage: "checkmark.circle").foregroundStyle(.secondary)
             case .needsSignIn:
                 Button { showCompanionSignIn = true } label: { Label("Sign in for the companion", systemImage: "person.badge.key") }
-                Text("This gateway has its auth gate on, so the session token is refused. The companion gets its own sign-in — separate from this phone's — and refreshes it itself.")
+                Text("This gateway has its auth gate on, so the session token is refused. The companion gets its own sign-in — separate from \(DeviceWords.this)'s — and refreshes it itself.")
                     .font(.footnote).foregroundStyle(.secondary)
             case .ready(let provider):
                 Label("Signed in\(provider.map { " via \($0)" } ?? "")\(setup.companionSecrets?.userId.map { " as \($0)" } ?? "")", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
@@ -365,7 +365,7 @@ struct PushSetupView: View {
     @ViewBuilder private func installStep(_ rt: GatewayRuntime) -> some View {
         Section {
             if setup.alreadyServing, !setup.installedOnGateway, let v = setup.installedVersion {
-                Label("Already on the gateway: companion v\(v) is running and connected. Nothing to install and no restart; this phone only needs to register (step 1).", systemImage: "checkmark.circle.fill")
+                Label("Already on the gateway: companion v\(v) is running and connected. Nothing to install and no restart; \(DeviceWords.this) only needs to register (step 1).", systemImage: "checkmark.circle.fill")
                     .font(.footnote).foregroundStyle(Color.readableGreen)
             }
             Button {
@@ -426,7 +426,7 @@ struct PushSetupView: View {
             overviewRow("Companion", symbol: "puzzlepiece.extension", ok: setup.companionHealthy,
                         primary: setup.installedVersion.map { "v\($0)" } ?? "not installed",
                         secondary: setup.companionHealthy ? "connected · \(setup.heartbeat?.devices ?? 0) device\(setup.heartbeat?.devices == 1 ? "" : "s")" : "not connected")
-            overviewRow("This phone", symbol: "iphone", ok: push.registeredAt != nil && push.authorization == .authorized,
+            overviewRow("\(DeviceWords.This)", symbol: "iphone", ok: push.registeredAt != nil && push.authorization == .authorized,
                         primary: push.registeredAt != nil ? "registered" : "not registered",
                         secondary: "notifications \(PushSetupView.statusText(push.authorization).lowercased())")
         } header: { sectionHeader("Overview") }
@@ -449,7 +449,7 @@ struct PushSetupView: View {
                     .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
         } header: { sectionHeader("Test") } footer: {
-            Text("One real notification: companion → relay → Apple → this phone.")
+            Text("One real notification: companion → relay → Apple → \(DeviceWords.this).")
         }
         Section {
             Button(role: .destructive) { confirmStartOver = true } label: {
@@ -507,7 +507,7 @@ struct CompanionUpdateRows: View {
                     Text("Vory Companion \(version)").font(.headline)
                     Text("Vorantx · \(sizeText)").font(.subheadline).foregroundStyle(.secondary)
                     if !setup.updating, setup.updateOutcome == nil, !setup.updateNeedsRestart {
-                        Text("Sends replies as notifications, keeps the Live Activity up to date, and brings approval cards to your phone the moment a bot needs a yes.")
+                        Text("Sends replies as notifications, \(DeviceWords.keepsActivity)and brings approval cards to \(DeviceWords.your) the moment a bot needs a yes.")
                             .font(.footnote).foregroundStyle(.secondary).padding(.top, 2)
                         if setup.runningCanSelfReload {
                             Label("Installs in place — no Gateway restart.", systemImage: "checkmark.circle")
@@ -668,11 +668,19 @@ struct StepPage<Content: View, Header: View>: View {
 
     var body: some View {
         Form { content() }
+            #if os(macOS)
+            .formStyle(.grouped)
+            #endif
             .scrollContentBackground(.hidden)
             .listSectionSpacing(24)
             .contentMargins(.top, headerHeight + 10, for: .scrollContent)
             .contentMargins(.bottom, 120, for: .scrollContent)
             .overlay(alignment: .top) { top }
+            #if os(macOS)
+            // The wizard's column, as wide as a settings page.
+            .frame(maxWidth: 700)
+            .frame(maxWidth: .infinity)
+            #endif
     }
 
     /// Vory and the step's title, over the form; the form scrolls under it.
@@ -770,8 +778,8 @@ struct CompanionView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
-            SettingsHeaderSection(title: "Companion", symbol: "puzzlepiece.fill", color: .blue, description: "The plugin on your gateway that brings notifications, Live Activities and approval cards to this phone.")
+        SettingsList {
+            SettingsHeaderSection(title: "Companion", symbol: "puzzlepiece.fill", color: .blue, description: "The plugin on your gateway that brings \(DeviceWords.companionBrings) to \(DeviceWords.this).")
             if let rt {
                 let push = model.push
                 Section {
@@ -795,7 +803,7 @@ struct CompanionView: View {
                         CompanionStatusChecks(setup: setup)
                     }
                 } header: { sectionHeader("Companion on the gateway") } footer: {
-                    Text("A small plugin on your gateway. It sends replies as notifications, keeps the Live Activity up to date, and gets approval cards to your phone the moment a bot needs a yes.")
+                    Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes.")
                 }
                 Section {
                     LabeledContent("Notifications", value: PushSetupView.statusText(push.authorization))
@@ -803,7 +811,7 @@ struct CompanionView: View {
                         LabeledContent("Push relay", value: push.relayRegisteredAt.map { "registered " + $0.formatted(date: .omitted, time: .shortened) } ?? "not registered")
                     }
                     LabeledContent("Device file on gateway", value: push.registeredAt.map { "published " + $0.formatted(date: .omitted, time: .shortened) } ?? "not published")
-                } header: { sectionHeader("This phone") }
+                } header: { sectionHeader("\(DeviceWords.This)") }
                 if setup.isCompleted(for: rt) || setup.installedVersion != nil {
                     Section {
                         Button(role: .destructive) { confirmReset = true } label: {
@@ -812,13 +820,13 @@ struct CompanionView: View {
                         }
                         .disabled(resetting)
                     } footer: {
-                        Text("Stops the service and removes the plugin and its files from the gateway, and this phone forgets the setup. Installing again starts from scratch.")
+                        Text("Stops the service and removes the plugin and its files from the gateway, and \(DeviceWords.this) forgets the setup. Installing again starts from scratch.")
                     }
                 }
                 Section {
                     NavigationLink { CompanionDiagnosticsView(setup: setup, push: push) } label: { Label("Diagnostics", systemImage: "stethoscope") }
                 } footer: {
-                    Text("The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
+                    Text(DeviceWords.isMac ? "The last notification and the last push the Companion sent." : "The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
                 }
             } else {
                 Text("Connect a gateway first.").foregroundStyle(.secondary)
@@ -832,13 +840,13 @@ struct CompanionView: View {
             Button("Uninstall", role: .destructive) { Task { resetting = true; if let rt { await setup.uninstall(runtime: rt, model: model) }; resetting = false } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — approve it in the chat that opens). Notifications, Live Activities and approval cards stop until it is installed again.")
+            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — approve it in the chat that opens). \(DeviceWords.CompanionBrings) stop until it is installed again.")
         }
         .task {
             guard let rt else { return }
             await setup.prepare(runtime: rt)
         }
-        .refreshable { if let rt { await setup.checkCompanion(runtime: rt) } }
+        .reloadable { if let rt { await setup.checkCompanion(runtime: rt) } }
         // The badge on Settings › Notifications follows what this page finds.
         .onChange(of: setup.companionCheckedAt) { _, _ in model.companionUpdateAvailable = setup.updateAvailable }
     }
@@ -1037,8 +1045,8 @@ final class PushSetupModel {
         await push.syncRegistration(runtime: rt)
         await push.registerWithRelay()
         if let e = push.lastError ?? push.relayError { registerOutcome = "Failed: \(e)" }
-        else if push.registeredAt == nil { registerOutcome = "Failed: the phone has no push token yet. Try again in a moment." }
-        else { registerOutcome = "Registered \(Date().formatted(date: .omitted, time: .shortened)): device file published to the gateway" + (PushRelay.isConfigured ? " and the phone registered with the relay." : ".") }
+        else if push.registeredAt == nil { registerOutcome = "Failed: \(DeviceWords.the) has no push token yet. Try again in a moment." }
+        else { registerOutcome = "Registered \(Date().formatted(date: .omitted, time: .shortened)): device file published to the gateway" + (PushRelay.isConfigured ? " and \(DeviceWords.the) registered with the relay." : ".") }
     }
 
     func signOutCompanion(runtime rt: GatewayRuntime) {
@@ -1484,8 +1492,8 @@ final class PushSetupModel {
             }
             if arrived {
                 testPhase = decrypted
-                    ? .done(ok: true, text: "Received on this phone \(secs)s after asking, content decrypted. The whole chain works.")
-                    : .done(ok: true, text: "Received on this phone \(secs)s after asking — but its content could not be decrypted, so it showed the placeholder text. Register this phone again (step 1) so the relay key matches, then test once more.")
+                    ? .done(ok: true, text: "Received on \(DeviceWords.this) \(secs)s after asking, content decrypted. The whole chain works.")
+                    : .done(ok: true, text: "Received on \(DeviceWords.this) \(secs)s after asking — but its content could not be decrypted, so it showed the placeholder text. Register \(DeviceWords.this) again (step 1) so the relay key matches, then test once more.")
                 return
             }
             if sentTo == nil, secs % 2 == 0 {
@@ -1493,14 +1501,14 @@ final class PushSetupModel {
                 if heartbeat?.lastTestNonce == nonce {
                     sentTo = heartbeat?.lastTestDevices ?? 0
                     detail = heartbeat?.lastTestDetail ?? ""
-                    testStage = sentTo == 0 ? "The companion found no phone to send to" : "Sent to Apple by the companion · waiting for it to arrive…"
+                    testStage = sentTo == 0 ? "The companion found no device to send to" : "Sent to Apple by the companion · waiting for it to arrive…"
                 }
             }
         }
         let relayNote = detail.isEmpty ? "" : (detail.contains("1010") ? " Cloudflare blocked the companion's request to the relay (error 1010, browser check) — update the companion; newer ones identify themselves."
                                                                         : " The relay answered: \(detail).")
         if let n = sentTo {
-            testPhase = .done(ok: false, text: n == 0 ? "The companion tried, but the relay refused the push for this phone.\(relayNote)\(detail.contains("1010") ? "" : " If it says \"unknown device\", register this phone again (step 1).")"
+            testPhase = .done(ok: false, text: n == 0 ? "The companion tried, but the relay refused the push for \(DeviceWords.this).\(relayNote)\(detail.contains("1010") ? "" : " If it says \"unknown device\", register \(DeviceWords.this) again (step 1).")"
                                                      : "The companion sent it to \(n) device\(n == 1 ? "" : "s") but nothing arrived here within a minute.\(relayNote) Check that notifications are allowed for Vory, and the relay registration in step 1.")
         } else {
             testPhase = .done(ok: false, text: "The companion never picked the request up within a minute. Is it connected (step 5)?")
@@ -1858,8 +1866,13 @@ struct CompanionSignInSheet: View {
 /// device builds). Nil on the simulator, where the field is simply typed in.
 enum ProvisioningProfile {
     static var teamID: String? {
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url) else { return nil }
+        #if os(macOS)
+        // A Mac app keeps its profile beside Info.plist, not among the resources.
+        let url: URL? = Bundle.main.bundleURL.appendingPathComponent("Contents/embedded.provisionprofile")
+        #else
+        let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision")
+        #endif
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
         // The profile is CMS-signed DER with the property list embedded as plain text.
         guard let start = data.range(of: Data("<?xml".utf8)), let end = data.range(of: Data("</plist>".utf8)) else { return nil }
         let plistData = data[start.lowerBound..<end.upperBound]
@@ -1878,12 +1891,13 @@ struct CompanionDiagnosticsView: View {
     var push: PushRegistrar
 
     var body: some View {
-        List {
-            SettingsHeaderSection(title: "Diagnostics", symbol: "stethoscope", color: .gray, description: "The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
+        SettingsList {
+            SettingsHeaderSection(title: "Diagnostics", symbol: "stethoscope", color: .gray, description: DeviceWords.isMac ? "The last notification and the last push the Companion sent." : "The last notification, the Live Activity's tokens and log, and the last push the Companion sent.")
             Section {
                     LabeledContent("Last notification") {
                         Text(setup.extensionBreadcrumb ?? "none handled yet").font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
                     }
+                    #if os(iOS)
                     LabeledContent("Live Activity") {
                         VStack(alignment: .trailing, spacing: 2) {
                             Text(push.liveActivityToken != nil ? "active · token since \(push.liveActivityTokenAt?.formatted(date: .omitted, time: .shortened) ?? "?")" : "none running")
@@ -1910,8 +1924,13 @@ struct CompanionDiagnosticsView: View {
                             Text("none yet").font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    #endif
             } footer: {
+                #if os(iOS)
                 Text("With a Live Activity running, finish and approval alerts go through it (the Island expands and buzzes); banners only when there is none.")
+                #else
+                Text("On the Mac every alert arrives as a notification; running turns and waiting approvals also sit in the menu bar.")
+                #endif
             }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)

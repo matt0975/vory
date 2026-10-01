@@ -51,7 +51,7 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 if search.isEmpty, !setupCardDone, model.runtime != nil, model.push.registeredAt == nil {
                     Section {
                         NavigationLink { CompanionView() } label: {
@@ -59,7 +59,7 @@ struct SettingsView: View {
                                 BotFaceView(spec: AboutView.voryBot, size: 46, active: true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Unlock Vory's full potential").font(.headline)
-                                    Text("Install the Companion for notifications, Live Activities and approval cards.").font(.caption).foregroundStyle(.secondary)
+                                    Text("Install the Companion for \(DeviceWords.companionBrings).").font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 Button { withAnimation(.snappy) { setupCardDone = true } } label: {
@@ -167,7 +167,7 @@ struct GatewaysView: View {
     @State private var pendingDelete: GatewayConnection?
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Gateways", symbol: "network", color: .blue, description: "The gateways \(DeviceWords.this) can reach, and which one is active.")
             Section {
                 ForEach(model.store.connections) { c in
@@ -189,7 +189,7 @@ struct GatewaysView: View {
                         Spacer()
                         NavigationLink { GatewayFormView(existing: c) } label: { EmptyView() }.frame(width: 20)
                     }
-                    .swipeActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
+                    .rowActions { Button(role: .destructive) { pendingDelete = c } label: { Label("Delete", systemImage: "trash") } }
                 }
             } footer: {
                 Text("One saved gateway covers every profile on that machine; switch profiles from the Chats or Settings tab. Approvals always go to the gateway that owns the session.")
@@ -206,7 +206,7 @@ struct GatewaysView: View {
             }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() } }
+        .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame() }
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }
             Button("Cancel", role: .cancel) {}
@@ -226,7 +226,7 @@ struct ProfileView: View {
     @State private var deleting = false
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Profile", symbol: "person.crop.circle", color: .indigo, description: "Which bot the Settings screens read and write, and new bots on this gateway.")
             if let rt = model.runtime {
                 Section("Active profile in this app") {
@@ -262,7 +262,7 @@ struct ProfileView: View {
                 } footer: { Text("Profiles are separate Hermes homes on the gateway machine (config, skills, sessions). Settings screens read and write the profile selected here.") }
             }
         }
-        .refreshable { await model.runtime?.loadProfiles() }
+        .reloadable { await model.runtime?.loadProfiles() }
         .alert("Delete \(pendingDelete?.label ?? "profile")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button(deleting ? "Deleting…" : "Delete", role: .destructive) { if let p = pendingDelete { Task { await delete(p) } } }.disabled(deleting)
             Button("Cancel", role: .cancel) { pendingDelete = nil }
@@ -315,7 +315,7 @@ struct NotificationsView: View {
 
     var body: some View {
         let push = model.push
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(DeviceWords.kind == "phone" ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
             Section {
                 Toggle("Notifications", isOn: $notificationsOn)
@@ -335,7 +335,7 @@ struct NotificationsView: View {
                     .disabled(!notificationsOn)
                     .onChange(of: muteDesktopOrigin) { _, _ in Task { if let rt = model.runtime { await push.syncRegistration(runtime: rt) } } }
             } footer: {
-                Text("With Vory for Mac on the same gateway: a chat whose last message was sent from the Mac notifies the Mac only. Send from this phone and the chat is this phone's again. Needs Companion 1.0.35.")
+                Text("With Vory for Mac on the same gateway: a chat whose last message was sent from the Mac notifies the Mac only. Send from \(DeviceWords.this) and the chat is \(DeviceWords.this)'s again. Needs Companion 1.0.35.")
             }
             #endif
             Section {
@@ -349,6 +349,7 @@ struct NotificationsView: View {
                     Link("Open System Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                     #endif
                 }
+                #if os(iOS)
                 Toggle("Live Activity", isOn: $liveActivities)
                 Toggle("Haptics", isOn: $haptics)
                 Toggle(isOn: $typingHaptics) {
@@ -359,8 +360,13 @@ struct NotificationsView: View {
                     }
                 }
                 .disabled(!haptics)
+                #endif
             } header: { Text("Permission") } footer: {
+                #if os(iOS)
                 Text("Typing haptics: a soft tick under your thumb as the reply's text arrives, for the chat on screen. Beta.")
+                #else
+                Text("Running turns and waiting approvals also sit in the menu bar, with a badge on the Dock icon.")
+                #endif
             }
             Section {
                 NavigationLink { CompanionView() } label: { Label("Companion", systemImage: "puzzlepiece.extension") }
@@ -381,20 +387,20 @@ struct SecurityView: View {
     @Environment(AppModel.self) private var model
     @AppStorage(ApprovalConfirm.modeKey) private var confirmMode = ApprovalConfirm.mode
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Security", symbol: "faceid", color: .green, description: "\(DeviceWords.kind == "phone" ? "Face ID" : "Touch ID") lock, a second step for approvals, and how \(DeviceWords.this) keeps its credentials.")
             Section {
                 Toggle("Require \(model.lock.biometryName)", isOn: Binding(get: { model.lock.isEnabled }, set: { model.lock.isEnabled = $0 }))
-            } footer: { Text("Locks the app after it has been in the background. Gateway credentials are stored in the iOS Keychain (device-only).") }
+            } footer: { Text("\(DeviceWords.isMac ? "Locks the app when the Mac sleeps or its screen locks." : "Locks the app after it has been in the background.") Gateway credentials are stored in the Keychain (device-only).") }
             Section {
-                Picker("Confirm from the Lock Screen", selection: $confirmMode) {
+                Picker(DeviceWords.isMac ? "Confirm from notifications" : "Confirm from the Lock Screen", selection: $confirmMode) {
                     Text("Risky actions").tag("risky")
                     Text("Every approval").tag("all")
                     Text("Never").tag("off")
                 }
                 .onChange(of: confirmMode) { _, _ in LocalNotifier.registerCategories() }
             } header: { Text("Approvals") } footer: {
-                Text("Approve or Deny on the Live Activity or a notification opens the chat and, for the actions that matter, asks once more before it counts. Risky actions are writes, deletes and spends: a command that removes or changes files, pushes or deploys, installs, escalates, sends or pays for something, plus anything the smart guardian flagged. Reads and lookups apply at once, so the second question stays rare enough to mean something. The card's own buttons in the chat never ask twice.")
+                Text("Approve or Deny on \(DeviceWords.isMac ? "a notification" : "the Live Activity or a notification") opens the chat and, for the actions that matter, asks once more before it counts. Risky actions are writes, deletes and spends: a command that removes or changes files, pushes or deploys, installs, escalates, sends or pays for something, plus anything the smart guardian flagged. Reads and lookups apply at once, so the second question stays rare enough to mean something. The card's own buttons in the chat never ask twice.")
             }
         }
     }
@@ -414,8 +420,8 @@ struct BotsSettingsView: View {
     @AppStorage(GatewayRuntime.defaultProfileKey) private var defaultProfile = ""
 
     var body: some View {
-        List {
-            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: the default bot, glass, motion and tilt.")
+        SettingsList {
+            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: DeviceWords.isMac ? "What applies to every bot at once: the default bot and glass." : "What applies to every bot at once: the default bot, glass, motion and tilt.")
             if let rt = model.runtime {
                 Section {
                     Picker("Default bot", selection: $defaultProfile) {
@@ -444,7 +450,7 @@ struct BotsSettingsView: View {
                 .onChange(of: style) { _, _ in BotMotionSource.shared.apply() }
                 Toggle(isOn: $tilt) {
                     HStack(spacing: 6) {
-                        Text("Tilt with the phone")
+                        Text("Tilt with \(DeviceWords.the)")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
                             .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
@@ -452,13 +458,13 @@ struct BotsSettingsView: View {
                 .disabled(!motion)
                 .onChange(of: tilt) { _, _ in BotMotionSource.shared.apply() }
             } footer: {
-                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with \(DeviceWords.the) and, on the Bots page, follow its angle with their eyes.")
             }
             #endif
             Section {
                 NavigationLink { MotionDemoView() } label: { Label("Preview motion", systemImage: "play.circle") }
             } footer: {
-                Text("Every pose the bots know, side by side: working, thinking, using a tool, waiting for a yes, and the rest. Tap one to see its tap.")
+                Text("Every pose the bots know, side by side: working, thinking, using a tool, waiting for a yes, and the rest. \(DeviceWords.isMac ? "Click one to see it react" : "Tap one to see its tap").")
             }
             Section {
                 Toggle(isOn: $glassAll) {
@@ -470,7 +476,7 @@ struct BotsSettingsView: View {
                 }
                 .accessibilityIdentifier("settings.bots.glassAll")
             } footer: {
-                Text("Every bot becomes a piece of glass, like the app icon — in chats, the Island, notifications and the reply window. Off, each bot keeps the finish chosen in its Creator Studio.")
+                Text("Every bot becomes a piece of glass, like the app icon — in chats, \(DeviceWords.isMac ? "the menu bar and notifications" : "the Island, notifications and the reply window"). Off, each bot keeps the finish chosen in its Creator Studio.")
             }
             if let profiles = model.runtime?.profiles, !profiles.isEmpty {
                 Section("Your bots") {
@@ -500,7 +506,7 @@ struct SummariesSettingsView: View {
     @State private var cleared = false
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Vory Summaries", symbol: "sparkles", color: .purple, description: "Apple Intelligence, on \(DeviceWords.this), reads each chat and writes its line in the list.")
             Section {
                 Toggle(isOn: $titles) {
@@ -560,16 +566,31 @@ struct AppearanceView: View {
     private var layout: TabLayout { TabLayout.parse(layoutRaw) }
 
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
+    #if os(macOS)
+    private func tabBinding(_ tab: AppModel.AppTab) -> Binding<Bool> {
+        Binding(get: { layout.contains(tab) }, set: { on in var l = layout; l.set(tab, enabled: on); layoutRaw = l.encoded })
+    }
+    private func moveTab(_ tab: AppModel.AppTab, by step: Int) {
+        var l = layout
+        guard let i = l.tabs.firstIndex(of: tab) else { return }
+        let to = i + step
+        guard l.tabs.indices.contains(to) else { return }
+        l.move(fromOffsets: IndexSet(integer: i), toOffset: step > 0 ? to + 1 : to)
+        layoutRaw = l.encoded
+    }
+    #endif
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Appearance", symbol: "circle.lefthalf.filled", color: .black, description: "Theme, tabs, the chat header and what the transcript shows.")
 
+            #if os(iOS)
             Section {
                 Picker("Chat header shows", selection: $headerShowsTitle) {
                     Text("Bot name").tag(false)
                     Text("Chat title").tag(true)
                 }
             } footer: { Text("What the pill under the bot leads with in a chat; the other is shown beneath it while the bot is idle.") }
+            #endif
             Section {
                 AccentPicker()
             } header: { Text("Accent") } footer: { Text("Buttons, the selected tab, links and your bubbles take this colour. Bots keep their own.") }
@@ -583,6 +604,31 @@ struct AppearanceView: View {
             } header: { Text("Appearance") } footer: {
                 Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.settings).")
             }
+            #if os(macOS)
+            // The Mac's sidebar holds every page: a switch each, arrows for the order.
+            Section {
+                ForEach(layout.tabs, id: \.self) { tab in
+                    HStack(spacing: 10) {
+                        Label(tab.title, systemImage: tab.symbol)
+                        Spacer()
+                        Button { moveTab(tab, by: -1) } label: { Image(systemName: "chevron.up") }
+                            .buttonStyle(.borderless).disabled(layout.tabs.first == tab).help("Move up")
+                        Button { moveTab(tab, by: 1) } label: { Image(systemName: "chevron.down") }
+                            .buttonStyle(.borderless).disabled(layout.tabs.last == tab).help("Move down")
+                        Toggle("", isOn: tabBinding(tab)).labelsHidden().disabled(TabLayout.required.contains(tab))
+                    }
+                }
+                ForEach(AppModel.AppTab.allCases.filter { !layout.contains($0) }, id: \.self) { tab in
+                    HStack(spacing: 10) {
+                        Label(tab.title, systemImage: tab.symbol).foregroundStyle(.secondary)
+                        Spacer()
+                        Toggle("", isOn: tabBinding(tab)).labelsHidden()
+                    }
+                }
+            } header: { Text("Sidebar") } footer: {
+                Text("Switch a page on to put it in the sidebar; the arrows set the order. Chats and Settings stay. ⌘1 to ⌘9 open the first nine.")
+            }
+            #else
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
                     // Chats and Settings stay: no delete control, and no lock badge either.
@@ -600,7 +646,7 @@ struct AppearanceView: View {
             } footer: {
                 Text(editMode?.wrappedValue.isEditing == true
                      ? "Drag to reorder, swipe or − to remove. Chats and Settings can move but not go."
-                     : "Tap Edit to reorder or add tabs. Four fit on the bar; New Chat floats beside it.")
+                     : "\(DeviceWords.Tap) Edit to reorder or add tabs. Four fit on the bar; New Chat floats beside it.")
             }
             // Hidden tabs only appear while editing, like the Messages/Music tab editors.
             if editMode?.wrappedValue.isEditing == true {
@@ -621,12 +667,13 @@ struct AppearanceView: View {
                     if layout.isFull { Text("Remove one to add another.") }
                 }
             }
+            #endif
             if let rt = model.runtime, !rt.profiles.isEmpty {
                 Section {
                     ForEach(rt.profiles) { p in
                         BotColorRow(profile: p.name, label: p.label)
                     }
-                } header: { Text("Bot colors") } footer: { Text("Shown in chat headers, the Bots list and each bot's Live Activity. Stored on this device.") }
+                } header: { Text("Bot colors") } footer: { Text("Shown in chat headers, the Bots list and \(DeviceWords.isMac ? "the menu bar" : "each bot's Live Activity"). Stored on this device.") }
             }
             Section {
                 Toggle("Show tool calls", isOn: $showToolCalls)
@@ -634,7 +681,9 @@ struct AppearanceView: View {
                 Toggle("Show tokens per second", isOn: $showTurnStats)
                 Toggle("Show system notes", isOn: $showSystemNotes)
                 Toggle("Bot beside replies", isOn: $showBots)
+                #if os(iOS)
                 Toggle("Pull left for times", isOn: $timeReveal)
+                #endif
             } header: { Text("Chat") } footer: {
                 Text("Hidden rows are still received and kept; this only changes what the transcript draws. Approval cards are always shown. Pull left for times slides the thread aside to show when each message arrived; off, the thread never moves sideways.")
             }
@@ -682,7 +731,7 @@ struct AboutView: View {
     static let voryBot = BotLookSpec.vory
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "About", symbol: "info.circle", color: .blue, description: "Version, the Vory cloud, and what is installed.")
                 .listSectionSpacing(8)
             Section {
@@ -723,7 +772,9 @@ struct AboutView: View {
                 LabeledContent("Companion plugin", value: model.companionInstalledVersion.map { "v\($0)" } ?? "not installed")
                 LabeledContent("Ships with this build", value: "v\(PushSetupModel.bundledPluginVersion)")
                 LabeledContent("Push relay", value: PushRelay.isConfigured ? "configured" : "none")
+                #if os(iOS)
                 LabeledContent("Live Activity", value: appVersion)
+                #endif
                 LabeledContent("Notification extensions", value: appVersion)
             } header: { Text("Installed") } footer: {
                 Text("What Vory puts on your gateway and inside this app. Updates arrive under Software Update.")
@@ -817,7 +868,7 @@ struct SoftwareUpdateView: View {
     @State private var setup = PushSetupModel()
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Software Update", symbol: "arrow.down.circle", color: .gray, description: "The Companion version on the gateway, updated in place.")
             if let rt = model.runtime {
                 Section {
@@ -829,7 +880,7 @@ struct SoftwareUpdateView: View {
                                 BotFaceView(spec: AboutView.voryBot, size: 44, active: true)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text("Install the Vory Companion").font(.headline)
-                                    Text("Unlocks notifications, Live Activities and approval cards while Vory is closed.").font(.caption).foregroundStyle(.secondary)
+                                    Text("Unlocks \(DeviceWords.companionBrings) while Vory is closed.").font(.caption).foregroundStyle(.secondary)
                                 }
                             }
                         }
@@ -846,7 +897,7 @@ struct SoftwareUpdateView: View {
                         .animation(.snappy, value: setup.checkingCompanion)
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
-                    Text("A small plugin on your gateway. It sends replies as notifications, keeps the Live Activity up to date, and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")
+                    Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")
                 }
                 Section {
                     LabeledContent("On the gateway", value: setup.installedVersion.map { "v\($0)" } ?? "—")
@@ -864,7 +915,7 @@ struct SoftwareUpdateView: View {
         .listSectionSpacing(28)
         .animation(.smooth, value: setup.updateOutcome == nil)
         .task { if let rt = model.runtime { await setup.prepare(runtime: rt) } }
-        .refreshable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) } }
+        .reloadable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) } }
         // The cloud squints while it checks and turns once the answer is in.
         .onChange(of: setup.checkingCompanion) { was, now in if was, !now { BotAmbient.shared.turnFinished(profile: "vory-update") } }
         .onChange(of: setup.companionCheckedAt) { _, _ in

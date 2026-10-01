@@ -48,16 +48,10 @@ final class AppModel {
     /// `companionUpdateAvailable`. Called when the app comes to the foreground.
     func refreshCompanionUpdateFlag() async {
         guard let rt = runtime, push.registeredAt != nil else { companionUpdateAvailable = false; return }
-        #if os(iOS)
         let probe = PushSetupModel()
         await probe.checkCompanion(runtime: rt)
         companionUpdateAvailable = probe.updateAvailable
         companionInstalledVersion = probe.installedVersion
-        #else
-        // The Mac gets the companion setup with Settings; until then there is nothing to compare.
-        _ = rt
-        companionUpdateAvailable = false
-        #endif
     }
 
     enum AppTab: String, Hashable, CaseIterable, Sendable, Identifiable {

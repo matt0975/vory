@@ -914,6 +914,9 @@ public final class BotAmbient {
     /// −1…1: roll (x) and pitch (y) away from the resting hold.
     public var tilt: CGPoint = .zero
     public var enabled = true
+    /// The display is asleep or the screen is locked (Mac): every face holds still. Drawing
+    /// into a window nobody can see made each frame wait on the render server.
+    public var displayAsleep = false
     /// True while a list is being scrolled (cleared shortly after the last movement); the Bots
     /// page bots play while it is.
     public var scrolling = false
@@ -1206,7 +1209,7 @@ public struct BotFaceView: View {
         let animating = (active || state != .idle || finished != nil || tapped != nil || leaving) && !drawn
         let wobble = state == .working
         let _ = spinTick
-        TimelineView(.animation(minimumInterval: animating ? 1 / 30 : 1 / 24, paused: !animating && !eyesBusy && gaze == shownGaze)) { timeline in
+        TimelineView(.animation(minimumInterval: animating ? 1 / 30 : 1 / 24, paused: ambient.displayAsleep || (!animating && !eyesBusy && gaze == shownGaze))) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let u = min(1, max(0, timeline.date.timeIntervalSince(gazeChangedAt) / 0.35))
             let ease = u * u * (3 - 2 * u)

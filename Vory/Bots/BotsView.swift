@@ -15,7 +15,11 @@ struct BotsView: View {
     @State private var editing: ProfileInfo?
     @State private var path = NavigationPath()
 
+    #if os(macOS)
+    private let columns = [GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 18)]
+    #else
     private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
+    #endif
 
     /// Press and hold a bot: its settings page (colour, look, description, model, instructions).
     struct BotSettingsRoute: Hashable { var profile: String }
@@ -23,52 +27,12 @@ struct BotsView: View {
     var body: some View {
         NavigationStack(path: $path) {
             ScrollView {
-                if let rt = model.runtime {
-                    LazyVGrid(columns: columns, spacing: 22) {
-                        ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
-                            NavigationLink(value: p) {
-                                BotCard(profile: p, isActive: rt.selectedProfile == p.name,
-                                        working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
-                                        slot: i, slots: rt.profiles.count)
-                            }
-                            .buttonStyle(.plain)
-                            // Press and hold: what you would otherwise dig for.
-                            .contextMenu {
-                                Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
-                                Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
-                                Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
-                                Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
-                                if rt.selectedProfile != p.name {
-                                    Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
-                                }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16).padding(.top, 18)
-                    if rt.profiles.isEmpty {
-                        Text("No profiles reported by this gateway.").foregroundStyle(.secondary).font(.footnote).padding()
-                    }
-                    Text("Each bot is a Hermes profile: its own SOUL.md, model and sessions. Tap one for its chats.")
-                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        .padding(.horizontal, 28).padding(.top, 14)
-                    if capabilities != nil, !rooms.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Group chats").font(.title3.weight(.semibold)).padding(.horizontal, 20).padding(.top, 26)
-                            if capabilities?.driver == false {
-                                Label("The room driver is not running on the gateway; group chats are listed but the bots will not answer in them.", systemImage: "exclamationmark.triangle")
-                                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
-                            }
-                            ForEach(rooms) { room in
-                                NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain)
-                            }
-                            Text("Start one from the compose button on Chats by adding more than one bot.")
-                                .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
-                        }
-                    }
-                    if let error { Text(error).foregroundStyle(.red).font(.footnote).padding() }
-                } else {
-                    ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash")
-                }
+                pageContent
+                    #if os(macOS)
+                    // Cards the size of the phone's, in a column, not pills the width of the window.
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity)
+                    #endif
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
             .navigationTitle("Bots")
@@ -86,14 +50,64 @@ struct BotsView: View {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
                 }
             }
-            .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt) } }
-            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p) } }
+            .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame() } }
+            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame() } }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).navigationTitle("").navigationBarTitleDisplayMode(.inline) }
             .navigationDestination(for: Room.self) { RoomView(room: $0) }
             .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0) }
-            .refreshable { await load() }
+            .reloadable { await load() }
             .task(id: model.runtime?.connection.id) { await load() }
+        }
+    }
+
+    /// The grid of bots and the group chats under it.
+    @ViewBuilder private var pageContent: some View {
+        if let rt = model.runtime {
+            LazyVGrid(columns: columns, spacing: 22) {
+                ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
+                    NavigationLink(value: p) {
+                        BotCard(profile: p, isActive: rt.selectedProfile == p.name,
+                                working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
+                                slot: i, slots: rt.profiles.count)
+                    }
+                    .buttonStyle(.plain)
+                    // Press and hold: what you would otherwise dig for.
+                    .contextMenu {
+                        Button { path.append(ChatRoute(storedID: nil, title: nil, profile: p.name)) } label: { Label("New chat", systemImage: "square.and.pencil") }
+                        Button { path.append(p) } label: { Label("Chats", systemImage: "bubble.left.and.bubble.right") }
+                        Button { path.append(BotSettingsRoute(profile: p.name)) } label: { Label("Bot settings", systemImage: "slider.horizontal.3") }
+                        Button { editing = p } label: { Label("Edit bot", systemImage: "pencil") }
+                        if rt.selectedProfile != p.name {
+                            Button { rt.selectedProfile = p.name } label: { Label("Make active", systemImage: "checkmark.circle") }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16).padding(.top, 18)
+            if rt.profiles.isEmpty {
+                Text("No profiles reported by this gateway.").foregroundStyle(.secondary).font(.footnote).padding()
+            }
+            Text("Each bot is a Hermes profile: its own SOUL.md, model and sessions. \(DeviceWords.Tap) one for its chats.")
+                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .padding(.horizontal, 28).padding(.top, 14)
+            if capabilities != nil, !rooms.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Group chats").font(.title3.weight(.semibold)).padding(.horizontal, 20).padding(.top, 26)
+                    if capabilities?.driver == false {
+                        Label("The room driver is not running on the gateway; group chats are listed but the bots will not answer in them.", systemImage: "exclamationmark.triangle")
+                            .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
+                    }
+                    ForEach(rooms) { room in
+                        NavigationLink(value: room) { RoomCard(room: room) }.buttonStyle(.plain)
+                    }
+                    Text("Start one from the compose button on Chats by adding more than one bot.")
+                        .font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
+                }
+            }
+            if let error { Text(error).foregroundStyle(.red).font(.footnote).padding() }
+        } else {
+            ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash")
         }
     }
 
@@ -283,7 +297,7 @@ struct NewRoomSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 Section {
                     TextField("Room name", text: $name)
                 } footer: { Text("A hosted group chat on this gateway; every bot you add takes part in one shared thread.") }
@@ -366,7 +380,7 @@ struct BotDetailView: View {
     @State private var composing = false
 
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 NavigationLink { ProfileCardView(profileName: profile.name) } label: {
                     HStack(spacing: 12) {
@@ -398,7 +412,7 @@ struct BotDetailView: View {
             composing = true
         }
         .navigationDestination(isPresented: $composing) { ConversationView(route: ChatRoute(storedID: nil, title: nil, profile: profile.name)) }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task { await load() }
         .alert("Delete chat?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Delete", role: .destructive) { if let s = pendingDelete { Task { await delete(s) } } }
@@ -496,6 +510,7 @@ struct RoomView: View {
                                     .foregroundStyle(.white)
                                     .background(Color.vory, in: MessageBubbleShape(side: .trailing))
                             }
+                            .roomBubble(.trailing)
                         case _ where ev.kind.hasPrefix("message."):
                             let member = ev.payload["member_id"]?.stringValue ?? ev.actor.id
                             let profile = room.members.first { $0.memberId == member || $0.handle == member }?.profile ?? member
@@ -509,6 +524,7 @@ struct RoomView: View {
                                 }
                                 Spacer(minLength: 40)
                             }
+                            .roomBubble(.leading)
                         default:
                             Text(body.isEmpty ? ev.kind : body).font(.caption).foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity).padding(.vertical, 2)
@@ -528,6 +544,11 @@ struct RoomView: View {
                     Color.clear.frame(height: 0).id("bottom")
                 }
                 .padding()
+                #if os(macOS)
+                // The same reading column as a single chat.
+                .frame(maxWidth: ChatStyle.macColumn)
+                .frame(maxWidth: .infinity)
+                #endif
             }
             .overlay {
                 // Nothing said yet: the bots in the room, the way a new chat shows its bot.
@@ -558,6 +579,13 @@ struct RoomView: View {
                 .padding(.horizontal, 12).padding(.vertical, 6)
                 .glassEffect(.regular, in: .rect(cornerRadius: 24))
                 .padding(12)
+                #if os(macOS)
+                .frame(maxWidth: ChatStyle.macColumn)
+                .frame(maxWidth: .infinity)
+                .textFieldStyle(.plain)
+                // Return sends, as in a single chat.
+                .onSubmit { Task { await send() } }
+                #endif
             }
             .onChange(of: events.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) } }
             .animation(.snappy(duration: 0.25), value: typing)
@@ -601,5 +629,17 @@ struct RoomView: View {
                                                  "payload": .object(["text": .string(t), "thread_id": .string(threadID)])])
             await load()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+private extension View {
+    /// A room bubble's share of the Mac's reading column, on its side; the phone's own width is the limit.
+    @ViewBuilder func roomBubble(_ side: Alignment) -> some View {
+        #if os(macOS)
+        frame(maxWidth: ChatStyle.macColumn * 0.72, alignment: side).frame(maxWidth: .infinity, alignment: side)
+        #else
+        self
+        #endif
     }
 }

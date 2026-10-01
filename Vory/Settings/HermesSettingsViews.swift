@@ -14,7 +14,7 @@ struct ModelSettingsView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Model", symbol: "cpu", color: .blue, description: "The default model and provider for this bot.")
             if let o = options {
                 Section {
@@ -45,7 +45,7 @@ struct ModelSettingsView: View {
                 else { Text(error).foregroundStyle(.red) }
             } else { ProgressView() }
         }
-        .refreshable { await load(refresh: true) }
+        .reloadable { await load(refresh: true) }
         .task(id: rt?.selectedProfile) { await load() }
         .alert("Confirm model", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } })) {
             Button("Use it anyway") { if let c = confirm { Task { await set(scope: c.scope, task: c.task, provider: c.provider, model: c.modelName, confirmed: true) } } }
@@ -115,7 +115,7 @@ struct ConfigFormView: View {
     }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Config", symbol: "slider.horizontal.3", color: .gray, description: "Every setting in this bot's config, grouped the way the gateway reports them.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(categories, id: \.0) { cat, fields in
@@ -128,7 +128,7 @@ struct ConfigFormView: View {
         }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search config keys")
         .overlay { if schema == nil && error == nil { ProgressView() } }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }
 
@@ -226,7 +226,7 @@ struct EnvView: View {
     }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "API Keys & Environment", symbol: "key.fill", color: .orange, description: "Provider keys and environment variables the gateway uses.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             Section {
@@ -247,7 +247,7 @@ struct EnvView: View {
                             }
                         }
                         .tint(.primary)
-                        .swipeActions {
+                        .rowActions {
                             if vars[k]?.hasValue == true { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
                         }
                     }
@@ -256,7 +256,7 @@ struct EnvView: View {
         }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
         .toolbar { ToolbarItem(placement: .primaryAction) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             SecureField("Value", text: $newValue)
@@ -307,7 +307,7 @@ struct ToolsView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Tools", symbol: "wrench.and.screwdriver", color: .teal, description: "What the bot may do: each tool on or off.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(toolsets) { t in
@@ -320,7 +320,7 @@ struct ToolsView: View {
                 }
             }
         }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }
 
@@ -347,7 +347,7 @@ struct SkillsView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Skills", symbol: "sparkles", color: .purple, description: "The skills installed for this bot and what they add.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(skills.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { s in
@@ -360,7 +360,7 @@ struct SkillsView: View {
             }
         }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }
 
@@ -388,7 +388,7 @@ struct MCPView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "MCP Servers", symbol: "point.3.connected.trianglepath.dotted", color: .mint, description: "External tool servers the bot can call, and whether each is on.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if let testResult { Text(testResult).font(.footnote) }
@@ -399,13 +399,13 @@ struct MCPView: View {
                         Text(s.url ?? ([s.command].compactMap { $0 } + (s.args ?? [])).joined(separator: " ")).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
-                .swipeActions {
+                .rowActions {
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Remove", systemImage: "trash") }
                     Button { Task { await test(s) } } label: { Label("Test", systemImage: "bolt") }.tint(.blue)
                 }
             }
         }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert("Remove MCP server?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let s = pendingDelete { Task { await remove(s) } } }
@@ -471,7 +471,7 @@ struct ApprovalsView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Approvals", symbol: "checkmark.shield", color: .green, description: "How commands get approved — manual, smart or off — and what is always allowed.")
             Section {
                 Picker("Mode", selection: $mode) {
@@ -493,6 +493,14 @@ struct ApprovalsView: View {
                             Text(rule).font(.system(.body, design: .monospaced)).lineLimit(2)
                             Text(ruleKind(rule)).font(.caption).foregroundStyle(.secondary)
                         }
+                        #if os(macOS)
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                let next = allowlist.filter { $0 != rule }
+                                Task { await write(["command_allowlist": .array(next.map { .string($0) })], topLevel: true) }
+                            } label: { Label("Remove rule", systemImage: "trash") }
+                        }
+                        #endif
                     }
                     .onDelete { offsets in
                         var next = allowlist; next.remove(atOffsets: offsets)
@@ -500,7 +508,7 @@ struct ApprovalsView: View {
                     }
                 }
             } header: { Text("Always allowed · \(botLabel)") } footer: {
-                Text("Each rule is a command pattern or a tool, not one exact command, and it belongs to this bot's gateway profile: every chat with \(botLabel) runs matching commands without asking. Swipe a rule to remove it; new chats pick that up at once.")
+                Text("Each rule is a command pattern or a tool, not one exact command, and it belongs to this bot's gateway profile: every chat with \(botLabel) runs matching commands without asking. \(DeviceWords.isMac ? "Right-click" : "Swipe") a rule to remove it; new chats pick that up at once.")
             }
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
         }
@@ -551,7 +559,7 @@ struct CronView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Scheduled Tasks", symbol: "timer", color: .pink, description: "Prompts your bots run on a schedule.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if jobs.isEmpty, error == nil { ContentUnavailableView("No cron jobs", systemImage: "clock", description: Text("Jobs scheduled on any profile of this gateway appear here.")) }
@@ -570,7 +578,7 @@ struct CronView: View {
             }
         }
         .contentMargins(.top, 14, for: .scrollContent)
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task { await load() }
     }
 
@@ -667,7 +675,7 @@ struct CronJobDetailView: View {
     private var deliverOptions: [String] { Array(Set(["local", "telegram", "discord", "slack", "email", deliver].filter { !$0.isEmpty })).sorted() }
 
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 TextField("Name", text: $name)
                 Toggle("Enabled", isOn: $enabled)
@@ -825,7 +833,7 @@ struct SessionsView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Sessions", symbol: "list.bullet.rectangle", color: .cyan, description: "Every conversation on the gateway, with search and storage.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             Section {
@@ -834,13 +842,13 @@ struct SessionsView: View {
                         VStack(alignment: .leading) { Text(s.displayTitle).lineLimit(1); Text("\(s.messageCount ?? 0) messages · \(s.model ?? "")").font(.caption).foregroundStyle(.secondary) }
                     }
                     .tint(.primary)
-                    .swipeActions { Button(role: .destructive) { Task { await delete(s) } } label: { Label("Delete", systemImage: "trash") } }
+                    .rowActions { Button(role: .destructive) { Task { await delete(s) } } label: { Label("Delete", systemImage: "trash") } }
                 }
             }
         }
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
         .onChange(of: search) { _, _ in Task { await load() } }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -849,7 +857,7 @@ struct SessionsView: View {
                 } label: { Label("Options", systemImage: "gearshape") }
             }
         }
-        .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats) }
+        .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats).sheetFrame() }
     }
 
     private func load() async {
@@ -882,7 +890,7 @@ struct ChannelsView: View {
     @State private var error: String?
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Channels", symbol: "antenna.radiowaves.left.and.right", color: .brown, description: "Messaging platforms the gateway is connected to.")
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(Array(platforms.enumerated()), id: \.offset) { _, p in

@@ -33,7 +33,7 @@ struct TroubleshootingView: View {
             "After a restart, the gateway must be able to start the plugin: run hermes serve by hand once and read its output if the Companion never reports in.",
             "Update the Companion from Settings › Software Update whenever a build asks for it; old versions miss newer features.",
         ]),
-        Topic(id: "push", title: "No notifications or Live Activity", symbol: "bell.slash", checks: [
+        Topic(id: "push", title: DeviceWords.isMac ? "No notifications" : "No notifications or Live Activity", symbol: "bell.slash", checks: [
             "Settings › Companion › This device must show the relay registered and the device file published. Register again if either is missing.",
             "\(DeviceWords.settings) › Notifications › Vory must allow alerts\(DeviceWords.kind == "phone" ? ", and Live Activities must be on" : "").",
             "The Companion sends only for chats it mirrors: it attaches to running sessions when they start, so a turn already running when it was installed will not report.",
@@ -44,12 +44,12 @@ struct TroubleshootingView: View {
             "Settings › Companion › This device › Approval requests says whether the gateway agreed to send them and how many arrived. \"Not acknowledged\" means an older Hermes: update it on the gateway.",
             "Only actions the gateway's approval mode holds for a person reach \(DeviceWords.this). In a mode that approves low-risk commands on its own, most turns never ask.",
             "A card answered on another client (the dashboard, a terminal) disappears here too; the first answer wins.",
-            "With Confirm from the Lock Screen on, an Approve from the Live Activity opens the chat and asks once more for risky actions. Settings › Security changes that.",
+            DeviceWords.isMac ? "With Confirm from notifications on, an Approve from a notification opens the chat and asks once more for risky actions. Settings › Security changes that." : "With Confirm from the Lock Screen on, an Approve from the Live Activity opens the chat and asks once more for risky actions. Settings › Security changes that.",
         ]),
     ]
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, description: "What to check, symptom by symptom. Each item is something to look at on \(DeviceWords.this) or on the gateway machine.")
             ForEach(topics) { t in
                 Section {

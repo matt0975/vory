@@ -69,7 +69,7 @@ struct ProfileCardView: View {
     }
 
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 VStack(spacing: 10) {
                     BotAvatar(profile: profileName, size: 110, active: true)
@@ -87,7 +87,7 @@ struct ProfileCardView: View {
                         BotAvatarStore.set(c, for: profileName)
                         avatarsRaw = String(data: (try? JSONEncoder().encode(BotAvatarStore.stored())) ?? Data(), encoding: .utf8) ?? avatarsRaw
                     }
-            } header: { Text("Creator Studio") } footer: { Text("How this bot looks everywhere: chats, the Island, notifications. Stored on this device.") }
+            } header: { Text("Creator Studio") } footer: { Text("How this bot looks everywhere: chats, \(DeviceWords.isMac ? "the menu bar" : "the Island"), notifications. Stored on this device.") }
             if let chat {
                 Section {
                     Menu { ModelMenuContent(chat: chat) } label: {
@@ -139,7 +139,7 @@ struct ProfileCardView: View {
                 NavigationLink { SoulEditorView(profileName: profileName) } label: {
                     Label("Instructions (SOUL.md)", systemImage: "doc.text")
                 }
-            } footer: { Text("The bot's standing instructions. Edits are written to the gateway when you tap the check mark.") }
+            } footer: { Text("The bot's standing instructions. Edits are written to the gateway when you \(DeviceWords.tap) the check mark.") }
         }
         .navigationTitle(profile?.label ?? profileName)
         .navigationBarTitleDisplayMode(.inline)

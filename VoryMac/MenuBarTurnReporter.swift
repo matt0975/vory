@@ -77,6 +77,7 @@ final class MenuBarTurnReporter: TurnActivityReporting {
 /// doing and how long; a waiting approval gets Approve once and Deny right there.
 struct TurnMenu: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.openWindow) private var openWindow
     @State private var board = TurnBoard.shared
 
     var body: some View {
@@ -137,6 +138,8 @@ struct TurnMenu: View {
 
     /// Brings the app forward, on the chat when one is named.
     private func open(_ storedID: String?) {
+        // The window may be closed (the app lives on in the menu bar): this brings it back.
+        openWindow(id: MacWindow.main)
         NSApp.activate()
         if let storedID, let url = URL(string: "vory://chat/\(storedID)") { model.open(url) }
     }

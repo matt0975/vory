@@ -15,7 +15,7 @@ struct ProjectsView: View {
     @State private var searchText = ""
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Projects", symbol: "folder.fill", color: .indigo,
                                   description: "A project is a name over one or more folders on the gateway. Chats that work inside a project's folder belong to it, and a new chat started in a project begins in that folder.")
             if let rt = model.runtime {
@@ -26,11 +26,11 @@ struct ProjectsView: View {
                     if let error { Section { Text(error).foregroundStyle(.red).font(.footnote) } }
                     Section {
                         if store.open.isEmpty {
-                            Text(store.available == nil ? "Loading…" : "No projects yet. Tap + to make one.").foregroundStyle(.secondary)
+                            Text(store.available == nil ? "Loading…" : "No projects yet. \(DeviceWords.Tap) + to make one.").foregroundStyle(.secondary)
                         }
                         ForEach(store.open.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) }) { p in row(p, store: store) }
                     } header: { Text("Projects") } footer: {
-                        if !store.open.isEmpty { Text("Swipe a project to archive it. Press and hold for more.") }
+                        if !store.open.isEmpty { Text(DeviceWords.isMac ? "Right-click a project to archive it, edit it or more." : "Swipe a project to archive it. Press and hold for more.") }
                     }
                     let archived = store.projects.filter { $0.isArchived && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                     if !archived.isEmpty {
@@ -49,7 +49,7 @@ struct ProjectsView: View {
                     .disabled(model.runtime?.projects.available != true)
             }
         }
-        .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt) } }
+        .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame() } }
         .alert("Rename project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Rename") {
@@ -66,7 +66,7 @@ struct ProjectsView: View {
             Button("Cancel", role: .cancel) { pendingDelete = nil }
         } message: { Text("The folders and the chats stay on the gateway. Only the grouping goes.") }
         .task { await model.runtime?.projects.refresh() }
-        .refreshable { await model.runtime?.projects.refresh() }
+        .reloadable { await model.runtime?.projects.refresh() }
     }
 
     private func row(_ p: Project, store: ProjectsStore) -> some View {

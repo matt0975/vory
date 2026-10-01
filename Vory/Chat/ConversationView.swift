@@ -44,7 +44,7 @@ struct ConversationView: View {
                 framed(chat)
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
-                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat) }
+                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
@@ -64,7 +64,7 @@ struct ConversationView: View {
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
-                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName) }
+                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame() }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,

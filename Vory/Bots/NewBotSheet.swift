@@ -35,7 +35,7 @@ struct NewBotSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 Section {
                     VStack(spacing: 6) {
                         BotAvatar(profile: draftKey, size: 84, active: true, override: choice)

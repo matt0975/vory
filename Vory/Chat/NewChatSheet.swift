@@ -79,7 +79,7 @@ struct NewChatSheet: View {
                         // The whole chip, bot included: the face is not hit-testable on its own.
                         .contentShape(.capsule)
                         .onTapGesture { remove(p) }
-                        .accessibilityLabel("\(p.label), tap to remove")
+                        .accessibilityLabel("\(p.label), \(DeviceWords.tap) to remove")
                     }
                     TextField(chosen.isEmpty ? "Bot name" : "", text: $query)
                         .focused($focus, equals: .to)

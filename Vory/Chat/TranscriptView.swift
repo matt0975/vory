@@ -135,7 +135,7 @@ struct TranscriptView: View {
                     if chat.items.isEmpty, chat.resumeError == nil {
                         VStack(spacing: 8) {
                             BotAvatar(profile: chat.profileName, size: 56)
-                            Text("Say something to \(chat.profileName)").foregroundStyle(.secondary)
+                            Text("Say something to \(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)").foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity).padding(.top, 80)
                     }
@@ -300,8 +300,8 @@ struct TranscriptView: View {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
-            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text) }
-            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat) }
+            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide) }
+            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame() }
             #if os(iOS)
             // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
@@ -381,6 +381,10 @@ extension TranscriptView {
                     .equatable()
                     .id(row.item.id)
                     .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+                    #if os(macOS)
+                    // The Mac has no slide for times: hovering a message says when it arrived.
+                    .help(row.item.timestamp.formatted(date: .abbreviated, time: .shortened))
+                    #else
                     // The time waits just past the right edge; the column slides left to show it.
                     .overlay(alignment: .trailing) {
                         Text(row.item.timestamp, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
@@ -389,6 +393,7 @@ extension TranscriptView {
                             .fixedSize().alignmentGuide(.trailing) { d in d[.leading] - 20 }
                             .accessibilityHidden(true)
                     }
+                    #endif
             
     }
 
@@ -1212,7 +1217,7 @@ struct ToolCardView: View {
                 .padding(.top, 2)
             }
         }
-        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall) }
+        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall).sheetFrame(.wide) }
         .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass

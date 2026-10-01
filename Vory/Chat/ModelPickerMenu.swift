@@ -156,7 +156,7 @@ struct ContextBreakdownSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 if let b = breakdown {
                     Section {
                         VStack(alignment: .leading, spacing: 8) {
@@ -234,7 +234,7 @@ struct ModelSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 if let options {
                     ForEach(options.providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }) { p in
                         Section {

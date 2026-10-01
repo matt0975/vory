@@ -14,6 +14,9 @@ struct ChatRoute: Hashable {
     var readOnly: Bool = false
     /// A new chat's working folder on the gateway: the project it starts in.
     var cwd: String? = nil
+    /// Sets one fresh chat apart from the next on the Mac, where a chat replaces the one beside
+    /// the list: two "new chat" routes are otherwise equal and the second would change nothing.
+    var token: UUID? = nil
 }
 
 struct ChatListView: View {
@@ -106,7 +109,12 @@ struct ChatListView: View {
     /// detail column shows, the way selecting a conversation does in Messages.
     private func open(_ route: some Hashable) {
         #if os(macOS)
-        path.wrappedValue = NavigationPath([route])
+        if var chat = route as? ChatRoute, chat.storedID == nil {
+            chat.token = UUID()
+            path.wrappedValue = NavigationPath([chat])
+        } else {
+            path.wrappedValue = NavigationPath([route])
+        }
         selectedID = (route as? ChatRoute)?.storedID ?? (route as? RoomRoute).map { "room:" + $0.room.roomId }
         #else
         path.wrappedValue.append(route)
@@ -161,8 +169,8 @@ struct ChatListView: View {
                 guard r != nil, model.selectedTab == .chats, runtime != nil else { return }
                 showNewChat = true
             }
-            .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime) } }
-            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } } }
+            .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame() } }
+            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame() }
             .sheet(isPresented: $showNewChat) {
                 if let runtime {
                     NewChatSheet(runtime: runtime, initialProjectID: projectFilter.isEmpty || projectFilter == "__none__" ? runtime.projects.activeID : projectFilter) { start in
@@ -171,6 +179,7 @@ struct ChatListView: View {
                         case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text))
                         }
                     }
+                    .sheetFrame()
                 }
             }
             #if os(iOS)
@@ -534,9 +543,17 @@ struct ChatListView: View {
     }
 
     /// A row that opens `route`: a link on the phone, a button into the detail column on the Mac.
-    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, @ViewBuilder label: () -> Label) -> some View {
+    @ViewBuilder private func rowLink<Label: View>(_ route: some Hashable, selected: Bool = false, @ViewBuilder label: () -> Label) -> some View {
         #if os(macOS)
         Button { open(route) } label: { label().contentShape(.rect) }.buttonStyle(.plain)
+            // The open chat's row, tinted like the selected conversation in Messages. Drawn
+            // here: the Mac's list did not show a listRowBackground on these rows.
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.accentColor.opacity(0.16))
+                        .padding(.horizontal, -8).padding(.vertical, -7)
+                }
+            }
         #else
         NavigationLink(value: route) { label() }
         #endif
@@ -554,7 +571,7 @@ struct ChatListView: View {
 
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime) -> some View {
         let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)
-                rowLink(route) {
+                rowLink(route, selected: selectedID == s.id) {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
                                botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
@@ -564,7 +581,6 @@ struct ChatListView: View {
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
                 #if os(macOS)
-                .listRowBackground(selectedID == s.id ? Color.accentColor.opacity(0.14) : nil)
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
                 .onForceClick { peeking = s }
                 .popover(isPresented: Binding(get: { peeking?.id == s.id }, set: { if !$0 { peeking = nil } })) {
@@ -595,7 +611,7 @@ struct ChatListView: View {
         let archived = archivedRooms.contains(room.roomId)
         let log = roomLogs[room.roomId] ?? []
         let summary = summarizer.shown(summarizer.summary(forRoom: room, events: log), title: room.name, preview: Self.lastLine(room, log) ?? "")
-                rowLink(RoomRoute(room: room, initialText: nil)) {
+                rowLink(RoomRoute(room: room, initialText: nil), selected: selectedID == "room:" + room.roomId) {
                     HStack(spacing: 12) {
                         HStack(spacing: -12) {
                             ForEach(Array(room.members.prefix(3).enumerated()), id: \.offset) { _, m in
@@ -616,9 +632,6 @@ struct ChatListView: View {
                     }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
-                #if os(macOS)
-                .listRowBackground(selectedID == "room:" + room.roomId ? Color.accentColor.opacity(0.14) : nil)
-                #endif
                 .task(id: "\(room.roomId)-\(room.latestSeq ?? 0)-\(aiSummaries)") {
                     if roomLogs[room.roomId] == nil || (room.latestSeq ?? 0) > (roomLogs[room.roomId]?.last?.seq ?? 0),
                        let r: GroupsLogResult = try? await runtime.rpc("groups.log", ["room_id": .string(room.roomId), "since_seq": 0, "limit": 40], timeout: 10).decode() {

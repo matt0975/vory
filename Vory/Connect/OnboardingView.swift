@@ -42,9 +42,9 @@ struct OnboardingView: View {
     ]
     #else
     private static let basePages: [Page] = [
-        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your phone. Every bot you run lives here — swipe to see what we can do together.", demo: .bots),
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on \(DeviceWords.your). Every bot you run lives here — swipe to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
-        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on your phone. Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on \(DeviceWords.your). Once, for the session, always, or deny — it waits for you.", demo: .approval),
         Page(title: "I keep you posted.", says: "A Live Activity follows every turn in the Dynamic Island, and the reply comes as a notification you can answer right there.", demo: .island),
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
         Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),

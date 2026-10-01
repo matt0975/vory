@@ -119,7 +119,7 @@ struct SystemView: View {
     private let logPreview = 5
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "System", symbol: "server.rack", color: .secondary, description: "Gateway health, logs, restarts and updates.")
             if let s = status {
                 Section {
@@ -134,7 +134,7 @@ struct SystemView: View {
                             }
                         }
                     }
-                } header: { Text("Status") } footer: { Text("Green is fine. Tap anything red or amber to see what it means and what to do.") }
+                } header: { Text("Status") } footer: { Text("Green is fine. \(DeviceWords.Tap) anything red or amber to see what it means and what to do.") }
                 if let rt = model.runtime { maintenance(rt) }
                 Section {
                     Button("Run doctor") { Task { await runDoctor() } }
@@ -154,7 +154,7 @@ struct SystemView: View {
                 } header: { Text("Recent log (agent) · newest first") }
             } else if let error { Text(error).foregroundStyle(.red) } else { ProgressView() }
         }
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task { await load() }
     }
 
@@ -232,7 +232,7 @@ struct SessionStoreSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            SettingsList {
                 if let s = stats?.objectValue {
                     Section("Store") {
                         ForEach(["total", "active_store", "archived", "messages"], id: \.self) { k in
@@ -284,7 +284,7 @@ struct StatusLight: Identifiable {
                                advice: gwOK ? "Nothing to do." : "Use Restart gateway below. If it stays down, check the machine it runs on.", raw: s["gateway"]?.displayText ?? gwState))
         out.append(StatusLight(id: "code", title: "Code", summary: restartRequired ? "Restart needed" : "Current", level: restartRequired ? .warn : .ok,
                                explanation: "Whether the running Hermes matches the code on disk. After an update the old process keeps running until it is relaunched.",
-                               advice: restartRequired ? "Tap Update Hermes below; it relaunches the dashboard." : "Nothing to do.", raw: restartRequired ? "restart required" : "ok"))
+                               advice: restartRequired ? "\(DeviceWords.Tap) Update Hermes below; it relaunches the dashboard." : "Nothing to do.", raw: restartRequired ? "restart required" : "ok"))
         if let m = s["memory"] {
             let p = (m["pressure"]?.stringValue ?? "ok").lowercased()
             out.append(StatusLight(id: "memory", title: "Memory", summary: p.capitalized, level: p == "ok" || p == "normal" ? .ok : (p == "warning" || p == "elevated" ? .warn : .bad),
@@ -310,7 +310,7 @@ struct StatusLight: Identifiable {
 struct StatusDetailView: View {
     var light: StatusLight
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 HStack(spacing: 12) { Circle().fill(light.color).frame(width: 14, height: 14); Text(light.summary).font(.headline) }
             }

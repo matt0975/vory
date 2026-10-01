@@ -111,7 +111,7 @@ struct FilesView: View {
                 }
                 ToolbarItem(placement: .primaryAction) { Button { showImporter = true } label: { Label("Upload", systemImage: "square.and.arrow.up") } }
             }
-            .refreshable { await load() }
+            .reloadable { await load() }
             .task(id: path) { shownCount = 300; await load() }
             .task(id: model.runtime?.connection.id) { await load() }
             .quickLookPreview($previewURL)

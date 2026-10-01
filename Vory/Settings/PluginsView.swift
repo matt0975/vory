@@ -14,7 +14,7 @@ struct PluginsView: View {
     private var others: [PluginsHub.Plugin] { (hub?.plugins ?? []).filter { !Self.isCompanion($0) && $0.userHidden != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Plugins", symbol: "puzzlepiece.extension.fill", color: .orange,
                                   description: "Everything the gateway loads beside the agent itself: Vory's companion, the plugins you installed, and the ones Hermes ships with.")
             Section {
@@ -40,7 +40,7 @@ struct PluginsView: View {
             }
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-        .refreshable { await load() }
+        .reloadable { await load() }
         .task(id: runtime?.connection.id) { await load() }
     }
 
@@ -96,7 +96,7 @@ struct PluginDetailView: View {
     var plugin: PluginsHub.Plugin
 
     var body: some View {
-        List {
+        SettingsList {
             Section {
                 LabeledContent("Name", value: plugin.name)
                 if let v = plugin.version, !v.isEmpty { LabeledContent("Version", value: v) }

@@ -73,7 +73,7 @@ struct DashboardView: View {
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
-        .refreshable { await Task { await load() }.value }
+        .reloadable { await Task { await load() }.value }
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)") { await load() }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
         .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }

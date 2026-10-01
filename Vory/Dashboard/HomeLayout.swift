@@ -77,17 +77,25 @@ struct HomeSettingsView: View {
     @Environment(\.editMode) private var editMode
 
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
+    #if os(macOS)
+    private func move(_ item: HomeLayout.Item, by step: Int) {
+        update { l in
+            guard let i = l.items.firstIndex(where: { $0.card == item.card }), l.items.indices.contains(i + step) else { return }
+            l.move(fromOffsets: IndexSet(integer: i), toOffset: step > 0 ? i + step + 1 : i + step)
+        }
+    }
+    #endif
     private func update(_ change: (inout HomeLayout) -> Void) {
         var l = layout; change(&l); layoutRaw = l.encoded
     }
 
     var body: some View {
-        List {
+        SettingsList {
             SettingsHeaderSection(title: "Home", symbol: "house.fill", color: .blue,
                                   description: "The dashboard: a greeting, the month in numbers, your bots, the chats to pick back up, and what changed while you were away. Choose which cards, in what order and at what size.")
             Section {
                 TextField("Your name", text: $userName).textContentType(.givenName)
-            } header: { Text("You") } footer: { Text("Home greets you by name. Stays on this phone.") }
+            } header: { Text("You") } footer: { Text("Home greets you by name. Stays on \(DeviceWords.this).") }
             Section {
                 Picker("Open Vory on", selection: Binding(get: { AppModel.AppTab(rawValue: launchTab) ?? .chats }, set: { tab in
                     launchTab = tab.rawValue
@@ -96,7 +104,7 @@ struct HomeSettingsView: View {
                 })) {
                     ForEach(TabLayout.parse(tabLayoutRaw).visible()) { tab in Label(tab.title, systemImage: tab.symbol).tag(tab) }
                 }
-            } footer: { Text("The tab the app opens on. Only tabs on the bar are offered; add one from Appearance › Tab bar.") }
+            } footer: { Text(DeviceWords.isMac ? "The page the app opens on. Only pages in the sidebar are offered; add one from Appearance › Sidebar." : "The tab the app opens on. Only tabs on the bar are offered; add one from Appearance › Tab bar.") }
             Section {
                 Toggle(isOn: $homeAllBots) { Label("Chats from all bots", systemImage: "person.2") }
             } footer: { Text("Off, the Pick up and Since cards show the current bot's chats. On, they merge every bot's recent chats, each with its bot's face.") }
@@ -119,7 +127,11 @@ struct HomeSettingsView: View {
                         }
                         .accessibilityLabel("Size for \(item.card.title)")
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    .rowActions(allowsFullSwipe: false) {
+                        #if os(macOS)
+                        Button { move(item, by: -1) } label: { Label("Move Up", systemImage: "arrow.up") }.disabled(layout.items.first?.card == item.card)
+                        Button { move(item, by: 1) } label: { Label("Move Down", systemImage: "arrow.down") }.disabled(layout.items.last?.card == item.card)
+                        #endif
                         Button(role: .destructive) { update { $0.remove(item.card) } } label: { Label("Hide", systemImage: "eye.slash") }
                     }
                 }
@@ -127,7 +139,7 @@ struct HomeSettingsView: View {
                 .onDelete { offsets in update { l in offsets.map { l.items[$0].card }.forEach { l.remove($0) } } }
             } header: {
                 HStack { Text("On Home"); Spacer(); EditButton().font(.caption) }
-            } footer: { Text("Drag to reorder, swipe to hide. The size icon switches a card between its two sizes. On Home itself, press and hold a card and drag it onto another.") }
+            } footer: { Text(DeviceWords.isMac ? "Right-click a card to move or hide it. The size icon switches a card between its two sizes. On Home itself, choose Edit Home and drag a card onto another." : "Drag to reorder, swipe to hide. The size icon switches a card between its two sizes. On Home itself, press and hold a card and drag it onto another.") }
             if !layout.hidden.isEmpty {
                 Section("Not on Home") {
                     ForEach(layout.hidden) { card in
