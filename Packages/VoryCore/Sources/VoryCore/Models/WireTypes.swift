@@ -886,18 +886,6 @@ public struct PluginsHub: Codable, Sendable {
         public var canUpdateGit: Bool?
         public var removedReason: String?
         public var id: String { name }
-
-        enum CodingKeys: String, CodingKey {
-            case name, version, description, source, path
-            case runtimeStatus = "runtime_status"
-            case hasDashboardManifest = "has_dashboard_manifest"
-            case userHidden = "user_hidden"
-            case authRequired = "auth_required"
-            case authCommand = "auth_command"
-            case canRemove = "can_remove"
-            case canUpdateGit = "can_update_git"
-            case removedReason = "removed_reason"
-        }
     }
     public var plugins: [Plugin]
 }
