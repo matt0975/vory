@@ -48,7 +48,7 @@ final class ChatSummarizer {
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.deviceNotEligible): return "This device does not support Apple Intelligence."
-        case .unavailable(.appleIntelligenceNotEnabled): return "Turn on Apple Intelligence in iOS Settings first."
+        case .unavailable(.appleIntelligenceNotEnabled): return "Turn on Apple Intelligence in \(DeviceWords.settings) first."
         case .unavailable(.modelNotReady): return "Apple Intelligence is still downloading its model."
         case .unavailable: return "Apple Intelligence is not available right now."
         }

@@ -15,8 +15,8 @@ struct CompanionPromptSheet: View {
     private static let device = "this Mac"
     private static let pitch = "The Companion is a small plugin on your gateway. With it, replies arrive as notifications and approval cards reach you the moment a bot needs a yes."
     #else
-    private static let device = "this iPhone"
-    private static let pitch = "The Companion is a small plugin on your gateway. With it, replies arrive as notifications, a Live Activity follows every turn, and approval cards reach your phone the moment a bot needs a yes."
+    private static let device = DeviceWords.this
+    private static let pitch = "The Companion is a small plugin on your gateway. With it, replies arrive as notifications, a Live Activity follows every turn, and approval cards reach \(DeviceWords.your) the moment a bot needs a yes."
     #endif
 
     var body: some View {

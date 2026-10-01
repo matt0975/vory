@@ -168,7 +168,29 @@ final class PushRegistrar: PushRegistrationSyncing {
     /// Settings › Notifications › Notifications. Off removes this phone from the gateway and the
     /// relay, so nothing is sent; on registers it again.
     static let enabledKey = "notificationsEnabled"
+    static let muteDesktopOriginKey = "push.muteDesktopOrigin"
     var notificationsEnabled: Bool { UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true }
+
+    /// When this device last marked a session as its own, so one per chat per minute goes up.
+    private var originNoted: [String: Date] = [:]
+
+    /// `<profile home>/push/origins/<stored session id>.json`: which device prompted the chat
+    /// last. The Companion skips a phone that asked for quiet while the marker says Mac; a
+    /// prompt from the phone writes it again and takes the chat back. Fire and forget.
+    func noteSend(session: String, runtime: GatewayRuntime) {
+        guard !session.isEmpty, let home = runtime.profileHome else { return }
+        if let last = originNoted[session], Date().timeIntervalSince(last) < 60 { return }
+        originNoted[session] = Date()
+        let safe = session.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || "._-".unicodeScalars.contains($0) ? Character($0) : "_" }
+        let path = "\(home)/push/origins/\(String(safe)).json"
+        let marker: JSONValue = ["device_id": .string(installID), "platform": .string(Self.platform), "at": .number(Date().timeIntervalSince1970)]
+        Task {
+            guard let data = try? JSONEncoder().encode(marker) else { return }
+            let body: JSONValue = ["path": .string(path), "data_url": .string("data:application/json;base64," + data.base64EncodedString()), "overwrite": true]
+            do { let _: ManagedUploadResult = try await runtime.api.send("POST", "/api/files/upload", json: body) }
+            catch { LiveActivityController.note("origin marker failed: \(error.localizedDescription)") }
+        }
+    }
 
     func syncRegistration(runtime: GatewayRuntime) async {
         guard notificationsEnabled else { return }
@@ -204,6 +226,10 @@ final class PushRegistrar: PushRegistrationSyncing {
             return (p.name, JSONValue.object(["label": .string(p.label), "hex": .string(looks.colors[key] ?? BotColors.hex(for: p.name)),
                                                "avatar": .string(looks.avatars[key] ?? BotAvatarStore.choice(for: p.name).raw)]))
         }))
+        #endif
+        #if os(iOS)
+        // Quiet while a Mac drives the chat (Settings › Notifications); the Companion reads this.
+        payload["mute_desktop_origin"] = .bool(UserDefaults.standard.bool(forKey: Self.muteDesktopOriginKey))
         #endif
         payload.merge(PushRelay.deviceFileFields()) { $1 }
         do {

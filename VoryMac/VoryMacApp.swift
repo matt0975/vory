@@ -45,6 +45,24 @@ struct VoryMacApp: App {
                 .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.screensDidWakeNotification)) { _ in model.lock.willEnterForeground() }
         }
         .defaultSize(width: 980, height: 700)
+        .commands {
+            // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { model.selectedTab = .settings }.keyboardShortcut(",", modifiers: .command)
+            }
+            CommandMenu("Chat") {
+                Button("New Chat") { model.selectedTab = .chats; model.newChatRequest = UUID() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(model.runtime == nil)
+                Divider()
+                Button("Next Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: 1) }
+                    .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                    .disabled(model.runtime == nil)
+                Button("Previous Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: -1) }
+                    .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                    .disabled(model.runtime == nil)
+            }
+        }
 
         // The Live Activity's job on the Mac: the turns in flight and the approvals waiting, up
         // in the menu bar, with a badge on the Dock for what needs you.

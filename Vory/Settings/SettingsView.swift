@@ -168,7 +168,7 @@ struct GatewaysView: View {
 
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Gateways", symbol: "network", color: .blue, description: "The gateways this phone can reach, and which one is active.")
+            SettingsHeaderSection(title: "Gateways", symbol: "network", color: .blue, description: "The gateways \(DeviceWords.this) can reach, and which one is active.")
             Section {
                 ForEach(model.store.connections) { c in
                     HStack {
@@ -311,11 +311,12 @@ struct NotificationsView: View {
     @AppStorage("hapticsEnabled") private var haptics = true
     @AppStorage(TypingHaptics.key) private var typingHaptics = false
     @AppStorage(PushRegistrar.enabledKey) private var notificationsOn = true
+    @AppStorage(PushRegistrar.muteDesktopOriginKey) private var muteDesktopOrigin = false
 
     var body: some View {
         let push = model.push
         List {
-            SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission, Live Activities and haptics on this phone.")
+            SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(DeviceWords.kind == "phone" ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
             Section {
                 Toggle("Notifications", isOn: $notificationsOn)
                     .onChange(of: notificationsOn) { _, on in
@@ -326,8 +327,17 @@ struct NotificationsView: View {
                         }
                     }
             } footer: {
-                Text(notificationsOn ? "This phone is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: this phone is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
+                Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
             }
+            #if os(iOS)
+            Section {
+                Toggle("Quiet for chats driven from a Mac", isOn: $muteDesktopOrigin)
+                    .disabled(!notificationsOn)
+                    .onChange(of: muteDesktopOrigin) { _, _ in Task { if let rt = model.runtime { await push.syncRegistration(runtime: rt) } } }
+            } footer: {
+                Text("With Vory for Mac on the same gateway: a chat whose last message was sent from the Mac notifies the Mac only. Send from this phone and the chat is this phone's again. Needs Companion 1.0.35.")
+            }
+            #endif
             Section {
                 LabeledContent("Status", value: statusText(push.authorization))
                 if push.authorization == .notDetermined {
@@ -372,7 +382,7 @@ struct SecurityView: View {
     @AppStorage(ApprovalConfirm.modeKey) private var confirmMode = ApprovalConfirm.mode
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Security", symbol: "faceid", color: .green, description: "Face ID lock, a second step for approvals, and how this phone keeps its credentials.")
+            SettingsHeaderSection(title: "Security", symbol: "faceid", color: .green, description: "\(DeviceWords.kind == "phone" ? "Face ID" : "Touch ID") lock, a second step for approvals, and how \(DeviceWords.this) keeps its credentials.")
             Section {
                 Toggle("Require \(model.lock.biometryName)", isOn: Binding(get: { model.lock.isEnabled }, set: { model.lock.isEnabled = $0 }))
             } footer: { Text("Locks the app after it has been in the background. Gateway credentials are stored in the iOS Keychain (device-only).") }
@@ -491,7 +501,7 @@ struct SummariesSettingsView: View {
 
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Vory Summaries", symbol: "sparkles", color: .purple, description: "Apple Intelligence, on this phone, reads each chat and writes its line in the list.")
+            SettingsHeaderSection(title: "Vory Summaries", symbol: "sparkles", color: .purple, description: "Apple Intelligence, on \(DeviceWords.this), reads each chat and writes its line in the list.")
             Section {
                 Toggle(isOn: $titles) {
                     HStack(spacing: 6) {
@@ -508,7 +518,7 @@ struct SummariesSettingsView: View {
                     }
                 }
             } header: { Text("What the model writes") } footer: {
-                Text(ChatSummarizer.unavailableReason ?? "Titles: a short name for each chat in place of the gateway's. Previews: two lines on where the chat stands in place of the last message. Either can be on alone. Nothing leaves your phone and nothing changes on the gateway; off, the list shows the gateway's own titles and previews.")
+                Text(ChatSummarizer.unavailableReason ?? "Titles: a short name for each chat in place of the gateway's. Previews: two lines on where the chat stands in place of the last message. Either can be on alone. Nothing leaves \(DeviceWords.your) and nothing changes on the gateway; off, the list shows the gateway's own titles and previews.")
             }
             .disabled(!ChatSummarizer.isAvailable)
             #if os(iOS)
@@ -571,7 +581,7 @@ struct AppearanceView: View {
                 }
                 .pickerStyle(.segmented)
             } header: { Text("Appearance") } footer: {
-                Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow your iOS settings.")
+                Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.settings).")
             }
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
@@ -650,7 +660,7 @@ struct AppearanceView: View {
                     Text("Large").tag("large")
                 }
             } header: { Text("Reading") } footer: {
-                Text("Wide replies let a reply run to the right edge instead of leaving a margin. Text size is one step down or up from your iPhone's own text size, in chats only.")
+                Text("Wide replies let a reply run to the right edge instead of leaving a margin. Text size is one step down or up from \(DeviceWords.your)'s own text size, in chats only.")
             }
             Section {
                 Button("Clear chat list cache") { SessionCache.clearAll() }
@@ -836,7 +846,7 @@ struct SoftwareUpdateView: View {
                         .animation(.snappy, value: setup.checkingCompanion)
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
-                    Text("A small plugin on your gateway. It sends replies as notifications, keeps the Live Activity up to date, and gets approval cards to your phone the moment a bot needs a yes. Installs in place; no restart unless it says so.")
+                    Text("A small plugin on your gateway. It sends replies as notifications, keeps the Live Activity up to date, and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")
                 }
                 Section {
                     LabeledContent("On the gateway", value: setup.installedVersion.map { "v\($0)" } ?? "—")

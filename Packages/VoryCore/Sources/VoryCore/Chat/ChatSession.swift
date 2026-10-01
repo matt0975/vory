@@ -373,6 +373,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
             activity.start(for: self)
+            runtime.pushRegistrar?.noteSend(session: storedID, runtime: runtime)
         } catch {
             isRunning = false
             statusLine = nil

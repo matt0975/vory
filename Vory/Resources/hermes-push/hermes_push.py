@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.34"
+VERSION = "1.0.35"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -260,6 +260,51 @@ def devices_dir() -> Path:
 
 
 _dup_devices_logged: set = set()
+
+
+# ── where a chat was last prompted from ───────────────────────────────────────────────────────
+#
+# Each app writes <push dir>/origins/<stored session id>.json = {device_id, platform, at} when it
+# sends a prompt. A phone that asked to be quiet for chats driven from a Mac
+# (`mute_desktop_origin` in its device file) is skipped for a session whose latest prompt came
+# from a Mac within ORIGIN_WINDOW; replying from the phone writes the file again and takes the
+# chat back. The test push and anything without a session go to every device.
+
+ORIGIN_WINDOW = 12 * 3600
+_origins_pruned_at = 0.0
+
+
+def origins_dir() -> Path:
+    return devices_dir().parent / "origins"
+
+
+def session_origin(session_id: str) -> dict | None:
+    """The origin marker for a stored session, when there is a recent one."""
+    if not session_id:
+        return None
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)
+    p = origins_dir() / f"{safe}.json"
+    try:
+        o = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    at = float(o.get("at") or 0)
+    return o if time.time() - at < ORIGIN_WINDOW else None
+
+
+def prune_origins() -> None:
+    """Markers older than the window are dead weight; drop them, at most once an hour."""
+    global _origins_pruned_at
+    now = time.time()
+    if now - _origins_pruned_at < 3600:
+        return
+    _origins_pruned_at = now
+    for f in glob.glob(str(origins_dir() / "*.json")):
+        try:
+            if now - os.path.getmtime(f) > ORIGIN_WINDOW:
+                os.remove(f)
+        except OSError:
+            pass
 
 
 def load_devices(gateway_url: str) -> list[dict]:
@@ -571,9 +616,15 @@ class Relay:
             else:
                 break
         sent = 0
+        origin = session_origin(str(meta.get("session_id") or ""))
+        from_mac = bool(origin) and origin.get("platform") == "macos"
+        prune_origins()
         for d in load_devices(self.gw.url):
             if d.get("platform") == "watchos" or d.get("device_id") in skip:
                 continue  # the phone's alert is mirrored to the watch; a direct one would double up
+            if from_mac and d.get("platform") == "ios" and d.get("mute_desktop_origin"):
+                log.info("push %s → %s: skipped, the chat is being driven from a Mac and this phone asked for quiet", kind, d.get("device_name") or d.get("device_id"))
+                continue
             ok = self.apns.send(d, payload, collapse_id=collapse)
             sent += 1 if ok else 0
             log.info("push %s → %s: %s (%s)", kind, d.get("device_name") or d.get("device_id"), "sent" if ok else "FAILED", title[:60])

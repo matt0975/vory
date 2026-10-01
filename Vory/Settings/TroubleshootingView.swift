@@ -12,17 +12,17 @@ struct TroubleshootingView: View {
 
     private let topics: [Topic] = [
         Topic(id: "connect", title: "The connection test stops", symbol: "wifi.exclamationmark", checks: [
-            "Open the same URL in Safari on this phone. If the Hermes dashboard does not load there, the phone cannot reach the gateway and the app cannot either.",
+            "Open the same URL in Safari on \(DeviceWords.this). If the Hermes dashboard does not load there, the \(DeviceWords.kind) cannot reach the gateway and the app cannot either.",
             "Use the dashboard's address (hermes serve, port 9119 unless you changed it), not a chat web UI or an SSH app.",
             "At home or on a tailnet the address is plain http. Type http:// yourself if the form guessed https, or https:// if you put a certificate in front.",
-            "Tailscale: the Tailscale app on this phone must be connected, and the gateway machine must be on the same tailnet.",
+            "Tailscale: the Tailscale app on \(DeviceWords.this) must be connected, and the gateway machine must be on the same tailnet.",
             "Behind a reverse proxy: put the proxy's path in Path prefix (for example /hermes), and make sure the proxy passes WebSocket upgrades through.",
             "Cloudflare Access: always https, with a service token. A browser login for Access cannot be used by the app.",
         ]),
         Topic(id: "signin", title: "Sign-in fails", symbol: "person.badge.key", checks: [
             "Sign in with browser needs a Hermes with native sign-in. If the app says the gateway lacks it, update Hermes on the gateway, or use a session token from the dashboard instead.",
             "Nginx Proxy Manager with Block Common Exploits on used to reject the sign-in request; the app now encodes it fully. If a proxy still answers 403, check its rules for the /api path.",
-            "The browser closed without handing the app its code: the gateway's callback must reach this phone. A dashboard that only listens on the gateway machine cannot call back over the internet.",
+            "The browser closed without handing the app its code: the gateway's callback must reach \(DeviceWords.this). A dashboard that only listens on the gateway machine cannot call back over the internet.",
             "Username and password only works on a gateway that offers password sign-in. A browser-only gateway says so in the test; use the browser there.",
             "Session token: copy HERMES_DASHBOARD_SESSION_TOKEN from the gateway's environment. It is refused when the gateway has its auth gate on.",
         ]),
@@ -34,15 +34,15 @@ struct TroubleshootingView: View {
             "Update the Companion from Settings › Software Update whenever a build asks for it; old versions miss newer features.",
         ]),
         Topic(id: "push", title: "No notifications or Live Activity", symbol: "bell.slash", checks: [
-            "Settings › Companion › This phone must show the relay registered and the device file published. Register again if either is missing.",
-            "iOS Settings › Vory › Notifications must allow alerts, and Live Activities must be on.",
+            "Settings › Companion › This device must show the relay registered and the device file published. Register again if either is missing.",
+            "\(DeviceWords.settings) › Notifications › Vory must allow alerts\(DeviceWords.kind == "phone" ? ", and Live Activities must be on" : "").",
             "The Companion sends only for chats it mirrors: it attaches to running sessions when they start, so a turn already running when it was installed will not report.",
             "Focus modes and Notification Summary hold alerts back; check the Focus that is on.",
-            "One phone, one registration: signing in on a second phone does not stop the first one.",
+            "One device, one registration: signing in on a second one does not stop the first.",
         ]),
         Topic(id: "approvals", title: "No approval cards", symbol: "checkmark.shield", checks: [
-            "Settings › Companion › This phone › Approval requests says whether the gateway agreed to send them and how many arrived. \"Not acknowledged\" means an older Hermes: update it on the gateway.",
-            "Only actions the gateway's approval mode holds for a person reach the phone. In a mode that approves low-risk commands on its own, most turns never ask.",
+            "Settings › Companion › This device › Approval requests says whether the gateway agreed to send them and how many arrived. \"Not acknowledged\" means an older Hermes: update it on the gateway.",
+            "Only actions the gateway's approval mode holds for a person reach \(DeviceWords.this). In a mode that approves low-risk commands on its own, most turns never ask.",
             "A card answered on another client (the dashboard, a terminal) disappears here too; the first answer wins.",
             "With Confirm from the Lock Screen on, an Approve from the Live Activity opens the chat and asks once more for risky actions. Settings › Security changes that.",
         ]),
@@ -50,7 +50,7 @@ struct TroubleshootingView: View {
 
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, description: "What to check, symptom by symptom. Each item is something to look at on this phone or on the gateway machine.")
+            SettingsHeaderSection(title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, description: "What to check, symptom by symptom. Each item is something to look at on \(DeviceWords.this) or on the gateway machine.")
             ForEach(topics) { t in
                 Section {
                     ForEach(Array(t.checks.enumerated()), id: \.offset) { i, c in

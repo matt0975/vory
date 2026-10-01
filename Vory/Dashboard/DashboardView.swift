@@ -418,7 +418,7 @@ struct DashboardView: View {
             }
             if let sinceSummary {
                 Text(sinceSummary).font(.subheadline).lineLimit(full ? nil : 3)
-                Text("Summed up on this iPhone.").font(.caption2).foregroundStyle(.tertiary)
+                Text("Summed up on \(DeviceWords.this).").font(.caption2).foregroundStyle(.tertiary)
             } else if changedSinceVisit.isEmpty, !loading {
                 Text(lastVisit > 0 ? "Nothing new since \(Date(timeIntervalSince1970: lastVisit), format: .relative(presentation: .named))." : "Nothing happened in the last day.").font(.subheadline).foregroundStyle(.secondary)
             } else {

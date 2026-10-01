@@ -82,8 +82,9 @@ private struct MainSplitView: View {
                 } detail: {
                     NavigationStack(path: $chatPath) {
                         NoChatView()
-                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
-                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
+                            // No back chevron: the list beside it is the way between chats.
+                            .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).navigationBarBackButtonHidden(true) }
+                            .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).navigationBarBackButtonHidden(true) }
                     }
                 }
             } else {
@@ -97,8 +98,7 @@ private struct MainSplitView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .disabled(model.runtime == nil || model.selectedTab != .chats)
+                                        .disabled(model.runtime == nil || model.selectedTab != .chats)
                     .help("New Chat (⌘N)")
             }
         }

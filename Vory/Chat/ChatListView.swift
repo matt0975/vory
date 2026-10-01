@@ -74,6 +74,34 @@ struct ChatListView: View {
 
     private var runtime: GatewayRuntime? { model.runtime }
 
+    #if os(macOS)
+    /// The list as shown, for stepping through it from the keyboard.
+    private func entries(_ runtime: GatewayRuntime) -> [ListEntry] {
+        let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
+        let visibleRooms = groupsOnly
+            ? rooms.filter { (showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
+            : []
+        return Self.merge(rows, visibleRooms, sort: sortKey)
+    }
+
+    /// Opens the chat `direction` rows away from the open one (the first when none is open).
+    private func step(_ direction: Int, runtime: GatewayRuntime) {
+        let list = entries(runtime)
+        guard !list.isEmpty else { return }
+        let current = list.firstIndex { e in
+            switch e {
+            case .session(let s): return s.id == selectedID
+            case .room(let r): return "room:" + r.roomId == selectedID
+            }
+        }
+        let next = current.map { min(max($0 + direction, 0), list.count - 1) } ?? 0
+        switch list[next] {
+        case .session(let s): open(ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil))
+        case .room(let r): open(RoomRoute(room: r))
+        }
+    }
+    #endif
+
     /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
     /// detail column shows, the way selecting a conversation does in Messages.
     private func open(_ route: some Hashable) {
@@ -366,6 +394,8 @@ struct ChatListView: View {
         #if os(macOS)
         // The search field belongs in the toolbar on a Mac; over the list it hid the top of the scroll bar.
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search chats")
+        // ⌥⌘↓ / ⌥⌘↑ from the Chat menu: the row after or before the open one.
+        .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
         #else
         // The system drawer: out of sight until the list is pulled down, like Mail.
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")

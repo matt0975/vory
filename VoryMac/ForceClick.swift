@@ -22,20 +22,24 @@ final class ForceClickMonitor {
     private func start() {
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.pressure, .leftMouseUp]) { [weak self] event in
-            MainActor.assumeIsolated { self?.handle(event) }
-            return event
+            let consumed = MainActor.assumeIsolated { self?.handle(event) ?? false }
+            return consumed ? nil : event
         }
     }
 
-    private func handle(_ event: NSEvent) {
-        if event.type == .leftMouseUp { fired = false; return }
-        guard event.stage == 2, !fired, let window = event.window, let content = window.contentView else { return }
+    /// True when the event is consumed: the mouse-up that ends a force click, so the row under
+    /// it does not open as well.
+    @discardableResult
+    private func handle(_ event: NSEvent) -> Bool {
+        if event.type == .leftMouseUp { defer { fired = false }; return fired }
+        guard event.stage == 2, !fired, let window = event.window, let content = window.contentView else { return false }
         // SwiftUI's global frames hang from the window's top-left; AppKit's point is from the bottom-left.
         let inContent = content.convert(event.locationInWindow, from: nil)
         let point = CGPoint(x: inContent.x, y: content.isFlipped ? inContent.y : content.bounds.height - inContent.y)
-        guard let hit = targets.values.first(where: { $0.frame.contains(point) }) else { return }
+        guard let hit = targets.values.first(where: { $0.frame.contains(point) }) else { return false }
         fired = true
         hit.action()
+        return false
     }
 }
 

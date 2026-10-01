@@ -56,7 +56,7 @@ struct StatusView: View {
             Section {
                 row("Notifications", light: notificationsLight(push), detail: notificationsDetail(push)) { NotificationsView() }
                 row("Live Activity", light: liveActivityLight(push), detail: liveActivityDetail(push)) { NotificationsView() }
-            } header: { Text("On this phone") }
+            } header: { Text("On \(DeviceWords.this)") }
 
             Section {
                 LabeledContent("Vory", value: "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?") (\(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"))")
@@ -152,12 +152,12 @@ struct StatusView: View {
     private func notificationsDetail(_ push: PushRegistrar) -> String {
         if !push.notificationsEnabled { return "Turned off in Settings › Notifications" }
         switch push.authorization {
-        case .denied: return "Not allowed in iOS Settings"
+        case .denied: return "Not allowed in \(DeviceWords.settings)"
         case .notDetermined: return "Not asked yet"
         default: break
         }
         if let e = push.relayError ?? push.lastError { return e }
-        guard push.registeredAt != nil else { return "Allowed, but this phone is not registered with the gateway yet" }
+        guard push.registeredAt != nil else { return "Allowed, but \(DeviceWords.this) is not registered with the gateway yet" }
         return PushRelay.isConfigured ? "Allowed and registered with the gateway and the relay" : "Allowed and registered with the gateway"
     }
     private func liveActivityLight(_ push: PushRegistrar) -> Light {
@@ -168,6 +168,6 @@ struct StatusView: View {
     private func liveActivityDetail(_ push: PushRegistrar) -> String {
         if !LiveActivityController.isEnabled { return "Turned off in Settings › Notifications" }
         if !activitiesAllowed { return "Not allowed for Vory in iOS Settings" }
-        return push.pushToStartToken == nil ? "On. The gateway can update a running one; starting one while Vory is closed is not set up yet on this phone" : "On, and the gateway can start one while Vory is closed"
+        return push.pushToStartToken == nil ? "On. The gateway can update a running one; starting one while Vory is closed is not set up yet on \(DeviceWords.this)" : "On, and the gateway can start one while Vory is closed"
     }
 }

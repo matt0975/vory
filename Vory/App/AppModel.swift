@@ -100,6 +100,9 @@ final class AppModel {
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.
     var newChatRequest: UUID?
+    /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.
+    struct ChatStepRequest { let direction: Int; let id = UUID() }
+    var chatStepRequest: ChatStepRequest?
     /// The compose circle held down: the full New Message sheet instead of a fresh chat.
     var newChatSheetRequest: UUID?
     /// The bot's page in front, if any, so compose there starts a chat with that bot.

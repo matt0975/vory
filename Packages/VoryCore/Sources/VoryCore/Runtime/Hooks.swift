@@ -24,6 +24,13 @@ public protocol CardNotifying: AnyObject {
 @MainActor
 public protocol PushRegistrationSyncing: AnyObject {
     func syncRegistration(runtime: GatewayRuntime) async
+    /// A prompt just went out for `session` from this device: the gateway is told which device
+    /// drives the chat now (the Companion quiets a phone that asked for it while a Mac does).
+    func noteSend(session: String, runtime: GatewayRuntime)
+}
+
+public extension PushRegistrationSyncing {
+    func noteSend(session: String, runtime: GatewayRuntime) {}
 }
 
 /// Default when a platform has no turn surface.
