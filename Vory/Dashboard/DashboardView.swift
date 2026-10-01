@@ -36,19 +36,9 @@ struct DashboardView: View {
                 if let runtime, !runtime.needsAttention.isEmpty { needsYou(runtime) }
                 ForEach(layout.items) { item in
                     editableCard(item)
-                        .contextMenu {
-                            Section("Size") {
-                                Button { update { $0.set(item.card, size: .compact) } } label: { Label(item.card.sizeWords.compact, systemImage: item.size == .compact ? "checkmark" : "rectangle.compress.vertical") }
-                                Button { update { $0.set(item.card, size: .full) } } label: { Label(item.card.sizeWords.full, systemImage: item.size == .full ? "checkmark" : "rectangle.expand.vertical") }
-                            }
-                            if item.card == .pickUp || item.card == .since {
-                                Section("Chats from") {
-                                    Button { homeAllBots = false } label: { Label("This bot", systemImage: homeAllBots ? "person" : "checkmark") }
-                                    Button { homeAllBots = true } label: { Label("All bots", systemImage: homeAllBots ? "checkmark" : "person.2") }
-                                }
-                            }
-                            Button(role: .destructive) { withAnimation(.snappy) { update { $0.remove(item.card) } } } label: { Label("Hide from Home", systemImage: "eye.slash") }
-                        }
+                        // While Home is being edited the press is a drag, so the menu stands
+                        // aside; otherwise a long press races the drag and the menu won.
+                        .contextMenu(menuItems: { if !editingHome { cardMenu(item) } })
                 }
                 if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
                 // Edit: the cards can be dragged onto one another until Done; Settings has the
@@ -85,6 +75,20 @@ struct DashboardView: View {
     }
 
     @State private var editingHome = false
+
+    @ViewBuilder private func cardMenu(_ item: HomeLayout.Item) -> some View {
+                            Section("Size") {
+                                Button { update { $0.set(item.card, size: .compact) } } label: { Label(item.card.sizeWords.compact, systemImage: item.size == .compact ? "checkmark" : "rectangle.compress.vertical") }
+                                Button { update { $0.set(item.card, size: .full) } } label: { Label(item.card.sizeWords.full, systemImage: item.size == .full ? "checkmark" : "rectangle.expand.vertical") }
+                            }
+                            if item.card == .pickUp || item.card == .since {
+                                Section("Chats from") {
+                                    Button { homeAllBots = false } label: { Label("This bot", systemImage: homeAllBots ? "person" : "checkmark") }
+                                    Button { homeAllBots = true } label: { Label("All bots", systemImage: homeAllBots ? "checkmark" : "person.2") }
+                                }
+                            }
+                            Button(role: .destructive) { withAnimation(.snappy) { update { $0.remove(item.card) } } } label: { Label("Hide from Home", systemImage: "eye.slash") }
+    }
 
     /// The card, and while Home is being edited, a drag source and a drop target with a dashed
     /// edge to say so.
