@@ -47,7 +47,11 @@ struct ConversationView: View {
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear { model.visibleChatID = chat.storedID }
-                    .onDisappear { if model.visibleChatID == chat.storedID { model.visibleChatID = nil } }
+                    .onDisappear {
+                        if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
+                        // Leaving a chat: back to the default bot, when one is chosen.
+                        model.runtime?.returnToDefaultProfile()
+                    }
                     .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName) }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
@@ -279,9 +283,8 @@ struct ChatHeader: View {
     private var idleLine: String { headerShowsTitle ? chat.subtitle : (chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title) }
 
     var body: some View {
-        // One glass container: the back circle, the pill and the menu circle blend when the pill
-        // grows toward them, and the pill morphs between its resting and asking shapes.
-        GlassEffectContainer(spacing: 16) {
+        // No glass container here: a container draws its glass on a layer above the rest, and
+        // the pill covered the bot sitting on it.
         HStack(alignment: .top, spacing: 12) {
             Button(action: onBack) {
                 Image(systemName: "chevron.left").font(.title3.weight(.semibold))
@@ -359,7 +362,6 @@ struct ChatHeader: View {
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).
         .contentShape(.rect)
         .onTapGesture {}
-        }
     }
 }
 

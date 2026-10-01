@@ -88,20 +88,6 @@ struct ProfileCardView: View {
                         avatarsRaw = String(data: (try? JSONEncoder().encode(BotAvatarStore.stored())) ?? Data(), encoding: .utf8) ?? avatarsRaw
                     }
             } header: { Text("Creator Studio") } footer: { Text("How this bot looks everywhere: chats, the Island, notifications. Stored on this device.") }
-            Section {
-                TextField("Description", text: $description, axis: .vertical)
-                    .lineLimit(1...4)
-                    .onSubmit { Task { await saveDescription() } }
-                Button("Save description") { Task { await saveDescription() } }
-                    .disabled(description == (profile?.description ?? ""))
-            } header: { Text("Profile") } footer: { Text("The description is what other Hermes surfaces show for this bot (and what kanban routing reads).") }
-            Section {
-                if let o = options {
-                    Menu { modelMenuItems(o.providers) } label: { LabeledContent("Default model", value: modelLabel) }
-                } else { ProgressView() }
-            } header: { Text("Model") } footer: { Text("Writes this profile's config.yaml. Running chats keep their own model.") }
-            if let p = profile?.path { Section { Text(p).font(.caption.monospaced()).foregroundStyle(.tertiary) } header: { Text("Home") } }
-            if let status { Section { Text(status).font(.footnote).foregroundStyle(status.hasPrefix("Saved") ? Color.secondary : Color.red) } }
             if let chat {
                 Section {
                     Menu { ModelMenuContent(chat: chat) } label: {
@@ -125,6 +111,22 @@ struct ProfileCardView: View {
                         Button("Cancel", role: .cancel) {}
                     } message: { Text("The new name shows in the chat list and the header.") }
                 } header: { Text("This chat") }
+            }
+            Section {
+                TextField("Description", text: $description, axis: .vertical)
+                    .lineLimit(1...4)
+                    .onSubmit { Task { await saveDescription() } }
+                Button("Save description") { Task { await saveDescription() } }
+                    .disabled(description == (profile?.description ?? ""))
+            } header: { Text("Profile") } footer: { Text("The description is what other Hermes surfaces show for this bot (and what kanban routing reads).") }
+            Section {
+                if let o = options {
+                    Menu { modelMenuItems(o.providers) } label: { LabeledContent("Default model", value: modelLabel) }
+                } else { ProgressView() }
+            } header: { Text("Model") } footer: { Text("Writes this profile's config.yaml. Running chats keep their own model.") }
+            if let p = profile?.path { Section { Text(p).font(.caption.monospaced()).foregroundStyle(.tertiary) } header: { Text("Home") } }
+            if let status { Section { Text(status).font(.footnote).foregroundStyle(status.hasPrefix("Saved") ? Color.secondary : Color.red) } }
+            if let chat {
                 Section {
                     Toggle("Show tool calls", isOn: $showToolCalls)
                     Toggle("Show reasoning", isOn: $showReasoning)

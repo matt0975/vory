@@ -35,25 +35,7 @@ struct DashboardView: View {
                 header
                 if let runtime, !runtime.needsAttention.isEmpty { needsYou(runtime) }
                 ForEach(layout.items) { item in
-                    card(item)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        // Press, hold and drag a card onto another to put it there; the press
-                        // without a move still opens the menu.
-                        .draggable(item.card.rawValue) {
-                            Label(item.card.title, systemImage: item.card.symbol).font(.subheadline.weight(.medium))
-                                .padding(.horizontal, 14).padding(.vertical, 10)
-                                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
-                        }
-                        .dropDestination(for: String.self) { dropped, _ in
-                            guard let raw = dropped.first, let moved = HomeCard(rawValue: raw), moved != item.card else { return false }
-                            withAnimation(.snappy) {
-                                update { l in
-                                    guard let from = l.items.firstIndex(where: { $0.card == moved }), let to = l.items.firstIndex(where: { $0.card == item.card }) else { return }
-                                    l.items.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-                                }
-                            }
-                            return true
-                        }
+                    editableCard(item)
                         .contextMenu {
                             Section("Size") {
                                 Button { update { $0.set(item.card, size: .compact) } } label: { Label(item.card.sizeWords.compact, systemImage: item.size == .compact ? "checkmark" : "rectangle.compress.vertical") }
@@ -69,22 +51,66 @@ struct DashboardView: View {
                         }
                 }
                 if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
-                NavigationLink { HomeSettingsView() } label: {
-                    Label("Edit Home", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
-                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                // Edit: the cards can be dragged onto one another until Done; Settings has the
+                // sizes, the hidden cards, the name and the opening tab.
+                HStack(spacing: 10) {
+                    Button { withAnimation(.snappy) { editingHome.toggle() } } label: {
+                        Label(editingHome ? "Done" : "Edit Home", systemImage: editingHome ? "checkmark" : "arrow.up.arrow.down").font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                    }
+                    .buttonStyle(.bordered).tint(editingHome ? Color.vory : .secondary)
+                    NavigationLink { HomeSettingsView() } label: {
+                        Label("Settings", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                    }
+                    .buttonStyle(.bordered).tint(.secondary)
                 }
-                .buttonStyle(.bordered).tint(.secondary)
                 .padding(.top, 4)
+                if editingHome {
+                    Text("Press, hold and drag a card onto another to put it there.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                }
             }
             .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
             .animation(.snappy, value: layoutRaw)
         }
         .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
+            Button("OK") { tileNote = nil }
+        } message: { Text(tileNote?.text ?? "") }
         .refreshable { await Task { await load() }.value }
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)") { await load() }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
-        .onDisappear { lastVisit = max(lastVisit, visitStart) }
+        .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
+    }
+
+    @State private var editingHome = false
+
+    /// The card, and while Home is being edited, a drag source and a drop target with a dashed
+    /// edge to say so.
+    @ViewBuilder private func editableCard(_ item: HomeLayout.Item) -> some View {
+        if editingHome {
+            card(item)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.vory.opacity(0.5), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
+                .draggable(item.card.rawValue) {
+                    Label(item.card.title, systemImage: item.card.symbol).font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+                }
+                .dropDestination(for: String.self) { dropped, _ in
+                    guard let raw = dropped.first, let moved = HomeCard(rawValue: raw), moved != item.card else { return false }
+                    withAnimation(.snappy) {
+                        update { l in
+                            guard let from = l.items.firstIndex(where: { $0.card == moved }), let to = l.items.firstIndex(where: { $0.card == item.card }) else { return }
+                            l.items.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+                        }
+                    }
+                    return true
+                }
+        } else {
+            card(item).frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     @ViewBuilder private func card(_ item: HomeLayout.Item) -> some View {
@@ -201,6 +227,8 @@ struct DashboardView: View {
             }
             if full {
                 ActivityGrid(daily: usage?.daily ?? [], sessions: sessions, weeks: 13)
+                    .contentShape(.rect)
+                    .onTapGesture { tileNote = ("Activity", "One block per day for the last thirteen weeks, a column per week with Monday at the top. The more chats started that day, the brighter the block.") }
                 if let cost = t?.totalEstimatedCost, cost > 0.005 {
                     Text("About \(cost, format: .currency(code: "USD").precision(.fractionLength(2))) estimated for the period, as the gateway counts it.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -211,6 +239,17 @@ struct DashboardView: View {
             }
         })
     }
+
+    /// What each tile counts, for a tap on it.
+    private static let tileNotes: [String: String] = [
+        "Sessions": "Chats started in the period, as the gateway's analytics count them. On a gateway without the analytics API it is the chats in the list instead.",
+        "Messages": "Messages sent and received across the chats of the period.",
+        "Tokens": "Input, output and cached tokens the models used in the period, added up.",
+        "Active days": "Days in the period with at least one chat started.",
+        "Peak hour": "The hour of the day your chats most often start.",
+        "Top model": "The model used by the most chats in the period.",
+    ]
+    @State private var tileNote: (title: String, text: String)?
 
     private func tile(_ title: String, _ value: String) -> some View {
         // A number sits on one line; a name (the model) may take two, in a smaller face.
@@ -223,6 +262,9 @@ struct DashboardView: View {
         .frame(minHeight: 58, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
+        .contentShape(.rect)
+        .onTapGesture { if let t = Self.tileNotes[title] { tileNote = (title, t) } }
+        .accessibilityHint("Tap for what this counts")
         .background(Color(.tertiarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 

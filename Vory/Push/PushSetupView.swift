@@ -1236,6 +1236,16 @@ final class PushSetupModel {
                 return
             }
         }
+        // The last word is the companion's: if it is reporting in now, the restart happened,
+        // whatever the restart call said about itself (a tester saw "did not report completion
+        // in time" under a companion connected five seconds earlier).
+        await checkCompanion(runtime: rt)
+        if companionHealthy, let hb = heartbeat, Date().timeIntervalSince1970 - hb.updatedAt < 90 {
+            if case .failed = rt.maintenance.phase { rt.maintenance.finishEarly("Restarting gateway: back up") }
+            restartError = nil
+            restartPending = false
+            return
+        }
         if case .failed(let why) = rt.maintenance.phase { restartError = why; return }
         restartPending = false
     }

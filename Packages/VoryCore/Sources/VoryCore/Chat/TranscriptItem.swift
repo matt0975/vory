@@ -58,7 +58,12 @@ public struct BotDelivery: Hashable, Sendable {
 
     public static func parse(name: String, context: String?, argsText: String?) -> BotDelivery? {
         let command = context ?? ""
-        if let m = command.firstMatch(of: /(?:^|[;&|]\s*|\bhermes\s+)-p\s+("?)([a-z0-9][a-z0-9_-]{0,63})\1\s+chat\b[\s\S]*?-q\s+["']Message from/.ignoresCase()) {
+        // `-p <bot> chat … -q "…"` is the delivery, however the binary is spelled before it
+        // (hermes, $HERMES_BIN, an env assignment, a path) and whether or not the quoted text
+        // starts with "Message from".
+        if command.firstMatch(of: /(?:^|\s)-q(?:\s|=)/) != nil || command.contains("Message from"),
+           command.firstMatch(of: /\bchat\b/) != nil,
+           let m = command.firstMatch(of: /(?:^|[\s;&|])(?:-p|--profile)[\s=]+("?)([a-z0-9][a-z0-9_-]{0,63})\1(?=\s|$)/.ignoresCase()) {
             return BotDelivery(target: String(m.2).lowercased(), message: Self.quoted(after: "-q", in: command))
         }
         if name == "message_agent" || name == "send_message_to_agent" {

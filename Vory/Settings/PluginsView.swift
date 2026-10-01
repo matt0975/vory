@@ -9,8 +9,9 @@ struct PluginsView: View {
     @State private var loading = false
 
     private var runtime: GatewayRuntime? { model.runtime }
-    private var companion: PluginsHub.Plugin? { hub?.plugins.first { $0.name == "vory-push" } }
-    private var others: [PluginsHub.Plugin] { (hub?.plugins ?? []).filter { $0.name != "vory-push" && $0.userHidden != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
+    private static func isCompanion(_ p: PluginsHub.Plugin) -> Bool { let n = p.name.lowercased(); return n.contains("vory") || n == "hermes-push" || n == "hermes_push" }
+    private var companion: PluginsHub.Plugin? { hub?.plugins.first(where: Self.isCompanion) }
+    private var others: [PluginsHub.Plugin] { (hub?.plugins ?? []).filter { !Self.isCompanion($0) && $0.userHidden != true }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
 
     var body: some View {
         List {
@@ -21,11 +22,11 @@ struct PluginsView: View {
                     PluginRow(plugin: c, highlight: true)
                     let bundled = PushSetupModel.bundledPluginVersion
                     if let v = c.version, v != bundled {
-                        Label("This build carries companion \(bundled); Settings › Notifications updates it.", systemImage: "arrow.down.circle")
+                        Label("This build carries companion \(bundled); Settings › Companion updates it.", systemImage: "arrow.down.circle")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 } else if hub != nil {
-                    Label("Vory's companion is not on this gateway. Settings › Notifications installs it.", systemImage: "bell.slash")
+                    Label("Vory's companion is not in this gateway's plugin list. Settings › Companion installs it, or shows it running if the gateway loads it another way.", systemImage: "bell.slash")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             } header: { Text("Vory") }

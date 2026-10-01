@@ -10,6 +10,7 @@ struct BotsView: View {
     @State private var rooms: [Room] = []
     @State private var error: String?
     @State private var showNewBot = false
+    @State private var searchText = ""
     /// A bot being edited in the same sheet that creates one.
     @State private var editing: ProfileInfo?
     @State private var path = NavigationPath()
@@ -24,7 +25,7 @@ struct BotsView: View {
             ScrollView {
                 if let rt = model.runtime {
                     LazyVGrid(columns: columns, spacing: 22) {
-                        ForEach(Array(rt.profiles.enumerated()), id: \.element.id) { i, p in
+                        ForEach(Array(rt.profiles.filter { searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText) || $0.label.localizedCaseInsensitiveContains(searchText) }.enumerated()), id: \.element.id) { i, p in
                             NavigationLink(value: p) {
                                 BotCard(profile: p, isActive: rt.selectedProfile == p.name,
                                         working: rt.chats.contains { $0.profileName == p.name && $0.isRunning },
@@ -71,6 +72,7 @@ struct BotsView: View {
             }
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
             .navigationTitle("Bots")
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search bots")
             .tabRoot(.bots)
             .background(InteractivePopEnabler())
             .overlay {

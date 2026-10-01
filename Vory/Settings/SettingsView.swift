@@ -118,7 +118,7 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .tabRoot(.settings)
             .background(InteractivePopEnabler())
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search settings")
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search settings")
         }
     }
 }
@@ -401,14 +401,29 @@ struct SecurityView: View {
 /// Studio (Bots tab › bot › Profile).
 struct BotsSettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     @AppStorage(BotMotionSource.enabledKey) private var motion = true
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
     @AppStorage(BotMotionSource.styleKey) private var style = "lively"
+    @AppStorage(GatewayRuntime.defaultProfileKey) private var defaultProfile = ""
 
     var body: some View {
         List {
-            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: glass, motion and tilt.")
+            SettingsHeaderSection(title: "Bots", symbol: "cloud.fill", color: .indigo, description: "What applies to every bot at once: the default bot, glass, motion and tilt.")
+            if let rt = model.runtime {
+                Section {
+                    Picker("Default bot", selection: $defaultProfile) {
+                        Text("Follow the gateway").tag("")
+                        ForEach(rt.profiles) { p in
+                            Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.make(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
+                        }
+                    }
+                    .onChange(of: defaultProfile) { _, _ in rt.returnToDefaultProfile() }
+                } footer: {
+                    Text("The bot the app comes back to: on launch, and after a chat with another bot. Chats from other bots still open; the selection just does not stay on them. Follow the gateway keeps whatever bot is active there.")
+                }
+            }
             Section {
                 Toggle("Motion effects", isOn: $motion)
                     .onChange(of: motion) { _, _ in BotMotionSource.shared.apply() }

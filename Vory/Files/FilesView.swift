@@ -28,7 +28,11 @@ struct FilesView: View {
     @State private var shownCount = 300
 
     private var allVisible: [FileEntry] { showHidden ? (listing?.entries ?? []) : (listing?.entries ?? []).filter { !$0.name.hasPrefix(".") } }
-    private var visibleEntries: [FileEntry] { Array(allVisible.prefix(shownCount)) }
+    @State private var searchText = ""
+    private var visibleEntries: [FileEntry] {
+        let all = searchText.isEmpty ? allVisible : allVisible.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        return Array(all.prefix(shownCount))
+    }
     private var hiddenCount: Int { (listing?.entries ?? []).filter { $0.name.hasPrefix(".") }.count }
 
     var body: some View {
@@ -98,6 +102,7 @@ struct FilesView: View {
             .navigationTitle("Files")
             .tabRoot(.files)
             .background(InteractivePopEnabler())
+            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search this folder")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { path = nil } label: { Label("Home", systemImage: "house") } }
                 ToolbarItem(placement: .primaryAction) {

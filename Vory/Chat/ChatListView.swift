@@ -315,9 +315,9 @@ struct ChatListView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .safeAreaInset(edge: .top, spacing: 0) { searchField }
-        // The grouped list otherwise leaves a section's worth of empty space under the search bar.
-        .contentMargins(.top, 0, for: .scrollContent)
+        // The system drawer: out of sight until the list is pulled down, like Mail.
+        .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+        .textInputAutocapitalization(.never).autocorrectionDisabled()
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
         // The bots in the rows look where the list is going.

@@ -53,7 +53,9 @@ struct VoryGuide: View {
     var size: CGFloat = 96
 
     var body: some View {
-        VStack(spacing: 6) {
+        // The face's square frame leaves room under the drawn cloud; the bubble tucks up into it
+        // so the words sit right under him.
+        VStack(spacing: -size * 0.12) {
             BotFaceView(spec: AboutView.voryBot, size: size, active: true,
                         mood: BotFaceView.Mood(profile: "vory-guide", state: .guide, squint: thinking))
             VoryTypedBubble(text: says, key: key, reduceMotion: reduceMotion,

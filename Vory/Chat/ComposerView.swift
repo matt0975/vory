@@ -26,6 +26,7 @@ struct ComposerView: View {
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
+    @State private var showAttach = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var model
 
@@ -180,6 +181,9 @@ struct ComposerView: View {
                         .buttonStyle(.plain).accessibilityLabel("Cancel reply")
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
+                // The bar beside the words is flexible in height; without this the strip took
+                // the whole screen.
+                .fixedSize(horizontal: false, vertical: true)
                 .glassEffect(.regular, in: .rect(cornerRadius: 14))
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -267,28 +271,72 @@ struct ComposerView: View {
         }
     }
 
+    /// The + button, and the panel it opens: a tall glass sheet of big round icons like the one
+    /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
-        Menu {
-            Button { showPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
-            Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-            Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-            Button { showRecorder = true } label: { Label("Record Audio", systemImage: "waveform") }
-            Button { paste() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
-            Divider()
-            Button { showHistory = true } label: { Label("Message History", systemImage: "clock.arrow.circlepath") }
-                .disabled(chat.composerHistory.isEmpty)
+        Button {
+            withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
             // and grew past the bar.
             Image(systemName: "plus").font(.body.weight(.semibold))
+                .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
                 .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID("attach", in: namespace)
+                .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
         }
-        .menuStyle(.button)
         .buttonStyle(.plain)
-        .accessibilityLabel("Attach")
+        .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
+        .overlay(alignment: .bottomLeading) {
+            if showAttach {
+                attachPanel
+                    .glassEffectID("attach", in: namespace)
+                    .offset(y: -46)
+                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        // Anything tapped outside the panel closes it: a clear catcher far larger than the
+        // button, under the panel.
+        .background {
+            if showAttach {
+                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+            }
+        }
+    }
+
+    private var attachPanel: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            attachRow("Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true }
+            attachRow("Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true }
+            attachRow("Files", symbol: "folder.fill", color: .blue) { showFiles = true }
+            attachRow("Audio", symbol: "waveform", color: .red) { showRecorder = true }
+            attachRow("Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() }
+            attachRow("Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true }
+        }
+        .padding(.vertical, 10)
+        .frame(width: 272)
+        .glassEffect(.regular, in: .rect(cornerRadius: 30))
+    }
+
+    private func attachRow(_ title: String, symbol: String, color: Color, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy(duration: 0.28)) { showAttach = false }
+            action()
+        } label: {
+            HStack(spacing: 16) {
+                Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+                    .frame(width: 40, height: 40).background(color, in: .circle)
+                Text(title).font(.title3).foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 8)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
     }
 
     private func send() async {

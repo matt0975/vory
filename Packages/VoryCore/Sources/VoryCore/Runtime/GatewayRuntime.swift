@@ -160,11 +160,25 @@ public final class GatewayRuntime {
         } catch { restartRequired = nil }
     }
 
+    /// Settings › Bots › Default bot: the bot the app comes back to on launch and after a chat
+    /// with another one; empty follows the gateway's own active profile.
+    public static let defaultProfileKey = "bots.defaultProfile"
+    public var defaultProfile: String? {
+        let d = UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? ""
+        return d.isEmpty || !profiles.contains(where: { $0.name == d }) ? nil : d
+    }
+    /// Back to the default bot, when one is chosen and the selection drifted (a chat opened from
+    /// another bot's list, a route from a notification).
+    public func returnToDefaultProfile() {
+        if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
+    }
+
     public func loadProfiles() async {
         do {
             let r: ProfilesResponse = try await api.get("/api/profiles")
             profiles = r.profiles
-            if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
+            if let d = defaultProfile, selectedProfile != d { selectedProfile = d }
+            else if selectedProfile == nil || !profiles.contains(where: { $0.name == selectedProfile }) {
                 let active: ActiveProfileResponse? = try? await api.get("/api/profiles/active")
                 selectedProfile = active?.current ?? profiles.first(where: { $0.isDefault == true })?.name ?? profiles.first?.name
             }
