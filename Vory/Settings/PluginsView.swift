@@ -51,6 +51,7 @@ struct PluginsView: View {
             error = nil
         } catch {
             if let e = error as? HermesAPIError, case .http(let code, _) = e, code == 404 { self.error = "This gateway has no plugins hub yet (it needs a newer Hermes)." }
+            else if let e = error as? HermesAPIError, case .decoding = e { self.error = "This gateway answered without a plugin list (it needs a newer Hermes)." }
             else { self.error = error.localizedDescription }
         }
     }
