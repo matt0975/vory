@@ -40,7 +40,8 @@ struct ModelMenuContent: View {
         Group {
             if let options {
                 ForEach(options.providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }) { p in
-                    Section(p.name + (p.authenticated == false ? " (no key)" : "")) {
+                    Section(p.name + (p.authenticated == false ? " (no key)" : p.warning != nil ? " (needs setup)" : "")) {
+                        if let w = p.warning, !w.isEmpty { Text(w) }
                         ForEach(p.featuredModels ?? p.models ?? [], id: \.self) { m in
                             Button { select(provider: p.slug, model: m) } label: {
                                 if chat.modelName == m { Label(m, systemImage: "checkmark") } else { Text(m) }
@@ -217,6 +218,65 @@ struct ContextBreakdownSheet: View {
         case "conversation", "messages": return .orange
         case "free": return Color(.systemFill)
         default: return .gray
+        }
+    }
+}
+
+/// The model picker as a page, for where a menu cannot go: a card in the thread, say.
+/// Providers the gateway can use come first; the ones without a key or with a warning are
+/// marked so nobody picks them blind.
+struct ModelSheet: View {
+    @Bindable var chat: ChatSession
+    @Environment(\.dismiss) private var dismiss
+    @State private var options: ModelOptionsResult?
+    @State private var error: String?
+    @State private var busy = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if let options {
+                    ForEach(options.providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }) { p in
+                        Section {
+                            if let w = p.warning, !w.isEmpty { Text(w).font(.footnote).foregroundStyle(.orange) }
+                            ForEach(p.models ?? p.featuredModels ?? [], id: \.self) { m in
+                                Button { pick(p.slug, m) } label: {
+                                    HStack {
+                                        Text(m).foregroundStyle(.primary)
+                                        Spacer()
+                                        if chat.modelName == m { Image(systemName: "checkmark").foregroundStyle(Color.vory) }
+                                    }
+                                }
+                                .disabled(busy)
+                            }
+                        } header: {
+                            HStack {
+                                Text(p.name)
+                                if p.authenticated == false { Text("no key").font(.caption2).foregroundStyle(.orange) }
+                                else if p.warning != nil { Text("needs setup").font(.caption2).foregroundStyle(.orange) }
+                            }
+                        }
+                    }
+                } else if let error {
+                    Text(error).foregroundStyle(.red)
+                } else {
+                    ProgressView()
+                }
+            }
+            .navigationTitle("Model for this chat").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .task {
+                do { options = try await chat.runtime.api.get("/api/model/options", profile: chat.runtime.selectedProfile) }
+                catch { self.error = error.localizedDescription }
+            }
+        }
+    }
+
+    private func pick(_ provider: String, _ model: String) {
+        busy = true
+        Task {
+            do { try await chat.setModel(provider: provider, model: model); dismiss() }
+            catch { chat.banner = error.localizedDescription; busy = false }
         }
     }
 }

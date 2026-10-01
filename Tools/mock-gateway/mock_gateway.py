@@ -246,6 +246,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
                      "lines": ["=== hermes gateway restart ===", "stopping gateway (pid 4242)", "starting gateway"] + ([] if running else ["gateway up (pid 4243)"])}
     if base == "/api/model/options":
         return 200, {"model": MODEL, "provider": PROVIDER, "providers": [
+            {"slug": "claude-subscription-directsdk-experimental", "name": "Claude subscription", "authenticated": False,
+             "warning": "Needs the Claude Code CLI installed and signed in on the gateway machine.",
+             "featured_models": ["claude-subscription/claude-opus-4.6"], "models": ["claude-subscription/claude-opus-4.6"]},
             {"slug": "anthropic", "name": "Anthropic", "authenticated": True, "is_current": True,
              "featured_models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
              "models": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "anthropic/claude-haiku-4.5"],
@@ -485,6 +488,13 @@ class Gateway:
 
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        if prompt.strip().lower().startswith("fail"):
+            # The bot's provider needs a CLI the gateway does not have (a tester's Claude
+            # subscription plugin): the gateway cannot start the turn.
+            await self.event("error", s.sid, {"message": "Hermes could not start the assistant for this session. Details: Could not find the "
+                             "'claude-subscription-directsdk-experimental' CLI command '(none configured)'. Install it.. "
+                             "Check the model and provider with /model, or run `hermes setup` in a terminal to reconfigure."})
+            return
         await self.event("message.start", s.sid)
         await self.stream_words(s, REPLY_PART_1)
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})

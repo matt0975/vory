@@ -11,6 +11,7 @@ struct TranscriptView: View {
     var onOpenBot: (String) -> Void = { _ in }
     /// Reply on a bubble: the composer quotes it above the next message.
     var onReply: (String) -> Void = { _ in }
+    @State private var showModelSheet = false
     /// The dock's top edge in screen coordinates (0 = unknown). The thread's bottom margin is the
     /// distance from its own bottom edge to this: measured, not derived from a dock height added
     /// onto some inset, which left a blank band under the last reply on some phones.
@@ -134,7 +135,7 @@ struct TranscriptView: View {
                         }
                         TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
                                       typingTool: typingTool,
-                                      showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply,
+                                      showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply, onChooseModel: { showModelSheet = true },
                                       reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
                                                              set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
                                       onSelectText: { selectText = $0 },
@@ -301,6 +302,7 @@ struct TranscriptView: View {
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text) }
+            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat) }
             .ignoresSafeArea(.container, edges: .top)
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
@@ -640,6 +642,7 @@ struct TranscriptRow: View, Equatable {
     var onEdit: (String) -> Void = { _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
+    var onChooseModel: () -> Void = {}
     @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
     @AppStorage(ChatStyle.botTint) private var botTint = false
     /// The reply bubble's fill: grey, or the bot's colour at a wash.
@@ -777,6 +780,8 @@ struct TranscriptRow: View, Equatable {
             .font(.caption).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 2)
+        case .error(let text) where StartFailure.parse(text) != nil:
+            StartFailureCard(failure: StartFailure.parse(text)!, raw: text, onChooseModel: onChooseModel)
         case .error(let text):
             Label(text, systemImage: "exclamationmark.triangle.fill")
                 .font(.footnote)
@@ -796,6 +801,41 @@ struct TranscriptRow: View, Equatable {
             .padding(10)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
         }
+    }
+}
+
+/// The bot's model could not start on the gateway (a provider whose CLI or key is not there):
+/// what is wrong in plain words, a way to carry on with another model, and the gateway fix.
+struct StartFailureCard: View {
+    var failure: StartFailure
+    var raw: String
+    var onChooseModel: () -> Void
+    @State private var showRaw = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("This bot's model could not start", systemImage: "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.red)
+            if let p = failure.provider {
+                Text("The bot is set to the provider \(p), which needs its command-line tool installed and configured on the gateway machine. That is not something the app can do from here.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                Text(failure.reason).font(.footnote).foregroundStyle(.secondary)
+            }
+            Text("Pick another model for this chat, or set the provider up on the gateway with hermes setup, or in Settings › Model.")
+                .font(.footnote).foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button(action: onChooseModel) { Label("Choose another model", systemImage: "cpu") }
+                    .buttonStyle(.borderedProminent).controlSize(.small)
+                Button { withAnimation(.snappy) { showRaw.toggle() } } label: { Text(showRaw ? "Hide details" : "Details").font(.caption) }
+                    .buttonStyle(.borderless)
+            }
+            if showRaw {
+                Text(raw).font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.10), in: .rect(cornerRadius: 12))
     }
 }
 

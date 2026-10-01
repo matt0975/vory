@@ -57,7 +57,10 @@ struct ModelSettingsView: View {
         Menu {
             if allowAuto { Button("Auto (follow main)") { pick("auto", "") } }
             ForEach(providers) { p in
-                Section(p.name) { ForEach(p.models ?? [], id: \.self) { m in Button(m) { pick(p.slug, m) } } }
+                Section(p.name + (p.authenticated == false ? " (no key)" : p.warning != nil ? " (needs setup)" : "")) {
+                    if let w = p.warning, !w.isEmpty { Text(w) }
+                    ForEach(p.models ?? [], id: \.self) { m in Button(m) { pick(p.slug, m) } }
+                }
             }
         } label: { Text(title) }
     }

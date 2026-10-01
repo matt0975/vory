@@ -310,3 +310,22 @@ public struct InjectedNote: Hashable, Sendable {
         return nil
     }
 }
+
+/// The gateway could not start the bot's model: a provider whose CLI or key is missing on the
+/// gateway machine. Named so the chat can say what is wrong and offer another model.
+public struct StartFailure: Hashable, Sendable {
+    public var provider: String?
+    public var reason: String
+
+    public static func parse(_ text: String) -> StartFailure? {
+        let lower = text.lowercased()
+        guard lower.contains("could not start the assistant") || lower.contains("cli command") && lower.contains("could not find") else { return nil }
+        let provider = text.firstMatch(of: /[Cc]ould not find the '([^']+)' CLI command/).map { String($0.1) }
+            ?? text.firstMatch(of: /provider '([^']+)'/).map { String($0.1) }
+        var reason = text
+        if let r = text.range(of: "Details:") { reason = String(text[r.upperBound...]) }
+        if let r = reason.range(of: "Check the model") { reason = String(reason[..<r.lowerBound]) }
+        reason = reason.replacingOccurrences(of: "..", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
+        return StartFailure(provider: provider, reason: reason)
+    }
+}
