@@ -90,9 +90,24 @@ struct ConversationView: View {
     private func framed(_ chat: ChatSession) -> some View {
         #if os(macOS)
         thread(chat)
-            .safeAreaInset(edge: .bottom, spacing: 0) { dock(chat) }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
+            }
             .navigationSubtitle(macSubtitle(chat))
             .toolbar {
+                // The bot, in the middle over its thread; a click opens its profile.
+                ToolbarItem(placement: .principal) {
+                    Button { showProfile = true } label: {
+                        HStack(spacing: 7) {
+                            BotAvatar(profile: chat.profileName, size: 22)
+                            Text(chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName)
+                                .font(.headline).lineLimit(1)
+                        }
+                        .padding(.horizontal, 4)
+                    }
+                    .help(macSubtitle(chat))
+                    .accessibilityIdentifier("chat.bot")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },

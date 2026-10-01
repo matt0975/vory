@@ -542,10 +542,21 @@ struct ChatListView: View {
         #endif
     }
 
+    /// The bot beside each chat: with All bots on the phone, always on the Mac (the list reads
+    /// like a list of conversations with someone).
+    private var rowsShowBot: Bool {
+        #if os(macOS)
+        true
+        #else
+        allBots
+        #endif
+    }
+
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime) -> some View {
         let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)
                 rowLink(route) {
-                    SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: allBots,
+                    SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
+                               botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
                                project: projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
                                summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? ""))
@@ -709,6 +720,8 @@ struct SessionRow: View {
     var needsYou: Bool
     var live: Bool
     var showBot = false
+    /// Whose face to draw when the session itself does not say (the selected bot's list).
+    var botProfile: String? = nil
     var thinking = false
     var project: Project? = nil
     /// The on-device summary, when Vory Summaries is on and one is ready for this chat.
@@ -717,7 +730,7 @@ struct SessionRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // In the list: the eyes and the held pose (a squint, the pebble), no routines.
-            if showBot { BotAvatar(profile: session.profile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(state: live ? (thinking ? .thinking : .streaming) : .idle)) }
+            if showBot { BotAvatar(profile: session.profile ?? botProfile ?? "?", size: 34, active: live, mood: BotFaceView.Mood(state: live ? (thinking ? .thinking : .streaming) : .idle)) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     if session.pinned == true { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }

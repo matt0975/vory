@@ -83,6 +83,17 @@ struct TranscriptView: View {
     /// Tool cards that are open, keyed by item id: lifted out of the card so a recycled row
     /// keeps it and the turn's end can fold them all.
     @State private var openTools: Set<String> = []
+    /// The Mac's reading column as laid out, for the bubbles' share of it.
+    @State private var columnWidth: CGFloat = 760
+    /// How wide a bubble may grow: no limit on the phone (the screen is the limit), about
+    /// two thirds of the column on the Mac, like Messages.
+    private var bubbleCap: CGFloat {
+        #if os(macOS)
+        return wideReplies ? columnWidth : max(320, columnWidth * 0.72)
+        #else
+        return .infinity
+        #endif
+    }
 
     private var visibleItems: [TranscriptItem] {
         chat.items.filter { item in
@@ -154,6 +165,12 @@ struct TranscriptView: View {
                 }
                 .padding(.horizontal, wideReplies ? 10 : 16)
                 .padding(.top, 8)
+                #if os(macOS)
+                // A reading column in the middle of the pane, a page wide however wide the window is.
+                .frame(maxWidth: ChatStyle.macColumn)
+                .onGeometryChange(for: CGFloat.self) { ($0.size.width / 20).rounded() * 20 } action: { columnWidth = $0 }
+                .frame(maxWidth: .infinity)
+                #endif
                 .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
                 .animation(.snappy(duration: 0.28), value: chat.items.count)
                 .background(ScrollViewProbe(metrics: metrics))
@@ -357,7 +374,7 @@ extension TranscriptView {
                               onSelectText: { selectText = $0 },
                               toolOpen: Binding(get: { openTools.contains(row.item.id) },
                                                 set: { if $0 { openTools.insert(row.item.id) } else { openTools.remove(row.item.id) } }),
-                              showToolOutput: showToolOutput, compactTools: compactTools, wide: wideReplies)
+                              showToolOutput: showToolOutput, compactTools: compactTools, wide: wideReplies, maxBubble: bubbleCap)
                     // Equatable on what it draws (the closures and the binding are
                     // compared by value): a row whose message did not change is not
                     // rebuilt when the thread re-evaluates for a scroll or a token.
@@ -588,6 +605,8 @@ enum ChatStyle {
     static let currentStepOnly = "chat.currentStepOnly"
     /// Reply bubbles run to the edge instead of leaving a margin on the right.
     static let wideReplies = "chat.wideReplies"
+    /// The Mac's reading column: thread and composer share it, centred in the pane.
+    static let macColumn: CGFloat = 860
     /// "small", "default" or "large": one Dynamic Type step down or up for the thread only.
     static let textSize = "chat.textSize"
     /// "tailed" (Messages), "rounded" (no tails) or "plain" (replies without a bubble, like a page).
@@ -662,6 +681,7 @@ struct TranscriptRow: View, Equatable {
             && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
             && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
+            && a.maxBubble == b.maxBubble
     }
     var item: TranscriptItem
     /// The bot beside its bubble, as in a group chat; nil for none. Only the last bubble of a
@@ -691,9 +711,37 @@ struct TranscriptRow: View, Equatable {
     var compactTools = false
     /// Reply bubbles run to the right edge.
     var wide = false
+    /// The widest a bubble or card may be (the Mac's share of the reading column).
+    var maxBubble: CGFloat = .infinity
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        #if os(macOS)
+        // Like Messages: mine to the right, the bot's to the left, neither wider than its share;
+        // notices stay centred across the column.
+        let side = macSide
+        content
+            .frame(maxWidth: side == .center ? .infinity : maxBubble, alignment: side)
+            .frame(maxWidth: .infinity, alignment: side)
+        #else
+        content
+        #endif
+    }
+
+    #if os(macOS)
+    private var macSide: Alignment {
+        switch item.kind {
+        case .user(let text, let attachments):
+            return attachments.isEmpty && (InjectedNote.parse(text) != nil || AgentMessage.parse(text) != nil) ? .center : .trailing
+        case .steer: return .trailing
+        case .system: return .center
+        case .tool(let act): return act.delivery != nil ? .center : .leading
+        default: return .leading
+        }
+    }
+    #endif
+
+    @ViewBuilder private var content: some View {
         let _ = Perf.tick("row")
         switch item.kind {
         case .user(let text, let attachments) where attachments.isEmpty && InjectedNote.parse(text) != nil:
