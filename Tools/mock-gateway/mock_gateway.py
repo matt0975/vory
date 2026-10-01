@@ -514,8 +514,10 @@ class Gateway:
         # A word to the other bot, the Bot Mode way: a quiet run of its CLI through the terminal
         # tool. The app shows it as "Messaged work", then "Message from work" when the reply lands.
         d_id = f"t-{uuid.uuid4().hex[:8]}"
-        d_cmd = "hermes -p work chat -q \"Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.\""
-        await self.event("tool.start", s.sid, {"tool_id": d_id, "name": "terminal", "context": d_cmd, "args": {"command": d_cmd}})
+        d_cmd = ("/home/hermes/.hermes/tools/python-3.14.7/bin/python3 /home/hermes/.hermes/hermes-agent/tools/bot_mode_dm.py --run-delivery "
+                 "--author '{\"id\":\"default\"}' local /home/hermes/.hermes/profiles/default/cache/bot_dm/dm-hold-export.md "
+                 "/home/hermes/.hermes/venv/bin/hermes -p work chat --in ~ -c 'Bot Chat' --create-if-missing -Q")"
+        await self.event("tool.start", s.sid, {"tool_id": d_id, "name": "terminal", "context": d_cmd[:120], "args": {"command": d_cmd, "background": True}})
         await asyncio.sleep(1.2)
         await self.event("tool.complete", s.sid, {
             "tool_id": d_id, "name": "terminal", "duration_s": 1.2, "summary": "Messaged work",

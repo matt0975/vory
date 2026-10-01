@@ -57,11 +57,29 @@ public struct BotDelivery: Hashable, Sendable {
     public init(target: String, message: String? = nil) { self.target = target; self.message = message }
 
     public static func parse(name: String, context: String?, argsText: String?) -> BotDelivery? {
-        let command = context ?? ""
-        // `-p <bot> chat … -q "…"` is the delivery, however the binary is spelled before it
-        // (hermes, $HERMES_BIN, an env assignment, a path) and whether or not the quoted text
-        // starts with "Message from".
-        if command.firstMatch(of: /(?:^|\s)-q(?:\s|=)/) != nil || command.contains("Message from"),
+        // The preview the gateway sends is cut short; the full command is in the args.
+        var command = context ?? ""
+        if let a = argsText, let m = a.firstMatch(of: /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/) {
+            command = String(m.1).replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\n", with: "\n")
+        }
+        // The Bot Mode DM runner wraps the CLI: `python bot_mode_dm.py --run-delivery [--author …]
+        // <mode> <file> [--profile-home …] hermes -p <bot> chat …`, or `… hermes -p <me> peer dm
+        // <peer>/<bot>`. The peer form carries the sender's own -p, so it is read first.
+        if let m = command.firstMatch(of: /\bpeer\s+dm\s+("?)([A-Za-z0-9][A-Za-z0-9_\/.-]{0,80})\1/) {
+            return BotDelivery(target: Self.key(String(m.2)), message: nil)
+        }
+        if command.contains("--run-delivery"),
+           let m = command.firstMatch(of: /(?:^|[\s;&|])-p[\s=]+("?)([a-z0-9][a-z0-9_-]{0,63})\1(?=\s|$)/.ignoresCase()) {
+            return BotDelivery(target: String(m.2).lowercased(), message: nil)
+        }
+        // A quiet run of another bot's CLI is the delivery, however the binary is spelled before
+        // it (hermes, $HERMES_BIN, an env assignment, a path) and however the words travel:
+        // `-q "…"` inline, `-Q --query-file <tmp>` from a file (the Bot Mode DM transport the
+        // bot falls back to outside its Bot Chat), or `-c "Bot Chat"` into the other bot's
+        // thread. A peer DM, `hermes peer dm <peer>/<bot>`, is one too.
+        let quiet = command.firstMatch(of: /(?:^|\s)(?:-q|-Q|--quiet|--query-file)(?:\s|=|$)/) != nil
+        let botChat = command.firstMatch(of: /-c\s+["']?Bot Chat/.ignoresCase()) != nil
+        if quiet || botChat || command.contains("Message from"),
            command.firstMatch(of: /\bchat\b/) != nil,
            let m = command.firstMatch(of: /(?:^|[\s;&|])(?:-p|--profile)[\s=]+("?)([a-z0-9][a-z0-9_-]{0,63})\1(?=\s|$)/.ignoresCase()) {
             return BotDelivery(target: String(m.2).lowercased(), message: Self.quoted(after: "-q", in: command))
