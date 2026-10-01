@@ -280,6 +280,33 @@ gateway restart (one tap in the same screen). The systemd/launchd installer rema
   answers through the iPhone over WatchConnectivity (`sendMessage` wakes the phone app). On Wi-Fi or
   cellular the watch uses the live socket directly.
 
+## Vory for Mac
+
+A native macOS app (`VoryMac` target, same bundle id, macOS 26) built from the same views as the phone.
+Shared files carry `#if os(iOS)` / `#if os(macOS)` where the platforms differ; Mac-only pieces live in `VoryMac/`.
+
+- **Window**: a rail of pages on the left (every page can be switched on in Settings › Appearance › Sidebar,
+  ⌘1–⌘9 open the first nine), the chat list beside the open chat, and the thread and composer in a reading
+  column. One window; closing it leaves the menu bar item, which brings it back.
+- **Chat**: Return sends, Shift-Return adds a line, drop files or paste images into the composer,
+  *File › Import from iPhone or iPad* stands in for the camera, force click a chat row to peek it.
+  The Chat menu has New Chat (⌘N), New Chat With… (⇧⌘N), Next / Previous Chat (⌥⌘↓ / ⌥⌘↑),
+  Find Chats (⌘F), Stop (⌘.), Approve Once (⇧⌘Y) and Deny (⇧⌘D).
+- **Menu bar** in place of the Live Activity: running turns and waiting approvals with Approve / Deny,
+  and a badge on the Dock icon for what needs you.
+- **Notifications**: the same relay and Companion as the phone; a Mac notification service extension
+  decrypts them. On the iPhone, *Settings › Notifications › Quiet for chats driven from a Mac* keeps the
+  phone silent for a chat whose last message was sent from the Mac (Companion 1.0.35).
+- **Bot looks** follow the phone: it publishes colours, bodies and photos to `<profile home>/push/looks.json`
+  and the Mac reads them. The Mac does not write that file.
+- **Files**: drop files on the page to upload, drag one out to the Finder, or *Save As…* from the context menu.
+- **Widgets** for the desktop and Notification Center (`VoryMacWidgets`): Status, Needs you, Activity,
+  Overview and Context, from the same snapshot as the phone's.
+- Not on the Mac: Live Activities and the Dynamic Island, the watch link, tilt-driven eyes and haptics.
+
+Run it with the `VoryMac` scheme. It is sandboxed and shares the Keychain group with its extensions, so it
+must be signed (an unsigned build cannot read its own credentials).
+
 ## Code layout
 
 - `Packages/VoryCore` — everything that talks to a gateway and holds chat state: networking
@@ -288,7 +315,11 @@ gateway restart (one tap in the same screen). The systemd/launchd installer rema
   AppKit, WatchKit or ActivityKit; it builds for iOS, macOS and watchOS. Platform behaviour is injected
   through three hooks in `Runtime/Hooks.swift`: `TurnActivityReporting` (Live Activity on iOS),
   `CardNotifying` (local notifications) and `PushRegistrationSyncing` (device registration).
-- `Vory/` — the iOS app: SwiftUI views, Live Activity controller, push registrar, app lock.
+- `Vory/` — the app's SwiftUI views, push registrar and app lock, compiled for iOS and (minus a few
+  iOS-only files) for macOS; the Live Activity controller is iOS-only.
+- `VoryMac/` — the Mac app: the window and its rail, the menu bar item, the app delegate, and the stand-ins
+  that let shared views compile (`PlatformShims`, `UIKitCompat`). `VoryMacNotificationService/` and
+  `VoryMacWidgets/` are its two extensions; they compile the iOS extension sources.
 - `HermesLiveActivity/` + `Shared/` — the iPhone widget extension (Live Activity + home/lock-screen widgets),
   the `HermesTurnAttributes` it shares with the app, and the app icon. Dates in the content state travel as
   Unix seconds so the push companion can set them.
@@ -333,12 +364,17 @@ xcodebuild test -project Vory.xcodeproj -scheme Vory -destination "id=$UDID" -pa
 
 The streaming assertion is skipped (and reported) when the gateway has no AI provider configured.
 
+
+The same unit tests run against the Mac app (`VoryMacTests`, hosted in it, so the build must be signed):
+`xcodebuild test -scheme VoryMac -destination 'platform=macOS'`. Tests that differ by platform (the
+four-tab limit on the phone, the unlimited sidebar on the Mac) are behind `#if os(...)`.
+
 ### Shipping to TestFlight
 
 `Tools/release/testflight.sh` archives and uploads a build without any interactive Apple login,
-using an App Store Connect API key instead of an Apple ID password and 2FA. It derives a fresh,
-monotonic build number from the clock each run, because App Store Connect refuses a
-`(version, build)` pair it has already seen.
+using an App Store Connect API key instead of an Apple ID password and 2FA. The build number is one
+more than the highest App Store Connect already holds for the app, because it refuses a
+`(version, build)` pair it has already seen; `BUILD_NUMBER=` overrides it.
 
 ```bash
 export ASC_KEY_ID=ABCD123456
@@ -349,6 +385,17 @@ Tools/release/testflight.sh
 
 Put those in `Tools/release/.env` instead if you prefer; that path is gitignored. The `.p8` itself
 should live outside the repository.
+
+The Mac app ships from the same script to the same app record:
+
+```bash
+PLATFORM=macos Tools/release/testflight.sh            # archive, export a .pkg, upload
+PLATFORM=macos DRY_RUN=1 Tools/release/testflight.sh  # everything but the upload
+```
+
+Once, first: add the macOS platform to the app record; create Mac App Store provisioning profiles for the
+app and its two extensions with the names in `Tools/release/ExportOptions-macOS.plist`; and have a
+Mac installer certificate in the keychain (the `.pkg` is signed with it). `DRY_RUN=1` works for iOS too.
 
 Three things must happen once, in a browser, before the first run, because Apple offers no other
 route for them:

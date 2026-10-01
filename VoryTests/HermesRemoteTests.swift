@@ -350,6 +350,17 @@ private final class StubChat: ChatIdentity {
         #expect(missing.contains(.chats) && missing.contains(.settings))
     }
 
+    // The phone's bar holds four; the Mac's sidebar holds every page.
+    #if os(macOS)
+    @Test func sidebarTakesEveryPage() {
+        var l = TabLayout.default
+        #expect(!l.isFull)
+        for tab in AppModel.AppTab.allCases { l.set(tab, enabled: true) }
+        #expect(l.tabs.count == AppModel.AppTab.allCases.count && l.tabs.last == .settings)
+        // A layout with more than four survives a round trip.
+        #expect(TabLayout.parse(l.encoded).tabs == l.tabs)
+    }
+    #else
     @Test func tabBarCapsAtFour() {
         var l = TabLayout.default            // chats, bots, files, settings = 4
         #expect(l.isFull)
@@ -359,11 +370,13 @@ private final class StubChat: ChatIdentity {
         l.set(.cron, enabled: true)
         #expect(l.contains(.cron) && l.tabs.last == .settings)
     }
+    #endif
 
     @Test func botsAlwaysVisible() {
         #expect(TabLayout.default.visible(hasBotMode: false) == [.dashboard, .chats, .bots, .settings])
     }
 
+    #if os(iOS)
     @Test func storedFiveTabLayoutIsTrimmedToFour() {
         // A layout saved by a build that allowed five must not draw five.
         let l = TabLayout.parse("chats,bots,cron,system,settings")
@@ -371,6 +384,7 @@ private final class StubChat: ChatIdentity {
         #expect(l.tabs.first == .chats && l.tabs.last == .settings)
         #expect(!l.contains(.system))
     }
+    #endif
 
     @Test func turnStatsPreferExactCounts() {
         let exact = TurnStats.make(outputBefore: 100, outputAfter: 512, streamedCharacters: 9999, seconds: 10.3)

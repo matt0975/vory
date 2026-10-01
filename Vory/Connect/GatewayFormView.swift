@@ -206,13 +206,11 @@ struct GatewayFormView: View {
                 Text("Checks that /api/status returns JSON (not an HTML login page), that your credentials are accepted, and that the WebSocket at /api/ws opens.")
             }
         }
-        #if os(macOS)
-        // A Mac preferences sheet: labels in a column, bordered fields beside them, bold headings.
-        .formStyle(.columns)
-        .headerProminence(.increased)
-        .padding(.vertical, 8)
-        #else
+        // Grouped on both: on the Mac this is the System Settings look the other pages have
+        // (the column style ran headings into footers and clipped the longer labels).
         .formStyle(.grouped)
+        #if os(macOS)
+        .buttonStyle(SettingsRowButtonStyle())
         #endif
         .navigationTitle(existing == nil ? "Add Gateway" : "Edit Gateway")
         .navigationBarTitleDisplayMode(.inline)

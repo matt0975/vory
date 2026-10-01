@@ -33,6 +33,11 @@ final class AppModel {
     /// The chat on screen right now (stored id), so a route to it (a Live Activity tap, a
     /// notification) does not push a second copy of the same chat on top of it.
     var visibleChatID: String?
+    /// The chat on screen itself (a fresh one has no stored id yet), for the Mac's Chat menu:
+    /// Stop, Approve, Deny.
+    var visibleChat: ChatSession?
+    /// ⌘F on the Mac: put the cursor in the chat list's search field.
+    var focusSearchRequest: UUID?
     /// An Approve/Deny that came from the Live Activity or a notification while "Confirm
     /// approvals" is on: the chat shows it as a question and answers only on a yes.
     var approvalConfirm: ApprovalConfirm?

@@ -13,6 +13,16 @@
 #   1. Accept any pending agreements in App Store Connect.
 #   2. Create the app record for the bundle id below, named "Vory: Hermes Agent UI".
 # After that this script can run unattended for every subsequent build.
+#
+# The Mac app goes to TestFlight for Mac from the same script and the same app record:
+#
+#   PLATFORM=macos Tools/release/testflight.sh
+#
+# It archives the VoryMac scheme, exports a .pkg and uploads it with --type macos. Once, first:
+# add the macOS platform to the app record, and have Mac App Store profiles with the names in
+# ExportOptions-macOS.plist plus a Mac installer certificate in the keychain.
+#
+# DRY_RUN=1 (either platform) stops after the export and the push check: nothing is uploaded.
 
 set -euo pipefail
 
@@ -21,8 +31,13 @@ ROOT="$PWD"
 [ -f Tools/release/.env ] && . Tools/release/.env
 
 PROJECT="Vory.xcodeproj"
-SCHEME="Vory"
 BUNDLE_ID="com.vorantx.vory"
+PLATFORM="${PLATFORM:-ios}"
+case "$PLATFORM" in
+    ios)   SCHEME="Vory";    DESTINATION='generic/platform=iOS';   EXPORT_OPTIONS="Tools/release/ExportOptions.plist";       ARCHIVE_PREFIX="Vory" ;;
+    macos) SCHEME="VoryMac"; DESTINATION='generic/platform=macOS'; EXPORT_OPTIONS="Tools/release/ExportOptions-macOS.plist"; ARCHIVE_PREFIX="Vory-mac" ;;
+    *) printf 'PLATFORM must be ios or macos, not %s\n' "$PLATFORM" >&2; exit 1 ;;
+esac
 ARCHIVE_DIR="${ARCHIVE_DIR:-$ROOT/build/archives}"
 
 fail() { printf '\n%s\n' "$1" >&2; exit 1; }
@@ -56,19 +71,19 @@ if [ -z "${BUILD_NUMBER:-}" ]; then
     BUILD_NUMBER="$(next_build_number)" || fail "Could not read the existing builds from App Store Connect to pick the next build number. Pass BUILD_NUMBER=<n> to override."
 fi
 
-ARCHIVE="$ARCHIVE_DIR/Vory-$BUILD_NUMBER.xcarchive"
+ARCHIVE="$ARCHIVE_DIR/$ARCHIVE_PREFIX-$BUILD_NUMBER.xcarchive"
 mkdir -p "$ARCHIVE_DIR"
 
 AUTH=(-authenticationKeyPath "$ASC_KEY_PATH"
       -authenticationKeyID "$ASC_KEY_ID"
       -authenticationKeyIssuerID "$ASC_ISSUER_ID")
 
-echo "==> Archiving $BUNDLE_ID $MARKETING_VERSION ($BUILD_NUMBER)"
+echo "==> Archiving $BUNDLE_ID $MARKETING_VERSION ($BUILD_NUMBER) for $PLATFORM"
 xcodebuild archive \
     -project "$PROJECT" \
     -scheme "$SCHEME" \
     -configuration Release \
-    -destination 'generic/platform=iOS' \
+    -destination "$DESTINATION" \
     -archivePath "$ARCHIVE" \
     -allowProvisioningUpdates \
     "${AUTH[@]}" \
@@ -80,35 +95,53 @@ xcodebuild archive \
 [ -d "$ARCHIVE" ] || fail "Archive was not produced. Re-run without the grep filter to see why."
 
 echo "==> Exporting with manual distribution signing"
-EXPORT_DIR="$ARCHIVE_DIR/export-$BUILD_NUMBER"
+EXPORT_DIR="$ARCHIVE_DIR/export-$ARCHIVE_PREFIX-$BUILD_NUMBER"
 rm -rf "$EXPORT_DIR"
 xcodebuild -exportArchive \
     -archivePath "$ARCHIVE" \
-    -exportOptionsPlist Tools/release/ExportOptions.plist \
+    -exportOptionsPlist "$EXPORT_OPTIONS" \
     -exportPath "$EXPORT_DIR" \
     "${AUTH[@]}"
-
-IPA="$(ls "$EXPORT_DIR"/*.ipa 2>/dev/null | head -1)"
-[ -n "$IPA" ] || fail "No .ipa was produced in $EXPORT_DIR"
 
 # Guard the one thing that silently breaks background push: a build signed for the sandbox
 # APNs environment will never receive notifications sent to the production host.
 # PlistBuddy cannot read a pipe ("Error Reading File: /dev/stdin"), so go through real files.
 GUARD_TMP="$(mktemp -d)"
-unzip -p "$IPA" 'Payload/*.app/embedded.mobileprovision' > "$GUARD_TMP/prov.cms" 2>/dev/null || true
+if [ "$PLATFORM" = macos ]; then
+    PRODUCT="$(ls "$EXPORT_DIR"/*.pkg 2>/dev/null | head -1)"
+    [ -n "$PRODUCT" ] || fail "No .pkg was produced in $EXPORT_DIR"
+    # The profile sits beside Info.plist inside the app in the installer's payload.
+    pkgutil --expand-full "$PRODUCT" "$GUARD_TMP/pkg" >/dev/null 2>&1 || true
+    PROFILE="$(find "$GUARD_TMP/pkg" -path '*Vory.app/Contents/embedded.provisionprofile' 2>/dev/null | head -1)"
+    [ -n "$PROFILE" ] && cp "$PROFILE" "$GUARD_TMP/prov.cms"
+    APS_KEY='com.apple.developer.aps-environment'
+    UPLOAD_TYPE=macos
+else
+    PRODUCT="$(ls "$EXPORT_DIR"/*.ipa 2>/dev/null | head -1)"
+    [ -n "$PRODUCT" ] || fail "No .ipa was produced in $EXPORT_DIR"
+    unzip -p "$PRODUCT" 'Payload/*.app/embedded.mobileprovision' > "$GUARD_TMP/prov.cms" 2>/dev/null || true
+    APS_KEY='aps-environment'
+    UPLOAD_TYPE=ios
+fi
 security cms -D -i "$GUARD_TMP/prov.cms" -o "$GUARD_TMP/prov.plist" 2>/dev/null || true
-APS="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:aps-environment' "$GUARD_TMP/prov.plist" 2>/dev/null || true)"
+APS="$(/usr/libexec/PlistBuddy -c "Print :Entitlements:$APS_KEY" "$GUARD_TMP/prov.plist" 2>/dev/null || true)"
 rm -rf "$GUARD_TMP"
-[ "$APS" = "production" ] || fail "Expected aps-environment=production in the signed build, got '${APS:-absent}'."
-echo "    signed with aps-environment=production"
+[ "$APS" = "production" ] || fail "Expected $APS_KEY=production in the signed build, got '${APS:-absent}'."
+echo "    signed with $APS_KEY=production"
+
+if [ -n "${DRY_RUN:-}" ]; then
+    printf '\nDry run: %s is built, signed for production push, and NOT uploaded.\n' "$PRODUCT"
+    exit 0
+fi
 
 echo "==> Uploading to TestFlight"
-xcrun altool --upload-app --type ios --file "$IPA" \
+xcrun altool --upload-app --type "$UPLOAD_TYPE" --file "$PRODUCT" \
     --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
 
 # Keep the App Store listing in step: attach this build to the version (created if needed) and
 # refresh its screenshots from Tools/release/screenshots. Skipped with SKIP_LISTING=1.
-if [ -z "${SKIP_LISTING:-}" ]; then
+# The listing script knows the iOS version only; the Mac version's listing is kept by hand for now.
+if [ -z "${SKIP_LISTING:-}" ] && [ "$PLATFORM" = ios ]; then
     echo "==> Updating the App Store listing (build + screenshots)"
     python3 Tools/release/asc-listing.py attach "$MARKETING_VERSION" "$BUILD_NUMBER" \
         && python3 Tools/release/asc-listing.py screenshots \

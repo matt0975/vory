@@ -30,6 +30,9 @@ struct ChatListView: View {
     /// Chats the user deleted here, so a pinned row is not kept alive from memory afterwards.
     @State private var droppedIDs: Set<String> = []
     @State private var searchText = ""
+    #if os(macOS)
+    @FocusState private var searchFocused: Bool
+    #endif
     @State private var searchResults: [StoredSession] = []
     @State private var loading = false
     @State private var errorText: String?
@@ -403,6 +406,8 @@ struct ChatListView: View {
         #if os(macOS)
         // The search field belongs in the toolbar on a Mac; over the list it hid the top of the scroll bar.
         .searchable(text: $searchText, placement: .toolbar, prompt: "Search chats")
+        .searchFocused($searchFocused)
+        .onChange(of: model.focusSearchRequest) { _, r in if r != nil { searchFocused = true } }
         // ⌥⌘↓ / ⌥⌘↑ from the Chat menu: the row after or before the open one.
         .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
         #else

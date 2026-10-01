@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>teamID</key>
+	<string>4PLALDQ8V8</string>
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- We stamp the build number in testflight.sh, so Xcode must not rewrite it. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+	<!-- Manual signing, as on iOS: an App Manager API key may not create cloud-managed
+	     certificates. The app and its two extensions each need a Mac App Store profile with
+	     these names, and the keychain needs the Mac installer certificate for the .pkg. -->
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>signingCertificate</key>
+	<string>Apple Distribution</string>
+	<key>installerSigningCertificate</key>
+	<string>3rd Party Mac Developer Installer</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>com.vorantx.vory</key>
+		<string>Vory Mac App Store</string>
+		<key>com.vorantx.vory.notifications</key>
+		<string>Vory Mac Notification Service App Store</string>
+		<key>com.vorantx.vory.widgets</key>
+		<string>Vory Mac Widgets App Store</string>
+	</dict>
+</dict>
+</plist>

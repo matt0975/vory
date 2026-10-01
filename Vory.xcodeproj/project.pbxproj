@@ -24,6 +24,7 @@
 		AA00000000000000000310 /* VoryMacNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000321 /* VoryMacNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA00000000000000000403 /* VoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000401 /* VoryCore */; };
 		AA00000000000000000410 /* VoryMacWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000421 /* VoryMacWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AA00000000000000000501 /* VoryCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000502 /* VoryCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -90,6 +91,13 @@
 			remoteGlobalIDString = AA00000000000000000440;
 			remoteInfo = VoryMacWidgets;
 		};
+		AA00000000000000000503 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA00000000000000000240;
+			remoteInfo = VoryMac;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -154,6 +162,7 @@
 		AA00000000000000000220 /* Vory.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Vory.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000321 /* VoryMacNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryMacNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000421 /* VoryMacWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryMacWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000520 /* VoryMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoryMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -480,6 +489,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000597 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA00000000000000000501 /* VoryCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -496,6 +513,7 @@
 				AA00000000000000000321 /* VoryMacNotificationService.appex */,
 				AA00000000000000000421 /* VoryMacWidgets.appex */,
 				AA00000000000000000022 /* VoryTests.xctest */,
+				AA00000000000000000520 /* VoryMacTests.xctest */,
 				AA00000000000000000023 /* VoryUITests.xctest */,
 			);
 			name = Products;
@@ -609,6 +627,30 @@
 			);
 			productName = VoryTests;
 			productReference = AA00000000000000000022 /* VoryTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		AA00000000000000000540 /* VoryMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000583 /* Build configuration list for PBXNativeTarget "VoryMacTests" */;
+			buildPhases = (
+				AA00000000000000000596 /* Sources */,
+				AA00000000000000000597 /* Frameworks */,
+				AA00000000000000000598 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA000000000000000005A1 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000061 /* VoryTests */,
+			);
+			name = VoryMacTests;
+			packageProductDependencies = (
+				AA00000000000000000502 /* VoryCore */,
+			);
+			productName = VoryMacTests;
+			productReference = AA00000000000000000520 /* VoryMacTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		AA00000000000000000043 /* VoryUITests */ = {
@@ -826,6 +868,9 @@
 					AA00000000000000000043 = {
 						TestTargetID = AA00000000000000000040;
 					};
+					AA00000000000000000540 = {
+						TestTargetID = AA00000000000000000240;
+					};
 				};
 			};
 			buildConfigurationList = AA00000000000000000081 /* Build configuration list for PBXProject "Vory" */;
@@ -856,6 +901,7 @@
 				AA00000000000000000440 /* VoryMacWidgets */,
 				AA00000000000000000042 /* VoryTests */,
 				AA00000000000000000043 /* VoryUITests */,
+				AA00000000000000000540 /* VoryMacTests */,
 			);
 		};
 /* End PBXProject section */
@@ -932,6 +978,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA00000000000000000492 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000598 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1018,6 +1071,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000596 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -1065,6 +1125,11 @@
 			isa = PBXTargetDependency;
 			target = AA00000000000000000440 /* VoryMacWidgets */;
 			targetProxy = AA00000000000000000404 /* PBXContainerItemProxy */;
+		};
+		AA000000000000000005A1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA00000000000000000240 /* VoryMac */;
+			targetProxy = AA00000000000000000503 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -1770,6 +1835,46 @@
 			};
 			name = Release;
 		};
+		AA000000000000000005B6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.mactests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vory.app/Contents/MacOS/Vory";
+			};
+			name = Debug;
+		};
+		AA000000000000000005B7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.mactests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Vory.app/Contents/MacOS/Vory";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -1881,6 +1986,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		AA00000000000000000583 /* Build configuration list for PBXNativeTarget "VoryMacTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000005B6 /* Debug */,
+				AA000000000000000005B7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -1928,6 +2042,10 @@
 			productName = VoryCore;
 		};
 		AA00000000000000000401 /* VoryCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = VoryCore;
+		};
+		AA00000000000000000502 /* VoryCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = VoryCore;
 		};

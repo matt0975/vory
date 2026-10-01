@@ -17,6 +17,14 @@ struct VoryMacApp: App {
         _model = State(initialValue: AppModel.shared)
     }
 
+    /// The approval the open chat waits on, if any.
+    private var pendingApproval: PendingCard? { model.visibleChat?.cards.first { $0.method == "approval" } }
+
+    private func answerApproval(_ choice: String) {
+        guard let chat = model.visibleChat, let card = pendingApproval else { return }
+        Task { await chat.respond(card: card, result: ["choice": .string(choice)]) }
+    }
+
     var body: some Scene {
         // One window: the app has one gateway, one selection, one open chat. Closing it leaves
         // the menu bar item; the Dock icon, the Window menu or the menu bar item bring it back.
@@ -52,6 +60,8 @@ struct VoryMacApp: App {
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { model.selectedTab = .settings }.keyboardShortcut(",", modifiers: .command)
             }
+            // File › Import from iPhone or iPad: Continuity Camera into the composer.
+            ImportFromDevicesCommands()
             CommandMenu("Chat") {
                 Button("New Chat") { model.selectedTab = .chats; model.newChatRequest = UUID() }
                     .keyboardShortcut("n", modifiers: .command)
@@ -66,6 +76,20 @@ struct VoryMacApp: App {
                 Button("Previous Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: -1) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                     .disabled(model.runtime == nil)
+                Button("Find Chats") { model.selectedTab = .chats; model.focusSearchRequest = UUID() }
+                    .keyboardShortcut("f", modifiers: .command)
+                    .disabled(model.runtime == nil)
+                Divider()
+                // The open chat's turn: stop it, or answer the approval it waits on.
+                Button("Stop") { if let c = model.visibleChat { Task { await c.stop() } } }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .disabled(model.visibleChat?.isRunning != true)
+                Button("Approve Once") { answerApproval("once") }
+                    .keyboardShortcut("y", modifiers: [.command, .shift])
+                    .disabled(pendingApproval == nil)
+                Button("Deny") { answerApproval("deny") }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .disabled(pendingApproval == nil)
             }
         }
 

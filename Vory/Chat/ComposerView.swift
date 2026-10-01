@@ -259,6 +259,22 @@ struct ComposerView: View {
             for u in urls { importFile(u) }
             return !urls.isEmpty
         }
+        #if os(macOS)
+        // File › Import from iPhone or iPad (Continuity Camera): a photo or a scan taken on the
+        // phone is staged here, the Mac's stand-in for the camera row.
+        .importsItemProviders([.image, .pdf]) { providers in
+            for p in providers {
+                let pdf = p.hasItemConformingToTypeIdentifier(UTType.pdf.identifier)
+                let type = pdf ? UTType.pdf : UTType.image
+                _ = p.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
+                    guard let data else { return }
+                    let name = (p.suggestedName ?? (pdf ? "Scan" : "Photo")) + (pdf ? ".pdf" : ".jpg")
+                    Task { @MainActor in chat.stageAttachment(data: data, name: name, kind: pdf ? .pdf : .image) }
+                }
+            }
+            return !providers.isEmpty
+        }
+        #endif
         // Why the mic did nothing (no permission, no recognizer): said in the banner, not swallowed.
         .onChange(of: dictation.error) { _, e in if let e { chat.banner = e; dictation.error = nil } }
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))

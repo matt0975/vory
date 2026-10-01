@@ -49,7 +49,7 @@ struct ConversationView: View {
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
-                    .onAppear { model.visibleChatID = chat.storedID; LocalNotifier.clearDelivered(for: chat.storedID) }
+                    .onAppear { model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID) }
                     // What arrived for this chat while it was away is read now: its notifications
                     // leave Notification Center (a tester: "notifications won't stop even after
                     // attending to chat").
@@ -61,6 +61,7 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
+                        if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
