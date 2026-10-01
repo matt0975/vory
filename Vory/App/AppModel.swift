@@ -92,6 +92,8 @@ final class AppModel {
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.
     var newChatRequest: UUID?
+    /// The compose circle held down: the full New Message sheet instead of a fresh chat.
+    var newChatSheetRequest: UUID?
     /// The bot's page in front, if any, so compose there starts a chat with that bot.
     var composeProfile: String?
     /// The custom tab bar hides while a chat is open on the Chats tab (path-driven, instant)…

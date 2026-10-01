@@ -142,7 +142,7 @@ struct MainTabView: View {
             // is never removed from the tree: an insert/remove transition got stuck on the first
             // chat opened after launch (the bar stayed, tappable, over the composer). It slides
             // and fades instead, and its reserved height collapses to nothing.
-            VoryTabBar(tabs: tabs) { compose() }
+            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() })
                 .offset(y: model.tabBarHidden ? 140 : 0)
                 .opacity(model.tabBarHidden ? 0 : 1)
                 // The slide and fade animate; the reserved height below does not. Animating the
@@ -170,6 +170,10 @@ struct MainTabView: View {
     private func compose() {
         if model.selectedTab != .bots || model.composeProfile == nil { model.selectedTab = .chats }
         model.newChatRequest = UUID()
+    }
+    private func composeFull() {
+        model.selectedTab = .chats
+        model.newChatSheetRequest = UUID()
     }
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {

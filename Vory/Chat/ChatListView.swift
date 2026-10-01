@@ -92,8 +92,11 @@ struct ChatListView: View {
                     filterMenu
                 }
             }
-            // Compose: the Messages-style sheet (To: bots, first message).
-            .onChange(of: model.newChatRequest) { _, r in
+            // Compose: one tap is a fresh chat with the current bot, straight in (a tester:
+            // "I shouldn't have to name it or choose appearance"); a long press is the
+            // Messages-style sheet (To: bots, project, first message, files).
+            .onChange(of: model.newChatRequest) { _, r in if r != nil { openFreshChat() } }
+            .onChange(of: model.newChatSheetRequest) { _, r in
                 guard r != nil, model.selectedTab == .chats, runtime != nil else { return }
                 showNewChat = true
             }
@@ -136,6 +139,16 @@ struct ChatListView: View {
                 Button("Cancel", role: .cancel) {}
             } message: { Text("This removes the session and its transcript from the gateway.") }
         }
+    }
+
+    /// The compose circle's tap: a fresh chat with the current bot, in the project the list is
+    /// narrowed to, with nothing to fill in first.
+    private func openFreshChat() {
+        guard model.selectedTab == .chats, let runtime else { return }
+        let profile = model.composeProfile ?? runtime.selectedProfile
+        var cwd: String? = nil
+        if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
+        path.append(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd))
     }
 
     private var profileMenu: some View {

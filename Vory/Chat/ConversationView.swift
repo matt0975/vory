@@ -46,7 +46,16 @@ struct ConversationView: View {
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
-                    .onAppear { model.visibleChatID = chat.storedID }
+                    .onAppear { model.visibleChatID = chat.storedID; LocalNotifier.clearDelivered(for: chat.storedID) }
+                    // What arrived for this chat while it was away is read now: its notifications
+                    // leave Notification Center (a tester: "notifications won't stop even after
+                    // attending to chat").
+                    .onChange(of: chat.items.count) { _, _ in if model.visibleChatID == chat.storedID { LocalNotifier.clearDelivered(for: chat.storedID) } }
+                    .onReceive(NotificationCenter.default.publisher(for: .hermesNewChatRequested)) { n in
+                        guard model.visibleChatID == chat.storedID else { return }
+                        model.composeProfile = (n.userInfo?["profile"] as? String) ?? chat.profileName
+                        model.newChatRequest = UUID()
+                    }
                     .onDisappear {
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
@@ -126,10 +135,17 @@ struct ConversationView: View {
     }
     private func keyboardChanged(_ n: Notification) {
         guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-        let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
+        let screen = UIScreen.main.bounds
+        // A frame that is not a keyboard's (a floating or hardware keyboard's accessory, a frame
+        // from another scene, a whole-screen rect) must not push the dock to the top of the
+        // screen, as it did for a tester mid-turn. A keyboard sits on the bottom edge and is
+        // less than two thirds of the screen tall.
+        let onScreen = end.intersection(screen)
+        guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
+        let covered = max(0, screen.maxY - end.minY)
         let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
         withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-            keyboardInset = max(0, covered - safeBottom)
+            keyboardInset = min(max(0, covered - safeBottom), screen.height * 0.6)
         }
     }
 

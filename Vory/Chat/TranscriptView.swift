@@ -360,13 +360,20 @@ extension TranscriptView {
         let far = metrics.distanceFromBottom > 900
         jumpTask = Task { @MainActor in
             if far {
-                // A fast scroll, not a fade: from far away the thread first jumps (unanimated,
-                // before the next frame draws) to one screen short of the end, worked out from
-                // the geometry rather than by landing first, then scrolls the last stretch.
-                let end = metrics.contentHeight + metrics.reportedInsetBottom - metrics.containerHeight
-                scrollPosition.scrollTo(y: max(0, end - 900))
-                try? await Task.sleep(for: .milliseconds(16))
-                guard !Task.isCancelled else { return }
+                // From far away (a chat that grew while the app was away) the lazy stack's
+                // height is an estimate, so no animated glide: land flat at the end, then keep
+                // landing as rows lay out and the end moves, until the thread stops short of
+                // nothing. A tester's arrow did nothing after a few hours away.
+                scrollPosition.scrollTo(edge: .bottom)
+                for _ in 0..<20 {
+                    try? await Task.sleep(for: .milliseconds(70))
+                    guard !Task.isCancelled else { return }
+                    if metrics.userScrolling { return }
+                    if metrics.distanceFromBottom <= 24 { break }
+                    scrollPosition.scrollTo(edge: .bottom)
+                }
+                if metrics.distanceFromBottom > 24 { scrollPosition.scrollTo(id: "bottom", anchor: .bottom) }
+                return
             }
             withAnimation(.easeOut(duration: 0.35)) { scrollPosition.scrollTo(edge: .bottom) }
             // If it did not land (a lazy row laid out late, an older iOS), finish the job flat.
@@ -638,6 +645,10 @@ struct TranscriptRow: View, Equatable {
     var body: some View {
         let _ = Perf.tick("row")
         switch item.kind {
+        case .user(let text, let attachments) where attachments.isEmpty && InjectedNote.parse(text) != nil:
+            // The gateway speaking in the user's seat (a background process reporting in): a
+            // folded notice, not a blue bubble of the person's own words.
+            InjectedNoteRow(note: InjectedNote.parse(text)!)
         case .user(let text, let attachments) where attachments.isEmpty && AgentMessage.parse(text) != nil:
             // Another bot wrote in: a compact notice with the words folded under it, not a
             // bubble of ours.
@@ -770,6 +781,62 @@ struct TranscriptRow: View, Equatable {
             .font(.footnote)
             .padding(10)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        }
+    }
+}
+
+/// A gateway note that arrived in the user's seat: one quiet line, the words folded under it.
+struct InjectedNoteRow: View {
+    var note: InjectedNote
+    @State private var open = false
+    var body: some View {
+        VStack(spacing: 6) {
+            Button { withAnimation(.snappy) { open.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : "gearshape.2")
+                    Text(note.title).font(.caption)
+                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
+            if open {
+                Text(note.body).font(.caption.monospaced()).textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+    }
+}
+
+/// The whole tool call on its own page: the command or arguments and the output, as text you
+/// can select by range and share.
+struct ToolCallSheet: View {
+    var activity: ToolActivity
+    var fullCall: String?
+    @Environment(\.dismiss) private var dismiss
+    private var text: String {
+        var parts: [String] = []
+        if let c = fullCall, !c.isEmpty { parts.append((activity.name == "terminal" || activity.name == "bash" ? "# Command\n" : "# Arguments\n") + c) }
+        if let r = activity.resultText, !r.isEmpty { parts.append("# Output\n" + r) }
+        if let s = activity.summary, !s.isEmpty, parts.isEmpty { parts.append(s) }
+        return parts.joined(separator: "\n\n")
+    }
+    var body: some View {
+        NavigationStack {
+            SelectableText(text: text, monospaced: true)
+                .navigationTitle(activity.displayName).navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) { ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") } }
+                }
         }
     }
 }
@@ -952,7 +1019,19 @@ struct ToolCardView: View {
     var compact = false
     /// Set while the card opens: its frame changes are reported so the thread can reveal it.
     @State private var revealing = false
+    @State private var showFull = false
     private var expanded: Bool { open.wrappedValue }
+    /// What the tool was asked: the command out of the args when they are JSON with one, the
+    /// args as sent, or the context line.
+    private var fullCall: String? {
+        if let a = activity.argsText, !a.isEmpty {
+            if let m = a.firstMatch(of: /"command"\s*:\s*"((?:[^"\\]|\\.)*)"/) {
+                return String(m.1).replacingOccurrences(of: "\\n", with: "\n").replacingOccurrences(of: "\\\"", with: "\"").replacingOccurrences(of: "\\t", with: "\t")
+            }
+            return a
+        }
+        return activity.context
+    }
     /// The todo tool's items, when this card is one: drawn as a checklist, not as JSON.
     private var todos: [TodoItem]? { TodoItem.parse(name: activity.name, argsText: activity.argsText) }
 
@@ -980,7 +1059,9 @@ struct ToolCardView: View {
             }
             if expanded {
                 if compact, todos == nil, let s = activity.summary, !s.isEmpty { Text(s).font(.caption).lineLimit(3) }
-                if todos == nil, let a = activity.argsText, !a.isEmpty {
+                // The whole call: the args when the gateway sent them, else the context line in
+                // full (a tester opened a card and got a few more characters of a cut preview).
+                if todos == nil, let a = fullCall, !a.isEmpty {
                     Text(activity.name == "terminal" || activity.name == "bash" ? "Command" : "Arguments").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: a, lineCap: 40)
                 }
@@ -988,8 +1069,14 @@ struct ToolCardView: View {
                     Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: r, lineCap: 30)
                 }
+                Button { showFull = true } label: {
+                    Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
+                }
+                .buttonStyle(.borderless)
+                .padding(.top, 2)
             }
         }
+        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall) }
         .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass

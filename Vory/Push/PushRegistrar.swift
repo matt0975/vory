@@ -246,6 +246,21 @@ enum LocalNotifier {
         UNUserNotificationCenter.current().setNotificationCategories([approval, clarify, turn, err, enc, test])
     }
 
+    /// Removes the delivered notifications that belong to one chat: its thread, or a push whose
+    /// payload names its session.
+    static func clearDelivered(for storedID: String) {
+        guard !storedID.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { delivered in
+            let ids = delivered.filter { n in
+                let c = n.request.content
+                if c.threadIdentifier == storedID { return true }
+                return ((c.userInfo["hermes"] as? [String: Any])?["session_id"] as? String) == storedID
+            }.map(\.request.identifier)
+            if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
     @MainActor
     static func cardArrived(_ card: PendingCard, chat: ChatSession) {
         // In front of the user the card is on screen: a buzz, nothing more.

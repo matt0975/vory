@@ -14,6 +14,8 @@ struct VoryTabBar: View {
     @Environment(AppModel.self) private var model
     var tabs: [AppModel.AppTab]
     var compose: () -> Void
+    /// A long press on the compose circle: the full New Message sheet (bots, project, files).
+    var composeFull: () -> Void = {}
 
     /// Where the finger is along the capsule while it drags the lens; nil when not dragging.
     @State private var dragX: CGFloat?
@@ -50,8 +52,13 @@ struct VoryTabBar: View {
                         .glassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain)
+                .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    composeFull()
+                })
                 .disabled(model.runtime == nil)
                 .accessibilityLabel("New Chat")
+                .accessibilityHint("Tap for a fresh chat with the current bot; press and hold to choose a bot, a project or files first")
                 .accessibilityIdentifier("chats.new")
             }
         }

@@ -672,6 +672,16 @@ class Gateway:
                         {"role": "user", "text": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": row["last_active"] - 20, "row_id": 3},
                         {"role": "assistant", "text": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": row["last_active"], "row_id": 4},
                     ]
+                elif row and row["id"] == "20260921_093355_d4e5f6":
+                    # The export chat: a background job reported in while nobody was looking (the
+                    # gateway puts that in the user's seat), and a cut tool preview.
+                    live.history = [
+                        {"role": "user", "text": "Why is the nightly export timing out?", "timestamp": row["started_at"], "row_id": 1},
+                        {"role": "assistant", "text": REPLY_PART_1, "timestamp": row["started_at"] + 20, "row_id": 2},
+                        {"role": "tool", "name": "terminal", "context": "python3 - <<'EOF'\nimport json, shutil\nrows=json.load(open('downloads.json'))\nfor r in rows: ...", "text": "39 of 40 remuxed", "timestamp": row["started_at"] + 60, "row_id": 3},
+                        {"role": "user", "text": "[IMPORTANT: Background process proc_bb0091529c2c completed normally (exit code 0).\nCommand: cd /srv/app/_meta && python3 convert_to_mp4.py 2>&1 | tee convert_run.log\nOutput:\n...(first 1910 characters cut)\nremux 39/40 ok\nverify 39/40 ok]", "timestamp": row["last_active"] - 30, "row_id": 4},
+                        {"role": "assistant", "text": REPLY_PART_3, "timestamp": row["last_active"], "row_id": 5},
+                    ]
                 elif row:
                     live.history = [
                         {"role": "user", "text": "The log host is at 94% disk. Can you take a look?",

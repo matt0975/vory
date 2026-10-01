@@ -90,14 +90,37 @@ struct JumpToBottomButton: View {
 }
 
 /// The whole message as plain, selectable text — for copying just a part of it.
+/// Text you can select by range, with the handles and the Copy/Look Up menu UIKit gives: SwiftUI's
+/// own selectable text offers Copy and Share for the whole thing and nothing in between (a
+/// tester: "the select text window doesn't work").
+struct SelectableText: UIViewRepresentable {
+    var text: String
+    var monospaced = false
+    func makeUIView(context: Context) -> UITextView {
+        let v = UITextView()
+        v.isEditable = false
+        v.isSelectable = true
+        v.isScrollEnabled = true
+        v.alwaysBounceVertical = true
+        v.backgroundColor = .clear
+        v.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 24, right: 12)
+        v.dataDetectorTypes = [.link]
+        v.adjustsFontForContentSizeCategory = true
+        return v
+    }
+    func updateUIView(_ v: UITextView, context: Context) {
+        v.font = monospaced ? UIFont.monospacedSystemFont(ofSize: UIFont.preferredFont(forTextStyle: .footnote).pointSize, weight: .regular) : UIFont.preferredFont(forTextStyle: .body)
+        v.textColor = .label
+        if v.text != text { v.text = text }
+    }
+}
+
 struct SelectTextSheet: View {
     var text: String
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
-            ScrollView {
-                Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
-            }
+            SelectableText(text: text)
             .navigationTitle("Select Text")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

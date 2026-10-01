@@ -494,7 +494,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 return nil
             }
         case "new", "reset", "clear":
-            banner = "Start a new chat from the Chats tab; this one stays as it is."
+            // A fresh chat with this bot opens on top; this one stays as it is.
+            NotificationCenter.default.post(name: .hermesNewChatRequested, object: nil, userInfo: ["profile": profileName])
             return nil
         case "help", "commands":
             var cat = catalogCache

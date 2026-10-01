@@ -284,3 +284,29 @@ public struct TurnStats: Hashable, Sendable {
         self.exact = exact
     }
 }
+
+/// A note the gateway put in the user's seat: a background process reporting in, a scheduled run's
+/// prompt, a system line. Drawn as a quiet folded notice, not as the person's own bubble.
+public struct InjectedNote: Hashable, Sendable {
+    public var title: String
+    public var body: String
+
+    public static func parse(_ text: String) -> InjectedNote? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.hasPrefix("[") else { return nil }
+        let lower = t.lowercased()
+        if lower.hasPrefix("[important: background process") || lower.hasPrefix("[background process") {
+            let ok = lower.contains("completed normally") || lower.contains("exit code 0")
+            let failed = lower.contains("failed") || lower.contains("non-zero") || lower.contains("exit code") && !ok
+            return InjectedNote(title: failed ? "Background process failed" : "Background process finished", body: t)
+        }
+        if lower.hasPrefix("[cronjob") {
+            let name = t.firstMatch(of: /\[Cronjob "([^"]+)"/).map { String($0.1) }
+            return InjectedNote(title: name.map { "Scheduled run: \($0)" } ?? "Scheduled run", body: t)
+        }
+        if lower.hasPrefix("[important:") || lower.hasPrefix("[system") || lower.hasPrefix("[note") {
+            return InjectedNote(title: "Note from the gateway", body: t)
+        }
+        return nil
+    }
+}

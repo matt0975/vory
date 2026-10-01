@@ -333,6 +333,8 @@ public final class GatewayRuntime {
 
 public extension Notification.Name {
     public static let hermesSessionsChanged = Notification.Name("hermesSessionsChanged")
+    /// `/new` in a chat: the app opens a fresh chat with the same bot (userInfo "profile").
+    public static let hermesNewChatRequested = Notification.Name("hermesNewChatRequested")
     /// A piece of reply text arrived for a chat (`storedID`, `count` characters).
     public static let hermesStreamDelta = Notification.Name("hermesStreamDelta")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")
