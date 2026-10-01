@@ -10,6 +10,8 @@ struct ConversationView: View {
     @State private var showContext = false
     @State private var showProfile = false
     @State private var composerText = ""
+    /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
+    @State private var composerQuote = ""
     @State private var dockHeight: CGFloat = 60
     @State private var headerHeight: CGFloat = 96
     @State private var dockTop: CGFloat = 0
@@ -31,58 +33,18 @@ struct ConversationView: View {
                 // The thread runs under the status bar (it ignores the top safe area) while the
                 // header sits inside it, so the thread's top margin is the header plus that inset;
                 // without it the first message starts under the pill.
-                TranscriptView(chat: chat, onEditMessage: { composerText = $0 }, dockTop: dockTop, fallbackInset: dockHeight + keyboardInset, topInset: headerHeight + safeTop)
-                    .overlay {
-                        if let e = chat.resumeError, chat.items.isEmpty {
-                            ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
-                                // Centred in what is left above the composer and the keyboard.
-                                .padding(.bottom, dockHeight + keyboardInset)
-                        }
-                    }
+                thread(chat)
                     // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-                    .overlay(alignment: .bottom) {
-                        BottomDock(chat: chat, text: $composerText, namespace: glassNamespace)
-                            .disabled(chat.resumeError != nil && chat.items.isEmpty)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 400 { dockHeight = $0 } }
-                            .padding(.bottom, keyboardInset)
-                            // The dock's top edge on screen, keyboard included: the thread measures its
-                            // own bottom edge the same way and keeps its last line above this.
-                            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
-                    }
+                    .overlay(alignment: .bottom) { dock(chat) }
                     .ignoresSafeArea(.keyboard, edges: .bottom)
-                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
-                        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-                        let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
-                        let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
-                        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
-                            keyboardInset = max(0, covered - safeBottom)
-                        }
-                    }
-                    .overlay(alignment: .top) {
-                        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onContext: { showContext = true },
-                                   onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
-                    }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
+                    .overlay(alignment: .top) { header(chat) }
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat) }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
-                    .alert(confirmTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil; model.approvalConfirm = nil } })) {
-                        Button(confirming?.choice == "deny" ? "Deny" : "Approve once", role: confirming?.choice == "deny" ? .destructive : nil) {
-                            if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }) {
-                                Task { await chat.respond(card: card, result: ["choice": .string(c.choice)]) }
-                            }
-                            confirming = nil; model.approvalConfirm = nil
-                        }
-                        Button("Cancel", role: .cancel) { confirming = nil; model.approvalConfirm = nil }
-                    } message: {
-                        if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }), let a = card.approval {
-                            Text([a.description, a.command].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
-                        } else {
-                            Text("The request is no longer waiting.")
-                        }
-                    }
+                    .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear { model.visibleChatID = chat.storedID }
                     .onDisappear { if model.visibleChatID == chat.storedID { model.visibleChatID = nil } }
@@ -108,9 +70,11 @@ struct ConversationView: View {
     private func open() async {
         guard let runtime = model.runtime else { loadError = "No gateway connected."; return }
         do {
-            if let p = route.profile, !p.isEmpty, runtime.selectedProfile != p { runtime.selectedProfile = p }
+            // A read-only look at another bot's chat carries its bot on its own calls and leaves
+            // the selected bot alone; a chat of ours selects its bot first.
+            if !route.readOnly, let p = route.profile, !p.isEmpty, runtime.selectedProfile != p { runtime.selectedProfile = p }
             // Stored chats return at once with the cached transcript and sync behind the header.
-            if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title) }
+            if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.readOnly ? route.profile : nil) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
             // The first message from the compose sheet goes out as soon as the chat exists.
@@ -129,6 +93,72 @@ struct ConversationView: View {
         }
     }
 
+    // The thread, the dock, the header and the keyboard watcher live apart from the body: inside
+    // it they tipped the type checker over its limit.
+    private func thread(_ chat: ChatSession) -> some View {
+        TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
+                       dockTop: dockTop, fallbackInset: dockHeight + keyboardInset, topInset: headerHeight + safeTop)
+            .overlay {
+                if let e = chat.resumeError, chat.items.isEmpty {
+                    ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
+                        // Centred in what is left above the composer and the keyboard.
+                        .padding(.bottom, dockHeight + keyboardInset)
+                }
+            }
+    }
+    private func dock(_ chat: ChatSession) -> some View {
+        BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
+            .disabled(chat.resumeError != nil && chat.items.isEmpty)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 400 { dockHeight = $0 } }
+            .padding(.bottom, keyboardInset)
+            // The dock's top edge on screen, keyboard included: the thread measures its
+            // own bottom edge the same way and keeps its last line above this.
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
+    }
+    private func header(_ chat: ChatSession) -> some View {
+        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onContext: { showContext = true },
+                   onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+    }
+    private func keyboardChanged(_ n: Notification) {
+        guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
+        let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
+        withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
+            keyboardInset = max(0, covered - safeBottom)
+        }
+    }
+
+    // The confirmation alert's pieces live apart from the body: inside it they tipped the type
+    // checker over its limit.
+    private var confirmShown: Binding<Bool> {
+        Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil; model.approvalConfirm = nil } })
+    }
+    @ViewBuilder private func confirmButtons(chat: ChatSession) -> some View {
+        let deny = confirming?.choice == "deny"
+        Button(deny ? "Deny" : "Approve once", role: deny ? .destructive : nil) {
+            if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }) {
+                Task { await chat.respond(card: card, result: ["choice": .string(c.choice)]) }
+            }
+            confirming = nil; model.approvalConfirm = nil
+        }
+        Button("Cancel", role: .cancel) { confirming = nil; model.approvalConfirm = nil }
+    }
+    @ViewBuilder private func confirmMessage(chat: ChatSession) -> some View {
+        if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }), let a = card.approval {
+            Text([a.description, a.command].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
+        } else {
+            Text("The request is no longer waiting.")
+        }
+    }
+
+    private func editMessage(_ text: String) { composerText = text }
+    private func reply(_ text: String) { withAnimation(.snappy) { composerQuote = text } }
+    /// A "Messaged X" notice: X's chat opens read-only, or the banner says why it cannot.
+    private func openBot(_ handle: String, from chat: ChatSession) {
+        Task { if let why = await model.openBotChat(handle) { chat.banner = why } }
+    }
+
     private func newChat() async {
         guard let runtime = model.runtime else { return }
         do { chat = try await runtime.newChat() } catch { loadError = error.localizedDescription }
@@ -144,7 +174,10 @@ struct ConversationView: View {
 struct BottomDock: View {
     @Bindable var chat: ChatSession
     @Binding var text: String
+    @Binding var quote: String
     var namespace: Namespace.ID
+    /// Another bot's chat: a Read-only pill where the composer would be.
+    var readOnly = false
 
     var body: some View {
         // The container is what lets the composer morph into a card; menus presented from
@@ -163,7 +196,16 @@ struct BottomDock: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if !chat.queue.isEmpty { QueueStrip(chat: chat) }
-                if let card = chat.firstCard {
+                if readOnly {
+                    // Another bot's chat, opened from a notice: look, don't type, and leave its
+                    // cards to its owner.
+                    Label("Read-only", systemImage: "lock")
+                        .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .glassEffect(.regular, in: .capsule)
+                        .glassEffectID("dock", in: namespace)
+                        .accessibilityLabel("Read-only: this is another bot's chat")
+                } else if let card = chat.firstCard {
                     if card.method == "approval" {
                         PendingCardView(chat: chat, card: card)
                             .glassEffectID("dock", in: namespace)
@@ -181,7 +223,7 @@ struct BottomDock: View {
                             .glassEffectID("dock", in: namespace)
                     }
                 } else {
-                    ComposerView(chat: chat, text: $text, namespace: namespace)
+                    ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
             }
             .padding(.horizontal, 12)

@@ -37,6 +37,23 @@ struct DashboardView: View {
                 ForEach(layout.items) { item in
                     card(item)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        // Press, hold and drag a card onto another to put it there; the press
+                        // without a move still opens the menu.
+                        .draggable(item.card.rawValue) {
+                            Label(item.card.title, systemImage: item.card.symbol).font(.subheadline.weight(.medium))
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 14))
+                        }
+                        .dropDestination(for: String.self) { dropped, _ in
+                            guard let raw = dropped.first, let moved = HomeCard(rawValue: raw), moved != item.card else { return false }
+                            withAnimation(.snappy) {
+                                update { l in
+                                    guard let from = l.items.firstIndex(where: { $0.card == moved }), let to = l.items.firstIndex(where: { $0.card == item.card }) else { return }
+                                    l.items.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+                                }
+                            }
+                            return true
+                        }
                         .contextMenu {
                             Section("Size") {
                                 Button { update { $0.set(item.card, size: .compact) } } label: { Label(item.card.sizeWords.compact, systemImage: item.size == .compact ? "checkmark" : "rectangle.compress.vertical") }
@@ -460,7 +477,7 @@ struct ActivityGrid: View {
                             let n = counts[day] ?? 0
                             let future = day > today
                             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                                .fill(future ? Color.clear : (n == 0 ? Color.primary.opacity(0.07) : Color.accentColor.opacity(0.25 + 0.75 * min(1, Double(n) / Double(peak)))))
+                                .fill(future ? Color.clear : (n == 0 ? Color.primary.opacity(0.07) : Color.vory.opacity(0.25 + 0.75 * min(1, Double(n) / Double(peak)))))
                                 .aspectRatio(1, contentMode: .fit)
                                 .accessibilityLabel(future ? "" : "\(day.formatted(date: .abbreviated, time: .omitted)): \(n) sessions")
                         }

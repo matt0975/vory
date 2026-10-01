@@ -13,6 +13,7 @@ struct SettingsView: View {
         [
             Row(id: "profile", title: "Profile", symbol: "person.crop.circle", color: .indigo, destination: AnyView(ProfileView())),
             Row(id: "projects", title: "Projects", symbol: "folder.fill", color: .indigo, destination: AnyView(ProjectsView())),
+            Row(id: "plugins", title: "Plugins", symbol: "puzzlepiece.extension.fill", color: .orange, destination: AnyView(PluginsView())),
             Row(id: "model", title: "Model", symbol: "cpu", color: .blue, destination: AnyView(ModelSettingsView())),
             Row(id: "config", title: "Config", symbol: "slider.horizontal.3", color: .gray, destination: AnyView(ConfigFormView())),
             Row(id: "env", title: "API Keys & Environment", symbol: "key.fill", color: .orange, destination: AnyView(EnvView())),
@@ -351,7 +352,7 @@ struct NotificationsView: View {
                     HStack(spacing: 6) {
                         Text("Typing haptics")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .disabled(!haptics)
@@ -403,6 +404,7 @@ struct BotsSettingsView: View {
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
     @AppStorage(BotMotionSource.enabledKey) private var motion = true
     @AppStorage(BotMotionSource.tiltKey) private var tilt = false
+    @AppStorage(BotMotionSource.styleKey) private var style = "lively"
 
     var body: some View {
         List {
@@ -410,17 +412,25 @@ struct BotsSettingsView: View {
             Section {
                 Toggle("Motion effects", isOn: $motion)
                     .onChange(of: motion) { _, _ in BotMotionSource.shared.apply() }
+                Picker("Style", selection: $style) {
+                    Text("Lively").tag("lively")
+                    Text("Calm").tag("calm")
+                    Text("Still").tag("still")
+                }
+                .pickerStyle(.segmented)
+                .disabled(!motion)
+                .onChange(of: style) { _, _ in BotMotionSource.shared.apply() }
                 Toggle(isOn: $tilt) {
                     HStack(spacing: 6) {
                         Text("Tilt with the phone")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .disabled(!motion)
                 .onChange(of: tilt) { _, _ in BotMotionSource.shared.apply() }
             } footer: {
-                Text("Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
+                Text("Lively is every turn, lean and glance. Calm is half of it. Still keeps only the poses and the blinks, so a bot still shows what it is doing. Bots look where you scroll. With tilt on, they also lean with the phone and, on the Bots page, follow its angle with their eyes.")
             }
             Section {
                 NavigationLink { MotionDemoView() } label: { Label("Preview motion", systemImage: "play.circle") }
@@ -432,7 +442,7 @@ struct BotsSettingsView: View {
                     HStack(spacing: 6) {
                         Text("Liquid Glass for all bots")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 .accessibilityIdentifier("settings.bots.glassAll")
@@ -472,14 +482,14 @@ struct SummariesSettingsView: View {
                     HStack(spacing: 6) {
                         Text("Titles")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
                 Toggle(isOn: $previews) {
                     HStack(spacing: 6) {
                         Text("Previews")
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
             } header: { Text("What the model writes") } footer: {
@@ -531,6 +541,9 @@ struct AppearanceView: View {
                     Text("Chat title").tag(true)
                 }
             } footer: { Text("What the pill under the bot leads with in a chat; the other is shown beneath it while the bot is idle.") }
+            Section {
+                AccentPicker()
+            } header: { Text("Accent") } footer: { Text("Buttons, the selected tab, links and your bubbles take this colour. Bots keep their own.") }
             Section {
                 Picker("Theme", selection: $scheme) {
                     Text("System").tag("system")

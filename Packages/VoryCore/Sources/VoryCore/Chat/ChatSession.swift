@@ -125,14 +125,24 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var inlineAnswers: [String: CheckedContinuation<JSONValue?, Never>] = [:]
     private let activity: any TurnActivityReporting
 
-    public init(runtime: GatewayRuntime, storedID: String?, title: String?) {
+    /// The bot this chat belongs to when it is not the selected one (another bot's chat opened
+    /// read-only): every call carries it, and the header names it.
+    public let profile: String?
+
+    public init(runtime: GatewayRuntime, storedID: String?, title: String?, profile: String? = nil) {
         self.runtime = runtime
         self.activity = runtime.activityReporterFactory()
         self.storedID = storedID ?? ""
+        self.profile = profile
         self.title = title ?? "New chat"
     }
 
-    public var profileName: String { info?.profileName ?? runtime.selectedProfile ?? "default" }
+    public var profileName: String { profile ?? info?.profileName ?? runtime.selectedProfile ?? "default" }
+
+    /// The runtime's call with this chat's bot attached.
+    private func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
+        try await runtime.rpc(method, params, profile: profile, timeout: timeout)
+    }
     public var modelName: String { info?.model ?? "" }
     public var subtitle: String {
         let m = modelName.isEmpty ? "no model" : (modelName.split(separator: "/").last.map(String.init) ?? modelName)
@@ -149,7 +159,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func create(cwd: String? = nil) async throws {
         var params: [String: JSONValue] = ["cols": 80]
         if let cwd, !cwd.isEmpty { params["cwd"] = .string(cwd); params["cwd_explicit"] = .bool(true) }
-        let r = try await runtime.rpc("session.create", params)
+        let r = try await rpc("session.create", params)
         runtimeID = r["session_id"]?.stringValue ?? ""
         storedID = r["stored_session_id"]?.stringValue ?? runtimeID
         info = try? r["info"]?.decode(SessionLiveInfo.self)
@@ -159,14 +169,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func resume() async throws {
-        let r = try await runtime.rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
+        let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
         apply(snapshot: r)
         await loadUsage()
     }
 
     public func reattachAfterReconnect() async {
         do {
-            let r = try await runtime.rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
+            let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
             apply(snapshot: r)
             stale = false
             if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
@@ -304,7 +314,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The fallback the gateway offers for a missed approval frame: anything still waiting on
     /// this session becomes a card answered through `approval.respond`.
     public func pollPendingApprovals() async {
-        guard let r = try? await runtime.rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
+        guard let r = try? await rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
         let list = r["pending"]?.arrayValue ?? r["approvals"]?.arrayValue ?? (r["request_id"] != nil ? [r] : [])
         for pa in list {
             guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) else { continue }
@@ -315,11 +325,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func loadUsage() async {
-        if let u: Usage = try? (await runtime.rpc("session.usage", ["session_id": .string(runtimeID)])).decode() { usage = u }
+        if let u: Usage = try? (await rpc("session.usage", ["session_id": .string(runtimeID)])).decode() { usage = u }
     }
 
     public func contextBreakdown() async throws -> ContextBreakdown {
-        try await runtime.rpc("session.context_breakdown", ["session_id": .string(runtimeID)]).decode()
+        try await rpc("session.context_breakdown", ["session_id": .string(runtimeID)]).decode()
     }
 
     // MARK: Sending
@@ -359,7 +369,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(outgoing)]
             if queued { params["queued"] = true }
-            let r = try await runtime.rpc("prompt.submit", params)
+            let r = try await rpc("prompt.submit", params)
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
             activity.start(for: self)
@@ -376,14 +386,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         let b64 = data.base64EncodedString()
         switch a.kind {
         case .image:
-            _ = try await runtime.rpc("image.attach_bytes", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
+            _ = try await rpc("image.attach_bytes", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
             return nil
         case .pdf:
-            _ = try await runtime.rpc("pdf.attach", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
+            _ = try await rpc("pdf.attach", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
             return nil
         case .audio, .video, .file:
             let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let r = try await runtime.rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string("data:\(mime);base64,\(b64)"), "name": .string(a.name)])
+            let r = try await rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string("data:\(mime);base64,\(b64)"), "name": .string(a.name)])
             return r["ref_text"]?.stringValue
         }
     }
@@ -412,12 +422,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func stop() async {
-        _ = try? await runtime.rpc("session.interrupt", ["session_id": .string(runtimeID)])
+        _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
 
     public func steer(_ text: String) async {
         do {
-            let r = try await runtime.rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
+            let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
             items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: r["status"]?.stringValue ?? "queued")))
         } catch {
             banner = error.localizedDescription
@@ -440,7 +450,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public private(set) var catalogCache: CommandsCatalog?
 
     public func commandsCatalog() async -> CommandsCatalog? {
-        let c: CommandsCatalog? = try? (await runtime.rpc("commands.catalog", ["session_id": .string(runtimeID)])).decode()
+        let c: CommandsCatalog? = try? (await rpc("commands.catalog", ["session_id": .string(runtimeID)])).decode()
         if let c { catalogCache = c }
         return c
     }
@@ -510,7 +520,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             return nil
         }
         do {
-            let r = try await runtime.rpc("slash.exec", ["session_id": .string(runtimeID), "command": .string(body)], timeout: 120)
+            let r = try await rpc("slash.exec", ["session_id": .string(runtimeID), "command": .string(body)], timeout: 120)
             if r["type"]?.stringValue != nil, let d = try? r.decode(CommandDispatchResult.self) {
                 return await apply(d, name: name, arg: arg, depth: depth)
             }
@@ -532,7 +542,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             var params: [String: JSONValue] = ["name": .string(name), "session_id": .string(runtimeID)]
             if let arg { params["arg"] = .string(arg) }
-            let r: CommandDispatchResult = try await runtime.rpc("command.dispatch", params).decode()
+            let r: CommandDispatchResult = try await rpc("command.dispatch", params).decode()
             return await apply(r, name: name, arg: arg, depth: depth)
         } catch {
             items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/\(name): \(error.localizedDescription)")))
@@ -572,9 +582,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         var value = model
         if let provider, !provider.isEmpty { value += " --provider \(provider)" }
         value += " --session"
-        let r = try await runtime.rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID)])
+        let r = try await rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID)])
         if r["confirm_required"]?.boolValue == true {
-            _ = try await runtime.rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID), "confirm_expensive_model": true])
+            _ = try await rpc("config.set", ["key": "model", "value": .string(value), "session_id": .string(runtimeID), "confirm_expensive_model": true])
         }
         if let i = try? r["info"]?.decode(SessionLiveInfo.self) { info = i }
         if let w = r["warning"]?.stringValue, !w.trimmingCharacters(in: .whitespaces).isEmpty { banner = w }
@@ -583,19 +593,19 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func setReasoning(_ effort: String) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
+        _ = try await rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
     }
 
     public func setFast(_ on: Bool) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "fast", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID)])
+        _ = try await rpc("config.set", ["key": "fast", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID)])
     }
 
     public func setYolo(_ on: Bool) async throws {
-        _ = try await runtime.rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
+        _ = try await rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
     }
 
     public func rename(_ newTitle: String) async {
-        if let r = try? await runtime.rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
+        if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
     }
 
     // MARK: Server → client requests
@@ -618,7 +628,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         runtime.setAttention(storedID: storedID, needed: true)
         activity.update(for: self, attention: true)
         if card.method == "approval", let rid = card.approval?.requestId, !card.viaApprovalRPC {
-            Task { _ = try? await runtime.rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
+            Task { _ = try? await rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
         }
         runtime.cardNotifier?.cardArrived(card, chat: self)
     }
@@ -629,7 +639,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if card.viaApprovalRPC, let rid = card.approval?.requestId {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "request_id": .string(rid)]
             params["choice"] = result["choice"] ?? "deny"
-            _ = try? await runtime.rpc("approval.respond", params)
+            _ = try? await rpc("approval.respond", params)
             return
         }
         if let c = inlineAnswers.removeValue(forKey: card.id) { c.resume(returning: result) }

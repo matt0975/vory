@@ -185,7 +185,7 @@ struct CreatorStudio: View {
                             .allowsHitTesting(false)
                             .padding(8)
                             .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(.tertiarySystemFill).opacity(selected == id ? 1 : 0)))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selected == id ? Color.accentColor : .clear, lineWidth: 2))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(selected == id ? Color.vory : .clear, lineWidth: 2))
                         Text(name(id)).font(.caption2).foregroundStyle(selected == id ? .primary : .secondary)
                     }
                     // The face is not hit-testable (above), which would leave a hole in the button
@@ -234,7 +234,7 @@ struct CreatorStudio: View {
                     HStack(spacing: 6) {
                         Text("Liquid Glass").font(.subheadline)
                         Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15))).foregroundStyle(Color.accentColor)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                     Text(glassAll ? "On for every bot in Settings › Bots." : "The bot as a piece of glass, like the app icon.").font(.caption).foregroundStyle(.secondary)
                 }

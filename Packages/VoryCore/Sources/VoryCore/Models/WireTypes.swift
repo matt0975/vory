@@ -863,3 +863,41 @@ public struct UsageAnalytics: Codable, Sendable {
     public var totals: Totals?
     public var periodDays: Int?
 }
+
+// MARK: Plugins (GET /api/dashboard/plugins/hub)
+
+/// The gateway's plugins as the dashboard's hub lists them: agent plugins (from the plugins
+/// folder, bundled with Hermes, or disabled) and dashboard extensions.
+public struct PluginsHub: Codable, Sendable {
+    public struct Plugin: Codable, Sendable, Identifiable, Hashable {
+        public var name: String
+        public var version: String?
+        public var description: String?
+        /// Where it came from: "user", "bundled", "git"…
+        public var source: String?
+        /// "enabled", "disabled", "bundled" or "".
+        public var runtimeStatus: String?
+        public var path: String?
+        public var hasDashboardManifest: Bool?
+        public var userHidden: Bool?
+        public var authRequired: Bool?
+        public var authCommand: String?
+        public var canRemove: Bool?
+        public var canUpdateGit: Bool?
+        public var removedReason: String?
+        public var id: String { name }
+
+        enum CodingKeys: String, CodingKey {
+            case name, version, description, source, path
+            case runtimeStatus = "runtime_status"
+            case hasDashboardManifest = "has_dashboard_manifest"
+            case userHidden = "user_hidden"
+            case authRequired = "auth_required"
+            case authCommand = "auth_command"
+            case canRemove = "can_remove"
+            case canUpdateGit = "can_update_git"
+            case removedReason = "removed_reason"
+        }
+    }
+    public var plugins: [Plugin]
+}

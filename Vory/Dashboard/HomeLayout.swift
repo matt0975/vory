@@ -127,7 +127,7 @@ struct HomeSettingsView: View {
                 .onDelete { offsets in update { l in offsets.map { l.items[$0].card }.forEach { l.remove($0) } } }
             } header: {
                 HStack { Text("On Home"); Spacer(); EditButton().font(.caption) }
-            } footer: { Text("Drag to reorder, swipe to hide. The size icon switches a card between its two sizes.") }
+            } footer: { Text("Drag to reorder, swipe to hide. The size icon switches a card between its two sizes. On Home itself, press and hold a card and drag it onto another.") }
             if !layout.hidden.isEmpty {
                 Section("Not on Home") {
                     ForEach(layout.hidden) { card in

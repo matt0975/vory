@@ -168,6 +168,29 @@ final class AppModel {
         }
     }
 
+    /// A "Messaged X" notice was tapped: X's own chat (its Bot Chat session) opens read-only.
+    /// X is a routing alias; it matches a profile by name or display name. The session is the
+    /// one titled Bot Chat among X's recent chats, the newest if there are several.
+    func openBotChat(_ handle: String) async -> String? {
+        guard let rt = runtime else { return "Not connected." }
+        let key = BotDelivery.key(handle)
+        guard let profile = rt.profiles.first(where: { BotDelivery.key($0.name) == key || BotDelivery.key($0.label) == key }) else {
+            return "No bot called \(handle) on this gateway."
+        }
+        do {
+            let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
+            let own = r.sessions.filter { ($0.profile ?? profile.name) == profile.name }
+            guard let s = own.first(where: { $0.title == "Bot Chat" }) ?? own.first(where: { ($0.title ?? "").localizedCaseInsensitiveContains("bot chat") }) else {
+                return "\(profile.label) has no Bot Chat yet."
+            }
+            var route = PendingRoute(connectionID: rt.connection.id, storedSessionID: s.id, profile: profile.name)
+            route.kind = "readonly"
+            selectedTab = .chats
+            pendingRoute = route
+            return nil
+        } catch { return "Could not list \(profile.label)'s chats: \(error.localizedDescription)" }
+    }
+
     func deactivate() async {
         await runtime?.stop()
         runtime = nil

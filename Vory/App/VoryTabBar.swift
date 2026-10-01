@@ -135,7 +135,7 @@ struct VoryTabBar: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .foregroundStyle(selected ? Color.accentColor : Color.primary)
+        .foregroundStyle(selected ? Color.vory : Color.primary)
         .animation(.snappy(duration: 0.24), value: labelled)
         .overlay(alignment: .top) {
             if let b = badge(for: tab) { b.offset(x: 14, y: 4) }

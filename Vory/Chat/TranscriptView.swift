@@ -7,6 +7,10 @@ struct TranscriptView: View {
     @Bindable var chat: ChatSession
     /// Long-press › "Edit & resend" hands the text back to the composer.
     var onEditMessage: (String) -> Void = { _ in }
+    /// A "Messaged X" or "Message from X" notice was tapped: open X's chat.
+    var onOpenBot: (String) -> Void = { _ in }
+    /// Reply on a bubble: the composer quotes it above the next message.
+    var onReply: (String) -> Void = { _ in }
     /// The dock's top edge in screen coordinates (0 = unknown). The thread's bottom margin is the
     /// distance from its own bottom edge to this: measured, not derived from a dock height added
     /// onto some inset, which left a blank band under the last reply on some phones.
@@ -128,7 +132,7 @@ struct TranscriptView: View {
                         }
                         TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
                                       typingTool: typingTool,
-                                      showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage,
+                                      showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply,
                                       reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
                                                              set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
                                       onSelectText: { selectText = $0 },
@@ -609,6 +613,8 @@ struct TranscriptRow: View, Equatable {
     var showReasoning = true
     var showStats = true
     var onEdit: (String) -> Void = { _ in }
+    var onOpenBot: (String) -> Void = { _ in }
+    var onReply: (String) -> Void = { _ in }
     var reasoningOpen: Binding<Bool> = .constant(false)
     var onSelectText: (String) -> Void = { _ in }
     var toolOpen: Binding<Bool> = .constant(false)
@@ -621,6 +627,11 @@ struct TranscriptRow: View, Equatable {
     var body: some View {
         let _ = Perf.tick("row")
         switch item.kind {
+        case .user(let text, let attachments) where attachments.isEmpty && AgentMessage.parse(text) != nil:
+            // Another bot wrote in: a compact notice with the words folded under it, not a
+            // bubble of ours.
+            let m = AgentMessage.parse(text)!
+            BotMessageNotice(handle: m.key, label: m.sender, headline: "Message from \(m.sender)", body: m.body, pending: false, onOpen: onOpenBot)
         case .user(let text, let attachments):
             HStack {
                 Spacer(minLength: 56)
@@ -632,11 +643,12 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .background(Color.accentColor, in: MessageBubbleShape(side: .trailing, tailed: botShown))
+                            .background(AppTheme.current, in: MessageBubbleShape(side: .trailing, tailed: botShown))
                             .contextMenu {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                                 ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                             }
                     }
@@ -685,6 +697,7 @@ struct TranscriptRow: View, Equatable {
                 .padding(.horizontal, 14).padding(.vertical, 9)
                 .background(Color(.systemGray5), in: MessageBubbleShape(side: .leading, tailed: botShown))
                 .contextMenu {
+                    Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                     Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
@@ -707,6 +720,15 @@ struct TranscriptRow: View, Equatable {
                         }
                     Label(status == "queued" ? "Steered · queued" : "Steered", systemImage: "arrow.turn.down.right")
                         .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        case .tool(let act) where act.delivery != nil:
+            // A message to another bot: "Messaging X…", then "Messaged X", then X's answer.
+            let d = act.delivery!
+            VStack(spacing: 4) {
+                BotMessageNotice(handle: d.target, label: d.target, headline: act.status == .running ? "Messaging \(d.target)…" : "Messaged \(d.target)", body: d.message, pending: act.status == .running, onOpen: onOpenBot)
+                if let reply = act.deliveryReply {
+                    BotMessageNotice(handle: d.target, label: d.target, headline: "Message from \(d.target)", body: reply, pending: false, onOpen: onOpenBot)
                 }
             }
         case .tool(let act):
@@ -738,6 +760,53 @@ struct TranscriptRow: View, Equatable {
             .padding(10)
             .glassEffect(.regular, in: .rect(cornerRadius: 12))
         }
+    }
+}
+
+/// A centred, quiet line for bot-to-bot traffic ("Messaged work", "Message from work") with the
+/// other bot's face; the words fold under it, and a tap opens that bot's own chat.
+struct BotMessageNotice: View {
+    var handle: String
+    var label: String
+    var headline: String
+    var body_: String?
+    var pending: Bool
+    var onOpen: (String) -> Void
+    @State private var open = false
+
+    init(handle: String, label: String, headline: String, body: String?, pending: Bool, onOpen: @escaping (String) -> Void) {
+        self.handle = handle; self.label = label; self.headline = headline; self.body_ = body; self.pending = pending; self.onOpen = onOpen
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Button { onOpen(handle) } label: {
+                HStack(spacing: 6) {
+                    BotAvatar(profile: handle, size: 18, active: pending)
+                    Text(headline).font(.caption).foregroundStyle(.secondary)
+                    if pending { ProgressView().controlSize(.mini) }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .glassEffect(.regular.interactive(), in: .capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(headline). Opens \(label)'s chat")
+            if let text = body_, !text.isEmpty {
+                Button { withAnimation(.snappy) { open.toggle() } } label: {
+                    Text(open ? "hide message" : "show message").font(.caption2).foregroundStyle(.tertiary)
+                }
+                .buttonStyle(.plain)
+                if open {
+                    Text(text).font(.footnote).textSelection(.enabled)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .frame(maxWidth: 360, alignment: .leading)
+                        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 12))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
     }
 }
 

@@ -18,11 +18,13 @@ struct VoryApp: App {
     }
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("colorSchemePreference") private var scheme = "system"
+    @AppStorage(AppTheme.accentKey) private var accentID = "blue"
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
+                .tint(AppTheme.accent(accentID).color)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
                 .task {

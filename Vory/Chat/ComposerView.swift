@@ -7,6 +7,8 @@ import VoryCore
 struct ComposerView: View {
     @Bindable var chat: ChatSession
     @Binding var text: String
+    /// The bubble being replied to; sent as a quote block above the message.
+    @Binding var quote: String
     /// The dock's morph namespace: the text capsule (alone, not the whole stack — the steer strip
     /// and the command list come and go under it) is what an approval card morphs from.
     var namespace: Namespace.ID
@@ -165,9 +167,24 @@ struct ComposerView: View {
                 }
                 .quickLookPreview($stagedPreview)
             }
+            if !quote.isEmpty {
+                // What the reply answers: the first lines of the bubble, with a way out.
+                HStack(alignment: .top, spacing: 8) {
+                    RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             // Same shape as the Messages app: a round attach button outside the field, and one
             // thin capsule holding the text with the mic or send control inside its trailing edge.
-            GlassEffectContainer(spacing: 14) {
             HStack(alignment: .bottom, spacing: 8) {
                 attachMenu
                 HStack(alignment: .bottom, spacing: 6) {
@@ -199,7 +216,6 @@ struct ComposerView: View {
                 // and on the phone that swallowed the taps meant for the text field's Paste menu.
                 .glassEffect(.regular, in: .rect(cornerRadius: 18))
                 .glassEffectID("dock", in: namespace)
-            }
             }
             if chat.isRunning, !text.isEmpty {
                 HStack {
@@ -242,7 +258,7 @@ struct ComposerView: View {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
-                    .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.accentColor), in: .circle)
+                    .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.vory), in: .circle)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
@@ -276,7 +292,14 @@ struct ComposerView: View {
     }
 
     private func send() async {
-        let t = text
+        var t = text
+        if !quote.isEmpty {
+            // A Markdown quote the bot reads as context; the quoted bubble is left out of the
+            // app's own history recall.
+            let q = quote.split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
+            t = q + "\n\n" + t
+            quote = ""
+        }
         text = ""
         focused = true
         historyCursor = nil

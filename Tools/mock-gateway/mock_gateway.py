@@ -99,6 +99,11 @@ STORED_SESSIONS: list[dict] = [
      "source": "tui", "model": MODEL, "started_at": time.time() - 29000,
      "last_active": time.time() - 27600, "message_count": 24, "is_active": False,
      "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"},
+    {"id": "20260930_221000_work01", "title": "Bot Chat",
+     "preview": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.",
+     "source": "cli", "model": MODEL, "started_at": time.time() - 90000,
+     "last_active": time.time() - 4900, "message_count": 4, "is_active": False,
+     "archived": False, "pinned": False, "profile": "work", "cwd": "/srv/export"},
     {"id": "20260920_221014_99aabb", "title": "Weekly dependency audit",
      "preview": "Three advisories this week, one of them reachable from our code path.",
      "source": "cron", "model": MODEL, "started_at": time.time() - 100000,
@@ -205,6 +210,15 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         if not row:
             return 404, {"detail": "session not found"}
         iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+        if row["title"] == "Bot Chat":
+            msgs = [
+                {"id": 1, "role": "user", "content": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": iso(row["started_at"])},
+                {"id": 2, "role": "assistant", "content": "Noted. The export runs at 2 AM; I'll leave the schedule alone until you're done.", "timestamp": iso(row["started_at"] + 30)},
+                {"id": 3, "role": "user", "content": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": iso(row["last_active"] - 20)},
+                {"id": 4, "role": "assistant", "content": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": iso(row["last_active"])},
+            ]
+            return 200, {"session_id": sid, "profile": "work", "messages": msgs,
+                         "pagination": {"limit": 60, "offset": 0, "order": "latest", "returned": len(msgs)}}
         msgs = [
             {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look?", "timestamp": iso(row["started_at"])},
             {"id": 2, "role": "assistant", "content": [{"type": "text", "text": REPLY_PART_1 + REPLY_PART_2}], "timestamp": iso(row["last_active"]),
@@ -269,6 +283,24 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
                      "totals": {"total_input": tot("input_tokens"), "total_output": tot("output_tokens"), "total_cache_read": tot("cache_read_tokens"), "total_reasoning": 0,
                                 "total_estimated_cost": tot("estimated_cost"), "total_actual_cost": 0, "total_sessions": tot("sessions"), "total_api_calls": tot("api_calls")},
                      "skills": {}, "tools": {}}
+    if base == "/api/dashboard/plugins/hub":
+        return 200, {"plugins": [
+            {"name": "vory-push", "version": "1.0.33", "description": "Vory's companion: push notifications, Live Activities and the Bot Chat watch.",
+             "source": "user", "runtime_status": "enabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/vory-push",
+             "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "kanban", "version": "0.4.2", "description": "A board of the agent's tasks on the dashboard.",
+             "source": "bundled", "runtime_status": "bundled", "has_dashboard_manifest": True, "path": "/opt/hermes/plugins/kanban",
+             "can_remove": False, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "dispatcher", "version": "1.2.0", "description": "Routes cron deliveries and channel messages to the right profile.",
+             "source": "git", "runtime_status": "enabled", "has_dashboard_manifest": True, "path": "/home/hermes/.hermes/plugins/dispatcher",
+             "can_remove": True, "can_update_git": True, "auth_required": False, "user_hidden": False},
+            {"name": "memory-sqlite", "version": "0.9.0", "description": "Long-term memory in a local SQLite file.",
+             "source": "user", "runtime_status": "disabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/memory-sqlite",
+             "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
+            {"name": "github", "version": "2.1.0", "description": "Pull requests, issues and reviews through the GitHub API.",
+             "source": "user", "runtime_status": "enabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/github",
+             "can_remove": True, "can_update_git": True, "auth_required": True, "auth_command": "hermes plugins auth github", "user_hidden": False},
+        ], "orphan_dashboard_plugins": [], "providers": {"memory_provider": "memory-sqlite", "memory_options": [], "context_engine": "default", "context_options": []}}
     if base == "/api/env":
         return 200, ENV_VARS
     if base == "/api/tools/toolsets":
@@ -479,6 +511,16 @@ class Gateway:
         await asyncio.sleep(0.3)
         await self.event("tool.complete", s.sid, {"tool_id": todo_id, "name": "todo_list", "duration_s": 0.0, "summary": "1 of 5 done", "result_text": ""})
 
+        # A word to the other bot, the Bot Mode way: a quiet run of its CLI through the terminal
+        # tool. The app shows it as "Messaged work", then "Message from work" when the reply lands.
+        d_id = f"t-{uuid.uuid4().hex[:8]}"
+        d_cmd = "hermes -p work chat -q \"Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.\""
+        await self.event("tool.start", s.sid, {"tool_id": d_id, "name": "terminal", "context": d_cmd, "args": {"command": d_cmd}})
+        await asyncio.sleep(1.2)
+        await self.event("tool.complete", s.sid, {
+            "tool_id": d_id, "name": "terminal", "duration_s": 1.2, "summary": "Messaged work",
+            "result_text": "session_id: 20260930_221000_work01\nGot it. The export is paused until you say go; I'll hold the 2 AM run too.\n"})
+
         await self.stream_words(s, REPLY_PART_2)
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
         await asyncio.sleep(0.3)
@@ -617,7 +659,16 @@ class Gateway:
                 sid = uuid.uuid4().hex[:8]
                 row = next((r for r in STORED_SESSIONS if r["id"] == stored), None)
                 live = Session(sid, stored, row["title"] if row else "Chat", profile)
-                if row:
+                if row and row["title"] == "Bot Chat":
+                    # The other bot's own thread: what the first bot sent it, and what it said back.
+                    live.profile = row["profile"]
+                    live.history = [
+                        {"role": "user", "text": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": row["started_at"], "row_id": 1},
+                        {"role": "assistant", "text": "Noted. The export runs at 2 AM; I'll leave the schedule alone until you're done.", "timestamp": row["started_at"] + 30, "row_id": 2},
+                        {"role": "user", "text": "Message from 🤖 default: I'm about to clear the rotated logs on the log host. Hold your nightly export until I confirm.", "timestamp": row["last_active"] - 20, "row_id": 3},
+                        {"role": "assistant", "text": "Got it. The export is paused until you say go; I'll hold the 2 AM run too.", "timestamp": row["last_active"], "row_id": 4},
+                    ]
+                elif row:
                     live.history = [
                         {"role": "user", "text": "The log host is at 94% disk. Can you take a look?",
                          "timestamp": row["started_at"], "row_id": 1},

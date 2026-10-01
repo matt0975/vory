@@ -10,6 +10,8 @@ struct ChatRoute: Hashable {
     var initialText: String? = nil
     /// Files picked in the compose sheet; staged into the chat and sent with the first message.
     var initialAttachments: [AttachmentPreview] = []
+    /// Another bot's chat opened from a "Messaged X" notice: the transcript, no composer, no cards.
+    var readOnly: Bool = false
     /// A new chat's working folder on the gateway: the project it starts in.
     var cwd: String? = nil
 }
@@ -123,7 +125,7 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                path.append(ChatRoute(storedID: r.storedSessionID, title: nil))
+                path.append(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.kind == "readonly" ? r.profile : nil, readOnly: r.kind == "readonly"))
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }
@@ -668,7 +670,7 @@ struct SessionPreview: View {
                             Text(m.text ?? "").font(.footnote).lineLimit(4)
                                 .padding(.horizontal, 10).padding(.vertical, 6)
                                 .foregroundStyle(m.role == "user" ? .white : .primary)
-                                .background(m.role == "user" ? Color.accentColor : Color(.systemGray5), in: .rect(cornerRadius: 12))
+                                .background(m.role == "user" ? Color.vory : Color(.systemGray5), in: .rect(cornerRadius: 12))
                             if m.role != "user" { Spacer(minLength: 40) }
                         }
                     }
@@ -721,7 +723,7 @@ struct RoomPreview: View {
                         Text(ev.payload["text"]?.stringValue ?? "").font(.footnote).lineLimit(3)
                             .padding(.horizontal, 10).padding(.vertical, 6)
                             .foregroundStyle(user ? .white : .primary)
-                            .background(user ? Color.accentColor : Color(.systemGray5), in: .rect(cornerRadius: 12))
+                            .background(user ? Color.vory : Color(.systemGray5), in: .rect(cornerRadius: 12))
                         if !user { Spacer(minLength: 40) }
                     }
                 }

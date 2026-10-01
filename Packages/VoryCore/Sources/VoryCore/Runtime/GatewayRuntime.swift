@@ -194,15 +194,17 @@ public final class GatewayRuntime {
     }
 
     /// Adds `profile` to RPC params when a non-default profile is selected.
-    public func profileParams(_ base: [String: JSONValue] = [:]) -> JSONValue {
+    public func profileParams(_ base: [String: JSONValue] = [:], profile: String? = nil) -> JSONValue {
         var p = base
-        if let sp = selectedProfile, !sp.isEmpty { p["profile"] = .string(sp) }
+        if let sp = profile ?? selectedProfile, !sp.isEmpty { p["profile"] = .string(sp) }
         return .object(p.compactingNulls)
     }
 
-    public func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
+    /// `profile`: this call's bot instead of the selected one (a read-only look at another
+    /// bot's chat keeps the selection where it was).
+    public func rpc(_ method: String, _ params: [String: JSONValue] = [:], profile: String? = nil, timeout: Double = 120) async throws -> JSONValue {
         try await socket.waitUntilReady()
-        return try await socket.call(method, params: profileParams(params), timeout: timeout)
+        return try await socket.call(method, params: profileParams(params, profile: profile), timeout: timeout)
     }
 
     // MARK: Chats
@@ -213,9 +215,9 @@ public final class GatewayRuntime {
     /// Opens (or returns) the live chat for a stored session id.
     /// Returns immediately with the cached transcript; the live attach runs behind it
     /// (`ChatSession.isResuming` / `resumeError`). Pass `waitForResume` to keep the old blocking contract.
-    public func openChat(storedID: String, title: String?, waitForResume: Bool = false) async throws -> ChatSession {
+    public func openChat(storedID: String, title: String?, profile: String? = nil, waitForResume: Bool = false) async throws -> ChatSession {
         if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
-        let session = ChatSession(runtime: self, storedID: storedID, title: title)
+        let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: profile)
         registry.add(session)
         session.beginResume()
         if waitForResume {

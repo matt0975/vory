@@ -134,7 +134,7 @@ struct BotCard: View {
             VStack(spacing: 2) {
                 HStack(spacing: 5) {
                     Text(profile.label).font(.subheadline.weight(.semibold)).lineLimit(1)
-                    if isActive { Circle().fill(Color.accentColor).frame(width: 6, height: 6).accessibilityLabel("active") }
+                    if isActive { Circle().fill(Color.vory).frame(width: 6, height: 6).accessibilityLabel("active") }
                 }
                 Text(profile.model.map { $0.split(separator: "/").last.map(String.init) ?? $0 } ?? "no model")
                     .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -294,7 +294,7 @@ struct NewRoomSheet: View {
                                 }
                                 Spacer()
                                 Image(systemName: members.contains(p.name) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(members.contains(p.name) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(members.contains(p.name) ? Color.vory : Color.secondary)
                             }
                         }
                         .tint(.primary)
@@ -488,7 +488,7 @@ struct RoomView: View {
                                 Text(body).textSelection(.enabled)
                                     .padding(.horizontal, 14).padding(.vertical, 9)
                                     .foregroundStyle(.white)
-                                    .background(Color.accentColor, in: MessageBubbleShape(side: .trailing))
+                                    .background(Color.vory, in: MessageBubbleShape(side: .trailing))
                             }
                         case _ where ev.kind.hasPrefix("message."):
                             let member = ev.payload["member_id"]?.stringValue ?? ev.actor.id
