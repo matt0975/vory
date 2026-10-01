@@ -27,6 +27,7 @@ struct ComposerView: View {
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
     @State private var showAttach = false
+    @State private var attachPanelHeight: CGFloat = 356
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var model
 
@@ -230,6 +231,26 @@ struct ComposerView: View {
                 .padding(.horizontal, 8)
             }
         }
+        // The attach panel grows out of the + button and sits above the whole composer, the reply
+        // strip included (anchored to the button it overlapped the strip).
+        .overlay(alignment: .topLeading) {
+            if showAttach {
+                attachPanel
+                    .glassEffectID("attach", in: namespace)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachPanelHeight = $0 }
+                    .offset(y: -(attachPanelHeight + 10))
+                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                    .zIndex(2)
+            }
+        }
+        // Anything tapped outside the panel closes it: a clear catcher far larger than the
+        // composer, under the panel.
+        .background {
+            if showAttach {
+                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+            }
+        }
         .animation(.snappy(duration: 0.25), value: slashSuggestions.map(\.name))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
@@ -287,23 +308,6 @@ struct ComposerView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
-        .overlay(alignment: .bottomLeading) {
-            if showAttach {
-                attachPanel
-                    .glassEffectID("attach", in: namespace)
-                    .offset(y: -46)
-                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
-                    .zIndex(2)
-            }
-        }
-        // Anything tapped outside the panel closes it: a clear catcher far larger than the
-        // button, under the panel.
-        .background {
-            if showAttach {
-                Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
-                    .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
-            }
-        }
     }
 
     private var attachPanel: some View {
