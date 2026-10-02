@@ -170,6 +170,14 @@ struct ConversationView: View {
         #endif
         return TranscriptView(chat: chat, onEditMessage: editMessage, onOpenBot: { openBot($0, from: chat) }, onReply: reply,
                        dockTop: dockTopArg, fallbackInset: fallback, topInset: top)
+            #if os(iOS)
+            // The thread's margins (header above, dock and keyboard below) add up to a minimum
+            // height. On a small phone with the keyboard up, or any phone with a tall card in
+            // the dock, that is more than the space above the keyboard; the screen was then
+            // measured as too tall and centred, which slid the header up under the status bar
+            // by half the excess. The thread takes whatever it is offered instead.
+            .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+            #endif
             .overlay {
                 if let e = chat.resumeError, chat.items.isEmpty {
                     ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(e))
