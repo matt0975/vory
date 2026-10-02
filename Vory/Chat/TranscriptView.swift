@@ -305,7 +305,8 @@ struct TranscriptView: View {
             }
             .animation(.snappy, value: chat.isRunning)
             .overlay(alignment: .topLeading) {
-                #if DEBUG
+                // The readout names UIScrollView's insets, which the Mac's scroll view does not have.
+                #if DEBUG && os(iOS)
                 if ProcessInfo.processInfo.arguments.contains("-vory-geometry") {
                     Text("dockTop \(Int(dockTop)) scrollBottom \(Int(scrollBottom)) inset \(Int(bottomInset)) dist \(Int(metrics.distanceFromBottom)) top \(Int(topInset)) sv \(Int(metrics.scrollView?.convert(metrics.scrollView?.bounds ?? .zero, to: nil).minY ?? -1))/\(Int(metrics.scrollView?.bounds.height ?? -1)) adj \(Int(metrics.scrollView?.adjustedContentInset.top ?? -1))/\(Int(metrics.scrollView?.adjustedContentInset.bottom ?? -1)) rep \(Int(metrics.reportedInsetBottom))")
                         .font(.caption2.monospacedDigit()).padding(4).background(.yellow).foregroundStyle(.black).padding(.top, 120)
