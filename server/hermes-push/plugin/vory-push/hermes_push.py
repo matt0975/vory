@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.35"
+VERSION = "1.0.36"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -305,6 +305,59 @@ def prune_origins() -> None:
                 os.remove(f)
         except OSError:
             pass
+    prune_goals()
+
+
+# ── what a working chat is after ──────────────────────────────────────────────────────────
+#
+# The app's Vory Summaries writes one line per working turn ("Finding why the export times
+# out") and files it as <push dir>/goals/<stored session id>.json = {goal, device_id, at}. A Live
+# Activity update replaces the card's whole state, so every update this companion pushes
+# carries the line along, or the card would lose it the moment the app is suspended. The line
+# belongs to one turn: only one written since the activity started counts.
+
+#: How long the system keeps one Live Activity going. Past this it has ended it itself.
+LA_MAX_AGE = 8 * 3600
+
+
+def goals_dir() -> Path:
+    return devices_dir().parent / "goals"
+
+
+def session_goal(session_id: str, since: float = 0.0) -> str | None:
+    """The goal line filed for a stored session, when it was written at or after ``since``."""
+    if not session_id:
+        return None
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", session_id)
+    try:
+        o = json.loads((goals_dir() / f"{safe}.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    goal = o.get("goal") if isinstance(o, dict) else None
+    at = float(o.get("at") or 0) if isinstance(o, dict) else 0.0
+    if not isinstance(goal, str) or not goal.strip():
+        return None
+    # A few seconds of slack: the phone's clock and this machine's are not the same clock.
+    if at < since - 5 or time.time() - at > LA_MAX_AGE:
+        return None
+    return goal.strip()[:160]
+
+
+def prune_goals() -> None:
+    """Goal lines of turns long over; dropped with the origin markers, at most once an hour."""
+    now = time.time()
+    for f in glob.glob(str(goals_dir() / "*.json")):
+        try:
+            if now - os.path.getmtime(f) > LA_MAX_AGE:
+                os.remove(f)
+        except OSError:
+            pass
+
+
+def idle_long_enough(first_seen_idle: float | None, now: float, grace: float) -> bool:
+    """A session counts as over only once it has been seen not running for ``grace`` seconds.
+    One poll that misses it (the live list failed, the session was between two ids) is not that."""
+    return first_seen_idle is not None and now - first_seen_idle >= grace
 
 
 def load_devices(gateway_url: str) -> list[dict]:
@@ -668,7 +721,9 @@ class Relay:
                     continue
                 if e.get("session_id") and e["session_id"] not in ids:
                     continue
-                if time.time() - float(e.get("started_at") or 0) > 3 * 3600:
+                # Long work is the point: an activity is aimed at for as long as the system keeps
+                # it (three hours here used to freeze the card of a long turn and lose its finish).
+                if time.time() - float(e.get("started_at") or 0) > LA_MAX_AGE:
                     continue
                 out.append({**d, "live_activity_token": e["token"], "live_activity_started_at": e.get("started_at"),
                             "live_activity_session_id": e.get("session_id")})
@@ -729,18 +784,44 @@ class Relay:
     #: activity token → when this companion ended it for a turn that was already over.
     _la_reaped: dict[str, float] = {}
 
+    #: Whether the last discovery poll got the gateway's live list, and what was running in it.
+    _live_ok = False
+    _live_running: set = set()
+    #: activity token → when its session was first seen not running (cleared when it runs again).
+    _la_idle_since: dict[str, float] = {}
+    #: Seconds a session must be seen not running, poll after poll, before its activity is ended.
+    REAP_GRACE = 45.0
+
+    def _moved_on_and_running(self, stored: str) -> bool:
+        """A long turn that compressed its context carries on under a new stored id, while the
+        phone's activity is still filed under the old one. True when the session's latest
+        descendant is running."""
+        try:
+            q = "?" + urllib.parse.urlencode({"profile": self.session_profile[stored]}) if self.session_profile.get(stored) else ""
+            latest = self.gw._http("GET", f"/api/sessions/{urllib.parse.quote(stored, safe='')}/latest-descendant{q}").get("session_id")
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(latest and latest != stored and latest in self._live_running)
+
     def reap_live_activities(self) -> int:
         """Ends the activities whose turn is over. The finish push needs the activity's own token,
         which the phone files only once it is awake and connected: a turn that started and ended
         while the app was closed (the companion started the activity by push) can file it late,
-        after the finish went out to nobody. Runs after each discovery poll: any filed activity for
-        a session that is not running now, older than two minutes, gets one end push."""
+        after the finish went out to nobody. Runs after each discovery poll.
+
+        It ends an activity only on what it knows: the gateway's live list must have been read
+        this poll, and the session must have been seen not running for REAP_GRACE seconds on
+        end. One failed read, a session not tracked yet, or a turn that moved to a new id after
+        compressing used to count as "over", and the card of a turn still working vanished."""
+        if not self._live_ok:
+            return 0
         now = time.time()
-        running: set[str] = set()
+        running: set[str] = set(self._live_running)
         for sid, a in self.attached.items():
             if (a.get("status") or "idle") not in ("idle", "", "done", "finished"):
                 running |= {sid, a.get("stored") or sid}   # the phone files under the stored id, older ones under the runtime id
         ended = 0
+        seen: set[str] = set()
         for d in load_devices(self.gw.url):
             if d.get("platform") != "ios":
                 continue
@@ -751,20 +832,32 @@ class Relay:
             for e in entries:
                 if not isinstance(e, dict) or not e.get("token") or e["token"] in self._la_reaped:
                     continue
+                token = e["token"]
+                seen.add(token)
                 stored = e.get("session_id") or ""
                 started = float(e.get("started_at") or 0)
                 if stored in running or now - started < 120 or now - self._la_push_started.get(stored, 0) < 120:
+                    self._la_idle_since.pop(token, None)
                     continue
-                if now - started > 3 * 3600:
-                    continue   # the app ends those itself, and the token is likely dead
+                if now - started > LA_MAX_AGE:
+                    continue   # the system has ended it, and the token is dead
+                first = self._la_idle_since.setdefault(token, now)
+                if not idle_long_enough(first, now, self.REAP_GRACE):
+                    continue
+                if self._moved_on_and_running(stored):
+                    self._la_idle_since.pop(token, None)
+                    continue
                 state = {"phase": "done", "detail": "Turn finished", "outputTokens": 0, "contextPercent": None, "needsAttention": False,
                          "startedAtUnix": started or float(now), "endedAtUnix": float(now)}
                 ok = self.apns.send(d, {"aps": {"timestamp": int(now), "event": "end", "content-state": state, "dismissal-date": int(now) + 60}},
-                                    push_type="liveactivity", token_override=e["token"])
+                                    push_type="liveactivity", token_override=token)
                 self._note_la("end (turn already over)", ok)
-                self._la_reaped[e["token"]] = now
+                self._la_reaped[token] = now
+                self._la_idle_since.pop(token, None)
                 ended += 1
                 log.info("ended a Live Activity for %s whose turn was already over", stored[:12])
+        for token in [t for t in self._la_idle_since if t not in seen]:
+            self._la_idle_since.pop(token, None)
         if len(self._la_reaped) > 200:
             self._la_reaped = {t: at for t, at in self._la_reaped.items() if now - at < 86400}
         return ended
@@ -822,6 +915,8 @@ class Relay:
         for d in targets:
             state = {"phase": "streaming", "detail": "Working…", "outputTokens": 0, "contextPercent": None, "needsAttention": False,
                      "startedAtUnix": float(d.get("live_activity_started_at") or now), "endedAtUnix": None, **state_patch}
+            if "goal" not in state and (goal := session_goal(d.get("live_activity_session_id") or stored, float(d.get("live_activity_started_at") or 0))):
+                state["goal"] = goal
             aps = {"timestamp": now, "event": "update", "content-state": state}
             if alert:
                 aps["alert"] = {**alert, "sound": "default"}
@@ -908,9 +1003,17 @@ class Relay:
         # The live list is the same for every profile (the gateway ignores the param): once.
         try:
             live = (await self.gw.call("session.active_list", {})).get("sessions", [])
+            self._live_ok = True
         except Exception as exc:  # noqa: BLE001
             log.debug("active_list failed: %s", exc)
             live = []
+            self._live_ok = False
+        # What is running, straight from the gateway's list and under both of a session's ids,
+        # whether or not this companion tracks it yet: the reaper goes by this.
+        self._live_running = set()
+        for s in live:
+            if (s.get("status") or "idle") not in ("idle", "", "done", "finished"):
+                self._live_running |= {i for i in (s.get("id"), s.get("session_key"), s.get("stored_session_id")) if i}
         for _once in (True,):
             seen_live = {s.get("id") for s in live}
             for s in live:

@@ -41,11 +41,13 @@ struct VoryApp: App {
                         model.lock.willEnterForeground()
                         Task { await model.push.refreshAuthorization() }
                         Task { await model.refreshCompanionUpdateFlag() }
-                        // Live Activities whose turn ended while the app was away must not linger.
-                        let chats = model.runtime?.chats ?? []
-                        LiveActivityController.endOrphans(runningStoredIDs: Set(chats.filter(\.isRunning).map(\.storedID)), knownStoredIDs: Set(chats.map(\.storedID)))
+                        // Live Activities whose turn ended while the app was away must not linger,
+                        // and one whose turn is still going must not be ended on old knowledge.
+                        LiveActivityController.settleAtForeground(runtime: model.runtime)
+                        AwayWatch.shared.returned(runtime: model.runtime)
                         Task { await model.push.refreshRelayIfStale() }
                     case .background:
+                        AwayWatch.shared.left(runtime: model.runtime)
                         BotMotionSource.shared.apply(active: false)
                         LocalNotifier.isForeground = false
                         model.lock.didEnterBackground()

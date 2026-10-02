@@ -70,6 +70,11 @@ struct HermesTurnLiveActivity: Widget {
                                 Text(context.state.attentionKind == "input" ? "Needs Your Input" : "Needs Approval").font(.title3.weight(.bold))
                             }
                             Text(context.state.detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        } else if let goal = context.state.shownGoal {
+                            // What the bot is after leads; the step it is on right now sits under it.
+                            Text(goal).font(.subheadline.weight(.medium)).lineLimit(2)
+                            Text(context.state.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            StatsRow(attributes: context.attributes, state: context.state)
                         } else {
                             Text(context.attributes.sessionTitle).font(.subheadline.weight(.medium)).lineLimit(1)
                             Text(context.state.detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
@@ -360,10 +365,16 @@ struct LockScreenTurnView: View {
                             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
                             Text(state.attentionKind == "input" ? "Needs Your Input" : "Needs Approval").font(.title3.weight(.bold))
                         }
-                    } else {
+                    } else if state.shownGoal == nil {
                         Text(attributes.sessionTitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    Text(state.detail).font(.subheadline).lineLimit(2)
+                    if let goal = state.shownGoal {
+                        // The same three lines as before: the goal takes two, the step one.
+                        Text(goal).font(.subheadline).lineLimit(2)
+                        Text(state.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    } else {
+                        Text(state.detail).font(.subheadline).lineLimit(2)
+                    }
                 }
                 Spacer(minLength: 4)
                 if state.needsAttention {

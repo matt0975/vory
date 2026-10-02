@@ -55,6 +55,14 @@ final class PushRegistrar: PushRegistrationSyncing {
                 NotificationCenter.default.post(name: .hermesPushRegistrationNeedsSync, object: nil)
             }
         }
+        NotificationCenter.default.addObserver(forName: .voryGoalChanged, object: nil, queue: .main) { [weak self] n in
+            let sid = n.userInfo?["storedID"] as? String
+            let goal = n.userInfo?["goal"] as? String
+            Task { @MainActor in
+                guard let self, let sid, let goal, let rt = AppModel.shared.runtime else { return }
+                self.noteGoal(session: sid, goal: goal, runtime: rt)
+            }
+        }
         NotificationCenter.default.addObserver(forName: .hermesLiveActivityToken, object: nil, queue: .main) { [weak self] n in
             let token = n.userInfo?["token"] as? String
             let started = n.userInfo?["startedAt"] as? Double
@@ -189,6 +197,23 @@ final class PushRegistrar: PushRegistrationSyncing {
             let body: JSONValue = ["path": .string(path), "data_url": .string("data:application/json;base64," + data.base64EncodedString()), "overwrite": true]
             do { let _: ManagedUploadResult = try await runtime.api.send("POST", "/api/files/upload", json: body) }
             catch { LiveActivityController.note("origin marker failed: \(error.localizedDescription)") }
+        }
+    }
+
+    /// `<profile home>/push/goals/<stored session id>.json`: the goal line Vory Summaries wrote
+    /// for a working chat. The Companion puts it into the Live Activity updates it pushes (its
+    /// own updates would otherwise wipe the line from the card while the app is away), and a
+    /// line written on the Mac reaches the phone's card the same way. Fire and forget.
+    func noteGoal(session: String, goal: String, runtime: GatewayRuntime) {
+        guard notificationsEnabled, !session.isEmpty, !goal.isEmpty, let home = runtime.profileHome else { return }
+        let safe = session.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || "._-".unicodeScalars.contains($0) ? Character($0) : "_" }
+        let path = "\(home)/push/goals/\(String(safe)).json"
+        let marker: JSONValue = ["goal": .string(String(goal.prefix(160))), "device_id": .string(installID), "at": .number(Date().timeIntervalSince1970)]
+        Task {
+            guard let data = try? JSONEncoder().encode(marker) else { return }
+            let body: JSONValue = ["path": .string(path), "data_url": .string("data:application/json;base64," + data.base64EncodedString()), "overwrite": true]
+            do { let _: ManagedUploadResult = try await runtime.api.send("POST", "/api/files/upload", json: body) }
+            catch { LiveActivityController.note("goal marker failed: \(error.localizedDescription)") }
         }
     }
 

@@ -18,11 +18,21 @@ public struct HermesTurnAttributes: ActivityAttributes, Sendable {
         /// "approval" (Approve / Deny make sense) or "input" (a password, a secret, a question):
         /// the widget must not offer Approve on a sudo prompt. Absent on older pushes.
         public var attentionKind: String? = nil
+        /// What the bot is working toward this turn ("Finding why the export times out"), when
+        /// Vory Summaries has written one. Leads the card while the turn runs; `detail` is then
+        /// the step under it. Absent on pushes from a Companion older than 1.0.36.
+        public var goal: String? = nil
         /// When the turn started, as Unix seconds; the widget renders a live elapsed timer from it.
         /// Plain numbers so the `hermes-push` companion can set them in a `liveactivity` push.
         public var startedAtUnix: Double
         /// When the turn ended (Unix seconds), so the timer freezes instead of counting past "done".
         public var endedAtUnix: Double?
+
+        /// The goal line, while it applies: a turn that is running and not waiting for an answer.
+        public var shownGoal: String? {
+            guard !needsAttention, endedAtUnix == nil, let g = goal?.trimmingCharacters(in: .whitespacesAndNewlines), !g.isEmpty else { return nil }
+            return g
+        }
 
         public var startedAt: Date { Date(timeIntervalSince1970: startedAtUnix) }
         public var endedAt: Date? { endedAtUnix.map { Date(timeIntervalSince1970: $0) } }
