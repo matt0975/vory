@@ -180,7 +180,8 @@ struct CloudSyncTests {
         let cloud = MemoryCloudStore(), clock = Clock()
         let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
         for key in [TabLayout.storageKey, PushRegistrar.enabledKey, PushRegistrar.installIDKey, PushRegistrar.muteDesktopOriginKey,
-                    AppLock.enabledKey, ApprovalConfirm.modeKey, ChatStyle.textSize, "launchTab", "activeConnectionID", "companionPromptShown"] {
+                    AppLock.enabledKey, ApprovalConfirm.modeKey, ChatStyle.textSize, "launchTab", "activeConnectionID", "companionPromptShown",
+                    ComposeAction.tapKey, ComposeAction.holdKey] {
             phoneDefaults.set("x", forKey: key)
             #expect(!CloudMerge.syncedSettings.contains(key))
         }

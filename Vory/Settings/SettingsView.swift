@@ -571,6 +571,8 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
     @AppStorage(ChatStyle.botTint) private var botTint = false
     @AppStorage(ChatStyle.textSize) private var textSize = "default"
+    @AppStorage(ComposeAction.tapKey) private var composeTap = ComposeAction.tapDefault.rawValue
+    @AppStorage(ComposeAction.holdKey) private var composeHold = ComposeAction.holdDefault.rawValue
     @Environment(\.editMode) private var editMode
 
     private var layout: TabLayout { TabLayout.parse(layoutRaw) }
@@ -676,6 +678,18 @@ struct AppearanceView: View {
                 } header: { Text("Not on the bar") } footer: {
                     if layout.isFull { Text("Remove one to add another.") }
                 }
+            }
+            #endif
+            #if os(iOS)
+            Section {
+                Picker("Tap", selection: $composeTap) {
+                    ForEach(ComposeAction.tapChoices) { Text($0.title).tag($0.rawValue) }
+                }
+                Picker("Press and hold", selection: $composeHold) {
+                    ForEach(ComposeAction.holdChoices) { Text($0.title).tag($0.rawValue) }
+                }
+            } header: { Text("New Chat button") } footer: {
+                Text("The pencil beside the tab bar. Start a chat goes straight into a fresh chat with the current bot. Show options opens the sheet where you pick bots, a project and files first.")
             }
             #endif
             if let rt = model.runtime, !rt.profiles.isEmpty {

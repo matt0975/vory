@@ -4,6 +4,27 @@ import Testing
 @testable import Vory
 @testable import VoryCore
 
+/// What the New Chat circle does on a tap and on a press and hold.
+@Suite struct ComposeActionTests {
+    @Test func nothingStoredIsTodaysBehaviour() {
+        #expect(ComposeAction.tap(nil) == .quick)
+        #expect(ComposeAction.hold(nil) == .sheet)
+    }
+
+    @Test func theTwoCanBeSwapped() {
+        #expect(ComposeAction.tap("sheet") == .sheet)
+        #expect(ComposeAction.hold("quick") == .quick)
+        #expect(ComposeAction.hold("none") == .none)
+    }
+
+    @Test func aTapAlwaysDoesSomething() {
+        // "none" is a choice for the hold only; an unknown value falls back too.
+        #expect(ComposeAction.tap("none") == .quick)
+        #expect(ComposeAction.tap("whatever") == .quick)
+        #expect(ComposeAction.hold("") == .sheet)
+    }
+}
+
 /// What happens to a Live Activity still showing when the app comes to the front, the goal
 /// line on its card, and a turn found stopped after the app was away.
 @Suite struct LiveActivityTests {

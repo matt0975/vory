@@ -14,8 +14,19 @@ struct VoryTabBar: View {
     @Environment(AppModel.self) private var model
     var tabs: [AppModel.AppTab]
     var compose: () -> Void
-    /// A long press on the compose circle: the full New Message sheet (bots, project, files).
+    /// The full New Message sheet (bots, project, files).
     var composeFull: () -> Void = {}
+    /// What a tap and a press and hold do (Settings › Appearance › New Chat button).
+    @AppStorage(ComposeAction.tapKey) private var tapRaw = ComposeAction.tapDefault.rawValue
+    @AppStorage(ComposeAction.holdKey) private var holdRaw = ComposeAction.holdDefault.rawValue
+
+    private func run(_ action: ComposeAction) {
+        switch action {
+        case .quick: compose()
+        case .sheet: composeFull()
+        case .none: break
+        }
+    }
 
     /// Where the finger is along the capsule while it drags the lens; nil when not dragging.
     @State private var dragX: CGFloat?
@@ -43,7 +54,7 @@ struct VoryTabBar: View {
         GlassEffectContainer(spacing: circleGap) {
             HStack(spacing: circleGap) {
                 capsule
-                Button(action: compose) {
+                Button { run(ComposeAction.tap(tapRaw)) } label: {
                     // Centred on the square, not the glyph: the pencil hangs off its top-right
                     // corner. Measured from a simulator screenshot (the square sat 2.5 pt low).
                     Image(systemName: "square.and.pencil").font(.system(size: 23, weight: .medium))
@@ -53,12 +64,14 @@ struct VoryTabBar: View {
                 }
                 .buttonStyle(.plain)
                 .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
+                    let action = ComposeAction.hold(holdRaw)
+                    guard action != .none else { return }
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                    composeFull()
+                    run(action)
                 })
                 .disabled(model.runtime == nil)
                 .accessibilityLabel("New Chat")
-                .accessibilityHint("Tap for a fresh chat with the current bot; press and hold to choose a bot, a project or files first")
+                .accessibilityHint("Tap to \(ComposeAction.tap(tapRaw).spoken); press and hold to \(ComposeAction.hold(holdRaw).spoken)")
                 .accessibilityIdentifier("chats.new")
             }
         }
