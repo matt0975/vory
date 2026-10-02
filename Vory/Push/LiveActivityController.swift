@@ -93,6 +93,7 @@ final class LiveActivityController: TurnActivityReporting {
     /// the companion can keep driving it and end it.
     static func observePushStarts() {
         guard pushToStartTask == nil else { return }
+        Task { @MainActor in observeGoals() }
         pushToStartTask = Task.detached {
             for await token in Activity<HermesTurnAttributes>.pushToStartTokenUpdates {
                 let hex = token.map { String(format: "%02x", $0) }.joined()
@@ -145,22 +146,90 @@ final class LiveActivityController: TurnActivityReporting {
         UIApplication.shared.endBackgroundTask(task)
     }
 
-    /// Ends activities nobody is driving any more: ones whose turn already ended, or that belong to
-    /// a chat this app has open and knows is idle. Called when the app comes to the foreground.
-    static func endOrphans(runningStoredIDs: Set<String>, knownStoredIDs: Set<String>) {
+    /// The goal line (Vory Summaries) reaches the card the moment it is written or rewritten,
+    /// rather than with the next step. Whichever chat it is for, whoever started its activity.
+    nonisolated(unsafe) private static var goalObserver: NSObjectProtocol?
+
+    @MainActor private static func observeGoals() {
+        guard goalObserver == nil else { return }
+        #if DEBUG
+        // For screenshots where the on-device model cannot run (the simulator):
+        // `-vory-test-goal "Finding why the export times out"` stands in for it.
+        if let line = UserDefaults.standard.string(forKey: "vory-test-goal"), !line.isEmpty {
+            ChatGoals.shared.writer = { _ in line }
+        }
+        #endif
+        goalObserver = NotificationCenter.default.addObserver(forName: .voryGoalChanged, object: nil, queue: .main) { n in
+            guard let sid = n.userInfo?["storedID"] as? String, let goal = n.userInfo?["goal"] as? String else { return }
+            for a in Activity<HermesTurnAttributes>.activities
+            where a.attributes.storedSessionID == sid && a.activityState == .active && a.content.state.endedAt == nil && a.content.state.goal != goal {
+                var st = a.content.state
+                st.goal = goal
+                ActivityHandle(a).update(st)
+            }
+        }
+    }
+
+    /// As long as the system keeps an activity going. Past this it has ended it itself.
+    nonisolated static let longestTurn: TimeInterval = 8 * 3600
+
+    /// What to do with an activity still showing when the app comes to the front.
+    enum Lingering: Equatable {
+        /// Its turn is over for certain: end it.
+        case end
+        /// This app has the chat open and believes it idle. That belief may be from before the
+        /// time away (a turn started from another device, a reply sent from a notification),
+        /// so the gateway is asked first.
+        case ask
+        case keep
+    }
+
+    nonisolated static func lingering(finished: Bool, age: TimeInterval, openHere: Bool, runningHere: Bool) -> Lingering {
+        if finished || age > longestTurn { return .end }
+        if openHere, !runningHere { return .ask }
+        return .keep
+    }
+
+    /// Called when the app comes to the foreground. Activities whose turn already ended go at
+    /// once. One for a chat that is open here and looks idle used to go at once too, which is
+    /// how a tap on the Live Activity of a turn started elsewhere erased it: the tap opened the
+    /// app, and the app ended the card on what it knew before it was suspended. Now the chat
+    /// is re-read from the gateway and the card goes only if the turn really is over.
+    static func settleAtForeground(runtime: GatewayRuntime?) {
+        var toAsk: [(ActivityHandle, ChatSession)] = []
+        let here = runtime?.connection.id.uuidString
         for a in Activity<HermesTurnAttributes>.activities {
             let sid = a.attributes.storedSessionID
-            let finished = a.content.state.endedAt != nil
-            let idleHere = knownStoredIDs.contains(sid) && !runningStoredIDs.contains(sid)
-            let ancient = Date().timeIntervalSince(a.content.state.startedAt) > 3 * 3600
-            guard finished || idleHere || ancient else { continue }
-            let h = ActivityHandle(a)
-            var st = a.content.state
-            st.endedAtUnix = st.endedAtUnix ?? Date().timeIntervalSince1970
-            h.end(st)
-            // Its push token dies with it; the gateway must not keep aiming at a dead activity.
-            NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil, userInfo: ["token": "", "storedID": sid, "startedAt": 0.0])
+            let sameGateway = a.attributes.connectionID.isEmpty || a.attributes.connectionID == here
+            let chat = sameGateway ? runtime?.chatForStored(sid) : nil
+            switch lingering(finished: a.content.state.endedAt != nil, age: Date().timeIntervalSince(a.content.state.startedAt),
+                             openHere: chat != nil, runningHere: chat?.isRunning ?? false) {
+            case .end: endNow(a)
+            case .ask: if let chat { toAsk.append((ActivityHandle(a), chat)) }
+            case .keep: break
+            }
         }
+        guard !toAsk.isEmpty else { return }
+        Task { @MainActor in
+            for (h, chat) in toAsk {
+                // Waits for the socket; the snapshot sets `isRunning`, and a running turn adopts
+                // this activity again on the way (`start(for:)`).
+                if !chat.isRunning { await chat.reattachAfterReconnect() }
+                if chat.isRunning { note("kept: “\(chat.title.prefix(24))” is still working"); continue }
+                if chat.stale { note("kept: could not ask the gateway about “\(chat.title.prefix(24))”"); continue }
+                endNow(h.activity)
+                note("ended: “\(chat.title.prefix(24))” is idle on the gateway")
+            }
+        }
+    }
+
+    private static func endNow(_ a: Activity<HermesTurnAttributes>) {
+        var st = a.content.state
+        st.endedAtUnix = st.endedAtUnix ?? Date().timeIntervalSince1970
+        endingIDs.insert(a.id)
+        ActivityHandle(a).end(st)
+        // Its push token dies with it; the gateway must not keep aiming at a dead activity.
+        NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil, userInfo: ["token": "", "storedID": a.attributes.storedSessionID, "startedAt": 0.0])
     }
 
     func start(for chat: ChatSession) {
@@ -230,6 +299,7 @@ final class LiveActivityController: TurnActivityReporting {
                                                        contextPercent: chat.usage?.contextPercent, needsAttention: attention, startedAt: startedAt,
                                                        contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
         state.attentionKind = attention ? (inputKind ? "input" : "approval") : nil
+        state.goal = ChatGoals.shared.goal(for: chat.storedID)
         // Away from the app the alert (the Island expanding, the buzz) comes from the
         // companion's push when one is installed; only without it does the app raise its own.
         if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
