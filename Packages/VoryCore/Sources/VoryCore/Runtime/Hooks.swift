@@ -18,6 +18,13 @@ public extension TurnActivityReporting {
 public protocol CardNotifying: AnyObject {
     func cardArrived(_ card: PendingCard, chat: ChatSession)
     func turnFinished(chat: ChatSession, error: String?)
+    /// A card this device was showing went without being answered here (answered on another
+    /// device): whatever was posted for it (a notification with Approve on it) is out of date.
+    func cardSettled(_ card: PendingCard, chat: ChatSession)
+}
+
+public extension CardNotifying {
+    func cardSettled(_ card: PendingCard, chat: ChatSession) {}
 }
 
 /// Publishes the device's push registration to the gateway after capabilities are known.

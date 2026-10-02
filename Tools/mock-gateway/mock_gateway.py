@@ -872,8 +872,23 @@ class Gateway:
         if method in ("session.close", "session.delete"):
             self.sessions.pop(p.get("session_id", ""), None)
             return ok({"closed": True, "deleted": p.get("session_id", "")})
+        if method == "approval.pending":
+            # What still waits on this session: the open approval requests, by their request id.
+            live = LIVE.get(p.get("session_id", "")) or next((l for l in LIVE.values() if l.stored == p.get("session_id")), None)
+            frames = list(live.open_frames.values()) if live is not None else []
+            return ok({"approvals": [{**f["params"], "request_id": f["params"].get("request_id")} for f in frames if f["method"] == "approval"]})
         if method == "approval.respond":
-            return ok({"resolved": 1})
+            # The fallback path a client uses for an approval it learned of by polling: it settles
+            # the open request the same way a response frame does.
+            for l in LIVE.values():
+                for frame_id, f in list(l.open_frames.items()):
+                    if f["method"] == "approval" and f["params"].get("request_id") == p.get("request_id"):
+                        fut = l.pending.get(frame_id)
+                        if fut and not fut.done():
+                            fut.set_result({"choice": p.get("choice", "deny")})
+                        l.open_frames.pop(frame_id, None)
+                        return ok({"resolved": 1})
+            return ok({"resolved": 0})
         if method == "approval.received":
             return ok({"acknowledged": True})
         if method in ("image.attach_bytes", "pdf.attach"):

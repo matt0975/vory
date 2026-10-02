@@ -165,6 +165,57 @@ extension GatewayIntegrationTests {
     }
 }
 
+extension GatewayIntegrationTests {
+    /// Two devices with the same chat open, and the bot asks for an approval: both show the
+    /// card. One answers; nothing tells the other, so its card used to stay up for good. It now
+    /// goes once the gateway no longer lists the approval as waiting.
+    @MainActor @Test func anApprovalAnsweredOnOneDeviceLeavesTheOther() async throws {
+        guard let env = Self.env, env.token == "mock-token" else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e approval", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let mac = GatewayRuntime(connection: conn, store: store)
+        let phone = GatewayRuntime(connection: conn, store: store)
+        await mac.start()
+        await phone.start()
+        let list: SessionListResponse = try await mac.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "5")], profile: mac.selectedProfile)
+        let stored = try #require(list.sessions.first?.id)
+        let answering = try await mac.openChat(storedID: stored, title: nil, waitForResume: true)
+        let watching = try await phone.openChat(storedID: stored, title: nil, waitForResume: true)
+
+        _ = await answering.send("Clean up the log host \(UUID().uuidString.prefix(6))")
+        func approval(_ chat: ChatSession) -> PendingCard? { chat.cards.first { $0.method == "approval" } }
+        var deadline = Date().addingTimeInterval(60)
+        while Date() < deadline, approval(answering) == nil || approval(watching) == nil { try await Task.sleep(for: .milliseconds(100)) }
+        let card = try #require(approval(answering), "the sending device never got the approval")
+        try #require(approval(watching) != nil, "the watching device never got the approval")
+        #expect(phone.needsAttention.contains(stored))
+
+        // Long enough that the card is no longer "just arrived" on the watching device.
+        try await Task.sleep(for: .seconds(ChatSession.cardGrace + 0.5))
+        await answering.respond(card: card, result: ["choice": "once"])
+
+        var goneWhileRunning = false
+        deadline = Date().addingTimeInterval(60)
+        while Date() < deadline {
+            if approval(watching) == nil, watching.isRunning { goneWhileRunning = true }
+            if !answering.isRunning, !watching.isRunning { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        print("e2e approval: card left the watching device while the turn was still running: \(goneWhileRunning)")
+        #expect(watching.cards.isEmpty, "the card answered on the other device is still showing")
+        #expect(!phone.needsAttention.contains(stored), "the chat still asks for attention on the watching device")
+        func notes(_ chat: ChatSession) -> [String] { chat.items.compactMap { if case .system(let t, _) = $0.kind { return t }; return nil } }
+        #expect(notes(watching).contains("Answered on another device"))
+        #expect(!notes(answering).contains("Answered on another device"), "the device that answered should not be told it was answered elsewhere")
+        #expect(goneWhileRunning, "the card should go as the turn moves on, not only when it ends")
+
+        await mac.stop()
+        await phone.stop()
+    }
+}
+
 actor EventCollector {
     private var events: [GatewayEvent] = []
     func add(_ e: GatewayEvent) { events.append(e) }

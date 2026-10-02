@@ -91,6 +91,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The events that open a turn. One of these on an idle chat means the prompt was sent
     /// from another device that has the same chat open.
     private static let turnOpeners: Set<String> = ["message.start", "reasoning.delta", "thinking.delta", "tool.start"]
+    /// Events that mean the bot is doing something again.
+    private static let turnMovers: Set<String> = ["message.delta", "reasoning.delta", "thinking.delta", "tool.start", "tool.complete"]
 
     /// The gateway sends a chat's events to every device that has it open, but the events
     /// carry the reply, not the prompt. When a turn starts that this device did not ask for,
@@ -281,6 +283,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         items = built
         toolIndex = [:]
         cards = []
+        cardShownAt = [:]
         isRunning = r["running"]?.boolValue ?? info?.running ?? false
         if let inflight = r["inflight"], !inflight.isNull {
             let user = inflight["user"]?.stringValue ?? ""
@@ -340,8 +343,26 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The fallback the gateway offers for a missed approval frame: anything still waiting on
     /// this session becomes a card answered through `approval.respond`.
     public func pollPendingApprovals() async {
+        let asked = Date()
+        lastApprovalCheck = asked
         guard let r = try? await rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
-        let list = r["pending"]?.arrayValue ?? r["approvals"]?.arrayValue ?? (r["request_id"] != nil ? [r] : [])
+        // The gateway's own list of what still waits, when it sent one (an older gateway
+        // answers with a single approval, which says nothing about the others).
+        let waiting = r["approvals"]?.arrayValue ?? r["pending"]?.arrayValue
+        if let waiting {
+            // An approval this device still shows that the gateway no longer lists was answered
+            // somewhere else (another device with the chat open, the dashboard, a terminal):
+            // nothing tells the other clients, so the card stayed up here for good. A card
+            // younger than the question is left alone: it may have arrived after the gateway
+            // made its list.
+            let open = Set(waiting.compactMap { $0["request_id"]?.stringValue })
+            for card in cards where card.method == "approval" {
+                guard let rid = card.approval?.requestId, !open.contains(rid),
+                      let shown = cardShownAt[card.id], shown.addingTimeInterval(Self.cardGrace) < asked else { continue }
+                settleElsewhere(card)
+            }
+        }
+        let list = waiting ?? (r["request_id"] != nil ? [r] : [])
         for pa in list {
             guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) else { continue }
             var params = pa.objectValue ?? [:]
@@ -654,8 +675,35 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
+    /// When each card appeared here.
+    private var cardShownAt: [String: Date] = [:]
+    private var lastApprovalCheck = Date.distantPast
+    /// A card this fresh is never taken for answered elsewhere.
+    static let cardGrace: TimeInterval = 2
+
+    /// A card this device shows was answered on another one (or its turn ended without it):
+    /// it goes, whoever waits on it here is released, and the chat stops asking for attention.
+    private func settleElsewhere(_ card: PendingCard) {
+        guard cards.contains(where: { $0.id == card.id }) else { return }
+        cards.removeAll { $0.id == card.id }
+        cardShownAt[card.id] = nil
+        if let c = inlineAnswers.removeValue(forKey: card.id) { c.resume(returning: .null) }
+        if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
+        runtime.cardNotifier?.cardSettled(card, chat: self)
+        items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: card.method == "approval" ? "Answered on another device" : "No longer waiting for an answer", symbol: "checkmark.shield")))
+    }
+
+    /// The turn is moving again while an approval card is showing: the bot was waiting on it,
+    /// so it has probably been answered elsewhere. Asked at once rather than at the next poll.
+    private func checkApprovalsIfTurnMovedOn() {
+        guard cards.contains(where: { $0.method == "approval" }), Date().timeIntervalSince(lastApprovalCheck) > 1.5 else { return }
+        lastApprovalCheck = Date()
+        Task { await pollPendingApprovals() }
+    }
+
     private func addCard(_ card: PendingCard) {
         guard !cards.contains(where: { $0.id == card.id }) else { return }
+        cardShownAt[card.id] = Date()
         cards.append(card)
         runtime.setAttention(storedID: storedID, needed: true)
         activity.update(for: self, attention: true)
@@ -667,6 +715,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func respond(card: PendingCard, result: JSONValue) async {
         cards.removeAll { $0.id == card.id }
+        cardShownAt[card.id] = nil
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
         if card.viaApprovalRPC, let rid = card.approval?.requestId {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "request_id": .string(rid)]
@@ -684,6 +733,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private func cancelCard(id: String, reason: String) {
         guard cards.contains(where: { $0.id == id }) else { return }
         cards.removeAll { $0.id == id }
+        cardShownAt[id] = nil
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false) }
         if let c = inlineAnswers.removeValue(forKey: id) { c.resume(returning: .null) }
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Request withdrawn (\(reason)).", symbol: "xmark.circle")))
@@ -695,6 +745,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         let p = ev.payload
         if !startedHere, !isRunning, !adoptingTurn, !isResuming, Self.turnOpeners.contains(ev.type) { adoptTurnStartedElsewhere() }
         if ev.type == "message.complete" || ev.type == "error" { startedHere = false }
+        if Self.turnMovers.contains(ev.type) { checkApprovalsIfTurnMovedOn() }
         switch ev.type {
         case "message.start":
             beginStreaming()
@@ -737,6 +788,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             // The gateway's own "Operation interrupted." message is shown as a card that says as much.
             else if status == "interrupted", InterruptedTurn.parse(text ?? "") == nil { items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Interrupted", symbol: "stop.circle"))) }
             if let w = p["warning"]?.stringValue, !w.isEmpty { banner = w }
+            // A finished turn waits for nothing: a card still showing was answered elsewhere.
+            for card in cards { settleElsewhere(card) }
             endPhase = (status == "error" || p["error"]?.stringValue?.isEmpty == false) ? "error" : "done"
             let finalPhase = endPhase
             isRunning = false

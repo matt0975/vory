@@ -344,6 +344,13 @@ final class WatchCardNotifier: CardNotifying {
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "card-\(card.id)", content: content, trigger: nil))
     }
 
+    /// Answered on another device: the banner that offered Approve here is out of date.
+    func cardSettled(_ card: PendingCard, chat: ChatSession) {
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: ["card-\(card.id)"])
+        center.removePendingNotificationRequests(withIdentifiers: ["card-\(card.id)"])
+    }
+
     func turnFinished(chat: ChatSession, error: String?) {
         guard WKApplication.shared().applicationState != .active else {
             WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success)
