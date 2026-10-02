@@ -256,6 +256,13 @@ struct TranscriptView: View {
                     withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
                 }
             }
+            // Your own message brings the thread to the end, as in Messages, however far up it
+            // was scrolled: a tester sent one from up the thread, saw nothing happen, and had to
+            // find the arrow to see the reply.
+            .onReceive(NotificationCenter.default.publisher(for: .hermesMessageSent)) { n in
+                guard (n.object as? ChatSession) === chat, !metrics.stickToBottom || metrics.distanceFromBottom > 24 else { return }
+                jumpToBottom()
+            }
             // Insets included: the bottom margin (dock plus home indicator) is about the size of
             // the threshold, so without it a slightly taller dock showed the arrow at the very end.
             .onScrollGeometryChange(for: CGFloat.self) { g in
@@ -1064,6 +1071,8 @@ struct ReasoningDisclosure: View {
 extension Notification.Name {
     /// A row that just expanded reports its bottom edge (global y) so the thread can show it.
     static let hermesRevealRow = Notification.Name("hermesRevealRow")
+    /// A message left the composer (object: its chat): the thread goes to the end for it.
+    static let hermesMessageSent = Notification.Name("hermesMessageSent")
 }
 
 /// Renders markdown blocks; inline styling from AttributedString(markdown:).
