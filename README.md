@@ -438,3 +438,9 @@ Then add a gateway in the app pointing at `http://127.0.0.1:9119` with that sess
 `ChatShowcaseUITests` drives a full conversation against it and saves screenshots of the streaming
 state, the tool cards, the approval card, the finished transcript, the context sheet and the model
 picker.
+
+A prompt can steer the scripted turn: one that starts with `fail` ends with the "could not start
+the assistant" error, and one that starts with `interrupt` ends with the gateway's own
+"Operation interrupted." message (the card for a turn that was cut short). The mock also has two
+projects and answers `session.workspace.move`, so moving a chat between projects can be tried;
+a folder under `/nowhere` is refused the way a missing folder is.
