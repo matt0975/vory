@@ -41,7 +41,7 @@ struct ProjectsView: View {
                 Section { Text("Connect a gateway first.").foregroundStyle(.secondary) }
             }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search projects")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

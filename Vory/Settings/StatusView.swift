@@ -66,13 +66,13 @@ struct StatusView: View {
                 if let v = setup.installedVersion { LabeledContent("Companion on the gateway", value: v) }
             } header: { Text("Versions") }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .task { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization(); activitiesAllowed = activitiesEnabled }
         .reloadable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) }; await model.push.refreshAuthorization() }
     }
 
     private func row<D: View>(_ title: String, light: Light, detail: String, @ViewBuilder destination: () -> D) -> some View {
-        NavigationLink { destination().navigationTitle("").navigationBarTitleDisplayMode(.inline) } label: {
+        NavigationLink { destination().untitledPage() } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Circle().fill(light.color).frame(width: 10, height: 10).padding(.top, 2)
                 VStack(alignment: .leading, spacing: 2) {

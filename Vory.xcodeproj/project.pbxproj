@@ -629,30 +629,6 @@
 			productReference = AA00000000000000000022 /* VoryTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		AA00000000000000000540 /* VoryMacTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = AA00000000000000000583 /* Build configuration list for PBXNativeTarget "VoryMacTests" */;
-			buildPhases = (
-				AA00000000000000000596 /* Sources */,
-				AA00000000000000000597 /* Frameworks */,
-				AA00000000000000000598 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				AA000000000000000005A1 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				AA00000000000000000061 /* VoryTests */,
-			);
-			name = VoryMacTests;
-			packageProductDependencies = (
-				AA00000000000000000502 /* VoryCore */,
-			);
-			productName = VoryMacTests;
-			productReference = AA00000000000000000520 /* VoryMacTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		AA00000000000000000043 /* VoryUITests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AA00000000000000000084 /* Build configuration list for PBXNativeTarget "VoryUITests" */;
@@ -851,6 +827,30 @@
 			productName = VoryMacWidgets;
 			productReference = AA00000000000000000421 /* VoryMacWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		AA00000000000000000540 /* VoryMacTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000583 /* Build configuration list for PBXNativeTarget "VoryMacTests" */;
+			buildPhases = (
+				AA00000000000000000596 /* Sources */,
+				AA00000000000000000597 /* Frameworks */,
+				AA00000000000000000598 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA000000000000000005A1 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000061 /* VoryTests */,
+			);
+			name = VoryMacTests;
+			packageProductDependencies = (
+				AA00000000000000000502 /* VoryCore */,
+			);
+			productName = VoryMacTests;
+			productReference = AA00000000000000000520 /* VoryMacTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
 

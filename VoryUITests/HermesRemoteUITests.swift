@@ -33,6 +33,12 @@ final class VoryUITests: XCTestCase {
     func testOnboardingConnectChatAndSettings() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         shot("01-onboarding")
+        // A fresh install opens on the first screen (Get Started / Restore from iCloud), then the
+        // tour; both stand between it and the gateway form.
+        let start = app.buttons["onboarding.getStarted"].firstMatch
+        if start.waitForExistence(timeout: 10) { start.tap() }
+        let skip = app.buttons["onboarding.skip"].firstMatch
+        if skip.waitForExistence(timeout: 5) { skip.tap() }
         let add = app.buttons["onboarding.addGateway"].firstMatch
         if add.waitForExistence(timeout: 10) {
             add.tap()

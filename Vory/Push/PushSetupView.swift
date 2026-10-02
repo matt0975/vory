@@ -838,8 +838,7 @@ struct CompanionView: View {
                 Text("Connect a gateway first.").foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("")
-        .navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .listSectionSpacing(28)
         .animation(.smooth, value: setup.updateOutcome == nil)
         .alert("Uninstall the Companion?", isPresented: $confirmReset) {
@@ -1939,6 +1938,6 @@ struct CompanionDiagnosticsView: View {
                 #endif
             }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
     }
 }

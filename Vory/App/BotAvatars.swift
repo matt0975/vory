@@ -112,6 +112,12 @@ enum BotAvatarStore {
         return image
     }
 
+    /// Every bot's photo, for a full reset.
+    static func removeAllPhotos() {
+        if let dir = photoURL(for: "x")?.deletingLastPathComponent() { try? FileManager.default.removeItem(at: dir) }
+        photoCache.removeAllObjects()
+    }
+
     static func removePhoto(for profile: String) {
         if let url = photoURL(for: profile) { try? FileManager.default.removeItem(at: url) }
         photoCache.removeObject(forKey: profile as NSString)

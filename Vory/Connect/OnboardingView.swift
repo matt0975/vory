@@ -6,8 +6,14 @@ import VoryCore
 /// page is about waiting — and under it a small live demo of the feature plays by itself. The
 /// last page leads to the gateway form. Nothing here touches a server.
 struct OnboardingView: View {
+    /// Straight to the tour: the debug hook that shows it over a configured app.
+    var skipWelcome = false
+    @Environment(AppModel.self) private var model
     @State private var page = 0
     @State private var showForm = false
+    /// Past the first screen (Get Started, or a restore that brought no gateway).
+    @State private var welcomed = false
+    @State private var showRestore = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Page {
@@ -54,6 +60,64 @@ struct OnboardingView: View {
     private var isLast: Bool { page == pages.count - 1 }
 
     var body: some View {
+        if welcomed || skipWelcome {
+            tour.transition(.opacity)
+        } else {
+            welcome.transition(.opacity)
+        }
+    }
+
+    /// The first thing a new device shows: Vory, and the two ways in. Someone coming from
+    /// another device restores and is done; everyone else gets the tour and the gateway form.
+    private var welcome: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 24)
+            BotFaceView(spec: BotLookSpec.vory, size: 150, active: true, mood: BotFaceView.Mood(profile: "vory-welcome", state: .guide))
+            Text("Vory").font(.system(size: 46, weight: .bold, design: .rounded)).padding(.top, 6)
+            Text("Your Hermes bots, on \(DeviceWords.your).")
+                .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 2)
+            Spacer(minLength: 24)
+            GlassEffectContainer(spacing: 14) {
+                VStack(spacing: 14) {
+                    Button {
+                        withAnimation(reduceMotion ? nil : .snappy) { welcomed = true }
+                    } label: {
+                        Text("Get Started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .accessibilityIdentifier("onboarding.getStarted")
+                    Button { showRestore = true } label: {
+                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("onboarding.restore")
+                }
+            }
+            .frame(maxWidth: 380)
+            Text("Already use Vory on another device? Restore brings your gateways, bot looks and settings from your own iCloud.")
+                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .frame(maxWidth: 380)
+                .padding(.top, 14)
+        }
+        .padding(.horizontal, 28).padding(.bottom, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(isPresented: $showRestore) {
+            CloudRestoreSheet { outcome in
+                if outcome.gateways > 0 {
+                    // A gateway is saved now: the root view moves on by itself, and this connects it.
+                    Task { await model.activateSavedConnection() }
+                } else {
+                    // Settings came back but no gateway did: on to the form.
+                    page = pages.count - 1
+                    welcomed = true
+                    showForm = true
+                }
+            }
+            .sheetFrame()
+        }
+    }
+
+    private var tour: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 // Vory, talking. A full turn on every page; a squint on the page about waiting.

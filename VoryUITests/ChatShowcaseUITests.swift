@@ -53,10 +53,13 @@ final class ChatShowcaseUITests: XCTestCase {
 
     /// Fresh installs land on onboarding; a cold simulator can take well over 10 s to get there.
     private func connectIfNeeded(url: String, token: String) {
+        // The first screen (Get Started / Restore from iCloud), then the tour's Skip.
+        let start = app.buttons["onboarding.getStarted"].firstMatch
         let skip = app.buttons["onboarding.skip"].firstMatch
         let add = app.buttons["onboarding.addGateway"].firstMatch
-        guard skip.waitForExistence(timeout: 40) || add.exists else { return }
-        if skip.exists { skip.tap() }
+        guard start.waitForExistence(timeout: 40) || skip.exists || add.exists else { return }
+        if start.exists { start.tap() }
+        if skip.waitForExistence(timeout: 10) { skip.tap() }
         XCTAssertTrue(add.waitForExistence(timeout: 10))
         add.tap()
         let name = app.textFields["gateway.name"].firstMatch

@@ -11,17 +11,31 @@ struct MacRootView: View {
     @State private var showCompanionPrompt = false
     @State private var showInstaller = false
     @State private var companionFound: String?
+    /// DEBUG: `-vory-show-welcome` shows the first screen over a configured app.
+    static let forceWelcome: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-vory-show-welcome")
+        #else
+        return false
+        #endif
+    }()
 
     var body: some View {
         ZStack {
-            if model.hasConnections {
+            if model.hasConnections && !Self.forceWelcome {
                 MainSplitView()
             } else {
                 OnboardingView()
                     .frame(minWidth: 520, minHeight: 680)
+                    // No name in the title bar and no strip behind it: the first screens run
+                    // to the top of the window, with only the three window buttons over them.
+                    .toolbar(removing: .title)
+                    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             }
             if model.lock.isLocked {
                 MacLockView()
+                    .toolbar(removing: .title)
+                    .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             }
         }
         // The first time a gateway comes up on this Mac (its own first connection, or one the

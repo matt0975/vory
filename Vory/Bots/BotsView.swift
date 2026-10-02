@@ -53,7 +53,7 @@ struct BotsView: View {
             .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame() } }
             .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame() } }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
-            .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).navigationTitle("").navigationBarTitleDisplayMode(.inline) }
+            .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).untitledPage() }
             .navigationDestination(for: Room.self) { RoomView(room: $0) }
             .navigationDestination(for: ChatRoute.self) { ConversationView(route: $0) }
             .reloadable { await load() }

@@ -158,6 +158,6 @@ struct HomeSettingsView: View {
                 Button("Reset Home to default") { layoutRaw = "" }
             }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
     }
 }

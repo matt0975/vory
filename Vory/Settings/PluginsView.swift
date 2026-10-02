@@ -39,7 +39,7 @@ struct PluginsView: View {
                 Text("Enabling, disabling and installing happen on the gateway (hermes plugins …) or its dashboard; the list here follows.")
             }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .reloadable { await load() }
         .task(id: runtime?.connection.id) { await load() }
     }

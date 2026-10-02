@@ -13,14 +13,17 @@ struct SettingsList<Content: View>: View {
 
     var body: some View {
         #if os(macOS)
-        Form { content }
-            .formStyle(.grouped)
-            // A button in a row is the row (a session, a key, a bot), as on the phone; the Mac's
-            // default would draw each as a push button. Explicit styles keep their own.
-            .buttonStyle(SettingsRowButtonStyle())
-            .scrollContentBackground(.hidden)
-            .frame(maxWidth: SettingsList<EmptyView>.width)
-            .frame(maxWidth: .infinity)
+        // The form spans the window (so its scroller sits at the window's edge and the bar over
+        // it is one piece) and its content keeps to a column in the middle.
+        GeometryReader { geo in
+            Form { content }
+                .formStyle(.grouped)
+                // A button in a row is the row (a session, a key, a bot), as on the phone; the Mac's
+                // default would draw each as a push button. Explicit styles keep their own.
+                .buttonStyle(SettingsRowButtonStyle())
+                .scrollContentBackground(.hidden)
+                .contentMargins(.horizontal, max(0, (geo.size.width - SettingsList<EmptyView>.width) / 2), for: .scrollContent)
+        }
         #else
         List { content }
         #endif
@@ -108,6 +111,17 @@ extension View {
         modifier(MacSheetFrame(size: size))
         #else
         self
+        #endif
+    }
+
+    /// A page that names itself in its content (the settings pages' header card): no title in
+    /// the bar. On the Mac an empty title would fall back to the window's name, so the title
+    /// is taken out of the toolbar instead.
+    @ViewBuilder func untitledPage() -> some View {
+        #if os(macOS)
+        navigationTitle("").toolbar(removing: .title)
+        #else
+        navigationTitle("").navigationBarTitleDisplayMode(.inline)
         #endif
     }
 

@@ -143,8 +143,6 @@ enum BotLooksMirror {
         #if os(iOS)
         WatchSync.shared.refresh()
         #endif
-        // The other devices get the same looks through the gateway (the iPhone publishes).
-        LooksSync.publishSoon()
     }
 
     private static func thumbnail(_ image: UIImage) -> Data? {

@@ -96,6 +96,49 @@ public enum Keychain {
         }
     }
 
+    // MARK: iCloud Keychain
+
+    /// The synced copies live under their own service, apart from the device-only items above:
+    /// the running app, its extensions and the watch keep reading the local items, and nothing
+    /// that queries `service` (the migration included) ever sees these.
+    public static let cloudService = baseBundleID + ".cloud"
+
+    private static func cloudBase(_ account: String) -> [String: Any] {
+        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                kSecAttrService as String: cloudService,
+                                kSecAttrAccount as String: account,
+                                kSecAttrSynchronizable as String: true]
+        if let g = accessGroup { q[kSecAttrAccessGroup as String] = g }
+        return dataProtected(q)
+    }
+
+    /// Writes an item that iCloud Keychain carries to the person's other devices (end-to-end
+    /// encrypted by the system). With iCloud Keychain off it is simply a local item.
+    public static func setSynced(_ data: Data, account: String) throws {
+        let query = cloudBase(account)
+        let attrs: [String: Any] = [kSecValueData as String: data,
+                                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
+        let status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        if status == errSecItemNotFound {
+            let s2 = SecItemAdd(query.merging(attrs) { $1 } as CFDictionary, nil)
+            guard s2 == errSecSuccess else { throw KeychainError(status: s2) }
+        } else if status != errSecSuccess {
+            throw KeychainError(status: status)
+        }
+    }
+
+    public static func getSynced(account: String) -> Data? {
+        var q = cloudBase(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: AnyObject?
+        return SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
+    }
+
+    public static func deleteSynced(account: String) {
+        SecItemDelete(cloudBase(account) as CFDictionary)
+    }
+
     /// Resolves the shared group from the bundle: `<AppIdentifierPrefix><base bundle id>.shared`,
     /// where the base id strips `.watchkitapp…` / `.LiveActivity` / other extension suffixes.
     public static func sharedGroupFromBundle() -> String? {

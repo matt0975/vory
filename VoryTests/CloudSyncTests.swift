@@ -1,0 +1,187 @@
+import Foundation
+import Testing
+@testable import Vory
+@testable import VoryCore
+
+/// The iCloud merge, with a dictionary for the cloud and one defaults suite per "device".
+@MainActor
+struct CloudSyncTests {
+    final class Clock { var t: Double = 1_000 }
+
+    /// A device: its own defaults, the shared cloud and the shared clock.
+    private func device(_ cloud: MemoryCloudStore, _ clock: Clock, id: String) -> (CloudMerge, UserDefaults) {
+        let suite = "cloud-test-\(id)-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        var merge = CloudMerge(cloud: cloud, defaults: defaults)
+        merge.deviceID = id
+        merge.deviceName = id
+        merge.now = { clock.t += 1; return clock.t }
+        return (merge, defaults)
+    }
+
+    /// Both devices have run the sync once: they have joined, with nothing to exchange yet.
+    private func joined(_ devices: CloudMerge...) { for d in devices { d.reconcile(.merge) } }
+
+    @Test func aChangeOnOneDeviceReachesTheOther() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        joined(phone, mac)
+
+        phoneDefaults.set("green", forKey: AppTheme.accentKey)
+        #expect(phone.reconcile(.merge).pushed == 1)
+        #expect(mac.reconcile(.merge).applied == 1)
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "green")
+        // Settled: another pass moves nothing either way.
+        #expect(mac.reconcile(.merge) == CloudMerge.Outcome())
+        #expect(phone.reconcile(.merge) == CloudMerge.Outcome())
+
+        // And back the other way.
+        macDefaults.set("pink", forKey: AppTheme.accentKey)
+        #expect(mac.reconcile(.merge).pushed == 1)
+        #expect(phone.reconcile(.merge).applied == 1)
+        #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == "pink")
+    }
+
+    @Test func valuesOnBothSidesAtTheFirstMeetingAreLeftAlone() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+
+        // The Mac syncs first with its own choice; the phone has had another one for months.
+        macDefaults.set("teal", forKey: AppTheme.accentKey)
+        phoneDefaults.set("orange", forKey: AppTheme.accentKey)
+        mac.reconcile(.merge)
+        let first = phone.reconcile(.merge)
+        #expect(first.applied == 0 && first.pushed == 0)
+        #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == "orange")
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "teal")
+
+        // Whoever changes it next is followed.
+        phoneDefaults.set("purple", forKey: AppTheme.accentKey)
+        #expect(phone.reconcile(.merge).pushed == 1)
+        #expect(mac.reconcile(.merge).applied == 1)
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "purple")
+    }
+
+    @Test func restoreTakesTheCloudAndBackUpTakesTheDevice() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+
+        phoneDefaults.set("orange", forKey: AppTheme.accentKey)
+        phoneDefaults.set(true, forKey: ChatStyle.wideReplies)
+        phone.reconcile(.merge)
+        macDefaults.set("teal", forKey: AppTheme.accentKey)
+        mac.reconcile(.merge)                                   // joining: what the cloud held is left where it is
+
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "teal")
+        #expect(macDefaults.object(forKey: ChatStyle.wideReplies) == nil)
+        #expect(mac.reconcile(.restore).applied == 2)           // the accent and wide replies
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "orange")
+        #expect(macDefaults.bool(forKey: ChatStyle.wideReplies))
+
+        macDefaults.set("graphite", forKey: AppTheme.accentKey)
+        mac.reconcile(.backUp)
+        phone.reconcile(.merge)
+        #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == "graphite")
+    }
+
+    @Test func aNewDeviceStartsCleanAndFollowsFromThenOn() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        phoneDefaults.set("Sam", forKey: "user.name")
+        phone.reconcile(.merge)
+
+        // Get Started on a new device (or one just reset): nothing older comes down by itself.
+        #expect(mac.reconcile(.merge) == CloudMerge.Outcome())
+        #expect(macDefaults.string(forKey: "user.name") == nil)
+
+        // A change made after it joined does.
+        phoneDefaults.set(false, forKey: ChatStyle.showReasoning)
+        phone.reconcile(.merge)
+        #expect(mac.reconcile(.merge).applied == 1)
+        #expect(macDefaults.object(forKey: ChatStyle.showReasoning) as? Bool == false)
+
+        // And Restore brings the rest.
+        #expect(mac.reconcile(.restore).applied == 1)
+        #expect(macDefaults.string(forKey: "user.name") == "Sam")
+    }
+
+    @Test func aResetDeviceJoinsAgainAsNew() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        phoneDefaults.set("green", forKey: AppTheme.accentKey)
+        phone.reconcile(.merge)
+
+        // The reset wipes the device's defaults, the sync's own bookkeeping included.
+        for key in phoneDefaults.dictionaryRepresentation().keys { phoneDefaults.removeObject(forKey: key) }
+        let after = phone.reconcile(.merge)
+        #expect(after == CloudMerge.Outcome())
+        #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == nil)
+        // The cloud still has it, for Restore.
+        #expect(phone.reconcile(.restore).applied == 1)
+        #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == "green")
+    }
+
+    @Test func thisDevicesOwnSettingsNeverLeaveIt() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        for key in [TabLayout.storageKey, PushRegistrar.enabledKey, PushRegistrar.installIDKey, PushRegistrar.muteDesktopOriginKey,
+                    AppLock.enabledKey, ApprovalConfirm.modeKey, ChatStyle.textSize, "launchTab", "activeConnectionID", "companionPromptShown"] {
+            phoneDefaults.set("x", forKey: key)
+            #expect(!CloudMerge.syncedSettings.contains(key))
+        }
+        phone.reconcile(.backUp)
+        #expect(cloud.cloudKeys.allSatisfy { !$0.hasPrefix(CloudMerge.settingPrefix) })
+    }
+
+    @Test func botLooksMergePerBotAndARemovedOneStaysRemoved() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        func colors(_ d: UserDefaults) -> [String: String] { CloudMerge.map(d.string(forKey: BotColors.storageKey)) }
+
+        phoneDefaults.set(CloudMerge.string(["alpha": "#111111", "beta": "#222222"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.string(["alpha": "studio:blob:classic"]), forKey: BotAvatarStore.storageKey)
+        phone.reconcile(.merge)
+        mac.reconcile(.restore)
+        #expect(colors(macDefaults) == ["alpha": "#111111", "beta": "#222222"])
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotAvatarStore.storageKey)) == ["alpha": "studio:blob:classic"])
+
+        // Each device edits a different bot: both edits survive.
+        phoneDefaults.set(CloudMerge.string(["alpha": "#AAAAAA", "beta": "#222222"]), forKey: BotColors.storageKey)
+        macDefaults.set(CloudMerge.string(["alpha": "#111111", "beta": "#BBBBBB"]), forKey: BotColors.storageKey)
+        phone.reconcile(.merge); mac.reconcile(.merge); phone.reconcile(.merge)
+        #expect(colors(phoneDefaults) == ["alpha": "#AAAAAA", "beta": "#BBBBBB"])
+        #expect(colors(macDefaults) == ["alpha": "#AAAAAA", "beta": "#BBBBBB"])
+
+        // A colour removed on the Mac does not come back from the phone.
+        macDefaults.set(CloudMerge.string(["alpha": "#AAAAAA"]), forKey: BotColors.storageKey)
+        mac.reconcile(.merge); phone.reconcile(.merge); mac.reconcile(.merge)
+        #expect(colors(phoneDefaults) == ["alpha": "#AAAAAA"])
+        #expect(colors(macDefaults) == ["alpha": "#AAAAAA"])
+    }
+
+    @Test func theSummarySaysWhatIsThereAndWhoWroteLast() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, _) = device(cloud, clock, id: "mac")
+        #expect(mac.summary().isEmpty)
+        phoneDefaults.set("green", forKey: AppTheme.accentKey)
+        phoneDefaults.set(CloudMerge.string(["alpha": "#111111"]), forKey: BotColors.storageKey)
+        phone.reconcile(.merge)
+        let s = mac.summary()
+        #expect(s.settings == 1 && s.bots == 1 && s.device == "phone")
+    }
+
+    @Test func aLongBotNameStillFitsACloudKey() {
+        let name = String(repeating: "long-bot-name-", count: 8)
+        #expect(CloudMerge.lookKey(name).utf8.count <= 64)
+        #expect(CloudMerge.lookKey("alpha") == "look.alpha")
+        // The hash is the same on every launch and every device.
+        #expect(CloudMerge.hash(Data("abc".utf8)) == CloudMerge.hash(Data("abc".utf8)))
+    }
+}

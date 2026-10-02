@@ -11,6 +11,15 @@ struct RootView: View {
         return false
         #endif
     }()
+    /// DEBUG: `-vory-show-welcome` shows the first screen (Get Started / Restore from iCloud)
+    /// over a configured app.
+    static let forceWelcome: Bool = {
+        #if DEBUG
+        return ProcessInfo.processInfo.arguments.contains("-vory-show-welcome")
+        #else
+        return false
+        #endif
+    }()
     /// Shown once, right after the first gateway is saved: install the Companion now or later.
     @AppStorage("companionPromptShown") private var companionPromptShown = false
     @AppStorage("launchTab") private var launchTab = "chats"
@@ -23,8 +32,8 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            if !model.hasConnections || Self.forceTour {
-                OnboardingView()
+            if !model.hasConnections || Self.forceTour || Self.forceWelcome {
+                OnboardingView(skipWelcome: Self.forceTour)
             } else {
                 MainTabView()
             }

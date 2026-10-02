@@ -33,6 +33,7 @@ struct SettingsView: View {
             Row(id: "status", title: "Status", symbol: "waveform.path.ecg", color: .green, destination: AnyView(StatusView())),
             Row(id: "notifications", title: "Notifications", symbol: "bell.badge", color: .red, destination: AnyView(NotificationsView())),
             Row(id: "security", title: "Security", symbol: "faceid", color: .green, destination: AnyView(SecurityView())),
+            Row(id: "icloud", title: "iCloud Sync", symbol: "icloud.fill", color: .cyan, destination: AnyView(CloudSyncView())),
             Row(id: "bots", title: "Bots", symbol: "cloud.fill", color: .indigo, destination: AnyView(BotsSettingsView())),
             Row(id: "appearance", title: "Appearance", symbol: "circle.lefthalf.filled", color: .black, destination: AnyView(AppearanceView())),
             Row(id: "home", title: "Home", symbol: "house.fill", color: .blue, destination: AnyView(HomeSettingsView())),
@@ -43,6 +44,7 @@ struct SettingsView: View {
         ]
     }
 
+    @State private var confirmReset = false
     private func filtered(_ rows: [Row]) -> [Row] { search.isEmpty ? rows : rows.filter { $0.title.localizedCaseInsensitiveContains(search) } }
     @AppStorage(BotColors.storageKey) private var botColorsRaw = ""
     @AppStorage(BotAvatarStore.storageKey) private var botAvatarsRaw = ""
@@ -100,13 +102,13 @@ struct SettingsView: View {
                 }
                 Section("Hermes") {
                     ForEach(filtered(hermesRows)) { row in
-                        NavigationLink { row.destination.navigationTitle("").navigationBarTitleDisplayMode(.inline) } label: { SettingsLabel(row.title, row.symbol, row.color) }
+                        NavigationLink { row.destination.untitledPage() } label: { SettingsLabel(row.title, row.symbol, row.color) }
                     }
                 }
                 .disabled(model.runtime == nil)
                 Section("App") {
                     ForEach(filtered(appRows)) { row in
-                        NavigationLink { row.destination.navigationTitle("").navigationBarTitleDisplayMode(.inline) } label: {
+                        NavigationLink { row.destination.untitledPage() } label: {
                             HStack {
                                 SettingsLabel(row.title, row.symbol, row.color)
                                 Spacer(minLength: 8)
@@ -115,6 +117,21 @@ struct SettingsView: View {
                         }
                     }
                 }
+                if search.isEmpty {
+                    Section {
+                        Button(role: .destructive) { confirmReset = true } label: { Label("Reset Vory…", systemImage: "arrow.counterclockwise") }
+                            .accessibilityIdentifier("settings.reset")
+                    } footer: {
+                        Text("Takes \(DeviceWords.this) back to the first screen, as if Vory had just been installed.")
+                    }
+                }
+            }
+            .confirmationDialog("Reset Vory on \(DeviceWords.this)?", isPresented: $confirmReset, titleVisibility: .visible) {
+                Button("Reset \(DeviceWords.This)", role: .destructive) { Task { await model.resetApp(eraseCloud: false) } }
+                Button("Reset and Erase iCloud Data", role: .destructive) { Task { await model.resetApp(eraseCloud: true) } }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this), and it stops receiving notifications. Your chats and bots live on the gateway and are not touched. What is in iCloud stays, so Restore from iCloud can bring it back, unless you erase that too.")
             }
             .navigationTitle("Settings")
             .tabRoot(.settings)
@@ -205,7 +222,7 @@ struct GatewaysView: View {
                 }
             }
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame() }
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }

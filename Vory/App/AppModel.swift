@@ -123,6 +123,9 @@ final class AppModel {
     var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
 
     init() {
+        // Settings, looks and gateways through the person's iCloud (it reads nothing until the
+        // next turn of the run loop, when this model exists).
+        CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, let rt = self.runtime else { return }
@@ -155,8 +158,6 @@ final class AppModel {
         runtime = rt
         activationError = nil
         await rt.start()
-        // Bot looks travel with the gateway: the phone's go up, the Mac's come down.
-        Task { await LooksSync.sync(runtime: rt) }
         await push.registerForRemoteNotificationsIfAuthorized()
         #if os(iOS)
         WatchSync.shared.push(store: store)
@@ -229,6 +230,37 @@ final class AppModel {
     func deactivate() async {
         await runtime?.stop()
         runtime = nil
+    }
+
+    /// Back to the first screen on this device, as if Vory had just been installed: every saved
+    /// gateway and sign-in, every setting, every bot look. The gateway is told to stop sending
+    /// here first. Chats and bots live on the gateway and are not touched. What is in iCloud
+    /// stays (Restore brings it back) unless `eraseCloud` asks for that too.
+    func resetApp(eraseCloud: Bool) async {
+        let sync = CloudSync.shared
+        sync.suspended = true
+        if let rt = runtime { await push.removeRegistration(runtime: rt) }
+        await deactivate()
+        for c in store.connections { store.delete(id: c.id) }
+        if eraseCloud { sync.eraseCloud() }
+        // What the extensions and widgets read, and the last notification's breadcrumb.
+        Keychain.delete(account: BotLooks.account)
+        Keychain.delete(account: WidgetSnapshot.account)
+        Keychain.delete(account: "push.nse.last")
+        BotAvatarStore.removeAllPhotos()
+        if let domain = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: domain) }
+        lock.isEnabled = false
+        pendingRoute = nil
+        visibleChat = nil
+        visibleChatID = nil
+        companionUpdateAvailable = false
+        companionInstalledVersion = nil
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        WidgetCenter.shared.reloadAllTimelines()
+        #if os(iOS)
+        WatchSync.shared.push(store: store)
+        #endif
+        sync.resumeAfterReset()
     }
 
     func deleteConnection(_ id: UUID) async {

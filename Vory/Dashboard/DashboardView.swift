@@ -69,7 +69,7 @@ struct DashboardView: View {
             .padding(.horizontal, 12)
             #endif
         }
-        .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+        .untitledPage()
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
