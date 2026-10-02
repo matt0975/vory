@@ -1,4 +1,3 @@
-#if os(iOS)
 import Foundation
 import Testing
 @testable import Vory
@@ -63,6 +62,8 @@ import Testing
     }
 }
 
+// From here on, what only the phone has.
+#if os(iOS)
 /// Where the phone's thread stops being lazy.
 @Suite struct TranscriptTailTests {
     @Test func aShortThreadIsNotLazyAndALongOneKeepsAtLeastABlockAtItsEnd() {
