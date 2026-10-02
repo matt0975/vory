@@ -126,7 +126,12 @@ struct StatusWidget: Widget {
         return URL(string: "vory://activity")
         #else
         let chat = entry.snapshot?.attentionChat ?? prefer
-        return chat.map { URL(string: "vory://chat/\($0.id)") } ?? URL(string: "vory://chats")
+        guard let chat else { return URL(string: "vory://chats") }
+        // The chat's bot goes with it, so the app opens it under its owner without asking the gateway.
+        var parts = URLComponents()
+        parts.scheme = "vory"; parts.host = "chat"; parts.path = "/" + chat.id
+        if !chat.profile.isEmpty { parts.queryItems = [URLQueryItem(name: "profile", value: chat.profile)] }
+        return parts.url ?? URL(string: "vory://chats")
         #endif
     }
 }
