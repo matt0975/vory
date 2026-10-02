@@ -157,6 +157,14 @@ struct TranscriptView: View {
                     if let s = chat.statusLine, chat.isRunning {
                         HStack(spacing: 8) {
                             ProgressView().controlSize(.small)
+                            #if os(macOS)
+                            // The Mac has no header pill over the thread: what the bot is working
+                            // on, when the on-device model has written it, sits here with the step.
+                            if let goal = ChatGoals.shared.goal(for: chat.storedID) {
+                                Label(goal, systemImage: "sparkles").font(.caption).foregroundStyle(.tint).lineLimit(1)
+                                Text("·").font(.caption).foregroundStyle(.tertiary)
+                            }
+                            #endif
                             Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                         }
                         // Clear of the bot column when the pinned working bot sits there.

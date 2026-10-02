@@ -159,16 +159,22 @@ private struct Sidebar: View {
     static let width: CGFloat = 84
 
     var body: some View {
-        VStack(spacing: 2) {
-            ForEach(Array(tabs.enumerated()), id: \.element) { i, tab in
-                RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil) {
-                    model.selectedTab = tab
+        // Every page can sit here, as many as wanted; with all of them on in a short window
+        // the rail scrolls.
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 2) {
+                ForEach(Array(tabs.enumerated()), id: \.element) { i, tab in
+                    RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil) {
+                        model.selectedTab = tab
+                    }
                 }
+                RailMore()
             }
-            Spacer(minLength: 0)
+            .padding(.top, 6).padding(.horizontal, 6).padding(.bottom, 4)
         }
-        .padding(.top, 6).padding(.horizontal, 6)
+        .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .contextMenu { RailPages() }
         // The rail does not fold away, so it needs no toggle (which would not fit over it anyway).
         .toolbar(removing: .sidebarToggle)
         .safeAreaInset(edge: .bottom, spacing: 0) { GatewayFooter() }
@@ -196,9 +202,9 @@ private struct RailItem: View {
     var body: some View {
         let button = Button(action: action) {
             VStack(spacing: 3) {
-                Image(systemName: tab.symbol)
-                    .font(.system(size: 19, weight: .medium))
-                    .symbolVariant(selected ? .fill : .none)
+                // The same icons as the iPhone's tab bar: the Vory outline for Bots, and each
+                // symbol as it is drawn there (no filled variant for the chosen one).
+                RailIcon(tab: tab)
                     .frame(height: 24)
                     .overlay(alignment: .topTrailing) {
                         if badge > 0 { CountBadge(badge).scaleEffect(0.78).offset(x: 12, y: -8) }
@@ -221,6 +227,92 @@ private struct RailItem: View {
             button.keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
         } else {
             button
+        }
+    }
+}
+
+/// A page's icon as the iPhone's tab bar draws it.
+private struct RailIcon: View {
+    var tab: AppModel.AppTab
+    var size: CGFloat = 19
+
+    var body: some View {
+        if tab == .bots {
+            VoryOutlineIcon().frame(width: size * 1.5, height: size * 1.28)
+        } else {
+            Image(systemName: tab.symbol).font(.system(size: size, weight: .medium))
+        }
+    }
+}
+
+/// The pages as switches: on puts a page in the rail, off takes it out. Chats and Settings stay.
+/// `rows`: laid out for the popover (icon, name, switch at the edge); otherwise menu items.
+private struct RailPages: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage(TabLayout.storageKey) private var tabLayoutRaw = ""
+    var rows = false
+
+    private var layout: TabLayout { TabLayout.parse(tabLayoutRaw) }
+
+    private func shown(_ tab: AppModel.AppTab) -> Binding<Bool> {
+        Binding(get: { layout.contains(tab) }, set: { on in
+            var l = layout
+            l.set(tab, enabled: on)
+            tabLayoutRaw = l.encoded
+            // The page being looked at left the rail: back to Chats.
+            if !on, model.selectedTab == tab { model.selectedTab = .chats }
+        })
+    }
+
+    var body: some View {
+        // The ones in the rail first, in their order, then the rest.
+        ForEach(layout.tabs + AppModel.AppTab.allCases.filter { !layout.contains($0) }, id: \.self) { tab in
+            if rows {
+                HStack(spacing: 10) {
+                    RailIcon(tab: tab, size: 14).frame(width: 24).foregroundStyle(.secondary)
+                    Text(tab.title)
+                    Spacer(minLength: 12)
+                    Toggle("Show \(tab.title) in the sidebar", isOn: shown(tab)).labelsHidden()
+                        .toggleStyle(.switch).controlSize(.small)
+                        .disabled(TabLayout.required.contains(tab))
+                }
+            } else {
+                Toggle(isOn: shown(tab)) { Label(tab.title, systemImage: tab.symbol) }
+                    .disabled(TabLayout.required.contains(tab))
+            }
+        }
+    }
+}
+
+/// The last thing in the rail: the way to put more pages in it, or take some out.
+private struct RailMore: View {
+    @State private var choosing = false
+    @State private var hovering = false
+
+    var body: some View {
+        Button { choosing = true } label: {
+            VStack(spacing: 3) {
+                Image(systemName: "ellipsis.circle").font(.system(size: 19, weight: .medium)).frame(height: 24)
+                Text("More").font(.caption2).lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .frame(width: Sidebar.width - 12, height: 54)
+            .background { RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hovering || choosing ? Color.primary.opacity(0.06) : .clear) }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Choose the pages in the sidebar")
+        .accessibilityIdentifier("rail.more")
+        .popover(isPresented: $choosing, arrowEdge: .trailing) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Pages in the sidebar").font(.headline)
+                VStack(alignment: .leading, spacing: 8) { RailPages(rows: true) }
+                Text("Switch on as many as you like. Their order is in Settings › Appearance.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(width: 240)
         }
     }
 }

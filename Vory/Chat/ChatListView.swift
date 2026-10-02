@@ -195,7 +195,7 @@ struct ChatListView: View {
             .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame() }
             .sheet(isPresented: $movingSelection) {
                 if let runtime {
-                    MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame()
+                    MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact)
                 }
             }
             .sheet(isPresented: $showNewChat) {
@@ -745,7 +745,7 @@ struct ChatListView: View {
                                botProfile: s.profile ?? runtime.selectedProfile,
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
                                project: showProject && projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
-                               step: runtime.chatForStored(s.id)?.statusLine,
+                               step: runtime.needsAttention.contains(s.id) ? nil : runtime.chatForStored(s.id)?.statusLine,
                                summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? ""))
                         .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: allBots ? s.profile : nil) } }
                 }
