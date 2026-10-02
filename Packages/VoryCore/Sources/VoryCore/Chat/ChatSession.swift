@@ -330,7 +330,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 }
                 assembler.start()
                 assembler.appendDelta(partial)
-                let id = "stream-\(UUID().uuidString)"
+                // A reply already streaming here (a turn adopted from another device: its first
+                // event made the row, then this snapshot arrived) keeps its row: under a new id
+                // the thread's last row would be taken out and put back while it is pinned to it.
+                let id = streamingItemID ?? "stream-\(UUID().uuidString)"
                 streamingItemID = id
                 items.append(TranscriptItem(id: id, kind: .assistant(text: partial, reasoning: nil, streaming: streaming)))
                 if !streaming { finishStreaming(finalText: nil) }
