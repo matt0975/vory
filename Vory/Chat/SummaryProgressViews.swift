@@ -25,8 +25,8 @@ struct SummarySparkle: View {
 }
 
 /// Floats over the foot of the chat list while a run of summaries is being written, with how
-/// far it has got, and says "up to date" for a moment when the run ends. It lies over the
-/// list rather than in it, so the rows stay where they are when it comes and goes. One chat
+/// far it has got, and says "up to date" for a moment when the run ends. It is the list's
+/// bottom inset, not a row, so the rows stay where they are when it comes and goes. One chat
 /// by itself gets no strip: its row's sparkle says enough.
 struct SummaryProgressStrip: View {
     @State private var showDone = false
@@ -74,7 +74,7 @@ struct SummaryProgressStrip: View {
             .font(.caption.weight(.medium))
             .padding(.horizontal, 12).padding(.vertical, 6)
             .glassEffect(.regular, in: .capsule)
-            .padding(.bottom, 10)
+            .padding(.top, 4).padding(.bottom, 10)
     }
 }
 

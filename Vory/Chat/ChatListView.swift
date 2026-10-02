@@ -523,8 +523,11 @@ struct ChatListView: View {
         // The bots in the rows look where the list is going.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
-        // At the foot of the list, like Mail's status line: at the top it lay over the first chat's title.
-        .overlay(alignment: .bottom) { SummaryProgressStrip() }
+        // At the foot of the list, like Mail's status line: at the top it lay over the first
+        // chat's title. As a bottom inset it sits above whatever the screen keeps at the bottom
+        // (the phone's tab bar and Home indicator); as an overlay it was drawn underneath them.
+        // The list is anchored at its top, so the rows do not move when it comes and goes.
+        .safeAreaInset(edge: .bottom, spacing: 0) { SummaryProgressStrip() }
         #if os(macOS)
         // A bar, not a plain inset: the rows fade out under it the way they do under the
         // toolbar, instead of showing through behind the search field.

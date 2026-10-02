@@ -56,7 +56,7 @@ final class ChatSummarizer {
 
     #if DEBUG
     /// `-vory-test-summaries`: stands in for the on-device model (a simulator has none): every
-    /// chat takes a moment and gets a canned title and summary, so the progress can be watched.
+    /// chat takes two seconds and gets a canned title and summary, so the progress can be watched.
     static let pretend = ProcessInfo.processInfo.arguments.contains("-vory-test-summaries")
     #else
     static let pretend = false
@@ -189,7 +189,7 @@ final class ChatSummarizer {
 
     private func generate(_ session: StoredSession, runtime: GatewayRuntime, profile: String?) async {
         if Self.pretend {
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(for: .seconds(2))
             summaries[session.id] = Summary(title: session.displayTitle, summary: "A stand-in summary for testing: where this chat stands, in a sentence.", stamp: session.lastActive ?? 0)
             save()
             return
