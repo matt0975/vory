@@ -358,6 +358,7 @@ struct ComposerView: View {
         text = ""
         focused = true
         historyCursor = nil
+        NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
     }
 
