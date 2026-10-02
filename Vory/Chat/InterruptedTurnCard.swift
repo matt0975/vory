@@ -76,6 +76,10 @@ struct AwayGraceSection: View {
                 }
                 .disabled(saving || grace.envOverride)
                 .accessibilityIdentifier("system.awayGrace")
+                if grace.isShort, !changed {
+                    Label("Short. On a Hermes older than September 2026 a long task is cut off about \(AwayGrace.label(grace.effective)) after the app leaves.", systemImage: "exclamationmark.triangle")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
                 if grace.envOverride {
                     Text("\(AwayGrace.envKey) is set in the gateway's environment and wins over this. Change or remove it in Settings › Environment.")
                         .font(.footnote).foregroundStyle(.secondary)

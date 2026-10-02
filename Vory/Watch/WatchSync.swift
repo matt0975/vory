@@ -98,7 +98,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
                 ["id": c.id, "method": c.method,
                  "text": c.approval?.description ?? c.approval?.command ?? c.clarify?.question ?? c.clarify?.questions?.first?.question ?? c.valuePrompt?.prompt ?? ""]
             }
-            return ["ok": true, "running": chat.isRunning, "status": chat.statusLine ?? "", "cards": cards]
+            // The watch shows what the bot is working on when this iPhone has written it (the
+            // watch runs no model), else the step it is on.
+            return ["ok": true, "running": chat.isRunning, "status": ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "", "cards": cards]
         case "stop":
             await chat.stop(); return ["ok": true]
         default:
