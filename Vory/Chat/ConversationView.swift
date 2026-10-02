@@ -92,6 +92,15 @@ struct ConversationView: View {
     private func framed(_ chat: ChatSession) -> some View {
         #if os(macOS)
         thread(chat)
+            // With no toolbar strip the thread runs up under the bot's pill; it fades out
+            // there instead of meeting the pill and the window's edge at full strength.
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black.opacity(0.35), .black], startPoint: .top, endPoint: .bottom).frame(height: 68)
+                    Color.black
+                }
+                .ignoresSafeArea()
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
             }
