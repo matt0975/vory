@@ -524,10 +524,19 @@ struct ChatListView: View {
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
         // At the foot of the list, like Mail's status line: at the top it lay over the first
-        // chat's title. As a bottom inset it sits above whatever the screen keeps at the bottom
-        // (the phone's tab bar and Home indicator); as an overlay it was drawn underneath them.
-        // The list is anchored at its top, so the rows do not move when it comes and goes.
+        // chat's title. The list is anchored at its top, so the rows do not move when it
+        // comes and goes.
+        #if os(macOS)
         .safeAreaInset(edge: .bottom, spacing: 0) { SummaryProgressStrip() }
+        #else
+        // On the phone the tab bar floats over the pages and lists do not get its height as
+        // safe area (RootView gives them a content margin instead), so a bottom inset still
+        // lands behind the bar. The pill floats just above the bar, and at the bottom edge
+        // when the bar is away (search with the keyboard up).
+        .overlay(alignment: .bottom) {
+            SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 6)
+        }
+        #endif
         #if os(macOS)
         // A bar, not a plain inset: the rows fade out under it the way they do under the
         // toolbar, instead of showing through behind the search field.
