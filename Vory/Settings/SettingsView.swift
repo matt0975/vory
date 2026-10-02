@@ -510,6 +510,9 @@ struct SummariesSettingsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Vory Summaries", symbol: "sparkles", color: .purple, description: "Apple Intelligence, on \(DeviceWords.this), reads each chat and writes its line in the list.")
+            Section { SummaryStatusRow() } header: { Text("Now") } footer: {
+                Text("A chat's sparkle pulses in the list while its summary is being written and is steady when it is done.")
+            }
             Section {
                 Toggle(isOn: $titles) {
                     HStack(spacing: 6) {

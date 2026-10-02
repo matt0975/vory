@@ -126,23 +126,6 @@ private struct MainSplitView: View {
                 }
             }
         }
-        .toolbar {
-            // New Chat belongs to the Chats tab; elsewhere the Chat menu (⌘N) switches there first.
-            if model.selectedTab == .chats {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
-                        Button { model.newChatSheetRequest = UUID() } label: { Label("New Chat With…", systemImage: "person.2") }
-                    } label: {
-                        Label("New Chat", systemImage: "square.and.pencil")
-                    } primaryAction: {
-                        model.newChatRequest = UUID()
-                    }
-                    .disabled(model.runtime == nil)
-                    .help("New Chat (⌘N). Hold for bots, a project and a first message (⇧⌘N).")
-                }
-            }
-        }
     }
 
     @ViewBuilder private func page(_ tab: AppModel.AppTab) -> some View {
@@ -343,6 +326,13 @@ private struct NoChatView: View {
             Text("Pick one from the list, or press ⌘N for a new one.").font(.callout).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Something of this column's own in the toolbar, however small: with nothing here the
+        // list's buttons slid from over the list to the far end of the window, and came back
+        // when a chat was opened.
+        .toolbar {
+            ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
+                .sharedBackgroundVisibility(.hidden)
+        }
     }
 }
 

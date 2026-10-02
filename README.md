@@ -288,11 +288,12 @@ Shared files carry `#if os(iOS)` / `#if os(macOS)` where the platforms differ; M
 - **Window**: a rail of pages on the left with the same icons as the phone's tab bar (any number of pages:
   *More* at the foot of the rail switches them on and off, Settings › Appearance › Sidebar sets their order,
   ⌘1–⌘9 open the first nine), the chat list beside the open chat, and the thread and composer in a reading
-  column. One window; closing it leaves the menu bar item, which brings it back.
+  column. Over the list: the bot menu, one menu for refresh, sort, filters and Select, New Chat, and the
+  search field. One window; closing it leaves the menu bar item, which brings it back.
 - **Chat**: Return sends, Shift-Return adds a line, drop files or paste images into the composer,
   *File › Import from iPhone or iPad* stands in for the camera, force click a chat row to peek it.
   The Chat menu has New Chat (⌘N), New Chat With… (⇧⌘N), Next / Previous Chat (⌥⌘↓ / ⌥⌘↑),
-  Find Chats (⌘F), Stop (⌘.), Approve Once (⇧⌘Y) and Deny (⇧⌘D).
+  Refresh Chats (⌘R), Find Chats (⌘F), Stop (⌘.), Approve Once (⇧⌘Y) and Deny (⇧⌘D).
 - **Menu bar** in place of the Live Activity: running turns and waiting approvals with Approve / Deny,
   and a badge on the Dock icon for what needs you.
 - **Notifications**: the same relay and Companion as the phone; a Mac notification service extension

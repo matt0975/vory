@@ -114,7 +114,8 @@ struct ConversationView: View {
                     Menu {
                         ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
                                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
-                    } label: { Image(systemName: "chevron.down") }
+                    } label: { Label("Chat options", systemImage: "ellipsis") }
+                    .menuIndicator(.hidden)
                     .help("Chat options")
                     .accessibilityIdentifier("chat.more")
                 }

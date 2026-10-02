@@ -6,6 +6,24 @@ import VoryCore
 /// into a short title and a two-line summary for the Chats list. Nothing leaves the phone and
 /// nothing is written to the gateway; switching it off shows the gateway's own title and
 /// preview again. Results are cached per chat and redone only when the chat changes.
+/// How far a run of summaries has got: chats queued since the model last sat idle, and how
+/// many of them are finished. A new run starts counting from nothing.
+struct SummaryProgress: Equatable {
+    private(set) var total = 0
+    private(set) var done = 0
+
+    var isWorking: Bool { done < total }
+    var fraction: Double { total == 0 ? 0 : Double(done) / Double(total) }
+    /// "3 of 12": the one being written now, out of the run.
+    var current: Int { min(total, done + 1) }
+
+    mutating func queued() {
+        if !isWorking { total = 0; done = 0 }
+        total += 1
+    }
+    mutating func finished() { done = min(total, done + 1) }
+}
+
 @MainActor @Observable
 final class ChatSummarizer {
     static let shared = ChatSummarizer()
@@ -29,6 +47,20 @@ final class ChatSummarizer {
 
     private(set) var summaries: [String: Summary] = [:]
     private var inFlight: Set<String> = []
+    /// The run in hand, for the strip over the list and the status in Settings.
+    private(set) var progress = SummaryProgress()
+    /// When the last run of more than one chat ended: "up to date" is said for a moment after.
+    private(set) var finishedAt: Date?
+    /// Whether this chat (or `roomKey` for a group chat) is queued or being written.
+    func isWorking(_ key: String) -> Bool { inFlight.contains(key) }
+
+    #if DEBUG
+    /// `-vory-test-summaries`: stands in for the on-device model (a simulator has none): every
+    /// chat takes a moment and gets a canned title and summary, so the progress can be watched.
+    static let pretend = ProcessInfo.processInfo.arguments.contains("-vory-test-summaries")
+    #else
+    static let pretend = false
+    #endif
     /// One generation at a time, at utility priority: several at once stuttered the list.
     private enum Job { case session(StoredSession, GatewayRuntime, String?); case room(Room, [RoomEvent]) }
     private var pending: [Job] = []
@@ -41,10 +73,12 @@ final class ChatSummarizer {
 
     /// Whether the on-device model can run here (Apple Intelligence on, model downloaded).
     static var isAvailable: Bool {
+        if pretend { return true }
         if case .available = SystemLanguageModel.default.availability { return true }
         return false
     }
     static var unavailableReason: String? {
+        if pretend { return nil }
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.deviceNotEligible): return "This device does not support Apple Intelligence."
@@ -83,6 +117,7 @@ final class ChatSummarizer {
         if let s = summaries[session.id], s.stamp == (session.lastActive ?? 0) { return }
         inFlight.insert(session.id)
         pending.append(.session(session, runtime, profile))
+        progress.queued()
         drain()
     }
 
@@ -104,6 +139,7 @@ final class ChatSummarizer {
         if let s = summaries[key], s.stamp == Self.roomStamp(events) { return }
         inFlight.insert(key)
         pending.append(.room(room, events))
+        progress.queued()
         drain()
     }
 
@@ -120,6 +156,8 @@ final class ChatSummarizer {
                 await generateRoom(room, events: events)
                 inFlight.remove(Self.roomKey(room))
             }
+            progress.finished()
+            if !progress.isWorking, progress.total > 1 { finishedAt = Date() }
             draining = false
             drain()
         }
@@ -150,6 +188,12 @@ final class ChatSummarizer {
     }
 
     private func generate(_ session: StoredSession, runtime: GatewayRuntime, profile: String?) async {
+        if Self.pretend {
+            try? await Task.sleep(for: .milliseconds(900))
+            summaries[session.id] = Summary(title: session.displayTitle, summary: "A stand-in summary for testing: where this chat stands, in a sentence.", stamp: session.lastActive ?? 0)
+            save()
+            return
+        }
         do {
             let messages = await recentMessages(session, runtime: runtime, profile: profile)
             guard !messages.isEmpty else { return }

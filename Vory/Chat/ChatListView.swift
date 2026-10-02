@@ -170,17 +170,19 @@ struct ChatListView: View {
                     ToolbarItemGroup(placement: .topBarTrailing) { selectionActions }
                 } else {
                 ToolbarItem(placement: .topBarLeading) { profileMenu }
+                #if os(macOS)
+                // Two buttons, the same size, that fit over the list at its narrowest: a button
+                // each for refresh, new bot, sort and filters ran past the column's edge and sat
+                // over the chat beside it, and moved about as the window was resized.
+                ToolbarItem(placement: .primaryAction) { viewMenu }
+                ToolbarItem(placement: .primaryAction) { composeMenu }
+                #else
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    #if os(macOS)
-                    // No pull to refresh on a trackpad.
-                    Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                        .keyboardShortcut("r", modifiers: .command)
-                        .help("Refresh (⌘R)")
-                    #endif
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
                     sortMenu
                     filterMenu
                 }
+                #endif
                 }
             }
             // Compose: one tap is a fresh chat with the current bot, straight in (a tester:
@@ -263,6 +265,9 @@ struct ChatListView: View {
                     }
                 }
                 Toggle(isOn: $allBots) { Label("All bots", systemImage: "person.2") }
+                #if os(macOS)
+                Button { showNewBot = true } label: { Label("New Bot…", systemImage: "plus") }
+                #endif
                 Divider()
                 Section(runtime.connection.name) {
                     Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
@@ -293,14 +298,51 @@ struct ChatListView: View {
 
     /// Sort on its own button: inside the filter menu it sat under every project, a long
     /// scroll away once there were many.
+    private var sortItems: some View {
+        Picker("Sort by", selection: $sortKey) {
+            Label("Recent", systemImage: "clock").tag("recent")
+            Label("Title", systemImage: "textformat").tag("title")
+            Label("Bot", systemImage: "person").tag("bot")
+            Label("Model", systemImage: "cpu").tag("model")
+        }
+    }
+
+    #if os(macOS)
+    /// Refresh, sort, filters and Select in one menu.
+    private var viewMenu: some View {
+        Menu {
+            Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+            Menu { sortItems.pickerStyle(.inline).labelsHidden() } label: { Label("Sort By", systemImage: "arrow.up.arrow.down") }
+            filterItems
+        } label: {
+            Label(filtering ? "View options (filters on)" : "View options", systemImage: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease")
+        }
+        .menuIndicator(.hidden)
+        .help(filtering ? "Sort and filters (filters on)" : "Sort and filters")
+        .accessibilityIdentifier("chats.filters")
+    }
+
+    /// New Chat: a click is a fresh chat with the current bot; hold, or right-click, for the
+    /// sheet with bots, a project and a first message.
+    private var composeMenu: some View {
+        Menu {
+            Button { model.newChatRequest = UUID() } label: { Label("New Chat", systemImage: "square.and.pencil") }
+            Button { model.newChatSheetRequest = UUID() } label: { Label("New Chat With…", systemImage: "person.2") }
+        } label: {
+            Label("New Chat", systemImage: "square.and.pencil")
+        } primaryAction: {
+            model.newChatRequest = UUID()
+        }
+        .menuIndicator(.hidden)
+        .disabled(model.runtime == nil)
+        .help("New Chat (⌘N). Hold for bots, a project and a first message (⇧⌘N).")
+        .accessibilityIdentifier("chats.compose")
+    }
+    #endif
+
     private var sortMenu: some View {
         Menu {
-            Picker("Sort by", selection: $sortKey) {
-                Label("Recent", systemImage: "clock").tag("recent")
-                Label("Title", systemImage: "textformat").tag("title")
-                Label("Bot", systemImage: "person").tag("bot")
-                Label("Model", systemImage: "cpu").tag("model")
-            }
+            sortItems
         } label: {
             Image(systemName: sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
                 .accessibilityLabel("Sort: \(sortKey)")
@@ -310,6 +352,15 @@ struct ChatListView: View {
 
     private var filterMenu: some View {
         Menu {
+            filterItems
+        } label: {
+            Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .accessibilityLabel(filtering ? "Filters (on)" : "Filters")
+        }
+        .accessibilityIdentifier("chats.filters")
+    }
+
+    @ViewBuilder private var filterItems: some View {
             Section("Show") {
                 Toggle(isOn: $pinnedOnly) { Label("Pinned only", systemImage: "pin") }
                 Toggle(isOn: $needsYouOnly) { Label("Needs you", systemImage: "exclamationmark.bubble") }
@@ -332,11 +383,6 @@ struct ChatListView: View {
             if filtering {
                 Button { pinnedOnly = false; needsYouOnly = false; liveOnly = false; groupsOnly = false; showArchived = true; projectFilter = "" } label: { Label("Clear filters", systemImage: "xmark.circle") }
             }
-        } label: {
-            Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                .accessibilityLabel(filtering ? "Filters (on)" : "Filters")
-        }
-        .accessibilityIdentifier("chats.filters")
     }
 
     /// The filters and the sort applied to the loaded (or searched) sessions.
@@ -389,14 +435,25 @@ struct ChatListView: View {
             TextField("Search chats", text: $searchText)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                 .submitLabel(.search)
+                #if os(macOS)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .onExitCommand { searchText = ""; searchFocused = false }
+                #endif
             if !searchText.isEmpty {
                 Button { searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                     .buttonStyle(.plain).accessibilityLabel("Clear search")
             }
         }
+        #if os(macOS)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color.primary.opacity(0.06), in: .capsule)
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
+        #else
         .padding(.horizontal, 14).padding(.vertical, 9)
         .glassEffect(.regular, in: .capsule)
         .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
+        #endif
     }
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
@@ -446,9 +503,8 @@ struct ChatListView: View {
         }
         .listStyle(.insetGrouped)
         #if os(macOS)
-        // The search field belongs in the toolbar on a Mac; over the list it hid the top of the scroll bar.
-        .searchable(text: $searchText, placement: .toolbar, prompt: "Search chats")
-        .searchFocused($searchFocused)
+        // The search field sits over the list it searches (in the top inset below), as in
+        // Messages: in the window's toolbar it landed at the far end, over the open chat.
         .onChange(of: model.focusSearchRequest) { _, r in if r != nil { searchFocused = true } }
         // ⌥⌘↓ / ⌥⌘↑ from the Chat menu: the row after or before the open one.
         .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
@@ -467,26 +523,40 @@ struct ChatListView: View {
         // The bots in the rows look where the list is going.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                if let waiting = model.needsSignIn {
-                    GatewaySignInBanner(connection: waiting)
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-                if let msg = runtime.restartRequired {
-                    RestartRequiredBanner(runtime: runtime, message: msg)
-                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                }
-            }
-        }
+        // At the foot of the list, like Mail's status line: at the top it lay over the first chat's title.
+        .overlay(alignment: .bottom) { SummaryProgressStrip() }
+        #if os(macOS)
+        // A bar, not a plain inset: the rows fade out under it the way they do under the
+        // toolbar, instead of showing through behind the search field.
+        .safeAreaBar(edge: .top, spacing: 0) { topBars(runtime) }
+        #else
+        .safeAreaInset(edge: .top, spacing: 0) { topBars(runtime) }
+        #endif
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in
             let first = Self.merge(rows, groupsOnly ? rooms : [], sort: sortKey).first?.id ?? rows.first?.id
             if let first { withAnimation(.snappy) { proxy.scrollTo(first, anchor: .top) } }
         }
+        }
+    }
+
+    /// What sits over the list: the search field on the Mac, then whatever needs saying.
+    private func topBars(_ runtime: GatewayRuntime) -> some View {
+        VStack(spacing: 0) {
+            #if os(macOS)
+            searchField
+            #endif
+            if let waiting = model.needsSignIn {
+                GatewaySignInBanner(connection: waiting)
+                    .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            if let msg = runtime.restartRequired {
+                RestartRequiredBanner(runtime: runtime, message: msg)
+                    .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
     }
 
@@ -820,7 +890,7 @@ struct ChatListView: View {
                                 if archived { Image(systemName: "archivebox").font(.caption2).foregroundStyle(.secondary) }
                                 Image(systemName: "person.2.fill").font(.caption2).foregroundStyle(.secondary)
                                 Text(summary?.title ?? room.name).font(.body.weight(.medium)).lineLimit(1)
-                                if summary != nil { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary) }
+                                SummarySparkle(key: ChatSummarizer.roomKey(room), done: summary != nil)
                             }
                             // The summary, else the last thing said, else who is in it.
                             Text(summary?.summary ?? Self.lastLine(room, log) ?? room.members.compactMap { $0.displayName ?? $0.handle ?? $0.profile }.joined(separator: ", "))
@@ -948,7 +1018,7 @@ struct SessionRow: View {
                     if session.pinned == true { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
                     if session.archived == true { Image(systemName: "archivebox").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Archived") }
                     Text(summary?.title ?? session.displayTitle).font(.body.weight(.medium)).lineLimit(1)
-                    if summary != nil { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Summarized on device") }
+                    SummarySparkle(key: session.id, done: summary != nil)
                 }
                 // While the bot works: what it is working on, over one line of the preview, so
                 // the row keeps its height.

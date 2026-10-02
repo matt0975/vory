@@ -77,6 +77,9 @@ struct VoryMacApp: App {
                 Button("Previous Chat") { model.selectedTab = .chats; model.chatStepRequest = .init(direction: -1) }
                     .keyboardShortcut(.upArrow, modifiers: [.command, .option])
                     .disabled(model.runtime == nil)
+                Button("Refresh Chats") { NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil) }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(model.runtime == nil)
                 Button("Find Chats") { model.selectedTab = .chats; model.focusSearchRequest = UUID() }
                     .keyboardShortcut("f", modifiers: .command)
                     .disabled(model.runtime == nil)
