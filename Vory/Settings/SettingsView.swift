@@ -44,7 +44,6 @@ struct SettingsView: View {
         ]
     }
 
-    @State private var confirmReset = false
     private func filtered(_ rows: [Row]) -> [Row] { search.isEmpty ? rows : rows.filter { $0.title.localizedCaseInsensitiveContains(search) } }
     @AppStorage(BotColors.storageKey) private var botColorsRaw = ""
     @AppStorage(BotAvatarStore.storageKey) private var botAvatarsRaw = ""
@@ -117,23 +116,6 @@ struct SettingsView: View {
                         }
                     }
                 }
-                if search.isEmpty {
-                    Section {
-                        Button(role: .destructive) { confirmReset = true } label: { Label("Reset Vory…", systemImage: "arrow.counterclockwise").foregroundStyle(.red) }
-                            .accessibilityIdentifier("settings.reset")
-                    } footer: {
-                        Text("Takes \(DeviceWords.this) back to the first screen, as if Vory had just been installed.")
-                    }
-                }
-            }
-            // An alert, not an action sheet: its Cancel is on screen on every device (a popover
-            // hides it), which matters with an erase among the choices.
-            .alert("Reset Vory on \(DeviceWords.this)?", isPresented: $confirmReset) {
-                Button("Reset \(DeviceWords.ThisTitle)", role: .destructive) { Task { await model.resetApp(eraseCloud: false) } }
-                Button("Reset and Erase iCloud Data", role: .destructive) { Task { await model.resetApp(eraseCloud: true) } }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this), and it stops receiving notifications. Your chats and bots live on the gateway and are not touched. What is in iCloud stays, so Restore from iCloud can bring it back, unless you erase that too; your other devices then stop syncing until you turn it on again there.")
             }
             .navigationTitle("Settings")
             .tabRoot(.settings)
@@ -747,6 +729,35 @@ struct AppearanceView: View {
     }
 }
 
+/// Settings › About › Reset: the one button that takes the device back to the first screen.
+struct ResetView: View {
+    @Environment(AppModel.self) private var model
+    @State private var confirmReset = false
+
+    var body: some View {
+        SettingsList {
+            SettingsHeaderSection(title: "Reset", symbol: "arrow.counterclockwise", color: .red,
+                                  description: "Takes \(DeviceWords.this) back to the first screen, as if Vory had just been installed.")
+            Section {
+                Button(role: .destructive) { confirmReset = true } label: { Label("Reset Vory…", systemImage: "arrow.counterclockwise").foregroundStyle(.red) }
+                    .accessibilityIdentifier("settings.reset")
+            } footer: {
+                Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this). Your chats and bots live on the gateway and are not touched. You are asked once more before anything happens.")
+            }
+        }
+        // An alert, not an action sheet: its Cancel is on screen on every device (a popover
+        // hides it), which matters with an erase among the choices.
+        .alert("Reset Vory on \(DeviceWords.this)?", isPresented: $confirmReset) {
+            Button("Reset \(DeviceWords.ThisTitle)", role: .destructive) { Task { await model.resetApp(eraseCloud: false) } }
+            Button("Reset and Erase iCloud Data", role: .destructive) { Task { await model.resetApp(eraseCloud: true) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this), and it stops receiving notifications. Your chats and bots live on the gateway and are not touched. What is in iCloud stays, so Restore from iCloud can bring it back, unless you erase that too; your other devices then stop syncing until you turn it on again there.")
+        }
+        .untitledPage()
+    }
+}
+
 struct AboutView: View {
     @Environment(AppModel.self) private var model
     @State private var taps = 0
@@ -816,6 +827,11 @@ struct AboutView: View {
             }
             Section {
                 Link("Hermes Agent documentation", destination: URL(string: "https://hermes-agent.nousresearch.com/docs")!)
+            }
+            // Out of plain sight: Reset lives one page further in, not on the Settings list.
+            Section {
+                NavigationLink { ResetView() } label: { Label("Reset", systemImage: "arrow.counterclockwise") }
+                    .accessibilityIdentifier("about.reset")
             }
         }
         .animation(.smooth, value: raining)
