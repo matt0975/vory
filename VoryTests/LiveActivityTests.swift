@@ -4,6 +4,24 @@ import Testing
 @testable import Vory
 @testable import VoryCore
 
+/// A turn started on another device: whether its prompt is already in the snapshot's messages.
+@Suite struct InflightPromptTests {
+    @Test func theSameWordsSentAgainAreANewPrompt() {
+        // The last user row says the same thing but is from an earlier turn.
+        #expect(!ChatSession.inflightPromptIsListed(prompt: "Free up space", lastUserText: "Free up space", lastUserAt: 1000, turnStart: 2000))
+        // The last user row is this turn's own: already listed.
+        #expect(ChatSession.inflightPromptIsListed(prompt: "Free up space", lastUserText: "Free up space", lastUserAt: 2000.4, turnStart: 2000))
+        #expect(ChatSession.inflightPromptIsListed(prompt: "Free up space", lastUserText: "Free up space", lastUserAt: 1999.5, turnStart: 2000))
+    }
+
+    @Test func differentWordsAreNeverListedAndNoStartTimeGoesByTheText() {
+        #expect(!ChatSession.inflightPromptIsListed(prompt: "b", lastUserText: "a", lastUserAt: 2000, turnStart: 2000))
+        #expect(!ChatSession.inflightPromptIsListed(prompt: "b", lastUserText: nil, lastUserAt: nil, turnStart: 2000))
+        // An older gateway that does not say when the turn began.
+        #expect(ChatSession.inflightPromptIsListed(prompt: "a", lastUserText: "a", lastUserAt: 1000, turnStart: 0))
+    }
+}
+
 /// What the New Chat circle does on a tap and on a press and hold.
 @Suite struct ComposeActionTests {
     @Test func nothingStoredIsTodaysBehaviour() {

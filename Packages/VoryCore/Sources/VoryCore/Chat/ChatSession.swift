@@ -263,6 +263,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         TranscriptCache.save(items, connection: runtime.connection.id, storedID: storedID)
     }
 
+    /// Whether a snapshot's in-flight prompt is already the last user row of its messages. With
+    /// the turn's start time known, that row must be from this turn; without it the text decides.
+    public nonisolated static func inflightPromptIsListed(prompt: String, lastUserText: String?, lastUserAt: Double?, turnStart: Double) -> Bool {
+        guard let lastUserText, lastUserText == prompt else { return false }
+        guard turnStart > 0, let lastUserAt else { return true }
+        return lastUserAt >= turnStart - 1
+    }
+
     private func apply(snapshot r: JSONValue) {
         runtimeID = r["session_id"]?.stringValue ?? runtimeID
         if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
@@ -287,8 +295,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         isRunning = r["running"]?.boolValue ?? info?.running ?? false
         if let inflight = r["inflight"], !inflight.isNull {
             let user = inflight["user"]?.stringValue ?? ""
-            let lastUserText: String? = items.last(where: { if case .user = $0.kind { return true }; return false })
-                .flatMap { if case .user(let t, _) = $0.kind { return t }; return nil }
+            let lastUser = items.last(where: { if case .user = $0.kind { return true }; return false })
+            let lastUserText: String? = lastUser.flatMap { if case .user(let t, _) = $0.kind { return t }; return nil }
             // Where this turn begins in `messages`: mid-turn the gateway has already flushed the
             // turn's tool and assistant rows while the prompt is still "inflight", so the prompt
             // goes in front of the first row stamped after the turn started (else after the last
@@ -299,7 +307,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 if let la = items.lastIndex(where: { if case .assistant = $0.kind { return true }; return false }) { return la + 1 }
                 return items.count
             }()
-            if !user.isEmpty, lastUserText != user {
+            // The prompt is already among the messages only when the last user row is this
+            // turn's own. The same words sent twice in a row are two prompts: going by the text
+            // alone, the second never appeared on a device that was watching.
+            let alreadyListed = Self.inflightPromptIsListed(prompt: user, lastUserText: lastUserText,
+                                                            lastUserAt: lastUser?.timestamp.timeIntervalSince1970, turnStart: turnStart)
+            if !user.isEmpty, !alreadyListed {
                 var prompt = TranscriptItem(id: "inflight-user", kind: .user(text: user, attachments: keptAttachments[user] ?? []))
                 if turnStart > 0 { prompt.timestamp = Date(timeIntervalSince1970: turnStart) }
                 items.insert(prompt, at: turnAt)
