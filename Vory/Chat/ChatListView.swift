@@ -451,6 +451,11 @@ struct ChatListView: View {
         #endif
         // Wider rows: the card hugs the screen edges and the rows their card.
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
+        #if os(macOS)
+        // The list runs a little way under the column's edge, which cut the scroll bar in half
+        // down its length; the bar is brought back inside the column.
+        .contentMargins(.trailing, 8, for: .scrollIndicators)
+        #endif
         // The bots in the rows look where the list is going.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
