@@ -96,6 +96,10 @@ struct ConversationView: View {
                 dock(chat).frame(maxWidth: ChatStyle.macColumn).frame(maxWidth: .infinity)
             }
             .navigationSubtitle(macSubtitle(chat))
+            // No toolbar strip over the thread: the bot and the menu float on the window, as in
+            // Messages. A short thread sits at the bottom with nothing above it, and the
+            // toolbar's own background spread down over that gap as a lighter band.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .toolbar {
                 // The bot, in the middle over its thread; a click opens its profile.
                 ToolbarItem(placement: .principal) {
