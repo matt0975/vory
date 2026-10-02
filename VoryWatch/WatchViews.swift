@@ -480,7 +480,7 @@ struct WatchChatView: View {
         while !Task.isCancelled {
             // The socket came up after this chat opened (Wi-Fi joined, or it was still
             // connecting): move to the live path instead of polling for the rest of the visit.
-            if model.socketUsable, let live = try? await rt.openChat(storedID: storedID, title: nil) {
+            if model.socketUsable, let live = try? await rt.openChat(storedID: storedID, title: nil, profile: profile) {
                 chat = live
                 proxied = false
                 return

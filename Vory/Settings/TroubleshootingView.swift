@@ -1,4 +1,5 @@
 import SwiftUI
+import VoryCore
 
 /// What to check when connecting, signing in, the Companion or notifications go wrong. Plain
 /// lists, one section per symptom, written for someone standing at a gateway they run themselves.
@@ -39,6 +40,14 @@ struct TroubleshootingView: View {
             "The Companion sends only for chats it mirrors: it attaches to running sessions when they start, so a turn already running when it was installed will not report.",
             "Focus modes and Notification Summary hold alerts back; check the Focus that is on.",
             "One device, one registration: signing in on a second one does not stop the first.",
+        ]),
+        Topic(id: "interrupted", title: "A long task stops with \u{201C}Operation interrupted\u{201D}", symbol: "stop.circle", checks: [
+            "The gateway stops a turn when no app has been connected to its chat for a while. " + (DeviceWords.isMac ? "A Mac that sleeps or loses its network drops the connection." : "iOS suspends Vory shortly after it leaves the screen, which drops the connection."),
+            "Update Hermes on the gateway (Settings › System). Versions since September 2026 leave a turn that is still working alone and only stop one that has done nothing for ten minutes.",
+            "On an older Hermes, make it wait longer: Settings › System › Keep work running. The dashboard service reads it when it starts, so restart it on the gateway machine afterwards.",
+            "\(AwayGrace.envKey) in the gateway's environment wins over that setting. If it is there (Settings › Environment), change or remove it.",
+            "Stop, pressed in any app that has the chat open, ends the turn with the same words.",
+            "The chat is intact either way. Send a message such as \u{201C}continue\u{201D} and the bot carries on from what it had done.",
         ]),
         Topic(id: "approvals", title: "No approval cards", symbol: "checkmark.shield", checks: [
             "Settings › Companion › This device › Approval requests says whether the gateway agreed to send them and how many arrived. \"Not acknowledged\" means an older Hermes: update it on the gateway.",

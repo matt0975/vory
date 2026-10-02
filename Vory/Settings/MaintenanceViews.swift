@@ -194,6 +194,7 @@ struct SystemView: View {
         } header: { Text("Maintenance") } footer: {
             Text("Restart runs `hermes gateway restart`; Update runs `hermes update` and relaunches the dashboard. Both happen on the gateway machine, and this app reconnects afterwards.")
         }
+        AwayGraceSection(runtime: rt)
     }
 
     private func load() async {

@@ -51,7 +51,7 @@ struct CompanionPromptSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 6)
-                Text("Later is fine — Settings will remind you.").font(.caption).foregroundStyle(.tertiary)
+                Text("Later is fine. Settings will remind you.").font(.caption).foregroundStyle(.tertiary)
             }
         }
         .padding(.horizontal, 28).padding(.bottom, 24)

@@ -252,7 +252,8 @@ struct ConversationView: View {
         let model = chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName
         var parts = [bot]
         if !model.isEmpty { parts.append(model) }
-        if chat.isRunning { parts.append(chat.statusLine ?? "Thinking…") } else if chat.isResuming { parts.append("Syncing…") }
+        // What it is working on, when the on-device model has written it; else the step it is on.
+        if chat.isRunning { parts.append(ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "Thinking…") } else if chat.isResuming { parts.append("Syncing…") }
         return parts.joined(separator: " · ")
     }
     #endif
@@ -408,12 +409,15 @@ struct ChatHeader: View {
                         }
                         // Shortened in code like the title: a compaction notice runs to a full
                         // sentence and the pill (fixedSize) stretched past the screen.
-                        let status = chat.isRunning ? (chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
+                        // While it works: the goal the on-device model wrote, else the step it is on.
+                        let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
+                        let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
                         Text(status.count > 42 ? String(status.prefix(41)).trimmingCharacters(in: .whitespaces) + "…" : status)
                             .font(.caption2).lineLimit(1)
                             .foregroundStyle(.secondary)
                             .contentTransition(.numericText())
                             .animation(.snappy, value: chat.statusLine)
+                            .animation(.snappy, value: goal)
                             .animation(.snappy, value: chat.botState == .awaitingApproval)
                     }
                     .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
@@ -459,6 +463,7 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        ChatProjectMenu(chat: chat)
         Divider()
         Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
         Button { Task { await chat.loadUsage() } } label: { Label("Refresh usage", systemImage: "arrow.clockwise") }

@@ -519,6 +519,7 @@ struct BotsSettingsView: View {
 struct SummariesSettingsView: View {
     @AppStorage(ChatSummarizer.titlesKey) private var titles = ChatSummarizer.titlesOn
     @AppStorage(ChatSummarizer.previewsKey) private var previews = ChatSummarizer.previewsOn
+    @AppStorage(ChatGoals.enabledKey) private var goals = ChatGoals.isOn
     #if os(iOS)
     @AppStorage(WatchSync.summariesToWatchKey) private var toWatch = false
     #endif
@@ -542,8 +543,16 @@ struct SummariesSettingsView: View {
                             .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
                     }
                 }
+                Toggle(isOn: $goals) {
+                    HStack(spacing: 6) {
+                        Text("Status line")
+                        Text("BETA").font(.caption2.weight(.bold)).padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Capsule().fill(Color.vory.opacity(0.15))).foregroundStyle(Color.vory)
+                    }
+                }
+                .accessibilityIdentifier("summaries.goals")
             } header: { Text("What the model writes") } footer: {
-                Text(ChatSummarizer.unavailableReason ?? "Titles: a short name for each chat in place of the gateway's. Previews: two lines on where the chat stands in place of the last message. Either can be on alone. Nothing leaves \(DeviceWords.your) and nothing changes on the gateway; off, the list shows the gateway's own titles and previews.")
+                Text(ChatSummarizer.unavailableReason ?? "Titles: a short name for each chat in place of the gateway's. Previews: two lines on where the chat stands in place of the last message. Status line: while a bot works, what it is trying to get done, in place of the step it is on. Each can be on alone. Nothing leaves \(DeviceWords.your) and nothing changes on the gateway; off, the app shows the gateway's own text.")
             }
             .disabled(!ChatSummarizer.isAvailable)
             #if os(iOS)

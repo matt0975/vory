@@ -12,6 +12,7 @@ struct TranscriptView: View {
     /// Reply on a bubble: the composer quotes it above the next message.
     var onReply: (String) -> Void = { _ in }
     @State private var showModelSheet = false
+    @State private var showAwayGrace = false
     /// The dock's top edge in screen coordinates (0 = unknown). The thread's bottom margin is the
     /// distance from its own bottom edge to this: measured, not derived from a dock height added
     /// onto some inset, which left a blank band under the last reply on some phones.
@@ -309,6 +310,7 @@ struct TranscriptView: View {
             }
             .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide) }
             .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame() }
+            .sheet(isPresented: $showAwayGrace) { AwayGraceSheet(runtime: chat.runtime).sheetFrame(.compact) }
             #if os(iOS)
             // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
@@ -376,6 +378,7 @@ extension TranscriptView {
                 TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
                               typingTool: typingTool,
                               showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply, onChooseModel: { showModelSheet = true },
+                              interruptCause: row.item.id == chat.items.last?.id ? chat.interruptCause : nil, onKeepRunning: { showAwayGrace = true },
                               reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
                                                      set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
                               onSelectText: { selectText = $0 },
@@ -693,7 +696,7 @@ struct TranscriptRow: View, Equatable {
             && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
             && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
-            && a.maxBubble == b.maxBubble
+            && a.maxBubble == b.maxBubble && a.interruptCause == b.interruptCause
     }
     var item: TranscriptItem
     /// The bot beside its bubble, as in a group chat; nil for none. Only the last bubble of a
@@ -709,6 +712,9 @@ struct TranscriptRow: View, Equatable {
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onChooseModel: () -> Void = {}
+    /// For a turn the gateway cut short: why, when this device knows, and the way to its setting.
+    var interruptCause: InterruptedTurn.Cause? = nil
+    var onKeepRunning: () -> Void = {}
     @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
     @AppStorage(ChatStyle.botTint) private var botTint = false
     /// The reply bubble's fill: grey, or the bot's colour at a wash.
@@ -787,6 +793,8 @@ struct TranscriptRow: View, Equatable {
                     }
                 }
             }
+        case .assistant(let text, _, false) where InterruptedTurn.parse(text) != nil:
+            InterruptedTurnCard(turn: InterruptedTurn.parse(text)!, cause: interruptCause, onKeepRunning: onKeepRunning)
         case .assistant(let text, let reasoning, let streaming):
             HStack(alignment: .bottom, spacing: 10) {
                 if let profile {

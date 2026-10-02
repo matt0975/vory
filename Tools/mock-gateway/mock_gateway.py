@@ -510,6 +510,14 @@ class Gateway:
                              "'claude-subscription-directsdk-experimental' CLI command '(none configured)'. Install it.. "
                              "Check the model and provider with /model, or run `hermes setup` in a terminal to reconfigure."})
             return
+        if prompt.strip().lower().startswith("interrupt"):
+            # What a turn looks like after the gateway stopped it (Stop, or no app connected for
+            # longer than its grace): the bot's message is the gateway's own sentence.
+            await self.event("message.start", s.sid)
+            await asyncio.sleep(0.6)
+            text = "Operation interrupted: waiting for model response (12.4s elapsed)." if "model" in prompt.lower() else "Operation interrupted."
+            await self.event("message.complete", s.sid, {"text": text, "status": "interrupted", "usage": usage(s.output_tokens, 1)})
+            return
         await self.event("message.start", s.sid)
         await self.stream_words(s, REPLY_PART_1)
         await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
@@ -668,6 +676,9 @@ class Gateway:
         if method == "config.get":
             if p.get("key") == "profile":
                 return ok({"home": "/home/hermes/.hermes", "display": profile})
+            if p.get("key") == "project":
+                # The bot's own working folder: where a chat goes when it leaves every project.
+                return ok({"cwd": p.get("cwd") or "/home/hermes", "branch": None})
             return ok({"value": "", "config": CONFIG})
         if method == "session.create":
             sid, stored = uuid.uuid4().hex[:8], time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
@@ -758,6 +769,20 @@ class Gateway:
                 "context_max": CONTEXT_MAX, "context_percent": int(used / CONTEXT_MAX * 100),
                 "context_used": used, "estimated_total": used, "context_estimated": False,
                 "context_source": "models.dev", "model": MODEL, "context_files": []})
+        if method == "session.workspace.move":
+            # Re-home a stored chat: its folder decides which project it is in.
+            row = next((r for r in STORED_SESSIONS if r["id"] == p.get("session_key")), None)
+            if not p.get("session_key"):
+                return err(4007, "session_key required")
+            if not p.get("cwd"):
+                return err(4016, "cwd required")
+            if row is None:
+                return err(4007, "session not found")
+            if str(p["cwd"]).startswith("/nowhere"):
+                return err(4017, f"working directory does not exist: {p['cwd']}")
+            row["cwd"] = p["cwd"]
+            print(f"moved {row['id']} to {p['cwd']}", flush=True)
+            return ok({"cwd": p["cwd"], "branch": None, "git_repo_root": None})
         if method == "projects.list":
             return ok({"projects": PROJECTS, "active_id": PROJECT_META["active_id"]})
         if method == "projects.tree":

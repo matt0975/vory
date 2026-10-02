@@ -328,7 +328,7 @@ struct DashboardView: View {
                                 BotAvatar(profile: p.name, size: 36, active: working != nil)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(p.label).font(.body.weight(.medium))
-                                    Text(waiting ? "Needs you" : (working.map { $0.statusLine ?? "Working…" } ?? "Idle"))
+                                    Text(waiting ? "Needs you" : (working.map { ChatGoals.shared.goal(for: $0.storedID) ?? $0.statusLine ?? "Working…" } ?? "Idle"))
                                         .font(.caption).foregroundStyle(waiting ? .red : (working != nil ? .blue : .secondary)).lineLimit(1)
                                 }
                                 Spacer()

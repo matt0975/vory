@@ -112,6 +112,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         didSet { if isRunning, statusLine != oldValue, cards.isEmpty { activity.update(for: self, attention: false) } }
     }
     public var banner: String?
+    /// Why the latest turn was cut short, when this device can tell: Stop pressed here, or the
+    /// app away from the gateway while the turn ran. Cleared by the next message.
+    public var interruptCause: InterruptedTurn.Cause?
     public var cards: [PendingCard] = []
     public var queue: [QueuedMessage] = []
     public var staged: [AttachmentPreview] = []
@@ -375,6 +378,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func submit(text: String, queued: Bool) async {
+        interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
         for a in staged {
@@ -448,6 +452,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func stop() async {
+        interruptCause = .stopped
         _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
 
@@ -729,7 +734,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             turnStartedAt = nil
             let status = p["status"]?.stringValue
             if let err = p["error"]?.stringValue, !err.isEmpty { appendError(err) }
-            else if status == "interrupted" { items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Interrupted", symbol: "stop.circle"))) }
+            // The gateway's own "Operation interrupted." message is shown as a card that says as much.
+            else if status == "interrupted", InterruptedTurn.parse(text ?? "") == nil { items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Interrupted", symbol: "stop.circle"))) }
             if let w = p["warning"]?.stringValue, !w.isEmpty { banner = w }
             endPhase = (status == "error" || p["error"]?.stringValue?.isEmpty == false) ? "error" : "done"
             let finalPhase = endPhase

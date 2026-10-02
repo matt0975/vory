@@ -119,7 +119,8 @@ struct TurnMenu: View {
                     Text(t.startedAt, style: .timer).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
                 Text(t.title).font(.caption).lineLimit(1)
-                Text(t.detail).font(.caption).foregroundStyle(t.attention ? .orange : .secondary).lineLimit(2)
+                // What it is working on, when the on-device model has written it; else the step.
+                Text(t.attention ? t.detail : (ChatGoals.shared.goal(for: t.id) ?? t.detail)).font(.caption).foregroundStyle(t.attention ? .orange : .secondary).lineLimit(2)
                 HStack(spacing: 8) {
                     if t.attention, let chat = t.chat, let card = chat.firstCard, card.method == "approval" {
                         Button("Approve once") { Task { await chat.respond(card: card, result: ["choice": "once"]) } }
@@ -141,6 +142,11 @@ struct TurnMenu: View {
         // The window may be closed (the app lives on in the menu bar): this brings it back.
         openWindow(id: MacWindow.main)
         NSApp.activate()
-        if let storedID, let url = URL(string: "vory://chat/\(storedID)") { model.open(url) }
+        guard let storedID else { return }
+        // The chat's bot goes with it, so it opens under its owner whatever is selected.
+        var parts = URLComponents()
+        parts.scheme = "vory"; parts.host = "chat"; parts.path = "/" + storedID
+        if let bot = board.turns.first(where: { $0.id == storedID })?.profile, !bot.isEmpty { parts.queryItems = [URLQueryItem(name: "profile", value: bot)] }
+        if let url = parts.url { model.open(url) }
     }
 }

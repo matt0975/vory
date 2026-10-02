@@ -93,7 +93,7 @@ struct CloudMerge {
         ChatStyle.showBots, ChatStyle.showToolOutput, ChatStyle.currentStepOnly, ChatStyle.compactTools,
         ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies,
         BotAvatarStore.glassAllKey, GatewayRuntime.defaultProfileKey,
-        ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey,
+        ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey, ChatGoals.enabledKey,
     ]
 
     static let stampsKey = "cloudSync.stamps"

@@ -156,6 +156,7 @@ final class AppModel {
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
         runtime = rt
+        ChatGoals.shared.attach(rt)
         activationError = nil
         await rt.start()
         await push.registerForRemoteNotificationsIfAuthorized()
@@ -230,6 +231,7 @@ final class AppModel {
     func deactivate() async {
         await runtime?.stop()
         runtime = nil
+        ChatGoals.shared.attach(nil)
     }
 
     /// Back to the first screen on this device, as if Vory had just been installed: every saved
