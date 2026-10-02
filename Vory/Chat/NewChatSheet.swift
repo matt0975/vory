@@ -200,7 +200,7 @@ struct NewChatSheet: View {
                 .disabled(chosen.count != 1)
                 .accessibilityLabel("Attach")
                 HStack(alignment: .bottom, spacing: 6) {
-                    ComposerTextView(text: $text, placeholder: chosen.isEmpty ? "Choose a bot first" : "Message", focused: $messageFocused,
+                    ComposerTextView(text: $text, placeholder: chosen.isEmpty ? "Choose a bot first" : "Message", focused: $messageFocused, accessibilityID: "newchat.text",
                                      onSend: { Task { await start() } },
                                      onPasteData: { data, name, type in stage(data, name: name, type: type) })
                         .padding(.leading, 14).padding(.vertical, 7)
@@ -212,6 +212,7 @@ struct NewChatSheet: View {
                     .buttonStyle(.plain).disabled(!canSend)
                     .padding(.trailing, 4).padding(.bottom, 4)
                     .accessibilityLabel("Send")
+                    .accessibilityIdentifier("newchat.send")
                 }
                 .frame(minHeight: 36)
                 // Plain glass: an interactive capsule answered touches meant for the field's Paste menu.

@@ -318,8 +318,10 @@ struct ToolsView: View {
                         if let tools = t.tools, !tools.isEmpty { Text(tools.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                     }
                 }
+                .accessibilityIdentifier("tool.toggle.\(t.name)")
             }
         }
+        .accessibilityIdentifier("settings.tools.page")
         .refreshable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }

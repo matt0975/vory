@@ -124,6 +124,7 @@ struct GatewayFormView: View {
                 Picker("Method", selection: $authMode) {
                     ForEach(AuthMode.allCases) { Text($0.title).tag($0) }
                 }
+                .accessibilityIdentifier("gateway.authMethod")
                 switch authMode {
                 case .sessionToken:
                     SecureField("Session token", text: $sessionToken)
@@ -134,7 +135,9 @@ struct GatewayFormView: View {
                 case .password:
                     providerPicker
                     TextField("Username", text: $username).textContentType(.username).autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .accessibilityIdentifier("gateway.username")
                     SecureField("Password", text: $password).textContentType(.password)
+                        .accessibilityIdentifier("gateway.password")
                     Text("The password is exchanged for a session and never stored.").font(.footnote).foregroundStyle(.secondary)
                 case .oauth:
                     providerPicker

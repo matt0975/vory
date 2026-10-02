@@ -169,10 +169,227 @@ import Testing
         let blocks = MarkdownParser.blocks(from: "# Title\n- a\n- b\n1. one\n2. two\n> quoted\n---")
         #expect(blocks.count == 5)
         if case .heading(let l, let t) = blocks[0] { #expect(l == 1); #expect(t == "Title") } else { Issue.record("heading") }
-        if case .bullets(let items) = blocks[1] { #expect(items == ["a", "b"]) } else { Issue.record("bullets") }
-        if case .numbered(let items) = blocks[2] { #expect(items == ["one", "two"]) } else { Issue.record("numbered") }
+        if case .list(let items) = blocks[1] { #expect(items.map(\.text) == ["a", "b"]); #expect(items.allSatisfy { $0.marker == .bullet }) } else { Issue.record("bullets") }
+        if case .list(let items) = blocks[2] { #expect(items.map(\.marker) == [.number(1), .number(2)]); #expect(items.map(\.text) == ["one", "two"]) } else { Issue.record("numbered") }
         if case .quote(let q) = blocks[3] { #expect(q == "quoted") } else { Issue.record("quote") }
         if case .rule = blocks[4] {} else { Issue.record("rule") }
+    }
+
+    @Test func nestedListsKeepDepthAndNumbering() {
+        let blocks = MarkdownParser.blocks(from: "- a\n  - b\n    - c\n- d\n\n1. x\n   1. y\n   2. z\n2. w")
+        #expect(blocks.count == 2)
+        if case .list(let items) = blocks[0] { #expect(items.map(\.depth) == [0, 1, 2, 0]); #expect(items.map(\.text) == ["a", "b", "c", "d"]) } else { Issue.record("nested bullets") }
+        if case .list(let items) = blocks[1] {
+            #expect(items.map(\.depth) == [0, 1, 1, 0])
+            #expect(items.map(\.marker) == [.number(1), .number(1), .number(2), .number(2)])
+        } else { Issue.record("nested numbered") }
+    }
+
+    @Test func taskListItems() {
+        let blocks = MarkdownParser.blocks(from: "- [ ] todo\n- [x] done\n- [X] DONE\n- plain")
+        guard case .list(let items) = blocks.first else { Issue.record("task list"); return }
+        #expect(items.map(\.marker) == [.task(checked: false), .task(checked: true), .task(checked: true), .bullet])
+        #expect(items.map(\.text) == ["todo", "done", "DONE", "plain"])
+    }
+
+    @Test func tableWithAlignmentsAndRaggedRows() {
+        let md = "Before\n| Name | Qty | Note |\n|:--|:-:|--:|\n| a | 1 | x |\n| b | 2 |\n| c | 3 | y | extra |\nAfter"
+        let blocks = MarkdownParser.blocks(from: md)
+        #expect(blocks.count == 3)
+        guard case .table(let t) = blocks[1] else { Issue.record("table"); return }
+        #expect(t.header == ["Name", "Qty", "Note"])
+        #expect(t.alignments == [.leading, .center, .trailing])
+        #expect(t.rows == [["a", "1", "x"], ["b", "2", ""], ["c", "3", "y"]])
+        if case .paragraph(let p) = blocks[2] { #expect(p == "After") } else { Issue.record("paragraph after table") }
+    }
+
+    @Test func tableCellsHonourEscapedPipesAndCodeSpans() {
+        let md = "| a | b |\n|---|---|\n| x \\| y | `p|q` |"
+        guard case .table(let t) = MarkdownParser.blocks(from: md).first else { Issue.record("table"); return }
+        #expect(t.rows == [["x | y", "`p|q`"]])
+    }
+
+    @Test func tableWithoutOuterPipes() {
+        guard case .table(let t) = MarkdownParser.blocks(from: "a | b\n--|--\n1 | 2").first else { Issue.record("table"); return }
+        #expect(t.header == ["a", "b"]); #expect(t.rows == [["1", "2"]])
+    }
+
+    @Test func streamingTableHeaderStaysParagraphUntilDelimiterArrives() {
+        let partial = MarkdownParser.blocks(from: "| a | b |")
+        if case .paragraph = partial[0] {} else { Issue.record("expected paragraph") }
+        let full = MarkdownParser.blocks(from: "| a | b |\n|---|---|")
+        if case .table(let t) = full[0] { #expect(t.rows.isEmpty) } else { Issue.record("expected table") }
+    }
+
+    @Test func pipesWithoutDelimiterAreNotATable() {
+        let blocks = MarkdownParser.blocks(from: "a | b\nnot a delimiter")
+        #expect(blocks.count == 1)
+        if case .paragraph = blocks[0] {} else { Issue.record("paragraph") }
+    }
+
+    @Test func standaloneAndLinkedImages() {
+        let blocks = MarkdownParser.blocks(from: "![logo](https://x.test/a.png \"t\")\n\n[![badge](https://x.test/b.svg)](https://x.test)\n\ntext ![inline](https://x.test/c.png) here")
+        #expect(blocks.count == 3)
+        if case .image(let alt, let url, let link) = blocks[0] { #expect(alt == "logo"); #expect(url == "https://x.test/a.png"); #expect(link == nil) } else { Issue.record("image") }
+        if case .image(let alt, let url, let link) = blocks[1] { #expect(alt == "badge"); #expect(url == "https://x.test/b.svg"); #expect(link == "https://x.test") } else { Issue.record("linked image") }
+        if case .paragraph = blocks[2] {} else { Issue.record("inline image stays in the paragraph") }
+    }
+
+    @Test func windowsLineEndingsParseLikeUnix() {
+        let md = "---\r\ntitle: Hi\r\n---\r\n| a | b |\r\n|---|---|\r\n| 1 | 2 |\r\n"
+        let blocks = MarkdownParser.blocks(from: md)
+        #expect(blocks.count == 1)
+        if case .table(let t) = blocks[0] { #expect(t.header == ["a", "b"]); #expect(t.rows == [["1", "2"]]) } else { Issue.record("table") }
+    }
+
+    @Test func frontMatterIsHiddenOnlyWhenClosedAndKeyed() {
+        let blocks = MarkdownParser.blocks(from: "---\ntitle: Hi\ntags: [a]\n---\n# Body")
+        #expect(blocks.count == 1)
+        if case .heading(_, let t) = blocks[0] { #expect(t == "Body") } else { Issue.record("heading") }
+        // A rule followed by prose, or an unclosed block, is left alone.
+        #expect(MarkdownParser.blocks(from: "---\nhello\n---\nx").count == 4)
+        #expect(MarkdownParser.blocks(from: "---\ntitle: Hi\nno close").first == .rule)
+    }
+}
+
+// MARK: Markdown parser: gaps beyond StreamingTests (parser and heading fonts only; layout is not covered here)
+
+@Suite struct MarkdownCoverageTests {
+    // Tables
+
+    @Test func headerAndDelimiterWithDifferentColumnCountsIsNotATable() {
+        let blocks = MarkdownParser.blocks(from: "| a | b | c |\n|---|---|\n| 1 | 2 | 3 |")
+        #expect(!blocks.contains { if case .table = $0 { return true } else { return false } })
+    }
+
+    @Test func tableAlignmentWithSpacesAndDefault() {
+        guard case .table(let t) = MarkdownParser.blocks(from: "| a | b | c |\n| :--- | :---: | ---: |\n| 1 | 2 | 3 |").first else { Issue.record("table"); return }
+        #expect(t.alignments == [.leading, .center, .trailing])
+        guard case .table(let d) = MarkdownParser.blocks(from: "| a | b |\n|---|---|\n| 1 | 2 |").first else { Issue.record("table"); return }
+        #expect(d.alignments == [.leading, .leading])
+    }
+
+    @Test func tableWithOuterPipesAndEmptyCells() {
+        guard case .table(let t) = MarkdownParser.blocks(from: "|a||c|\n|-|-|-|\n|1||3|").first else { Issue.record("table"); return }
+        #expect(t.header == ["a", "", "c"])
+        #expect(t.rows == [["1", "", "3"]])
+    }
+
+    @Test func aBlankLineEndsATableAndAnotherCanFollow() {
+        let blocks = MarkdownParser.blocks(from: "| a | b |\n|---|---|\n| 1 | 2 |\n\n| c | d |\n|---|---|\n| 3 | 4 |")
+        let tables = blocks.compactMap { b -> MarkdownTable? in if case .table(let t) = b { return t } else { return nil } }
+        #expect(tables.count == 2)
+        #expect(tables.map(\.header) == [["a", "b"], ["c", "d"]])
+    }
+
+    // Lists
+
+    @Test func tabCountsAsFourColumnsOfIndentation() {
+        guard case .list(let items) = MarkdownParser.blocks(from: "- a\n\t- b\n\t\t- c\n- d").first else { Issue.record("list"); return }
+        #expect(items.map(\.depth) == [0, 1, 2, 0])
+        // Four spaces and a tab are the same level.
+        guard case .list(let spaced) = MarkdownParser.blocks(from: "- a\n    - b\n\t- c").first else { Issue.record("list"); return }
+        #expect(spaced.map(\.depth) == [0, 1, 1])
+    }
+
+    @Test func numberedListNestedInsideABulletStaysOneBlock() {
+        let blocks = MarkdownParser.blocks(from: "- a\n  1. x\n  2. y\n- b")
+        #expect(blocks.count == 1)
+        guard case .list(let items) = blocks[0] else { Issue.record("list"); return }
+        #expect(items.map(\.depth) == [0, 1, 1, 0])
+        #expect(items.map(\.marker) == [.bullet, .number(1), .number(2), .bullet])
+    }
+
+    @Test func aTopLevelListOfAnotherKindStartsANewBlock() {
+        let blocks = MarkdownParser.blocks(from: "- a\n- b\n1. x\n2. y")
+        #expect(blocks.count == 2)
+    }
+
+    @Test func numberedListStartsAtItsFirstNumberThenCounts() {
+        guard case .list(let a) = MarkdownParser.blocks(from: "3. a\n4. b").first else { Issue.record("list"); return }
+        #expect(a.map(\.marker) == [.number(3), .number(4)])
+        guard case .list(let b) = MarkdownParser.blocks(from: "5. a\n1. b").first else { Issue.record("list"); return }
+        #expect(b.map(\.marker) == [.number(5), .number(6)])
+    }
+
+    @Test func nestingDepthIsCappedAtSix() {
+        let md = (0..<9).map { String(repeating: "  ", count: $0) + "- item\($0)" }.joined(separator: "\n")
+        guard case .list(let items) = MarkdownParser.blocks(from: md).first else { Issue.record("list"); return }
+        #expect(items.count == 9)
+        #expect(items.map(\.depth).max() == 6)
+    }
+
+    @Test func taskListEdgeCases() {
+        guard case .list(let items) = MarkdownParser.blocks(from: "- [ ]\n- [x]\n- [ ]no space\n  - [x] nested").first else { Issue.record("list"); return }
+        #expect(items.map(\.marker) == [.task(checked: false), .task(checked: true), .bullet, .task(checked: true)])
+        #expect(items.map(\.text) == ["", "", "[ ]no space", "nested"])
+        #expect(items.map(\.depth) == [0, 0, 0, 1])
+        // Only bullets carry checkboxes: a numbered item keeps its literal text.
+        guard case .list(let numbered) = MarkdownParser.blocks(from: "1. [ ] x").first else { Issue.record("list"); return }
+        #expect(numbered.map(\.marker) == [.number(1)])
+        #expect(numbered.map(\.text) == ["[ ] x"])
+    }
+
+    // Images
+
+    @Test func imageBlocksKeepTheirURLAndTheViewDecidesWhatLoads() {
+        // The parser does not filter schemes: MarkdownView loads https only and opens http/https links only.
+        guard case .image(let alt, let url, let link) = MarkdownParser.blocks(from: "![a](file:///etc/hosts)").first else { Issue.record("image"); return }
+        #expect(alt == "a"); #expect(url == "file:///etc/hosts"); #expect(link == nil)
+        guard case .image(let emptyAlt, _, _) = MarkdownParser.blocks(from: "![](https://x.test/a.png)").first else { Issue.record("image"); return }
+        #expect(emptyAlt == "")
+    }
+
+    @Test func unbalancedImageLinkIsAParagraph() {
+        let blocks = MarkdownParser.blocks(from: "[![a](https://x.test/a.png)]")
+        #expect(blocks.count == 1)
+        if case .paragraph = blocks[0] {} else { Issue.record("expected paragraph") }
+    }
+
+    // Front matter
+
+    @Test func frontMatterWithBOMOrDotsCloserIsHidden() {
+        #expect(MarkdownParser.blocks(from: "\u{FEFF}---\ntitle: x\n---\nBody") == [.paragraph("Body")])
+        #expect(MarkdownParser.blocks(from: "---\ntitle: x\n...\nBody") == [.paragraph("Body")])
+        #expect(MarkdownParser.blocks(from: "---\ntitle: x\n---").isEmpty)
+    }
+
+    @Test func frontMatterIsOnlyHiddenAtTheStart() {
+        let blocks = MarkdownParser.blocks(from: "Intro\n\n---\ntitle: x\n---\nBody")
+        #expect(blocks.contains(.rule))
+    }
+
+    // Headings
+
+    @Test func headingsOneToSixAreDistinctLevelsAndSevenHashesIsText() {
+        let md = "# a\n## b\n### c\n#### d\n##### e\n###### f\n####### g\n#nospace"
+        let blocks = MarkdownParser.blocks(from: md)
+        #expect(blocks.count == 7)
+        let levels = blocks.prefix(6).compactMap { b -> Int? in if case .heading(let l, _) = b { return l } else { return nil } }
+        #expect(levels == [1, 2, 3, 4, 5, 6])
+        if case .paragraph = blocks[6] {} else { Issue.record("seven hashes and a missing space are plain text") }
+    }
+
+    @Test func headingFontsAreDistinctForEveryLevel() {
+        let fonts = (1...6).map { MarkdownView.headingFont($0) }
+        for i in 0..<fonts.count { for j in (i + 1)..<fonts.count { #expect(fonts[i] != fonts[j], "h\(i + 1) and h\(j + 1) share a font") } }
+    }
+
+    // Image display state (no network)
+
+    @Test func imageDisplayStateDecidesSpinnerPlaceholderOrImage() {
+        typealias V = MarkdownImageView
+        #expect(V.display(success: false, failure: false, timedOut: false) == .spinner)
+        #expect(V.display(success: false, failure: true, timedOut: false) == .placeholder)
+        #expect(V.display(success: false, failure: false, timedOut: true) == .placeholder)
+        // An image that arrives after the timeout still wins over the placeholder.
+        #expect(V.display(success: true, failure: false, timedOut: true) == .image)
+        #expect(V.display(success: true, failure: false, timedOut: false) == .image)
+    }
+
+    @Test func placeholderUsesTheAltTextOrAGenericTitle() {
+        #expect(MarkdownImageView.placeholderTitle(alt: "HTTP") == "HTTP")
+        #expect(MarkdownImageView.placeholderTitle(alt: "") == "Image unavailable")
     }
 }
 
