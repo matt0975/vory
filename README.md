@@ -458,3 +458,9 @@ the assistant" error, and one that starts with `interrupt` ends with the gateway
 "Operation interrupted." message (the card for a turn that was cut short). The mock also has two
 projects and answers `session.workspace.move`, so moving a chat between projects can be tried;
 a folder under `/nowhere` is refused the way a missing folder is.
+
+## License
+
+Vory is open source under the [MIT License](LICENSE). The name Vory, the app icon and the Vory
+bot are not part of that license: build on the code as you like, but ship it under your own name
+and mark.
