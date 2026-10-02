@@ -60,6 +60,10 @@ struct TranscriptView: View {
     @State private var openedAt = Date()
     private var settling: Bool { Date().timeIntervalSince(openedAt) < 1.5 }
     @State private var jumpTask: Task<Void, Never>?
+    /// Where the part of the thread that is not lazy starts (see `threadRows`), once the thread
+    /// has set it: it moves only while the thread rests at its end. `TranscriptRowModel.split`
+    /// says when it is not used.
+    @State private var tailFrom: Int?
     @State private var revealTask: Task<Void, Never>?
     @State private var overscrollTask: Task<Void, Never>?
     /// How much of the scroll view the keyboard covers (beyond the home-indicator safe area). The
@@ -129,10 +133,7 @@ struct TranscriptView: View {
         return Group {
             ScrollView {
                 TimeRevealColumn {
-                // Lazy: a long session (hundreds of replies and tool rows) used to build every
-                // row at once, and the layer tree that made could exhaust memory in the render
-                // commit (abort in CA::Render::Encoder::grow, three crash reports on 1.1 (6)).
-                LazyVStack(alignment: .leading, spacing: 10) {
+                ThreadStack(alignment: .leading, spacing: 10) {
                     if chat.items.isEmpty, chat.resumeError == nil {
                         VStack(spacing: 8) {
                             BotAvatar(profile: chat.profileName, size: 56)
@@ -140,7 +141,7 @@ struct TranscriptView: View {
                         }
                         .frame(maxWidth: .infinity).padding(.top, 80)
                     }
-                    ForEach(rows) { row in rowView(row) }
+                    threadRows
                     // Working with no bubble to fill (between parts, during a tool): the typing
                     // bubble stands on its own, dark with the badge while a tool runs.
                     if chat.isRunning, !lastIsEmptyStreamingReply {
@@ -229,42 +230,7 @@ struct TranscriptView: View {
             // A tool card or reasoning block that opened low on the screen grew under the
             // composer; once its height has settled, the thread scrolls just enough to show
             // its bottom edge. Collapsing posts nothing, so the thread stays put then.
-            .onReceive(NotificationCenter.default.publisher(for: .hermesRevealRow)) { n in
-                guard let bottom = n.userInfo?["bottom"] as? CGFloat, let id = n.userInfo?["id"] as? String else { return }
-                let top = n.userInfo?["top"] as? CGFloat ?? bottom
-                // While the card grows, its top stays where the finger found it: the thread is
-                // anchored at its bottom, so the growth used to push the card up by its own
-                // height and the reveal then pulled it back down, a visible jitter on every
-                // expand. Each frame of the growth is countered on the scroll view directly.
-                if revealAnchor?.id != id { revealAnchor = (id, top); metrics.stickToBottom = false }
-                #if os(iOS)
-                if let a = revealAnchor, a.id == id, let sv = metrics.scrollView, abs(top - a.top) > 0.5 {
-                    let y = max(-sv.adjustedContentInset.top, sv.contentOffset.y + (top - a.top))
-                    sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
-                }
-                #endif
-                let settledBottom = bottom - (top - (revealAnchor?.top ?? top))
-                revealTask?.cancel()
-                revealTask = Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled else { return }
-                    revealAnchor = nil
-                    // Only when the opened row runs under the composer; then its bottom edge is
-                    // aligned to the visible bottom (the scroll view resolves the row itself,
-                    // so no offset arithmetic across coordinate spaces).
-                    let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
-                    let overshoot = settledBottom - limit
-                    guard overshoot > 0 else { return }
-                    #if os(iOS)
-                    if let sv = metrics.scrollView {
-                        let maxY = max(0, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
-                        sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, sv.contentOffset.y + overshoot)), animated: true)
-                        return
-                    }
-                    #endif
-                    withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
-                }
-            }
+            .onReceive(NotificationCenter.default.publisher(for: .hermesRevealRow)) { revealRow($0) }
             // Your own message brings the thread to the end, as in Messages, however far up it
             // was scrolled: a tester sent one from up the thread, saw nothing happen, and had to
             // find the arrow to see the reply.
@@ -333,21 +299,11 @@ struct TranscriptView: View {
             .onChange(of: chat.items.last) { _, _ in
                 if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
             }
-            .onChange(of: chat.items.count) { _, _ in
-                guard metrics.stickToBottom, !metrics.userScrolling else { return }
-                if settling { scrollPosition.scrollTo(edge: .bottom) }
-                else { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
-            }
+            .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
+            .task(id: visibleItems.count) { await settleTail() }
             .onAppear { openedAt = Date() }
             // Once the history is in and laid out, make sure the end is really on screen.
-            .task(id: chat.isResuming) {
-                guard !chat.isResuming else { return }
-                for delay in [300, 900] {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                    guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
-                    if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { scrollPosition.scrollTo(edge: .bottom) }
-                }
-            }
+            .task(id: chat.isResuming) { await landAfterResume() }
             .onChange(of: chat.statusLine) { _, _ in
                 if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
@@ -376,6 +332,31 @@ struct TranscriptView: View {
 }
 
 extension TranscriptView {
+    /// The thread's rows. Lazy: a long session (hundreds of replies and tool rows) used to build
+    /// every row at once, and the layer tree that made could exhaust memory in the render
+    /// commit (abort in CA::Render::Encoder::grow, three crash reports on 1.1 (6)).
+    @ViewBuilder private var threadRows: some View {
+        #if os(macOS)
+        ForEach(rows) { row in rowView(row) }
+        #else
+        // On the phone only the older rows are lazy. A lazy stack gives a row it has not drawn
+        // the average height of the ones it has, and a row added under a pinned thread starts
+        // out undrawn: after one long reply the thread claimed hundreds of points it did not
+        // have, the scroll to the end went there, and the thread showed its top or nothing
+        // for a moment (any new message, most plainly one sent from another device).
+        // Rows the lazy stack takes over start out undrawn too, so their height changes as
+        // they cross: that happens between messages (`settleTail`), not as one arrives.
+        let all = rows
+        let split = TranscriptRowModel.split(count: all.count, tailFrom: tailFrom)
+        if split > 0 {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(all[..<split])) { row in rowView(row) }
+            }
+        }
+        ForEach(Array(all[split...])) { row in rowView(row) }
+        #endif
+    }
+
     /// One row of the thread: the time separator before it when there is one, and the message
     /// with the time waiting past its right edge. Its own function: inside the thread's body
     /// this call tipped the type checker over its limit.
@@ -414,6 +395,84 @@ extension TranscriptView {
                     }
                     #endif
             
+    }
+
+    /// A tool card or reasoning block opened: keeps its top where the finger found it while it
+    /// grows, then shows its bottom edge if that ran under the composer.
+    private func revealRow(_ n: Notification) {
+        guard let bottom = n.userInfo?["bottom"] as? CGFloat, let id = n.userInfo?["id"] as? String else { return }
+        let top = n.userInfo?["top"] as? CGFloat ?? bottom
+        // While the card grows, its top stays where the finger found it: the thread is
+        // anchored at its bottom, so the growth used to push the card up by its own
+        // height and the reveal then pulled it back down, a visible jitter on every
+        // expand. Each frame of the growth is countered on the scroll view directly.
+        if revealAnchor?.id != id { revealAnchor = (id, top); metrics.stickToBottom = false }
+        #if os(iOS)
+        if let a = revealAnchor, a.id == id, let sv = metrics.scrollView, abs(top - a.top) > 0.5 {
+            let y = max(-sv.adjustedContentInset.top, sv.contentOffset.y + (top - a.top))
+            sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: y), animated: false)
+        }
+        #endif
+        let settledBottom = bottom - (top - (revealAnchor?.top ?? top))
+        revealTask?.cancel()
+        revealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled else { return }
+            revealAnchor = nil
+            // Only when the opened row runs under the composer; then its bottom edge is
+            // aligned to the visible bottom (the scroll view resolves the row itself,
+            // so no offset arithmetic across coordinate spaces).
+            let limit = (dockTop > 0 ? dockTop : UIScreen.main.bounds.height - fallbackInset) - 8
+            let overshoot = settledBottom - limit
+            guard overshoot > 0 else { return }
+            #if os(iOS)
+            if let sv = metrics.scrollView {
+                let maxY = max(0, sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height)
+                sv.setContentOffset(CGPoint(x: sv.contentOffset.x, y: min(maxY, sv.contentOffset.y + overshoot)), animated: true)
+                return
+            }
+            #endif
+            withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(id: id, anchor: .bottom) }
+        }
+    }
+
+    private func landAfterResume() async {
+        guard !chat.isResuming else { return }
+        for delay in [300, 900] {
+            try? await Task.sleep(for: .milliseconds(delay))
+            guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
+            if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { scrollPosition.scrollTo(edge: .bottom) }
+        }
+    }
+
+    /// A row came or went under a locked thread: the thread eases to its end with it.
+    private func followRows(from old: Int, to new: Int) {
+        guard metrics.stickToBottom, !metrics.userScrolling else { return }
+        #if os(iOS)
+        // Rows crossing into the lazy stack change the height above the screen: the thread
+        // lands at its end at once then, with nothing to glide through.
+        let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
+        #else
+        let crossed = false
+        #endif
+        if settling || crossed { scrollPosition.scrollTo(edge: .bottom) }
+        else { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
+    }
+
+    /// Hands the older rows of the thread's end to the lazy stack once the thread has been
+    /// still for a moment, and only while it rests at its end: the rows that cross are above
+    /// the screen then, and the thread is put back on its end in the same pass, so nothing
+    /// shows. Not while the reader is up the thread, where the rows on screen would shift.
+    private func settleTail() async {
+        #if os(iOS)
+        try? await Task.sleep(for: .milliseconds(400))
+        let count = visibleItems.count
+        let wanted = TranscriptRowModel.tailStart(count)
+        guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling, tailFrom != wanted else { return }
+        let moves = TranscriptRowModel.split(count: count, tailFrom: tailFrom) != wanted
+        tailFrom = wanted
+        if moves { scrollPosition.scrollTo(edge: .bottom) }
+        #endif
     }
 
     private func scheduleOverscrollFix() {
@@ -462,6 +521,14 @@ extension TranscriptView {
         }
     }
 }
+
+/// What holds the thread: the Mac's whole thread is one lazy stack; the phone's is a plain
+/// stack with the lazy part inside it (see `threadRows`).
+#if os(macOS)
+private typealias ThreadStack<Content: View> = LazyVStack<Content>
+#else
+private typealias ThreadStack<Content: View> = VStack<Content>
+#endif
 
 #if os(macOS)
 /// No UIKit scroll view to find here: scrolling by a measured distance falls back to the
@@ -660,6 +727,25 @@ struct TranscriptRowModel: Identifiable {
     var id: String { item.id }
 
     static let gap: TimeInterval = 15 * 60
+
+    /// Rows the end of the thread keeps out of the lazy stack, at least: enough to fill the
+    /// screen, so a thread at its end shows no lazy row.
+    static let tailBlock = 16
+    /// The most rows the end of the thread holds before the lazy stack takes some regardless.
+    static let tailCap = 48
+    /// Where the rows that are not lazy would start if nothing held them: whole blocks, so
+    /// the boundary moves once in a block of rows.
+    static func tailStart(_ count: Int) -> Int {
+        max(0, (count - tailBlock) / tailBlock * tailBlock)
+    }
+    /// Index of the first row that is not lazy. The thread's own boundary (`tailFrom`) stands
+    /// while it leaves a sensible end: a thread that has not set one, a history that just
+    /// arrived, or rows that piled up while the reader was up the thread, go by whole blocks.
+    static func split(count: Int, tailFrom: Int?) -> Int {
+        let wanted = tailStart(count)
+        guard let tailFrom, tailFrom <= wanted, count - tailFrom <= tailCap else { return wanted }
+        return tailFrom
+    }
 
     static func build(_ items: [TranscriptItem], now: Date = Date()) -> [TranscriptRowModel] {
         var out: [TranscriptRowModel] = []

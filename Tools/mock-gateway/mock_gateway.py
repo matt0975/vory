@@ -407,6 +407,7 @@ class Session:
         self.inflight: dict | None = None  # {user, assistant, streaming} while a turn runs
         self.running = False
         self.turn_started_at = 0.0
+        self.turn_base = 0                 # where the running turn's rows start in `history`
         self.pending: dict[str, asyncio.Future] = {}   # open server→client requests
         self.open_frames: dict[str, dict] = {}         # their frames, replayed on resume
 
@@ -495,11 +496,30 @@ class Gateway:
         s.running = True
         s.turn_started_at = time.time()
         s.inflight = {"user": prompt, "assistant": "", "streaming": True}
+        s.turn_base = len(s.history)
         try:
             await self._run_turn(s, prompt)
         finally:
             s.running = False
             s.inflight = None
+
+    @staticmethod
+    def store_turn(s: Session, prompt: str, layout: list) -> None:
+        """Files a finished turn the way the gateway's history has it: the prompt, then the
+        reply's parts and the tool rows in the order they happened. `layout` is that order:
+        a string is a part of the reply, a number is that many of the turn's tool rows (they
+        were filed as they completed, ahead of the prompt)."""
+        tools = s.history[s.turn_base:]
+        del s.history[s.turn_base:]
+        rows = [{"role": "user", "text": prompt, "timestamp": s.turn_started_at}]
+        for part in layout:
+            if isinstance(part, int):
+                rows += tools[:part]
+                tools = tools[part:]
+            else:
+                rows.append({"role": "assistant", "text": part, "timestamp": time.time()})
+        for r in rows + tools:
+            s.history.append({**r, "row_id": len(s.history) + 1})
 
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
@@ -575,8 +595,8 @@ class Gateway:
                         "Say the word if you want a dry run instead."})
             text = (REPLY_PART_1 + REPLY_PART_2 + "\n\nUnderstood, I'll leave the files in place. "
                     "Say the word if you want a dry run instead.")
-            s.history += [{"role": "user", "text": prompt, "timestamp": time.time(), "row_id": len(s.history) + 1},
-                          {"role": "assistant", "text": text, "timestamp": time.time(), "row_id": len(s.history) + 2}]
+            self.store_turn(s, prompt, [REPLY_PART_1, 3, REPLY_PART_2 + "\n\nUnderstood, I'll leave the files in place. "
+                                        "Say the word if you want a dry run instead."])
             s.inflight = None
             await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 2)})
             return
@@ -596,8 +616,7 @@ class Gateway:
         full = REPLY_PART_1 + REPLY_PART_2 + "\n\n" + REPLY_PART_3
         await self.event("session.title", s.sid, {"session_id": s.stored, "title": "Disk cleanup on the log host"})
         s.title = "Disk cleanup on the log host"
-        s.history += [{"role": "user", "text": prompt, "timestamp": time.time(), "row_id": len(s.history) + 1},
-                      {"role": "assistant", "text": full, "timestamp": time.time(), "row_id": len(s.history) + 2}]
+        self.store_turn(s, prompt, [REPLY_PART_1, 3, REPLY_PART_2, 1, REPLY_PART_3])
         s.inflight = None
         await self.event("message.complete", s.sid, {
             "text": full, "status": "complete", "usage": usage(s.output_tokens, 2)})

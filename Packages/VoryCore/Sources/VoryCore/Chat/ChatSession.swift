@@ -271,6 +271,37 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         return lastUserAt >= turnStart - 1
     }
 
+    /// A snapshot's rows under the ids of the rows already shown that say the same thing. The
+    /// gateway numbers a turn's rows once it has stored them, so a turn that was watched as it
+    /// streamed (its rows named on the way in) came back under new ids in the next snapshot, and
+    /// the thread took out every one of those rows and put it back. Rows are paired in order,
+    /// looking a few rows ahead for the notes only this device shows.
+    public nonisolated static func keepingIDs(_ built: [TranscriptItem], from shown: [TranscriptItem]) -> [TranscriptItem] {
+        func said(_ item: TranscriptItem) -> String? {
+            switch item.kind {
+            case .user(let t, _): return "u" + t.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .assistant(let t, _, let streaming): return streaming ? nil : "a" + t.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .tool(let act): return "t" + act.name
+            default: return nil
+            }
+        }
+        var out = built
+        var next = 0
+        var taken = Set<String>()
+        for i in out.indices {
+            if let words = said(out[i]),
+               let j = shown[next...].prefix(6).firstIndex(where: { said($0) == words }), !taken.contains(shown[j].id) {
+                out[i].id = shown[j].id
+                next = j + 1
+            } else if taken.contains(out[i].id) {
+                // Its own id went to an earlier row (rows shifted under it): never two rows with one id.
+                out[i].id += "-\(i)"
+            }
+            taken.insert(out[i].id)
+        }
+        return out
+    }
+
     private func apply(snapshot r: JSONValue) {
         runtimeID = r["session_id"]?.stringValue ?? runtimeID
         if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
@@ -288,7 +319,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 built.append(item)
             }
         }
-        items = built
+        // The reply streaming now is put back under its own id below; it is not history's.
+        items = Self.keepingIDs(built, from: items.filter { $0.id != streamingItemID })
         toolIndex = [:]
         cards = []
         cardShownAt = [:]
@@ -313,7 +345,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             let alreadyListed = Self.inflightPromptIsListed(prompt: user, lastUserText: lastUserText,
                                                             lastUserAt: lastUser?.timestamp.timeIntervalSince1970, turnStart: turnStart)
             if !user.isEmpty, !alreadyListed {
-                var prompt = TranscriptItem(id: "inflight-user", kind: .user(text: user, attachments: keptAttachments[user] ?? []))
+                // One id per turn: an earlier turn's prompt may still be shown under its own.
+                var promptID = "inflight-user-\(Int(turnStart))"
+                if items.contains(where: { $0.id == promptID }) { promptID += "-\(items.count)" }
+                var prompt = TranscriptItem(id: promptID, kind: .user(text: user, attachments: keptAttachments[user] ?? []))
                 if turnStart > 0 { prompt.timestamp = Date(timeIntervalSince1970: turnStart) }
                 items.insert(prompt, at: turnAt)
             }

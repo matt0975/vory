@@ -22,6 +22,71 @@ import Testing
     }
 }
 
+/// A snapshot replacing the rows on screen: rows that say the same keep their ids.
+@Suite struct SnapshotRowIDTests {
+    private func user(_ id: String, _ t: String) -> TranscriptItem { TranscriptItem(id: id, kind: .user(text: t, attachments: [])) }
+    private func reply(_ id: String, _ t: String, streaming: Bool = false) -> TranscriptItem { TranscriptItem(id: id, kind: .assistant(text: t, reasoning: nil, streaming: streaming)) }
+    private func tool(_ id: String, _ name: String) -> TranscriptItem { TranscriptItem(id: id, kind: .tool(ToolActivity(id: id, name: name, context: nil, status: .done))) }
+    private func note(_ id: String) -> TranscriptItem { TranscriptItem(id: id, kind: .system(text: "Answered on another device", symbol: "checkmark.shield")) }
+
+    @Test func aTurnWatchedLiveKeepsItsRowsWhenHistoryNumbersThem() {
+        let shown = [user("h-1-0", "Check the disk"), reply("h-2-1", "It is full."),
+                     user("inflight-user-170", "Free up space"), reply("stream-1", "Looking."), tool("tool-t-1", "terminal"),
+                     note("local-1"), reply("stream-2", "Done.")]
+        let built = [user("h-1-0", "Check the disk"), reply("h-2-1", "It is full."),
+                     user("h-3-2", "Free up space"), reply("h-4-3", "Looking.\n"), tool("h-5-4", "terminal"), reply("h-6-5", "Done.")]
+        let ids = ChatSession.keepingIDs(built, from: shown).map(\.id)
+        #expect(ids == ["h-1-0", "h-2-1", "inflight-user-170", "stream-1", "tool-t-1", "stream-2"])
+    }
+
+    @Test func rowsThatSayOtherThingsKeepHistorysIDs() {
+        let shown = [user("a", "one"), reply("b", "two")]
+        let built = [user("h-1-0", "three"), reply("h-2-1", "four"), tool("h-3-2", "terminal")]
+        #expect(ChatSession.keepingIDs(built, from: shown).map(\.id) == ["h-1-0", "h-2-1", "h-3-2"])
+        #expect(ChatSession.keepingIDs(built, from: []).map(\.id) == ["h-1-0", "h-2-1", "h-3-2"])
+    }
+
+    @Test func theSameWordsTwicePairInOrderAndNoIDIsUsedTwice() {
+        let shown = [user("u1", "ok"), reply("r1", "Sure."), user("u2", "ok"), reply("r2", "Sure.")]
+        let built = [user("h-1-0", "ok"), reply("h-2-1", "Sure."), user("h-3-2", "ok"), reply("h-4-3", "Sure."), user("h-5-4", "ok")]
+        let ids = ChatSession.keepingIDs(built, from: shown).map(\.id)
+        #expect(ids == ["u1", "r1", "u2", "r2", "h-5-4"])
+        // Rows shifted by one: a row shown under history's id for the next row must not make two rows share it.
+        let shifted = ChatSession.keepingIDs([user("h-1-0", "new first"), user("h-2-1", "ok")], from: [user("h-2-1", "new first"), user("x", "ok")]).map(\.id)
+        #expect(Set(shifted).count == 2)
+    }
+
+    @Test func aReplyStillStreamingIsNotPairedWithHistory() {
+        let shown = [user("u1", "go"), reply("stream-9", "Half", streaming: true)]
+        let built = [user("h-1-0", "go"), reply("h-2-1", "Half")]
+        #expect(ChatSession.keepingIDs(built, from: shown).map(\.id) == ["u1", "h-2-1"])
+    }
+}
+
+/// Where the phone's thread stops being lazy.
+@Suite struct TranscriptTailTests {
+    @Test func aShortThreadIsNotLazyAndALongOneKeepsAtLeastABlockAtItsEnd() {
+        #expect(TranscriptRowModel.tailStart(0) == 0)
+        #expect(TranscriptRowModel.tailStart(31) == 0)
+        #expect(TranscriptRowModel.tailStart(32) == 16)
+        #expect(TranscriptRowModel.tailStart(500) == 480)
+        for n in 0...200 { #expect(n - TranscriptRowModel.tailStart(n) < 2 * TranscriptRowModel.tailBlock) }
+    }
+
+    @Test func theThreadsOwnBoundaryStandsUntilItLeavesTooMuchOrTooLittle() {
+        // A thread that has not set one yet.
+        #expect(TranscriptRowModel.split(count: 90, tailFrom: nil) == 64)
+        // Rows arriving since the boundary was set: it stays where it is.
+        #expect(TranscriptRowModel.split(count: 60, tailFrom: 16) == 16)
+        // A long history arriving in a thread that had none: whole blocks, not every row at once.
+        #expect(TranscriptRowModel.split(count: 500, tailFrom: 0) == 480)
+        // More rows piled up than the end may hold.
+        #expect(TranscriptRowModel.split(count: 16 + TranscriptRowModel.tailCap + 1, tailFrom: 16) == TranscriptRowModel.tailStart(16 + TranscriptRowModel.tailCap + 1))
+        // A shorter thread than the boundary was set for.
+        #expect(TranscriptRowModel.split(count: 20, tailFrom: 48) == 0)
+    }
+}
+
 /// What the New Chat circle does on a tap and on a press and hold.
 @Suite struct ComposeActionTests {
     @Test func nothingStoredIsTodaysBehaviour() {
