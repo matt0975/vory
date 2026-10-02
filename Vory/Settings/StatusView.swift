@@ -169,7 +169,7 @@ struct StatusView: View {
     }
     private func liveActivityDetail(_ push: PushRegistrar) -> String {
         if !LiveActivityController.isEnabled { return "Turned off in Settings › Notifications" }
-        if !activitiesAllowed { return "Not allowed for Vory in iOS Settings" }
+        if !activitiesAllowed { return "Not allowed for Vory in Settings" }
         return push.pushToStartToken == nil ? "On. The gateway can update a running one; starting one while Vory is closed is not set up yet on \(DeviceWords.this)" : "On, and the gateway can start one while Vory is closed"
     }
 }

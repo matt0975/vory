@@ -10,5 +10,6 @@ struct VoryComplicationsBundle: WidgetBundle {
         ActivityWidget()
         ContextWidget()
         OverviewWidget()
+        BlocksWidget()
     }
 }

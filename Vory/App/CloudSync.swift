@@ -295,73 +295,171 @@ struct CloudGateway: Codable, Equatable {
         [connection.name, connection.gateway.description, "\(connection.authMode)", connection.authProvider ?? "", connection.connectionKind ?? "",
          sessionToken ?? "", access.clientId, access.clientSecret].joined(separator: "\u{1f}")
     }
+
+    /// The same gateway, whatever id a device saved it under (one added again after a reset
+    /// gets a new id): where it is and how it signs in.
+    var address: String { CloudGateways.address(connection) }
 }
 
 struct CloudGatewayFile: Codable, Equatable {
     var gateways: [CloudGateway] = []
     /// Gateways removed on some device, by id, so the copy on another does not bring them back.
     var deleted: [String: Double] = [:]
+    /// When someone chose "Reset and Erase iCloud Data": a device that joined before that
+    /// stops syncing and says so, instead of quietly putting its own copy back.
+    var erasedAt: Double?
 }
 
 /// The synced copy of the gateway list. The device-only Keychain items stay the source of
 /// truth for the running app, its extensions and the watch; this is a separate item that
-/// iCloud Keychain carries, merged in on restore.
+/// iCloud Keychain carries.
+///
+/// The same memory the settings have, per gateway: the time of the cloud copy this device
+/// last agreed with, and what its own copy looked like then. A gateway edited here goes up; one
+/// edited elsewhere comes down; neither is sent back and forth.
+/// What the gateway merge needs from the store of saved gateways: the app's `ConnectionStore`,
+/// or a plain list in tests (two of them stand in for two devices).
+@MainActor
+protocol GatewayStoring: AnyObject {
+    var connections: [GatewayConnection] { get }
+    func connection(id: UUID) -> GatewayConnection?
+    func secrets(for id: UUID) -> GatewaySecrets
+    func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws
+}
+
+extension ConnectionStore: GatewayStoring {}
+
 @MainActor
 enum CloudGateways {
     static let account = "gateways"
     static let knownKey = "cloudSync.knownGateways"
+    static let stampsKey = "cloudSync.gatewayStamps"
+    static let seenKey = "cloudSync.gatewaySeen"
 
-    static func load() -> CloudGatewayFile {
-        Keychain.getSynced(account: account).flatMap { try? JSONDecoder().decode(CloudGatewayFile.self, from: $0) } ?? CloudGatewayFile()
+    /// What a pass did. `changed` are gateways this device already had whose setup came down.
+    struct Outcome: Equatable {
+        var added: [CloudGateway] = []
+        var changed: [UUID] = []
+        var pushed = false
     }
 
-    static func save(_ file: CloudGatewayFile) {
-        if let data = try? JSONEncoder().encode(file) { try? Keychain.setSynced(data, account: account) }
+    /// The cloud's file. A dictionary in tests; the synced Keychain item in the app.
+    struct Storage {
+        var load: () -> CloudGatewayFile
+        var save: (CloudGatewayFile) -> Void
+
+        @MainActor static let keychain = Storage(
+            load: { Keychain.getSynced(account: CloudGateways.account).flatMap { try? JSONDecoder().decode(CloudGatewayFile.self, from: $0) } ?? CloudGatewayFile() },
+            save: { file in if let data = try? JSONEncoder().encode(file) { try? Keychain.setSynced(data, account: CloudGateways.account) } })
     }
 
-    /// This device's gateways into the synced copy: new and changed ones go in, one removed
-    /// here leaves it and is remembered as removed. Returns whether anything changed.
+    static func load() -> CloudGatewayFile { Storage.keychain.load() }
+
+    nonisolated static func address(_ c: GatewayConnection) -> String {
+        "\(c.gateway.description.lowercased())|\(c.authMode)|\(c.authProvider ?? "")"
+    }
+
+    /// An address only this machine can reach: it means nothing on another device.
+    nonisolated static func isLoopback(_ c: GatewayConnection) -> Bool {
+        let host = c.gateway.host.lowercased()
+        return host == "localhost" || host == "::1" || host == "[::1]" || host.hasPrefix("127.") || host.hasSuffix(".localhost")
+    }
+
+    /// One pass, both ways.
+    ///
+    /// - A gateway here that the cloud lacks goes up (unless it was removed elsewhere, is a
+    ///   loopback address, or the cloud already has the same address under another id).
+    /// - A gateway both have: edited here since the last agreement, it goes up; edited
+    ///   elsewhere, it comes down; the same, nothing moves.
+    /// - A gateway removed here leaves the cloud and is remembered as removed.
+    /// - `importNew`: gateways only the cloud has are added here. Off for a device that has
+    ///   none yet, where bringing them in is Restore's job.
     @discardableResult
-    static func push(store: ConnectionStore, defaults: UserDefaults = .standard, now: Double = Date().timeIntervalSince1970) -> Bool {
-        var file = load()
+    static func reconcile(store: any GatewayStoring, importNew: Bool, storage: Storage = .keychain,
+                          defaults: UserDefaults = .standard, now: Double = Date().timeIntervalSince1970) -> Outcome {
+        var file = storage.load()
         let before = file
-        let local = store.connections
+        var out = Outcome()
+        var stamps = (defaults.dictionary(forKey: stampsKey) as? [String: Double]) ?? [:]
+        var seen = (defaults.dictionary(forKey: seenKey) as? [String: String]) ?? [:]
         let known = Set(defaults.stringArray(forKey: knownKey) ?? [])
 
-        for c in local {
+        func copy(of c: GatewayConnection) -> CloudGateway {
             let secrets = store.secrets(for: c.id)
-            let mine = CloudGateway(connection: c, sessionToken: c.authMode == .sessionToken ? secrets.sessionToken : nil, access: secrets.access, updatedAt: now)
+            return CloudGateway(connection: c, sessionToken: c.authMode == .sessionToken ? secrets.sessionToken : nil, access: secrets.access, updatedAt: now)
+        }
+
+        for c in store.connections {
+            let id = c.id.uuidString
+            let mine = copy(of: c)
             if let i = file.gateways.firstIndex(where: { $0.connection.id == c.id }) {
-                if file.gateways[i].signature != mine.signature { file.gateways[i] = mine }
-            } else if file.deleted[c.id.uuidString] == nil {
+                let theirs = file.gateways[i]
+                if theirs.signature == mine.signature {
+                    stamps[id] = theirs.updatedAt; seen[id] = mine.signature
+                } else if seen[id] == nil {
+                    // The first meeting with different copies: both stay until one is edited.
+                    stamps[id] = theirs.updatedAt; seen[id] = mine.signature
+                } else if seen[id] != mine.signature {
+                    // Edited here since the last agreement: this device's edit goes up.
+                    file.gateways[i] = mine
+                    stamps[id] = now; seen[id] = mine.signature
+                } else if theirs.updatedAt > (stamps[id] ?? 0) {
+                    // Edited on another device since this one last agreed: take it. What travels
+                    // is the setup and the secrets every device shares; a browser sign-in stays.
+                    var conn = c
+                    conn.name = theirs.connection.name
+                    conn.gateway = theirs.connection.gateway
+                    conn.authMode = theirs.connection.authMode
+                    conn.authProvider = theirs.connection.authProvider
+                    conn.connectionKind = theirs.connection.connectionKind
+                    var secrets = store.secrets(for: c.id)
+                    if theirs.connection.authMode == .sessionToken { secrets.sessionToken = theirs.sessionToken }
+                    secrets.access = theirs.access
+                    if (try? store.upsert(conn, secrets: secrets)) != nil {
+                        out.changed.append(c.id)
+                        stamps[id] = theirs.updatedAt; seen[id] = theirs.signature
+                    }
+                }
+            } else if file.deleted[id] == nil, !isLoopback(c) {
+                // The same address under another id (added again after a reset): this copy
+                // takes its place, so no device ends up with the address twice.
+                if let j = file.gateways.firstIndex(where: { $0.address == mine.address }) {
+                    file.deleted[file.gateways[j].connection.id.uuidString] = now
+                    file.gateways.remove(at: j)
+                }
                 file.gateways.append(mine)
+                stamps[id] = now; seen[id] = mine.signature
             }
         }
+
         // Had it, pushed it, and it is gone now: removed here.
-        let localIDs = Set(local.map(\.id.uuidString))
+        let localIDs = Set(store.connections.map(\.id.uuidString))
         for id in known.subtracting(localIDs) {
             file.gateways.removeAll { $0.connection.id.uuidString == id }
             file.deleted[id] = now
+            stamps[id] = nil; seen[id] = nil
         }
-        defaults.set(Array(localIDs).sorted(), forKey: knownKey)
-        guard file != before else { return false }
-        save(file)
-        return true
-    }
 
-    /// The synced copy into this device: gateways it does not have are added, signed in when
-    /// their sign-in travels. Nothing here is replaced or removed. Returns the ones added.
-    @discardableResult
-    static func merge(into store: ConnectionStore, defaults: UserDefaults = .standard) -> [CloudGateway] {
-        var added: [CloudGateway] = []
-        for g in load().gateways where store.connection(id: g.connection.id) == nil {
-            let secrets = GatewaySecrets(sessionToken: g.sessionToken, provider: g.connection.authProvider, access: g.access)
-            if (try? store.upsert(g.connection, secrets: secrets)) != nil { added.append(g) }
+        if importNew {
+            let addresses = Set(store.connections.map(address))
+            for g in file.gateways where store.connection(id: g.connection.id) == nil {
+                // Not a second copy of an address this device already has, and not an address
+                // only the device that saved it can reach.
+                guard !addresses.contains(g.address), !isLoopback(g.connection) else { continue }
+                let secrets = GatewaySecrets(sessionToken: g.sessionToken, provider: g.connection.authProvider, access: g.access)
+                if (try? store.upsert(g.connection, secrets: secrets)) != nil {
+                    out.added.append(g)
+                    let id = g.connection.id.uuidString
+                    stamps[id] = g.updatedAt; seen[id] = g.signature
+                }
+            }
         }
-        if !added.isEmpty {
-            defaults.set(Array(Set(store.connections.map(\.id.uuidString))).sorted(), forKey: knownKey)
-        }
-        return added
+
+        defaults.set(Array(Set(store.connections.map(\.id.uuidString))).sorted(), forKey: knownKey)
+        defaults.set(stamps, forKey: stampsKey)
+        defaults.set(seen, forKey: seenKey)
+        if file != before { storage.save(file); out.pushed = true }
+        return out
     }
 }
 
@@ -373,6 +471,9 @@ final class CloudSync {
     static let shared = CloudSync()
     static let enabledKey = "cloudSync.enabled"
     static let deviceIDKey = "cloudSync.deviceID"
+    static let erasedSeenKey = "cloudSync.erasedSeen"
+    /// In the key-value store: when the iCloud data was last erased from a device.
+    static let erasedAtCloudKey = "meta.erasedAt"
 
     /// What a restore did, for the screen that asked for it.
     struct RestoreOutcome: Equatable {
@@ -386,12 +487,15 @@ final class CloudSync {
     var enabled: Bool {
         didSet {
             UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
-            if enabled { syncNow() }
+            if enabled { pausedByErase = nil; syncNow() }
         }
     }
     private(set) var lastSyncedAt: Date?
     /// Bumped whenever the cloud's contents may have changed, so a summary on screen is read again.
     private(set) var revision = 0
+    /// Set when another device erased the iCloud data: this one stopped syncing rather than
+    /// put its own copy back, and Settings says so.
+    private(set) var pausedByErase: Date?
 
     /// Whether this device is signed in to iCloud at all (never in the simulator).
     var signedIn: Bool { FileManager.default.ubiquityIdentityToken != nil }
@@ -400,6 +504,9 @@ final class CloudSync {
     @ObservationIgnored private weak var store: ConnectionStore?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var pending: Task<Void, Never>?
+    /// What the synced settings and looks looked like at the last pass: a defaults change
+    /// that touches none of them (a cache, a last-visit time) costs nothing.
+    @ObservationIgnored private var lastLocalFingerprint = ""
     /// While the app is being reset: nothing taken apart here must reach iCloud as a change.
     @ObservationIgnored var suspended = false
 
@@ -407,12 +514,17 @@ final class CloudSync {
         enabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true
     }
 
-    private var merge: CloudMerge {
+    private var deviceID: String {
         let defaults = UserDefaults.standard
-        var id = defaults.string(forKey: Self.deviceIDKey) ?? ""
-        if id.isEmpty { id = String(UUID().uuidString.prefix(8)).lowercased(); defaults.set(id, forKey: Self.deviceIDKey) }
-        var m = CloudMerge(cloud: cloud, defaults: defaults)
-        m.deviceID = id
+        if let id = defaults.string(forKey: Self.deviceIDKey), !id.isEmpty { return id }
+        let id = String(UUID().uuidString.prefix(8)).lowercased()
+        defaults.set(id, forKey: Self.deviceIDKey)
+        return id
+    }
+
+    private var merge: CloudMerge {
+        var m = CloudMerge(cloud: cloud, defaults: .standard)
+        m.deviceID = deviceID
         m.deviceName = PushRegistrar.deviceName
         m.photoStamp = { name in
             guard let url = BotAvatarStore.photoURL(for: name), let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
@@ -431,7 +543,7 @@ final class CloudSync {
         self.store = store
         let center = NotificationCenter.default
         center.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloud, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.cloudChanged() }
+            MainActor.assumeIsolated { self?.syncNow() }
         }
         // A setting changed here (or was just applied from the cloud, which the merge sees as
         // already agreed and leaves alone).
@@ -445,32 +557,67 @@ final class CloudSync {
         }
     }
 
-    /// Both ways, now. A device with no gateway yet takes none: that is Restore's job, on the
-    /// first screen, where the person chooses it.
+    /// Everything, both ways, now: on launch, when iCloud says something changed, when the app
+    /// comes forward, and when sync is switched on.
     func syncNow() {
-        guard enabled, started, !suspended else { return }
-        let out = merge.reconcile(.merge)
-        if out.applied > 0 { BotLooksMirror.mirror() }
-        if let store {
-            if !store.connections.isEmpty { CloudGateways.merge(into: store) }
-            CloudGateways.push(store: store)
-        }
+        guard enabled, started, !suspended, !stoppedByErase() else { return }
+        syncSettings()
+        syncGateways()
         lastSyncedAt = Date()
         revision += 1
     }
 
-    private func cloudChanged() {
-        revision += 1
-        syncNow()
+    private func syncSettings() {
+        let out = merge.reconcile(.merge)
+        lastLocalFingerprint = localFingerprint()
+        if out.applied > 0 { BotLooksMirror.mirror() }
     }
 
+    /// A device with no gateway yet takes none: that is Restore's job, on the first screen,
+    /// where the person chooses it.
+    private func syncGateways() {
+        guard let store else { return }
+        let out = CloudGateways.reconcile(store: store, importNew: !store.connections.isEmpty)
+        reconnectIfChanged(out.changed)
+    }
+
+    /// A gateway whose address or token came down while the app is connected to it: connect again.
+    private func reconnectIfChanged(_ ids: [UUID]) {
+        let model = AppModel.shared
+        guard let active = model.runtime?.connection.id, ids.contains(active), let conn = model.store.connection(id: active) else { return }
+        Task { await model.deactivate(); await model.activate(conn) }
+    }
+
+    /// The values that sync, as one string. Photos are not in it: the looks mirror calls
+    /// `looksChanged()` when one is replaced.
+    private func localFingerprint() -> String {
+        let d = UserDefaults.standard
+        var parts = CloudMerge.syncedSettings.map { d.object(forKey: $0).map(CloudMerge.fingerprint) ?? "" }
+        parts.append(d.string(forKey: BotColors.storageKey) ?? "")
+        parts.append(d.string(forKey: BotAvatarStore.storageKey) ?? "")
+        return parts.joined(separator: "\u{1f}")
+    }
+
+    /// Any defaults change lands here, and most are not ours (caches, last-visit times): only a
+    /// change to something that syncs schedules a pass, and that pass is the settings alone.
     private func localChanged() {
+        guard enabled, started, !suspended, localFingerprint() != lastLocalFingerprint else { return }
+        schedule()
+    }
+
+    /// A bot's photo was replaced: its file changed, its settings did not.
+    func looksChanged() {
         guard enabled, started, !suspended else { return }
+        schedule()
+    }
+
+    private func schedule() {
         pending?.cancel()
         pending = Task { @MainActor in
             try? await Task.sleep(for: .seconds(1.5))
-            guard !Task.isCancelled else { return }
-            self.syncNow()
+            guard !Task.isCancelled, self.enabled, !self.suspended, !self.stoppedByErase() else { return }
+            self.syncSettings()
+            self.lastSyncedAt = Date()
         }
     }
 
@@ -480,10 +627,39 @@ final class CloudSync {
         withObservationTracking { _ = store.connections } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                if self.enabled, !self.suspended, let store = self.store { CloudGateways.push(store: store) }
+                if self.enabled, !self.suspended, !self.stoppedByErase(), let store = self.store {
+                    CloudGateways.reconcile(store: store, importNew: false)
+                }
                 self.watchGateways()
             }
         }
+    }
+
+    // MARK: Erased elsewhere
+
+    /// Someone erased the iCloud data from another device after this one joined: stop here and
+    /// say so, rather than quietly putting this device's copy back. Turning sync on again in
+    /// Settings joins afresh and puts this device's settings up.
+    private func stoppedByErase() -> Bool {
+        let defaults = UserDefaults.standard
+        let erased = max(cloud.double(forKey: Self.erasedAtCloudKey), CloudGateways.load().erasedAt ?? 0)
+        guard erased > defaults.double(forKey: Self.erasedSeenKey) else { return false }
+        defaults.set(erased, forKey: Self.erasedSeenKey)
+        let joined = defaults.double(forKey: CloudMerge.joinedKey)
+        guard joined > 0, erased > joined else { return false }
+        forgetAgreements()
+        enabled = false
+        pausedByErase = Date(timeIntervalSince1970: erased)
+        return true
+    }
+
+    /// This device's memory of what it agreed with the cloud: gone, so its next pass is a first one.
+    private func forgetAgreements() {
+        let defaults = UserDefaults.standard
+        for key in [CloudMerge.stampsKey, CloudMerge.seenKey, CloudMerge.joinedKey, CloudGateways.knownKey, CloudGateways.stampsKey, CloudGateways.seenKey] {
+            defaults.removeObject(forKey: key)
+        }
+        lastLocalFingerprint = ""
     }
 
     // MARK: Restore and back up
@@ -511,42 +687,59 @@ final class CloudSync {
     func restore() -> RestoreOutcome {
         var result = RestoreOutcome()
         result.settings = merge.reconcile(.restore).applied
+        lastLocalFingerprint = localFingerprint()
         BotLooksMirror.mirror()
         if let store {
-            let added = CloudGateways.merge(into: store)
-            result.gateways = added.count
-            result.needSignIn = added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }.count
-            CloudGateways.push(store: store)
+            let out = CloudGateways.reconcile(store: store, importNew: true)
+            result.gateways = out.added.count
+            result.needSignIn = out.added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }.count
+            reconnectIfChanged(out.changed)
         }
         lastSyncedAt = Date()
         revision += 1
         return result
     }
 
-    /// Everything Vory keeps in iCloud, gone: the settings, the looks and the synced gateway list.
+    /// This device's settings, looks and gateways over what iCloud holds.
+    func backUpNow() {
+        merge.reconcile(.backUp)
+        lastLocalFingerprint = localFingerprint()
+        if let store { CloudGateways.reconcile(store: store, importNew: false) }
+        cloud.synchronize()
+        lastSyncedAt = Date()
+        revision += 1
+    }
+
+    // MARK: Reset
+
+    /// Everything Vory keeps in iCloud, gone: the settings, the looks and the synced gateway
+    /// list. A marker stays behind so the person's other devices stop syncing and say why,
+    /// instead of putting their own copies straight back.
     func eraseCloud() {
+        let now = Date().timeIntervalSince1970
         for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix) || key.hasPrefix(CloudMerge.devicePrefix) {
             cloud.removeObject(forKey: key)
         }
-        Keychain.deleteSynced(account: CloudGateways.account)
+        cloud.set(now, forKey: Self.erasedAtCloudKey)
+        CloudGateways.Storage.keychain.save(CloudGatewayFile(erasedAt: now))
         cloud.synchronize()
         revision += 1
     }
 
-    /// After a reset: this device joins again as a new one.
+    /// This device's own "last change from" entry, for a reset: it joins again under a new id.
+    func removeOwnDeviceEntry() {
+        cloud.removeObject(forKey: CloudMerge.devicePrefix + deviceID)
+    }
+
+    /// After a reset: this device joins again as a new one. An erase it just did itself is not
+    /// news to it.
     func resumeAfterReset() {
         pending?.cancel()
         suspended = false
         lastSyncedAt = nil
+        lastLocalFingerprint = ""
+        let erased = max(cloud.double(forKey: Self.erasedAtCloudKey), CloudGateways.load().erasedAt ?? 0)
+        if erased > 0 { UserDefaults.standard.set(erased, forKey: Self.erasedSeenKey) }
         enabled = true
-    }
-
-    /// This device's settings, looks and gateways over what iCloud holds.
-    func backUpNow() {
-        merge.reconcile(.backUp)
-        if let store { CloudGateways.push(store: store) }
-        cloud.synchronize()
-        lastSyncedAt = Date()
-        revision += 1
     }
 }

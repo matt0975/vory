@@ -35,7 +35,7 @@ struct TroubleshootingView: View {
         ]),
         Topic(id: "push", title: DeviceWords.isMac ? "No notifications" : "No notifications or Live Activity", symbol: "bell.slash", checks: [
             "Settings › Companion › This device must show the relay registered and the device file published. Register again if either is missing.",
-            "\(DeviceWords.settings) › Notifications › Vory must allow alerts\(DeviceWords.kind == "phone" ? ", and Live Activities must be on" : "").",
+            "\(DeviceWords.settings) › Notifications › Vory must allow alerts\(!DeviceWords.isMac ? ", and Live Activities must be on" : "").",
             "The Companion sends only for chats it mirrors: it attaches to running sessions when they start, so a turn already running when it was installed will not report.",
             "Focus modes and Notification Summary hold alerts back; check the Focus that is on.",
             "One device, one registration: signing in on a second one does not stop the first.",

@@ -119,19 +119,21 @@ struct SettingsView: View {
                 }
                 if search.isEmpty {
                     Section {
-                        Button(role: .destructive) { confirmReset = true } label: { Label("Reset Vory…", systemImage: "arrow.counterclockwise") }
+                        Button(role: .destructive) { confirmReset = true } label: { Label("Reset Vory…", systemImage: "arrow.counterclockwise").foregroundStyle(.red) }
                             .accessibilityIdentifier("settings.reset")
                     } footer: {
                         Text("Takes \(DeviceWords.this) back to the first screen, as if Vory had just been installed.")
                     }
                 }
             }
-            .confirmationDialog("Reset Vory on \(DeviceWords.this)?", isPresented: $confirmReset, titleVisibility: .visible) {
-                Button("Reset \(DeviceWords.This)", role: .destructive) { Task { await model.resetApp(eraseCloud: false) } }
+            // An alert, not an action sheet: its Cancel is on screen on every device (a popover
+            // hides it), which matters with an erase among the choices.
+            .alert("Reset Vory on \(DeviceWords.this)?", isPresented: $confirmReset) {
+                Button("Reset \(DeviceWords.ThisTitle)", role: .destructive) { Task { await model.resetApp(eraseCloud: false) } }
                 Button("Reset and Erase iCloud Data", role: .destructive) { Task { await model.resetApp(eraseCloud: true) } }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this), and it stops receiving notifications. Your chats and bots live on the gateway and are not touched. What is in iCloud stays, so Restore from iCloud can bring it back, unless you erase that too.")
+                Text("Every saved gateway and sign-in, every setting and every bot look is removed from \(DeviceWords.this), and it stops receiving notifications. Your chats and bots live on the gateway and are not touched. What is in iCloud stays, so Restore from iCloud can bring it back, unless you erase that too; your other devices then stop syncing until you turn it on again there.")
             }
             .navigationTitle("Settings")
             .tabRoot(.settings)
@@ -333,7 +335,7 @@ struct NotificationsView: View {
     var body: some View {
         let push = model.push
         SettingsList {
-            SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(DeviceWords.kind == "phone" ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
+            SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(!DeviceWords.isMac ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
             Section {
                 Toggle("Notifications", isOn: $notificationsOn)
                     .onChange(of: notificationsOn) { _, on in
@@ -361,7 +363,7 @@ struct NotificationsView: View {
                     Button("Allow Notifications") { Task { _ = await push.requestAuthorization() } }
                 } else if push.authorization == .denied {
                     #if os(iOS)
-                    Link("Open iOS Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+                    Link("Open Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
                     #else
                     Link("Open System Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                     #endif
@@ -405,7 +407,7 @@ struct SecurityView: View {
     @AppStorage(ApprovalConfirm.modeKey) private var confirmMode = ApprovalConfirm.mode
     var body: some View {
         SettingsList {
-            SettingsHeaderSection(title: "Security", symbol: "faceid", color: .green, description: "\(DeviceWords.kind == "phone" ? "Face ID" : "Touch ID") lock, a second step for approvals, and how \(DeviceWords.this) keeps its credentials.")
+            SettingsHeaderSection(title: "Security", symbol: "faceid", color: .green, description: "\(!DeviceWords.isMac ? "Face ID" : "Touch ID") lock, a second step for approvals, and how \(DeviceWords.this) keeps its credentials.")
             Section {
                 Toggle("Require \(model.lock.biometryName)", isOn: Binding(get: { model.lock.isEnabled }, set: { model.lock.isEnabled = $0 }))
             } footer: { Text("\(DeviceWords.isMac ? "Locks the app when the Mac sleeps or its screen locks." : "Locks the app after it has been in the background.") Gateway credentials are stored in the Keychain (device-only).") }
@@ -619,7 +621,7 @@ struct AppearanceView: View {
                 }
                 .pickerStyle(.segmented)
             } header: { Text("Appearance") } footer: {
-                Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.settings).")
+                Text("Liquid Glass intensity, Reduce Transparency, Increase Contrast, Bold Text, Dynamic Type and Reduce Motion follow \(DeviceWords.isMac ? "System Settings" : "\(DeviceWords.your)'s own settings").")
             }
             #if os(macOS)
             // The Mac's sidebar holds every page: a switch each, arrows for the order.

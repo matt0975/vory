@@ -111,6 +111,60 @@ import Testing
     }
 }
 
+extension GatewayIntegrationTests {
+    /// Two devices with the same chat open: one sends, and the other shows the prompt as well as
+    /// the reply. The gateway fans a chat's events out to everyone attached, but the events
+    /// carry the reply only; the watching device fetches the prompt when the turn starts.
+    @MainActor @Test func aTurnSentFromOneDeviceShowsOnTheOther() async throws {
+        guard let env = Self.env else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e two devices", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let mac = GatewayRuntime(connection: conn, store: store)
+        let phone = GatewayRuntime(connection: conn, store: store)
+        await mac.start()
+        await phone.start()
+
+        // An existing chat, opened on both: the mock shares a session between the clients that
+        // resume it, the way the real gateway does.
+        let list: SessionListResponse = try await mac.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "5")], profile: mac.selectedProfile)
+        let stored = try #require(list.sessions.first?.id)
+        let sending = try await mac.openChat(storedID: stored, title: nil, waitForResume: true)
+        let watching = try await phone.openChat(storedID: stored, title: nil, waitForResume: true)
+        #expect(sending.runtimeID == watching.runtimeID, "the two clients are not attached to the same live session")
+
+        func userTexts(_ chat: ChatSession) -> [String] {
+            chat.items.compactMap { if case .user(let t, _) = $0.kind { return t }; return nil }
+        }
+        func replies(_ chat: ChatSession) -> Int {
+            chat.items.filter { if case .assistant(let t, _, let streaming) = $0.kind { return !streaming && !t.isEmpty }; return false }.count
+        }
+        let before = (sent: replies(sending), watched: replies(watching))
+        let prompt = "Reply with exactly the single word: pong \(UUID().uuidString.prefix(6))"
+        _ = await sending.send(prompt)
+
+        var sawItRunning = false
+        let deadline = Date().addingTimeInterval(120)
+        while Date() < deadline {
+            // The mock's scripted turn asks for an approval; either device may answer it.
+            if let card = sending.cards.first(where: { $0.method == "approval" }) { await sending.respond(card: card, result: ["choice": "once"]) }
+            if watching.isRunning { sawItRunning = true }
+            if !sending.isRunning, !watching.isRunning, replies(sending) > before.sent, replies(watching) > before.watched { break }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        print("e2e two devices: sender items \(sending.items.count), watcher items \(watching.items.count), watcher saw it running \(sawItRunning)")
+        #expect(replies(sending) > before.sent, "the sending device got no reply")
+        #expect(sawItRunning, "the watching device never showed the turn as running")
+        #expect(replies(watching) > before.watched, "the watching device did not show the reply")
+        #expect(userTexts(watching).filter { $0 == prompt }.count == 1, "the watching device should show the other device's prompt, once")
+        #expect(!watching.isRunning)
+
+        await mac.stop()
+        await phone.stop()
+    }
+}
+
 actor EventCollector {
     private var events: [GatewayEvent] = []
     func add(_ e: GatewayEvent) { events.append(e) }

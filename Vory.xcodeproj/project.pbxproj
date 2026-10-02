@@ -294,6 +294,13 @@
 			);
 			target = AA00000000000000000440 /* VoryMacWidgets */;
 		};
+		AA00000000000000000601 /* Exceptions for "Widgets" folder in "VoryWatch" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				VoryWidgets.swift,
+			);
+			target = AA000000000000000000E0 /* VoryWatch */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -355,6 +362,9 @@
 		};
 		AA000000000000000000E4 /* Widgets */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				AA00000000000000000601 /* Exceptions for "Widgets" folder in "VoryWatch" target */,
+			);
 			path = Widgets;
 			sourceTree = "<group>";
 		};
@@ -669,6 +679,7 @@
 			fileSystemSynchronizedGroups = (
 				AA00000000000000000063 /* Shared */,
 				AA000000000000000000E2 /* VoryWatch */,
+				AA000000000000000000E4 /* Widgets */,
 			);
 			name = VoryWatch;
 			packageProductDependencies = (

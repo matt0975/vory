@@ -26,7 +26,7 @@ struct OnboardingView: View {
     #if os(macOS)
     private static let device = "Mac"
     #else
-    private static let device = "phone"
+    private static let device = DeviceWords.device
     #endif
 
     private var pages: [Page] {

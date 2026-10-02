@@ -27,6 +27,8 @@ struct VoryApp: App {
                 .tint(AppTheme.accent(accentID).color)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
+                // A chat handed over from the Mac (or another iPhone or iPad): open it here.
+                .continuesHandoff(model)
                 .task {
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()

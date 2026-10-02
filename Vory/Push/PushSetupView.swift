@@ -288,7 +288,7 @@ struct PushSetupView: View {
                 Button("Allow notifications") { Task { _ = await push.requestAuthorization() } }
             } else if push.authorization == .denied {
                 #if os(iOS)
-                Link("Open iOS Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
+                Link("Open Settings", destination: URL(string: UIApplication.openSettingsURLString)!)
                 #else
                 Link("Open System Settings", destination: URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension")!)
                 #endif

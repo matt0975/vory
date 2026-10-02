@@ -44,6 +44,7 @@
 	<key>NSUserActivityTypes</key>
 	<array>
 		<string>INSendMessageIntent</string>
+		<string>com.vorantx.vory.chat</string>
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

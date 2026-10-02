@@ -20,9 +20,12 @@ struct CompanionPromptSheet: View {
     #endif
 
     var body: some View {
+        FittedSheet { card }
+    }
+
+    private var card: some View {
         VStack(spacing: 18) {
             BotFaceView(spec: BotLookSpec.vory, size: 96, active: true)
-                .padding(.top, 26)
             if let found {
                 Text("The Companion is already here").font(.title2.weight(.bold)).multilineTextAlignment(.center)
                 Text("This gateway runs Companion \(found), set up from another device. Allow notifications on \(Self.device) and it will start sending here too; nothing to install.")
@@ -51,12 +54,12 @@ struct CompanionPromptSheet: View {
                 Text("Later is fine — Settings will remind you.").font(.caption).foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal, 28).padding(.bottom, 20)
+        .padding(.horizontal, 28).padding(.bottom, 24)
         #if os(macOS)
         .frame(width: 420)
+        #else
+        .frame(maxWidth: 440)
         #endif
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
     }
 
     /// The Companion's version on the gateway, or nil when it is not installed there. A quick

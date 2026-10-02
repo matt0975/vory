@@ -29,7 +29,8 @@ struct SnapshotProvider: TimelineProvider {
         // WidgetKit's completion is not Sendable; it is safe to call from the task once.
         let done = UncheckedSendable(completion)
         Task {
-            let snap = await Self.loadRefreshing()
+            // Every widget kind asks at once when the timelines reload: one fetch serves them all.
+            let snap = await SnapshotRefreshGate.shared.run { await Self.loadRefreshing() }
             let entry = SnapshotEntry(date: Date(), snapshot: snap)
             done.value(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(15 * 60))))
         }
@@ -73,6 +74,23 @@ struct SnapshotProvider: TimelineProvider {
             snap.save()
         }
         return snap
+    }
+}
+
+/// One refresh at a time per extension process: a caller that arrives while one is running
+/// waits for it and takes its answer instead of asking the gateway again. On the watch, where
+/// each request goes through the phone, six complications used to mean six fetches.
+actor SnapshotRefreshGate {
+    static let shared = SnapshotRefreshGate()
+    private var running: Task<WidgetSnapshot?, Never>?
+
+    func run(_ work: @escaping @Sendable () async -> WidgetSnapshot?) async -> WidgetSnapshot? {
+        if let running { return await running.value }
+        let task = Task { await work() }
+        running = task
+        let value = await task.value
+        running = nil
+        return value
     }
 }
 
@@ -508,40 +526,53 @@ struct OverviewView: View {
     }
 }
 
-/// One column per week, one row per weekday, darker for busier days.
-struct UsageBlocks: View {
-    var days: [WidgetSnapshot.Usage.Day]
-    var weeks: Int
+// MARK: Activity blocks
 
-    private var counts: [Date: Int] {
-        let cal = Calendar.current
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = .current
-        return Dictionary(days.compactMap { d in f.date(from: d.day).map { (cal.startOfDay(for: $0), d.sessions) } }, uniquingKeysWith: +)
+/// The blocks from Home on a watch face or the Lock Screen: a block per day, brighter for
+/// busier days. The rectangular one fits as many weeks as it has room for.
+struct BlocksWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "vory.blocks", provider: SnapshotProvider()) { entry in
+            BlocksView(entry: entry)
+                .containerBackground(.fill.tertiary, for: .widget)
+                .widgetURL(URL(string: "vory://home"))
+        }
+        .configurationDisplayName("Activity blocks")
+        .description("A block for every day, brighter for busier days, like the grid on Home.")
+        .supportedFamilies(Self.families)
     }
 
+    static var families: [WidgetFamily] {
+        #if os(macOS)
+        [.systemSmall]
+        #else
+        [.accessoryRectangular, .accessoryCircular]
+        #endif
+    }
+}
+
+struct BlocksView: View {
+    var entry: SnapshotEntry
+    @Environment(\.widgetFamily) private var family
+    private var days: [WidgetSnapshot.Usage.Day]? { entry.snapshot?.usage?.days }
+
     var body: some View {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        let weekday = cal.component(.weekday, from: today)
-        let daysBack = weeks * 7 - (7 - weekday)
-        let start = cal.date(byAdding: .day, value: -(daysBack - 1), to: today)!
-        let counts = counts
-        let peak = max(1, counts.values.max() ?? 1)
-        HStack(alignment: .top, spacing: 2) {
-            ForEach(0..<weeks, id: \.self) { w in
-                VStack(spacing: 2) {
-                    ForEach(0..<7, id: \.self) { d in
-                        let day = cal.date(byAdding: .day, value: w * 7 + d, to: start)!
-                        let n = counts[day] ?? 0
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                            .fill(day > today ? Color.clear : (n == 0 ? Color.primary.opacity(0.08) : Color.accentColor.opacity(0.3 + 0.7 * min(1, Double(n) / Double(peak)))))
-                            .aspectRatio(1, contentMode: .fit)
-                    }
-                }
+        switch family {
+        #if !os(macOS)
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                if let days { RecentBlocks(days: days).padding(9) }
+                else { Image(systemName: "square.grid.3x3.fill").widgetAccentable() }
+            }
+        #endif
+        default:
+            if let days {
+                UsageBlocks(days: days, weeks: nil)
+            } else {
+                Text("Open Vory's Home once to fill this in.").font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
         }
-        .widgetAccentable()
     }
 }

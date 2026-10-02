@@ -42,6 +42,7 @@ struct ConversationView: View {
         Group {
             if let chat {
                 framed(chat)
+                    .handsOff(chat)
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame() }

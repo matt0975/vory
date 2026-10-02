@@ -13,7 +13,7 @@ struct GatewayFormView: View {
     #if os(macOS)
     static let thisDevice = "this Mac"
     #else
-    static let thisDevice = "this iPhone"
+    static let thisDevice = DeviceWords.this
     #endif
 
     /// How the phone reaches the gateway. Only changes the help and the fields shown; the URL,

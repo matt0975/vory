@@ -33,6 +33,7 @@ struct VoryMacApp: App {
                 .environment(model)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
+                .continuesHandoff(model)
                 .task {
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()

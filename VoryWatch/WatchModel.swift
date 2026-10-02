@@ -19,6 +19,13 @@ final class WatchModel {
     var pendingChat: String?
     /// A complication tapped: open the Activity page (working chats, approvals waiting).
     var pendingActivity = false
+    /// The Overview or blocks complication tapped: open the Overview page.
+    var pendingOverview = false
+    /// The month in numbers, as the complications draw it; refreshed when the Overview page opens.
+    var usage: WidgetSnapshot.Usage? = WidgetSnapshot.load()?.usage
+    /// Gateways that came from the iPhone (by id), so one the phone drops is dropped here too
+    /// while one typed on the watch stays.
+    static let syncedGatewaysKey = "watch.syncedGateways"
     var syncStatus = "Waiting for iPhone…"
     /// nil = the selected profile; "*" = every profile merged.
     var listProfile: String?
@@ -57,12 +64,20 @@ final class WatchModel {
         }
         #endif
         if let c = store.active { await activate(c) }
+        #if DEBUG
+        // Simulator only: land on a page for a screenshot ("home", "activity", "chat/<id>").
+        if let page = env["VORY_E2E_OPEN"], let url = URL(string: "vory://" + page) { open(url) }
+        #endif
     }
 
     func activate(_ connection: GatewayConnection) async {
         if let rt = runtime {
             if rt.connection.id == connection.id { return }
             await rt.stop()
+            // Another gateway: its own list, from its own cache.
+            sessions = []
+            listLimit = 8
+            hasMore = true
         }
         store.activeConnectionID = connection.id
         let rt = GatewayRuntime(connection: connection, store: store)
@@ -119,7 +134,8 @@ final class WatchModel {
                 out = r.sessions
             }
             hasMore = out.count >= limit
-            sessions = out
+            // Pinned chats first, as on the phone; the gateway's order within each group.
+            sessions = out.filter { $0.pinned == true } + out.filter { $0.pinned != true }
             if let d = try? JSONEncoder().encode(Array(out.prefix(30))) { UserDefaults.standard.set(d, forKey: cacheKey) }
             loadError = nil
         } catch { loadError = error.localizedDescription }
@@ -136,6 +152,27 @@ final class WatchModel {
     }
 
     func syncPush() async { if let rt = runtime { await push.syncRegistration(runtime: rt) } }
+
+    /// The Overview page's numbers. What the snapshot holds shows at once; the gateway is asked
+    /// only when that is older than half an hour, and the answer goes back into the snapshot so
+    /// the complications draw the same thing.
+    func loadUsage() async {
+        if let u = WidgetSnapshot.load()?.usage {
+            usage = u
+            if Date().timeIntervalSince(u.updatedAt) < 1800 { return }
+        }
+        guard let rt = runtime else { return }
+        let profile = listProfile == "*" ? rt.selectedProfile : (listProfile ?? rt.selectedProfile)
+        guard let a: UsageAnalytics = try? await rt.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "91")], profile: profile) else { return }
+        // The watch holds a short list of chats: the message count and peak hour stay as the phone last worked them out.
+        let u = WidgetSnapshot.Usage.make(analytics: a, sessions: nil, previous: usage)
+        usage = u
+        if var snap = WidgetSnapshot.load() {
+            snap.usage = u
+            snap.save()
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
 
     // MARK: iPhone → watch credential sync
 
@@ -156,6 +193,20 @@ final class WatchModel {
         for c in connections {
             if let s = secrets[c.id.uuidString] { try? store.upsert(c, secrets: s) }
         }
+        // A gateway the phone no longer has (removed there, or the phone was reset) goes here too.
+        let incoming = Set(connections.map(\.id.uuidString))
+        let previous = Set(UserDefaults.standard.stringArray(forKey: Self.syncedGatewaysKey) ?? [])
+        for id in previous.subtracting(incoming) {
+            guard let uuid = UUID(uuidString: id) else { continue }
+            if let rt = runtime, rt.connection.id == uuid {
+                Task { await rt.stop() }
+                runtime = nil
+                sessions = []
+            }
+            store.delete(id: uuid)
+        }
+        UserDefaults.standard.set(Array(incoming).sorted(), forKey: Self.syncedGatewaysKey)
+        guard !store.connections.isEmpty else { syncStatus = "No gateway on the iPhone yet"; return }
         syncStatus = "Synced \(connections.count) gateway\(connections.count == 1 ? "" : "s") from iPhone"
         let activeID = (context["active"] as? String).flatMap(UUID.init(uuidString:))
         if let target = activeID.flatMap({ store.connection(id: $0) }) ?? store.active ?? connections.first {
@@ -169,6 +220,7 @@ final class WatchModel {
         guard url.scheme == "vory" else { return }
         if url.host == "chat", let id = url.pathComponents.dropFirst().first { pendingChat = id }
         else if url.host == "activity" || url.host == "chats" { pendingActivity = true }
+        else if url.host == "home" { pendingOverview = true }
     }
 
     func route(from userInfo: [AnyHashable: Any], action: String?, replyText: String?) {
@@ -280,7 +332,8 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
 @MainActor
 final class WatchCardNotifier: CardNotifying {
     func cardArrived(_ card: PendingCard, chat: ChatSession) {
-        guard WKApplication.shared().applicationState != .active else { return }
+        // On screen already: a tap on the wrist, no banner over the card itself.
+        guard WKApplication.shared().applicationState != .active else { WKInterfaceDevice.current().play(.notification); return }
         let content = UNMutableNotificationContent()
         content.title = "\(chat.profileName) · \(card.method == "approval" ? "approval needed" : "question")"
         content.subtitle = chat.title
@@ -292,7 +345,10 @@ final class WatchCardNotifier: CardNotifying {
     }
 
     func turnFinished(chat: ChatSession, error: String?) {
-        guard WKApplication.shared().applicationState != .active else { return }
+        guard WKApplication.shared().applicationState != .active else {
+            WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success)
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = chat.profileName
         content.subtitle = chat.title

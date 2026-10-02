@@ -242,7 +242,7 @@ final class AppModel {
         if let rt = runtime { await push.removeRegistration(runtime: rt) }
         await deactivate()
         for c in store.connections { store.delete(id: c.id) }
-        if eraseCloud { sync.eraseCloud() }
+        if eraseCloud { sync.eraseCloud() } else { sync.removeOwnDeviceEntry() }
         // What the extensions and widgets read, and the last notification's breadcrumb.
         Keychain.delete(account: BotLooks.account)
         Keychain.delete(account: WidgetSnapshot.account)
@@ -250,6 +250,7 @@ final class AppModel {
         BotAvatarStore.removeAllPhotos()
         if let domain = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: domain) }
         lock.isEnabled = false
+        selectedTab = .chats
         pendingRoute = nil
         visibleChat = nil
         visibleChatID = nil
@@ -260,6 +261,10 @@ final class AppModel {
         #if os(iOS)
         WatchSync.shared.push(store: store)
         #endif
+        // The screens being torn down save a thing or two on their way out (a last-visit
+        // time): once they are gone, wipe once more so the start really is clean.
+        try? await Task.sleep(for: .milliseconds(500))
+        if let domain = Bundle.main.bundleIdentifier { UserDefaults.standard.removePersistentDomain(forName: domain) }
         sync.resumeAfterReset()
     }
 

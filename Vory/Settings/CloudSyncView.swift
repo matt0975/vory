@@ -29,13 +29,13 @@ struct CloudSyncView: View {
                 if let device = summary.device, let date = summary.date {
                     LabeledContent("Last change", value: "\(device), \(date.formatted(date: .abbreviated, time: .shortened))")
                 }
-            } header: { Text("In iCloud") }
+            } header: { Text(sync.signedIn ? "In iCloud" : "Saved for iCloud") }
 
             Section {
                 Button { confirmRestore = true } label: { Label("Restore from iCloud…", systemImage: "icloud.and.arrow.down") }
                     .disabled(summary.isEmpty)
                     .accessibilityIdentifier("cloud.restore")
-                Button { confirmBackUp = true } label: { Label("Back Up \(DeviceWords.This) Now", systemImage: "icloud.and.arrow.up") }
+                Button { confirmBackUp = true } label: { Label("Back Up \(DeviceWords.ThisTitle) Now", systemImage: "icloud.and.arrow.up") }
                     .accessibilityIdentifier("cloud.backUp")
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
@@ -75,6 +75,9 @@ struct CloudSyncView: View {
     }
 
     private var statusLine: String {
+        if let erased = sync.pausedByErase {
+            return "The iCloud data was erased from another device on \(erased.formatted(date: .abbreviated, time: .shortened)), so sync stopped here and \(DeviceWords.this) kept what it has. Turn it on to put \(DeviceWords.this)'s settings, looks and gateways back in iCloud."
+        }
         if !sync.enabled { return "Off: \(DeviceWords.this) keeps its own settings and sends nothing to iCloud. What is already in iCloud stays there." }
         if !sync.signedIn { return "\(DeviceWords.This) does not appear to be signed in to iCloud, or iCloud Drive is off for it. Sync starts by itself once it is." }
         if let t = sync.lastSyncedAt { return "On. Last checked \(t.formatted(date: .omitted, time: .shortened))." }
@@ -107,19 +110,19 @@ struct CloudRestoreSheet: View {
     private let sync = CloudSync.shared
 
     var body: some View {
-        VStack(spacing: 18) {
-            BotFaceView(spec: BotLookSpec.vory, size: 84, active: summary == nil, mood: BotFaceView.Mood(profile: "vory-restore", state: summary == nil ? .thinking : .guide))
-            if let summary {
-                if summary.isEmpty { empty } else { found(summary) }
-            } else {
-                Text("Looking in your iCloud…").font(.headline)
-                ProgressView()
+        FittedSheet {
+            VStack(spacing: 18) {
+                BotFaceView(spec: BotLookSpec.vory, size: 84, active: summary == nil, mood: BotFaceView.Mood(profile: "vory-restore", state: summary == nil ? .thinking : .guide))
+                if let summary {
+                    if summary.isEmpty { empty } else { found(summary) }
+                } else {
+                    Text("Looking in your iCloud…").font(.headline)
+                    ProgressView()
+                }
             }
+            .padding(.horizontal, 28).padding(.bottom, 24)
+            .frame(maxWidth: 440)
         }
-        .padding(28)
-        .frame(maxWidth: 440)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .presentationDetents([.medium, .large])
         .task { summary = await sync.refresh() }
     }
 

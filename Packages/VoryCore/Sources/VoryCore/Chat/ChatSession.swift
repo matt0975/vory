@@ -83,6 +83,27 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             }
         }
     }
+    /// True from this device's own submit until its turn ends.
+    private var startedHere = false
+    /// A turn's first event arrived for a prompt this device did not send: its snapshot is
+    /// being fetched (once).
+    private var adoptingTurn = false
+    /// The events that open a turn. One of these on an idle chat means the prompt was sent
+    /// from another device that has the same chat open.
+    private static let turnOpeners: Set<String> = ["message.start", "reasoning.delta", "thinking.delta", "tool.start"]
+
+    /// The gateway sends a chat's events to every device that has it open, but the events
+    /// carry the reply, not the prompt. When a turn starts that this device did not ask for,
+    /// the session's snapshot is fetched once: it has the prompt in flight, so the other
+    /// device's message appears here with the reply streaming under it.
+    private func adoptTurnStartedElsewhere() {
+        adoptingTurn = true
+        Task { [weak self] in
+            guard let self else { return }
+            if let r = try? await rpc("session.resume", ["session_id": .string(storedID), "cols": 80]) { apply(snapshot: r) }
+            adoptingTurn = false
+        }
+    }
     /// Phase the next `isRunning = false` reports to the activity surface.
     private var endPhase = "done"
     private var activityEndTask: Task<Void, Never>?
@@ -364,6 +385,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
         staged = []
         items.append(TranscriptItem(id: UUID().uuidString, kind: .user(text: text, attachments: previews)))
+        startedHere = true
         isRunning = true
         statusLine = "Sending…"
         do {
@@ -375,6 +397,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             activity.start(for: self)
             runtime.pushRegistrar?.noteSend(session: storedID, runtime: runtime)
         } catch {
+            startedHere = false
             isRunning = false
             statusLine = nil
             items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: error.localizedDescription)))
@@ -663,6 +686,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func handle(event ev: GatewayEvent) {
         let p = ev.payload
+        if !startedHere, !isRunning, !adoptingTurn, !isResuming, Self.turnOpeners.contains(ev.type) { adoptTurnStartedElsewhere() }
+        if ev.type == "message.complete" || ev.type == "error" { startedHere = false }
         switch ev.type {
         case "message.start":
             beginStreaming()

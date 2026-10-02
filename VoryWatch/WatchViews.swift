@@ -14,6 +14,10 @@ struct WatchRootView: View {
             }
             .navigationDestination(for: String.self) { WatchChatView(storedID: $0) }
             .navigationDestination(for: WatchActivityRoute.self) { _ in WatchActivityView(path: $path) }
+            .navigationDestination(for: WatchOverviewRoute.self) { _ in WatchOverviewView() }
+        }
+        .onChange(of: model.pendingOverview) { _, go in
+            if go { path = NavigationPath(); path.append(WatchOverviewRoute()); model.pendingOverview = false }
         }
         .onChange(of: model.pendingChat) { _, id in
             if let id { path.append(id); model.pendingChat = nil }
@@ -25,6 +29,48 @@ struct WatchRootView: View {
 }
 
 struct WatchActivityRoute: Hashable {}
+struct WatchOverviewRoute: Hashable {}
+
+/// Home's overview on the wrist: the week and the month in numbers and the activity blocks,
+/// from the same snapshot the complications draw. Opens at once with what is stored.
+struct WatchOverviewView: View {
+    @Environment(WatchModel.self) private var model
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if let u = model.usage {
+                    HStack(alignment: .top) {
+                        stat("\(u.sessions7)", "chats, 7d")
+                        stat(WidgetSnapshot.Usage.tokens(u.tokens7), "tokens, 7d")
+                    }
+                    UsageBlocks(days: u.days, weeks: nil)
+                        .frame(height: 62)
+                        .accessibilityLabel("Activity blocks, one per day")
+                    HStack(alignment: .top) {
+                        stat("\(u.sessions30)", "chats, 30d")
+                        stat("\(u.activeDays30)", "active days")
+                    }
+                    if let m = u.topModel { Label(m, systemImage: "cpu").font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                    Text("Updated \(u.updatedAt, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Text("No numbers yet. They arrive from the gateway's analytics.").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .navigationTitle("Overview")
+        .task { await model.loadUsage() }
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(value).font(.system(.title3, design: .rounded).weight(.bold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+            Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
 
 /// What the complications open to: the chats waiting for an answer and the ones at work, with
 /// the gateway's state on top. A row opens its chat.
@@ -78,7 +124,7 @@ struct WatchBotFace: View {
     var body: some View {
         let looks = model.looks
         let key = looks.key(profile: profile, label: label ?? "") ?? profile
-        if looks.avatars[key] == "photo", let data = looks.photos[key], let img = UIImage(data: data) {
+        if looks.avatars[key] == "photo", let data = looks.photos[key], let img = WatchPhotoCache.image(key: key, data: data) {
             Image(uiImage: img).resizable().scaledToFill()
                 .frame(width: size, height: size).clipShape(.circle)
         } else {
@@ -86,6 +132,19 @@ struct WatchBotFace: View {
             BotFaceView(spec: BotLookSpec.from(choice: looks.avatars[key], hex: hex), size: size, active: false, drawn: true)
                 .frame(width: size, height: size)
         }
+    }
+}
+
+/// A bot's photo, decoded once: a list of chats used to decode the same JPEG for every row on
+/// every redraw.
+@MainActor
+enum WatchPhotoCache {
+    private static var images: [String: (bytes: Int, image: UIImage)] = [:]
+    static func image(key: String, data: Data) -> UIImage? {
+        if let hit = images[key], hit.bytes == data.count { return hit.image }
+        guard let img = UIImage(data: data) else { return nil }
+        images[key] = (data.count, img)
+        return img
     }
 }
 
@@ -108,8 +167,19 @@ struct WatchChatsView: View {
                     }
                 }
                 Section {
-                    NavigationLink(value: WatchActivityRoute()) { Label("Activity", systemImage: "bolt.horizontal.circle") }
-                    Button { showNewChat = true } label: { Label("New chat", systemImage: "square.and.pencil") }
+                    // One row for the three ways out of the list, so the chats start on the
+                    // first screen instead of under three full-width rows.
+                    HStack(spacing: 6) {
+                        Button { showNewChat = true } label: { Image(systemName: "square.and.pencil").frame(maxWidth: .infinity) }
+                            .accessibilityLabel("New chat")
+                        Button { path.append(WatchActivityRoute()) } label: { Image(systemName: "bolt.horizontal.circle").frame(maxWidth: .infinity) }
+                            .accessibilityLabel("Activity")
+                        Button { path.append(WatchOverviewRoute()) } label: { Image(systemName: "square.grid.3x3.fill").frame(maxWidth: .infinity) }
+                            .accessibilityLabel("Overview")
+                    }
+                    .buttonStyle(.bordered)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     ForEach(model.sessions.filter { !rt.needsAttention.contains($0.id) }) { s in
                         NavigationLink(value: s.id) { WatchSessionRow(session: s, badge: rt.chatForStored(s.id)?.isRunning == true ? "ellipsis.message" : nil, showBot: merged) }
                     }
@@ -252,7 +322,10 @@ struct WatchSessionRow: View {
         HStack(spacing: 8) {
             if showBot { WatchBotFace(profile: session.profile ?? "?", size: 24) }
             VStack(alignment: .leading, spacing: 2) {
-                Text(summary?.title ?? session.displayTitle).font(.headline).lineLimit(2)
+                HStack(spacing: 4) {
+                    if session.pinned == true { Image(systemName: "pin.fill").font(.system(size: 9)).foregroundStyle(.secondary) }
+                    Text(summary?.title ?? session.displayTitle).font(.headline).lineLimit(2)
+                }
                 Text(summary?.summary ?? session.preview ?? "").font(.caption2).foregroundStyle(.secondary).lineLimit(summary == nil ? 1 : 2)
             }
             Spacer(minLength: 0)
@@ -280,6 +353,8 @@ struct WatchChatView: View {
     @State private var profile: String?
     /// Messages on screen: the last few at first, more with "Show earlier".
     @State private var shown = 12
+    /// When the thread last followed the stream to its end.
+    @State private var lastFollow = Date.distantPast
 
     var body: some View {
         Group {
@@ -306,7 +381,13 @@ struct WatchChatView: View {
                     .task { try? await Task.sleep(for: .milliseconds(350)); proxy.scrollTo("bottom", anchor: .bottom) }
                     .onChange(of: chat.isResuming) { _, resuming in if !resuming { proxy.scrollTo("bottom", anchor: .bottom) } }
                     .onChange(of: chat.items.count) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-                    .onChange(of: chat.items.last) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+                    // A reply grows token by token: following every one of them made the wrist
+                    // lay the thread out dozens of times a second.
+                    .onChange(of: chat.items.last) { _, _ in
+                        let now = Date()
+                        if now.timeIntervalSince(lastFollow) > 0.35 { lastFollow = now; proxy.scrollTo("bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: chat.isRunning) { _, running in if !running { proxy.scrollTo("bottom", anchor: .bottom) } }
                     .onChange(of: chat.firstCard?.id) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                 }
                 .navigationTitle(chat.title)
@@ -397,6 +478,13 @@ struct WatchChatView: View {
 
     private func pollLoop(_ rt: GatewayRuntime) async {
         while !Task.isCancelled {
+            // The socket came up after this chat opened (Wi-Fi joined, or it was still
+            // connecting): move to the live path instead of polling for the rest of the visit.
+            if model.socketUsable, let live = try? await rt.openChat(storedID: storedID, title: nil) {
+                chat = live
+                proxied = false
+                return
+            }
             await refreshProxied(rt)
             try? await Task.sleep(for: .seconds(running ? 2 : 6))
         }
@@ -446,11 +534,23 @@ struct WatchTranscriptRow: View {
     var body: some View {
         switch item.kind {
         case .user(let t, _):
-            HStack { Spacer(minLength: 24); Text(t).font(.footnote).padding(8).background(Color.accentColor, in: .rect(cornerRadius: 12)).foregroundStyle(.white) }
+            if let notice = WatchNotice.parse(t) {
+                // Another bot writing in, or the gateway reporting: a quiet line, not your own bubble.
+                VStack(alignment: .leading, spacing: 2) {
+                    Label(notice.title, systemImage: notice.symbol).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                    if !notice.body.isEmpty { Text(notice.body).font(.caption2).foregroundStyle(.secondary).lineLimit(3) }
+                }
+            } else {
+                HStack { Spacer(minLength: 24); Text(t).font(.footnote).padding(8).background(Color.accentColor, in: .rect(cornerRadius: 12)).foregroundStyle(.white) }
+            }
         case .assistant(let t, _, let streaming):
             HStack(alignment: .bottom, spacing: 4) {
                 if let profile { WatchBotFace(profile: profile, size: 16) }
-                Text(t.isEmpty && streaming ? "…" : t).font(.footnote).padding(8).background(Color.gray.opacity(0.25), in: .rect(cornerRadius: 12))
+                // Bold, italics, code and links once the reply is whole; plain while it streams.
+                Group {
+                    if streaming { Text(t.isEmpty ? "…" : t) } else { Text(WatchMarkdown.inline(t)) }
+                }
+                .font(.footnote).padding(8).background(Color.gray.opacity(0.25), in: .rect(cornerRadius: 12))
                 Spacer(minLength: 12)
             }
         case .tool(let a):
@@ -466,6 +566,39 @@ struct WatchTranscriptRow: View {
             Text(t).font(.caption).padding(6).background(Color.gray.opacity(0.3), in: .rect(cornerRadius: 10))
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
+    }
+}
+
+/// A message in the user's seat that is not the user's: another bot, or the gateway.
+struct WatchNotice {
+    var title: String
+    var body: String
+    var symbol: String
+
+    /// Cheap checks first: almost every message is an ordinary one.
+    static func parse(_ text: String) -> WatchNotice? {
+        let t = text.drop { $0 == " " || $0 == "\n" }
+        if t.hasPrefix("Message from") || t.hasPrefix("[Message from agent") {
+            if let m = AgentMessage.parse(text) { return WatchNotice(title: "Message from \(m.sender)", body: m.body, symbol: "bubble.left.and.bubble.right") }
+        } else if t.hasPrefix("[") {
+            if let n = InjectedNote.parse(text) { return WatchNotice(title: n.title, body: "", symbol: "gearshape.2") }
+        }
+        return nil
+    }
+}
+
+/// Inline markdown for finished replies, parsed once per text.
+@MainActor
+enum WatchMarkdown {
+    private static var cache: [Int: AttributedString] = [:]
+
+    static func inline(_ text: String) -> AttributedString {
+        let key = text.hashValue
+        if let hit = cache[key] { return hit }
+        let parsed = (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible))) ?? AttributedString(text)
+        if cache.count > 80 { cache.removeAll(keepingCapacity: true) }
+        cache[key] = parsed
+        return parsed
     }
 }
 
@@ -492,6 +625,11 @@ struct WatchCardView: View {
             } else if let c = card.clarify {
                 Label("Question", systemImage: "questionmark.bubble").font(.caption.weight(.semibold))
                 Text(c.question ?? c.questions?.first?.question ?? "").font(.footnote)
+                // Offered answers are buttons: one tap, no typing on the wrist.
+                ForEach((c.choices ?? c.questions?.first?.choices ?? []).prefix(6), id: \.self) { choice in
+                    Button(choice) { Task { await chat.respond(card: card, result: ["answer": .string(choice)]) } }
+                        .font(.footnote)
+                }
                 TextField("Answer", text: $answer)
                 Button("Send") { Task { await chat.respond(card: card, result: ["answer": .string(answer)]) } }.disabled(answer.isEmpty)
             } else {
@@ -557,6 +695,20 @@ struct WatchSettingsView: View {
                         LabeledContent("Status", value: rt.socketState.label)
                         LabeledContent("Bot", value: model.listProfile == "*" ? "All bots" : (model.listProfile ?? rt.selectedProfile ?? "—"))
                         LabeledContent("Summaries", value: model.summaries.isEmpty ? "off on iPhone" : "\(model.summaries.count) from iPhone")
+                    }
+                    if model.store.connections.count > 1 {
+                        // More than one saved gateway: the watch can move between them itself.
+                        Section("Gateways") {
+                            ForEach(model.store.connections) { c in
+                                Button { Task { await model.activate(c); dismiss() } } label: {
+                                    HStack {
+                                        Text(c.name).lineLimit(1)
+                                        Spacer()
+                                        if c.id == rt.connection.id { Image(systemName: "checkmark") }
+                                    }
+                                }
+                            }
+                        }
                     }
                     Section {
                         Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }

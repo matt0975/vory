@@ -16,5 +16,9 @@
 	<array>
 		<string>$(AppIdentifierPrefix)com.vorantx.vory.shared</string>
 	</array>
+	<!-- iCloud key-value storage: settings and bot looks, the same on the person's devices.
+	     The same value on iOS and the Mac, so they share one store. No CloudKit container. -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>$(TeamIdentifierPrefix)com.vorantx.vory</string>
 </dict>
 </plist>

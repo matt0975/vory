@@ -11,6 +11,7 @@ struct HermesLiveActivityBundle: WidgetBundle {
         ActivityWidget()
         ContextWidget()
         OverviewWidget()
+        BlocksWidget()
     }
 }
 

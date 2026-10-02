@@ -185,3 +185,119 @@ struct CloudSyncTests {
         #expect(CloudMerge.hash(Data("abc".utf8)) == CloudMerge.hash(Data("abc".utf8)))
     }
 }
+
+/// The gateway list between two devices: one shared "cloud" file, a list and a defaults suite each.
+@MainActor
+struct CloudGatewayTests {
+    final class FakeStore: GatewayStoring {
+        var connections: [GatewayConnection] = []
+        var secretsByID: [UUID: GatewaySecrets] = [:]
+        func connection(id: UUID) -> GatewayConnection? { connections.first { $0.id == id } }
+        func secrets(for id: UUID) -> GatewaySecrets { secretsByID[id] ?? GatewaySecrets() }
+        func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws {
+            if let i = connections.firstIndex(where: { $0.id == connection.id }) { connections[i] = connection } else { connections.append(connection) }
+            secretsByID[connection.id] = secrets
+        }
+        func remove(_ id: UUID) { connections.removeAll { $0.id == id }; secretsByID[id] = nil }
+    }
+
+    final class Cloud { var file = CloudGatewayFile(); var clock: Double = 1_000
+        var storage: CloudGateways.Storage { .init(load: { self.file }, save: { self.file = $0 }) }
+        func tick() -> Double { clock += 1; return clock }
+    }
+
+    final class Device {
+        let store = FakeStore()
+        let defaults: UserDefaults
+        let cloud: Cloud
+        init(_ cloud: Cloud) {
+            let suite = "gateway-test-\(UUID().uuidString)"
+            defaults = UserDefaults(suiteName: suite)!
+            defaults.removePersistentDomain(forName: suite)
+            self.cloud = cloud
+        }
+        @MainActor @discardableResult func sync(importNew: Bool = true) -> CloudGateways.Outcome {
+            CloudGateways.reconcile(store: store, importNew: importNew, storage: cloud.storage, defaults: defaults, now: cloud.tick())
+        }
+    }
+
+    private func gateway(_ name: String, _ url: String, token: String = "t") throws -> (GatewayConnection, GatewaySecrets) {
+        (GatewayConnection(name: name, gateway: try GatewayURL.normalize(url, pathPrefix: nil), authMode: .sessionToken), GatewaySecrets(sessionToken: token))
+    }
+
+    @Test func aRenameAndANewTokenTravelOnceAndDoNotBounce() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        let (g, s) = try gateway("Home", "https://hermes.example.com")
+        try phone.store.upsert(g, secrets: s)
+        phone.sync()
+        #expect(mac.sync().added.count == 1)
+        #expect(mac.store.connections.first?.name == "Home")
+
+        // Renamed and given a new token on the phone.
+        var renamed = g; renamed.name = "House"
+        try phone.store.upsert(renamed, secrets: GatewaySecrets(sessionToken: "t2"))
+        #expect(phone.sync().pushed)
+        let down = mac.sync()
+        #expect(down.changed == [g.id] && !down.pushed)
+        #expect(mac.store.connections.first?.name == "House")
+        #expect(mac.store.secrets(for: g.id).sessionToken == "t2")
+
+        // Settled: nothing goes back up from either side, pass after pass.
+        for _ in 0..<3 {
+            #expect(phone.sync() == CloudGateways.Outcome())
+            #expect(mac.sync() == CloudGateways.Outcome())
+        }
+        #expect(cloud.file.gateways.count == 1 && cloud.file.gateways[0].connection.name == "House")
+    }
+
+    @Test func aDeviceWithNoGatewayTakesNoneUntilItRestores() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        let (g, s) = try gateway("Home", "https://hermes.example.com")
+        try phone.store.upsert(g, secrets: s)
+        phone.sync()
+        #expect(mac.sync(importNew: false).added.isEmpty && mac.store.connections.isEmpty)
+        #expect(mac.sync(importNew: true).added.count == 1)
+    }
+
+    @Test func theSameAddressAddedAgainAfterAResetIsNotASecondGateway() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        let (g, s) = try gateway("Home", "https://hermes.example.com")
+        try phone.store.upsert(g, secrets: s)
+        phone.sync(); mac.sync()
+
+        // The phone is reset (its list and its memory gone) and the same gateway added again: a new id.
+        let reset = Device(cloud)
+        let (again, s2) = try gateway("Home", "https://hermes.example.com")
+        #expect(again.id != g.id)
+        try reset.store.upsert(again, secrets: s2)
+        reset.sync(importNew: false)
+        #expect(cloud.file.gateways.count == 1)
+        mac.sync()
+        #expect(mac.store.connections.count == 1)
+    }
+
+    @Test func aLoopbackAddressStaysOnItsDevice() throws {
+        let cloud = Cloud(), mac = Device(cloud), phone = Device(cloud)
+        let (local, s) = try gateway("This Mac", "http://127.0.0.1:9119")
+        let (real, s2) = try gateway("Home", "https://hermes.example.com")
+        try mac.store.upsert(local, secrets: s)
+        try mac.store.upsert(real, secrets: s2)
+        mac.sync()
+        #expect(cloud.file.gateways.map(\.connection.name) == ["Home"])
+        #expect(phone.sync().added.map(\.connection.name) == ["Home"])
+    }
+
+    @Test func aGatewayRemovedOnOneDeviceDoesNotComeBackFromAnother() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        let (g, s) = try gateway("Home", "https://hermes.example.com")
+        try phone.store.upsert(g, secrets: s)
+        phone.sync(); mac.sync()
+        phone.store.remove(g.id)
+        phone.sync()
+        #expect(cloud.file.gateways.isEmpty && cloud.file.deleted[g.id.uuidString] != nil)
+        // The Mac still has its own copy and does not put it back.
+        mac.sync()
+        #expect(cloud.file.gateways.isEmpty)
+        #expect(phone.sync().added.isEmpty)
+    }
+}

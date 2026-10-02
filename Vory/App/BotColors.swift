@@ -143,6 +143,8 @@ enum BotLooksMirror {
         #if os(iOS)
         WatchSync.shared.refresh()
         #endif
+        // A look changed (a photo replaced leaves no setting behind to notice): iCloud gets it.
+        CloudSync.shared.looksChanged()
     }
 
     private static func thumbnail(_ image: UIImage) -> Data? {
