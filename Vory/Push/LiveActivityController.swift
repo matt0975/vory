@@ -87,6 +87,8 @@ final class LiveActivityController: TurnActivityReporting {
     nonisolated(unsafe) private static var pushToStartTask: Task<Void, Never>?
     nonisolated(unsafe) private static var startedByPushTask: Task<Void, Never>?
     nonisolated(unsafe) private static var adoptedTokenTasks: [String: Task<Void, Never>] = [:]
+    nonisolated(unsafe) private static var adoptedIDs: Set<String> = []
+    private nonisolated static let adoptLock = NSLock()
 
     /// Called once at launch. Publishes the push-to-start token, and for every activity the
     /// system starts on a push, publishes that activity's own update token under its session so
@@ -122,10 +124,20 @@ final class LiveActivityController: TurnActivityReporting {
     /// only reports changes). Once per activity.
     nonisolated private static func adopt(_ a: Activity<HermesTurnAttributes>, why: String) {
         let id = a.id
-        guard adoptedTokenTasks[id] == nil else { return }
+        // Claimed under a lock: at a background launch for a push-started activity this runs on
+        // the main thread (activities showing at launch) and on the `activityUpdates` task at
+        // the same moment, for the same activity. Two unguarded writes to the table aborted
+        // the app as it launched.
+        adoptLock.lock()
+        let claimed = adoptedIDs.insert(id).inserted
+        adoptLock.unlock()
+        guard claimed else { return }
         note("activity \(id.prefix(6)) appeared (\(why))")
         let h = ActivityHandle(a)
-        adoptedTokenTasks[id] = h.observePushTokens(storedID: a.attributes.storedSessionID, startedAt: a.content.state.startedAt)
+        let task = h.observePushTokens(storedID: a.attributes.storedSessionID, startedAt: a.content.state.startedAt)
+        adoptLock.lock()
+        adoptedTokenTasks[id] = task
+        adoptLock.unlock()
         if let token = a.pushToken {
             let hex = token.map { String(format: "%02x", $0) }.joined()
             NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil,
