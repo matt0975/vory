@@ -89,7 +89,10 @@ public final class NativeAuthClient: NSObject {
                     }
                 }
                 listener.onCallback = { code, st in finish(.success((code, st))) }
-                let session = ASWebAuthenticationSession(url: url, callback: .customScheme("hermesremote")) { _, error in
+                // Not the main actor's: on the Mac the system calls this back on its own queue.
+                // Written in a main-actor method the closure was taken for a main-actor one,
+                // and the runtime's check stopped the app the moment the browser sheet closed.
+                let session = ASWebAuthenticationSession(url: url, callback: .customScheme("hermesremote")) { @Sendable _, error in
                     if let error {
                         if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { finish(.failure(NativeAuthError.cancelled)) }
                         else { finish(.failure(error)) }
