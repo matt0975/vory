@@ -285,7 +285,8 @@ gateway restart (one tap in the same screen). The systemd/launchd installer rema
 A native macOS app (`VoryMac` target, same bundle id, macOS 26) built from the same views as the phone.
 Shared files carry `#if os(iOS)` / `#if os(macOS)` where the platforms differ; Mac-only pieces live in `VoryMac/`.
 
-- **Window**: a rail of pages on the left (every page can be switched on in Settings › Appearance › Sidebar,
+- **Window**: a rail of pages on the left with the same icons as the phone's tab bar (any number of pages:
+  *More* at the foot of the rail switches them on and off, Settings › Appearance › Sidebar sets their order,
   ⌘1–⌘9 open the first nine), the chat list beside the open chat, and the thread and composer in a reading
   column. One window; closing it leaves the menu bar item, which brings it back.
 - **Chat**: Return sends, Shift-Return adds a line, drop files or paste images into the composer,
@@ -296,9 +297,15 @@ Shared files carry `#if os(iOS)` / `#if os(macOS)` where the platforms differ; M
   and a badge on the Dock icon for what needs you.
 - **Notifications**: the same relay and Companion as the phone; a Mac notification service extension
   decrypts them. On the iPhone, *Settings › Notifications › Quiet for chats driven from a Mac* keeps the
-  phone silent for a chat whose last message was sent from the Mac (Companion 1.0.35).
-- **Bot looks** follow the phone: it publishes colours, bodies and photos to `<profile home>/push/looks.json`
-  and the Mac reads them. The Mac does not write that file.
+  phone silent for a chat whose last message was sent from the Mac (Companion 1.0.35). Companion 1.0.36
+  ends a Live Activity only once the gateway confirms the turn is idle, and carries the status line a
+  device wrote into the updates it pushes, so a line written on the Mac reaches the phone's card.
+- **iCloud sync** (Settings › iCloud Sync, both platforms): the settings that follow the person (the name
+  on Home among them), each bot's look and the saved gateways are the same on every device signed in to
+  the same iCloud. Settings and looks go through the iCloud key-value store, gateways through iCloud
+  Keychain; nothing is stored on the gateway or by Vory. The first screen offers *Restore from iCloud*.
+- **Projects**: *Filters › Group by project* lists chats under their projects; a chat moves to another
+  project from its menu (the gateway re-homes its working folder, `session.workspace.move`).
 - **Files**: drop files on the page to upload, drag one out to the Finder, or *Save As…* from the context menu.
 - **Widgets** for the desktop and Notification Center (`VoryMacWidgets`): Status, Needs you, Activity,
   Overview and Context, from the same snapshot as the phone's.

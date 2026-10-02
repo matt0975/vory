@@ -50,6 +50,8 @@ struct CloudSummary: Equatable {
     var settings = 0
     var bots = 0
     var gateways = 0
+    /// The name Home greets the person by, when iCloud holds one.
+    var name: String?
     /// The device that wrote last, other than this one when there is another.
     var device: String?
     var date: Date?
@@ -88,7 +90,7 @@ struct CloudMerge {
     /// list filters, caches, and anything that identifies the install.
     static let syncedSettings: [String] = [
         AppTheme.accentKey, "colorSchemePreference",
-        HomeLayout.storageKey, HomeLayout.allBotsKey, "user.name",
+        HomeLayout.storageKey, HomeLayout.allBotsKey, nameKey,
         ChatStyle.showToolCalls, ChatStyle.showReasoning, ChatStyle.showTurnStats, ChatStyle.showSystemNotes,
         ChatStyle.showBots, ChatStyle.showToolOutput, ChatStyle.currentStepOnly, ChatStyle.compactTools,
         ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies,
@@ -96,6 +98,8 @@ struct CloudMerge {
         ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey, ChatGoals.enabledKey,
     ]
 
+    /// The name Home greets the person by.
+    static let nameKey = "user.name"
     static let stampsKey = "cloudSync.stamps"
     static let seenKey = "cloudSync.seen"
     /// When this device joined the sync: cloud entries older than that are not taken by themselves.
@@ -232,7 +236,10 @@ struct CloudMerge {
         var s = CloudSummary()
         var latest: (name: String, t: Double, own: Bool)?
         for key in cloud.cloudKeys {
-            if key.hasPrefix(Self.settingPrefix) { s.settings += 1 }
+            if key.hasPrefix(Self.settingPrefix) {
+                s.settings += 1
+                if key == Self.settingPrefix + Self.nameKey, let n = ((cloud.cloudValue(key) as? [String: Any])?["v"] as? String)?.trimmingCharacters(in: .whitespaces), !n.isEmpty { s.name = n }
+            }
             else if key.hasPrefix(Self.lookPrefix) {
                 if (cloud.cloudValue(key) as? [String: Any])?["gone"] as? Bool != true { s.bots += 1 }
             } else if key.hasPrefix(Self.devicePrefix), let d = cloud.cloudValue(key) as? [String: Any], let t = d["t"] as? Double {

@@ -23,6 +23,7 @@ struct CloudSyncView: View {
             }
 
             Section {
+                if let name = summary.name { LabeledContent("Your name", value: name) }
                 LabeledContent("Settings", value: summary.settings == 0 ? "none" : "\(summary.settings)")
                 LabeledContent("Bot looks", value: summary.bots == 0 ? "none" : "\(summary.bots)")
                 LabeledContent("Gateways", value: summary.gateways == 0 ? "none" : "\(summary.gateways)")
@@ -138,14 +139,15 @@ struct CloudRestoreSheet: View {
     }
 
     @ViewBuilder private func found(_ s: CloudSummary) -> some View {
-        Text("Found your Vory").font(.title3.weight(.semibold))
+        // The name Home greets them by comes back with the rest; saying it shows whose backup this is.
+        Text(s.name.map { "Welcome back, \($0)" } ?? "Found your Vory").font(.title3.weight(.semibold))
         if let device = s.device, let date = s.date {
             Text("Last changed on \(device), \(date.formatted(date: .abbreviated, time: .shortened))").font(.callout).foregroundStyle(.secondary)
         }
         VStack(alignment: .leading, spacing: 10) {
             line("network", s.gateways == 0 ? "No saved gateways" : (s.gateways == 1 ? "1 gateway" : "\(s.gateways) gateways"))
             line("cloud", s.bots == 0 ? "No bot looks" : (s.bots == 1 ? "Looks for 1 bot" : "Looks for \(s.bots) bots"))
-            line("slider.horizontal.3", s.settings == 0 ? "No settings" : "Your settings")
+            line("slider.horizontal.3", s.settings == 0 ? "No settings" : (s.name == nil ? "Your settings" : "Your settings and your name on Home"))
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)

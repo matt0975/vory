@@ -110,6 +110,56 @@ struct CloudSyncTests {
         #expect(macDefaults.string(forKey: "user.name") == "Sam")
     }
 
+    // The name Home greets the person by, on every path it can take.
+
+    @Test func theNameOnHomeIsBackedUpAndRestored() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        phoneDefaults.set("Sam", forKey: CloudMerge.nameKey)
+        phone.reconcile(.backUp)
+        #expect(mac.summary().name == "Sam", "the restore sheet cannot say whose backup it found")
+
+        // A new device that chooses Restore, with no name of its own or with another one typed.
+        mac.reconcile(.restore)
+        #expect(macDefaults.string(forKey: CloudMerge.nameKey) == "Sam")
+        let (pad, padDefaults) = device(cloud, clock, id: "pad")
+        padDefaults.set("Samantha", forKey: CloudMerge.nameKey)
+        pad.reconcile(.restore)
+        #expect(padDefaults.string(forKey: CloudMerge.nameKey) == "Sam")
+
+        // Back Up takes this device's side, the name included.
+        pad.reconcile(.merge)
+        padDefaults.set("Samantha", forKey: CloudMerge.nameKey)
+        pad.reconcile(.backUp)
+        mac.reconcile(.merge)
+        #expect(macDefaults.string(forKey: CloudMerge.nameKey) == "Samantha")
+    }
+
+    @Test func aNameAlreadyOnOneDeviceReachesTheOnesThatJoinedBeforeIt() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        // The Mac has synced for a while and never had a name; the phone has had one for months
+        // and only now gets a build that syncs.
+        mac.reconcile(.merge)
+        phoneDefaults.set("Sam", forKey: CloudMerge.nameKey)
+        #expect(phone.reconcile(.merge).pushed == 1)
+        #expect(mac.reconcile(.merge).applied == 1)
+        #expect(macDefaults.string(forKey: CloudMerge.nameKey) == "Sam")
+
+        // A later change of name travels too, and clearing it clears it everywhere.
+        macDefaults.set("Sam W", forKey: CloudMerge.nameKey)
+        mac.reconcile(.merge)
+        phone.reconcile(.merge)
+        #expect(phoneDefaults.string(forKey: CloudMerge.nameKey) == "Sam W")
+        phoneDefaults.set("", forKey: CloudMerge.nameKey)
+        phone.reconcile(.merge)
+        mac.reconcile(.merge)
+        #expect(macDefaults.string(forKey: CloudMerge.nameKey) == "")
+        #expect(mac.summary().name == nil)
+    }
+
     @Test func aResetDeviceJoinsAgainAsNew() {
         let cloud = MemoryCloudStore(), clock = Clock()
         let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
