@@ -318,7 +318,7 @@ final class AppModel {
                 // The socket may still be connecting right after a background launch.
                 let deadline = Date().addingTimeInterval(12)
                 while rt.socketState != .open, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-                if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil) {
+                if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil, profile: r.profile) {
                     LiveActivityController.note("reply from notification → sending to \(r.storedSessionID.prefix(12))")
                     await chat.send(text)
                 } else {
@@ -326,7 +326,7 @@ final class AppModel {
                 }
                 return
             }
-            if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil) {
+            if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil, profile: r.profile) {
                 let choice = action == LocalNotifier.approveOnceAction ? "once" : "deny"
                 let deadline = Date().addingTimeInterval(8)
                 while chat.cards.isEmpty, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }

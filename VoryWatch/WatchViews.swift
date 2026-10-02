@@ -408,7 +408,7 @@ struct WatchChatView: View {
             profile = model.sessions.first { $0.id == storedID }?.profile
             title = model.sessions.first { $0.id == storedID }?.displayTitle ?? "Chat"
             if model.socketUsable {
-                do { chat = try await rt.openChat(storedID: storedID, title: nil); return } catch { /* fall through */ }
+                do { chat = try await rt.openChat(storedID: storedID, title: nil, profile: profile); return } catch { /* fall through */ }
             }
             // No socket yet (the Bluetooth link never opens one): show the last messages over
             // REST at once instead of waiting on a socket that may never come, and keep polling.

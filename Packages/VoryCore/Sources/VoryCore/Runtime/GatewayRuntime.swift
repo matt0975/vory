@@ -214,6 +214,57 @@ public final class GatewayRuntime {
         return .object(p.compactingNulls)
     }
 
+    /// A chat's own call: the bot that owns the chat and no other. No fallback to the selected
+    /// bot, which may have changed since the chat was opened.
+    public nonisolated static func params(_ base: [String: JSONValue], owner: String?) -> JSONValue {
+        var p = base
+        if let owner, !owner.isEmpty { p["profile"] = .string(owner) }
+        return .object(p.compactingNulls)
+    }
+
+    public func rpc(_ method: String, _ params: [String: JSONValue] = [:], owner: String?, timeout: Double = 120) async throws -> JSONValue {
+        try await socket.waitUntilReady()
+        return try await socket.call(method, params: Self.params(params, owner: owner), timeout: timeout)
+    }
+
+    /// Which bot's store holds a chat, for an open that was not told (a notification without
+    /// its bot, a card for a chat started elsewhere). One small request per bot, the selected
+    /// one first. Returns nil when no store has it yet (a chat seconds old), and throws when
+    /// the gateway could not be asked: guessing is what moves chats.
+    public func ownerProfile(ofStored id: String) async throws -> String? {
+        if profiles.isEmpty { await loadProfiles() }
+        let names = Self.lookupOrder(profiles: profiles.map(\.name), selected: selectedProfile)
+        var found: [(name: String, archived: Bool)] = []
+        var failure: Error?
+        for name in names {
+            do {
+                let row: JSONValue = try await api.get("/api/sessions/\(id)", profile: name)
+                let archived = row["archived"]?.boolValue ?? ((row["archived"]?.doubleValue ?? 0) != 0)
+                found.append((name, archived))
+                if !archived { break }
+            } catch HermesAPIError.http(let status, _) where status == 404 {
+                continue
+            } catch {
+                failure = error
+            }
+        }
+        if let owner = Self.owner(among: found) { return owner }
+        if let failure { throw failure }
+        return selectedProfile
+    }
+
+    /// The selected bot first (the usual answer), then the rest in the gateway's order.
+    public nonisolated static func lookupOrder(profiles: [String], selected: String?) -> [String] {
+        guard let selected, profiles.contains(selected) else { return profiles }
+        return [selected] + profiles.filter { $0 != selected }
+    }
+
+    /// A live copy over an archived one: after the gateway has moved a chat, the store it
+    /// left keeps the id as an archived row.
+    public nonisolated static func owner(among found: [(name: String, archived: Bool)]) -> String? {
+        found.first { !$0.archived }?.name ?? found.first?.name
+    }
+
     /// `profile`: this call's bot instead of the selected one (a read-only look at another
     /// bot's chat keeps the selection where it was).
     public func rpc(_ method: String, _ params: [String: JSONValue] = [:], profile: String? = nil, timeout: Double = 120) async throws -> JSONValue {
@@ -229,9 +280,18 @@ public final class GatewayRuntime {
     /// Opens (or returns) the live chat for a stored session id.
     /// Returns immediately with the cached transcript; the live attach runs behind it
     /// (`ChatSession.isResuming` / `resumeError`). Pass `waitForResume` to keep the old blocking contract.
+    /// `profile`: the bot whose store holds the chat. When the caller does not know it, the
+    /// gateway is asked before anything is resumed: a `session.resume` sent under another bot
+    /// does not fail, it makes the gateway move the chat into that bot's store.
     public func openChat(storedID: String, title: String?, profile: String? = nil, waitForResume: Bool = false) async throws -> ChatSession {
         if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
-        let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: profile)
+        var owner = profile
+        if owner == nil || owner!.isEmpty {
+            owner = try await ownerProfile(ofStored: storedID)
+            // Another open of the same chat may have finished while the gateway was asked.
+            if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
+        }
+        let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: owner)
         registry.add(session)
         session.beginResume()
         if waitForResume {
@@ -251,7 +311,7 @@ public final class GatewayRuntime {
 
     public func closeChat(_ chat: ChatSession) {
         registry.remove(chat)
-        Task { _ = try? await socket.call("session.close", params: profileParams(["session_id": .string(chat.runtimeID)])) }
+        Task { _ = try? await socket.call("session.close", params: Self.params(["session_id": .string(chat.runtimeID)], owner: chat.profile)) }
     }
 
     // MARK: Events
@@ -293,7 +353,7 @@ public final class GatewayRuntime {
         // elsewhere): refusing it withdraws the prompt, so open the session and show the card.
         let stored = req.params["stored_session_id"]?.stringValue ?? req.sessionID
         log.warning("server request \(req.method, privacy: .public) for unopened session \(stored, privacy: .public); opening it")
-        if let chat = try? await openChat(storedID: stored, title: nil, waitForResume: true) {
+        if let chat = try? await openChat(storedID: stored, title: nil, profile: req.params["profile"]?.stringValue, waitForResume: true) {
             return await chat.answer(serverRequest: req)
         }
         return nil

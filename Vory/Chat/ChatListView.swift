@@ -102,7 +102,7 @@ struct ChatListView: View {
         }
         let next = current.map { min(max($0 + direction, 0), list.count - 1) } ?? 0
         switch list[next] {
-        case .session(let s): open(ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil))
+        case .session(let s): open(ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile))
         case .room(let r): open(RoomRoute(room: r))
         }
     }
@@ -204,7 +204,7 @@ struct ChatListView: View {
                 // Already looking at that chat: nothing to push (a second copy of the same chat
                 // used to land on top, and a confirmation asked there could go to the covered one).
                 guard model.visibleChatID != r.storedSessionID else { return }
-                open(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.kind == "readonly" ? r.profile : nil, readOnly: r.kind == "readonly"))
+                open(ChatRoute(storedID: r.storedSessionID, title: r.kind == "readonly" ? "Bot Chat" : nil, profile: r.profile, readOnly: r.kind == "readonly"))
             }
             .alert("Delete group chat?", isPresented: Binding(get: { pendingRoomDelete != nil }, set: { if !$0 { pendingRoomDelete = nil } })) {
                 Button("Delete", role: .destructive) { if let r = pendingRoomDelete { Task { await deleteRoom(r) } } }
@@ -459,8 +459,11 @@ struct ChatListView: View {
                     for try await part in group { all += part }
                 }
             } else {
-                let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: runtime.selectedProfile)
-                all = r.sessions
+                // Each row carries the bot it was listed for: opening it later must not depend
+                // on which bot is selected by then.
+                let listed = runtime.selectedProfile
+                let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: listed)
+                all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
             // Chats open in the app that the gateway does not list yet: a new chat gets its
             // stored row on the first prompt and the row fills in as the turn flushes, so a chat
@@ -507,9 +510,10 @@ struct ChatListView: View {
     private func search(_ q: String) async {
         guard let runtime, !q.trimmingCharacters(in: .whitespaces).isEmpty else { searchResults = []; return }
         do {
-            let r: JSONValue = try await runtime.api.get("/api/sessions/search", query: [URLQueryItem(name: "q", value: q)], profile: runtime.selectedProfile)
+            let searched = runtime.selectedProfile
+            let r: JSONValue = try await runtime.api.get("/api/sessions/search", query: [URLQueryItem(name: "q", value: q)], profile: searched)
             let arr = r["sessions"]?.arrayValue ?? r["results"]?.arrayValue ?? r.arrayValue ?? []
-            searchResults = arr.compactMap { try? $0.decode(StoredSession.self) }
+            searchResults = arr.compactMap { try? $0.decode(StoredSession.self) }.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = searched }; return s }
         } catch { errorText = error.localizedDescription }
     }
 
@@ -575,7 +579,7 @@ struct ChatListView: View {
     }
 
     @ViewBuilder private func sessionRow(_ s: StoredSession, runtime: GatewayRuntime) -> some View {
-        let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: allBots ? s.profile : nil)
+        let route = ChatRoute(storedID: s.id, title: s.displayTitle, profile: s.profile)
                 rowLink(route, selected: selectedID == s.id) {
                     SessionRow(session: s, needsYou: runtime.needsAttention.contains(s.id), live: runtime.chatForStored(s.id)?.isRunning ?? false, showBot: rowsShowBot,
                                botProfile: s.profile ?? runtime.selectedProfile,

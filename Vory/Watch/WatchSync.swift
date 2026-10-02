@@ -78,7 +78,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
             guard let chat = try? await rt.newChat() else { return ["ok": false, "error": "could not create a chat"] }
             return ["ok": true, "session": chat.storedID, "title": chat.title]
         }
-        guard let sid = m["session"] as? String, let chat = try? await rt.openChat(storedID: sid, title: nil, waitForResume: true) else { return ["ok": false, "error": "could not open the chat"] }
+        guard let sid = m["session"] as? String, let chat = try? await rt.openChat(storedID: sid, title: nil, profile: m["profile"] as? String, waitForResume: true) else { return ["ok": false, "error": "could not open the chat"] }
         switch op {
         case "prompt":
             guard let text = m["text"] as? String, !text.isEmpty else { return ["ok": false, "error": "empty"] }

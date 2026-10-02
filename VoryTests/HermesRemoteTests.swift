@@ -507,6 +507,34 @@ private final class StubChat: ChatIdentity {
 
 // MARK: Bot-to-bot deliveries
 
+/// A chat is resumed under the bot that owns it, never the one that happens to be selected:
+/// the gateway answers a resume under another bot by moving the chat into that bot's store.
+@Suite struct ChatOwnerTests {
+    @Test func aChatsCallCarriesItsOwnerAndNothingElse() {
+        let p = GatewayRuntime.params(["session_id": "abc"], owner: "work")
+        #expect(p["profile"]?.stringValue == "work")
+        #expect(p["session_id"]?.stringValue == "abc")
+        // No owner: no profile at all, rather than whichever bot is selected.
+        #expect(GatewayRuntime.params(["session_id": "abc"], owner: nil)["profile"] == nil)
+        #expect(GatewayRuntime.params(["session_id": "abc"], owner: "")["profile"] == nil)
+    }
+
+    @Test func theLookupAsksTheSelectedBotFirst() {
+        #expect(GatewayRuntime.lookupOrder(profiles: ["default", "work", "lab"], selected: "work") == ["work", "default", "lab"])
+        #expect(GatewayRuntime.lookupOrder(profiles: ["default", "work"], selected: nil) == ["default", "work"])
+        // A selection the gateway no longer has is not asked.
+        #expect(GatewayRuntime.lookupOrder(profiles: ["default", "work"], selected: "gone") == ["default", "work"])
+    }
+
+    @Test func aLiveCopyWinsOverTheArchivedOneAMoveLeftBehind() {
+        #expect(GatewayRuntime.owner(among: [("default", true), ("work", false)]) == "work")
+        #expect(GatewayRuntime.owner(among: [("default", false)]) == "default")
+        // Only an archived copy anywhere: that store still owns it.
+        #expect(GatewayRuntime.owner(among: [("default", true)]) == "default")
+        #expect(GatewayRuntime.owner(among: []) == nil)
+    }
+}
+
 @Suite struct BotDeliveryTests {
     @Test func quietRunWithInlineMessage() {
         let d = BotDelivery.parse(name: "terminal", context: "hermes -p work chat -q \"Message from 🤖 default: hold the export\"", argsText: nil)
