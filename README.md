@@ -447,6 +447,12 @@ Then add a gateway in the app pointing at `http://127.0.0.1:9119` with that sess
 state, the tool cards, the approval card, the finished transcript, the context sheet and the model
 picker.
 
+To look at, or record, the Mac app against the mock with none of your own gateways in it, make
+the demo copy of a Debug build: `Tools/dev/make-demo-app.sh <Debug Vory.app> <folder>`. It is the
+same binary under its own bundle id, ad-hoc signed, with its own settings, credentials kept in
+memory and a dictionary in place of iCloud, and it takes its gateway (or an iCloud backup to
+restore) from launch arguments; the script's header lists them. None of that is in a Release build.
+
 A prompt can steer the scripted turn: one that starts with `fail` ends with the "could not start
 the assistant" error, and one that starts with `interrupt` ends with the gateway's own
 "Operation interrupted." message (the card for a turn that was cut short). The mock also has two

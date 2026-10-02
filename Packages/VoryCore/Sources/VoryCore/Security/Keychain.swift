@@ -20,6 +20,20 @@ public enum Keychain {
     /// `TEAMID.com.vorantx.vory.shared` (from `keychain-access-groups`); nil keeps the default group.
     nonisolated(unsafe) public static var accessGroup: String?
 
+    #if DEBUG
+    /// The demo copy of the app (its own bundle id, ad-hoc signed) has no Keychain it may use:
+    /// items live in memory for the life of the process instead. Never set in a release build.
+    nonisolated(unsafe) public static var memoryOnly = false
+    nonisolated(unsafe) private static var memory: [String: Data] = [:]
+    private static let memoryLock = NSLock()
+    /// Reads, writes (a value) or removes (nil) an in-memory item; returns what is there after.
+    private static func inMemory(_ key: String, write: Data?? = nil) -> Data? {
+        memoryLock.lock(); defer { memoryLock.unlock() }
+        if let write { memory[key] = write }
+        return memory[key]
+    }
+    #endif
+
     private static func base(_ account: String) -> [String: Any] {
         var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrService as String: service,
@@ -42,6 +56,9 @@ public enum Keychain {
     }
 
     public static func set(_ data: Data, account: String) throws {
+        #if DEBUG
+        if memoryOnly { _ = inMemory(account, write: .some(data)); return }
+        #endif
         let query = base(account)
         let attrs: [String: Any] = [kSecValueData as String: data,
                                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
@@ -56,6 +73,9 @@ public enum Keychain {
     }
 
     public static func get(account: String) -> Data? {
+        #if DEBUG
+        if memoryOnly { return inMemory(account) }
+        #endif
         var q = base(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -64,6 +84,9 @@ public enum Keychain {
     }
 
     public static func delete(account: String) {
+        #if DEBUG
+        if memoryOnly { _ = inMemory(account, write: .some(nil)); return }
+        #endif
         SecItemDelete(base(account) as CFDictionary)
     }
 
@@ -78,6 +101,9 @@ public enum Keychain {
     /// Moves items written before `accessGroup` existed into the group so widgets can see them.
     /// Runs in a few milliseconds and is a no-op once everything has moved.
     public static func migrateToAccessGroupIfNeeded() {
+        #if DEBUG
+        if memoryOnly { return }
+        #endif
         guard let group = accessGroup else { return }
         let q: [String: Any] = dataProtected([kSecClass as String: kSecClassGenericPassword,
                                               kSecAttrService as String: service,
@@ -115,6 +141,9 @@ public enum Keychain {
     /// Writes an item that iCloud Keychain carries to the person's other devices (end-to-end
     /// encrypted by the system). With iCloud Keychain off it is simply a local item.
     public static func setSynced(_ data: Data, account: String) throws {
+        #if DEBUG
+        if memoryOnly { _ = inMemory("cloud:" + account, write: .some(data)); return }
+        #endif
         let query = cloudBase(account)
         let attrs: [String: Any] = [kSecValueData as String: data,
                                     kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
@@ -128,6 +157,9 @@ public enum Keychain {
     }
 
     public static func getSynced(account: String) -> Data? {
+        #if DEBUG
+        if memoryOnly { return inMemory("cloud:" + account) }
+        #endif
         var q = cloudBase(account)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -136,6 +168,9 @@ public enum Keychain {
     }
 
     public static func deleteSynced(account: String) {
+        #if DEBUG
+        if memoryOnly { _ = inMemory("cloud:" + account, write: .some(nil)); return }
+        #endif
         SecItemDelete(cloudBase(account) as CFDictionary)
     }
 

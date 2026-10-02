@@ -333,6 +333,9 @@ private struct NoChatView: View {
             ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
                 .sharedBackgroundVisibility(.hidden)
         }
+        // The placeholder must not bring a toolbar strip with it: in dark mode it showed as a
+        // lighter band across the top of the empty column.
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 }
 

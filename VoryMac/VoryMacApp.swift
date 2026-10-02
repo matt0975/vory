@@ -10,6 +10,10 @@ struct VoryMacApp: App {
     @AppStorage("colorSchemePreference") private var scheme = "system"
 
     init() {
+        #if DEBUG
+        // The demo copy (its own bundle id): credentials in memory, iCloud a dictionary.
+        DemoMode.prepare()
+        #endif
         // The notification service extension reads the same Keychain group; existing items move over once.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()

@@ -368,6 +368,10 @@ enum CloudGateways {
 
     /// An address only this machine can reach: it means nothing on another device.
     nonisolated static func isLoopback(_ c: GatewayConnection) -> Bool {
+        #if DEBUG
+        // The demo copy's whole world is a mock on this machine, its "iCloud" included.
+        if DemoMode.isOn { return false }
+        #endif
         let host = c.gateway.host.lowercased()
         return host == "localhost" || host == "::1" || host == "[::1]" || host.hasPrefix("127.") || host.hasSuffix(".localhost")
     }
@@ -507,9 +511,19 @@ final class CloudSync {
     private(set) var pausedByErase: Date?
 
     /// Whether this device is signed in to iCloud at all (never in the simulator).
-    var signedIn: Bool { FileManager.default.ubiquityIdentityToken != nil }
+    var signedIn: Bool {
+        #if DEBUG
+        if DemoMode.isOn { return true }
+        #endif
+        return FileManager.default.ubiquityIdentityToken != nil
+    }
 
-    @ObservationIgnored private let cloud = NSUbiquitousKeyValueStore.default
+    #if DEBUG
+    /// The demo copy has no iCloud: a dictionary stands in for it.
+    @ObservationIgnored private let cloud: any CloudKeyValueStore = DemoMode.cloud ?? NSUbiquitousKeyValueStore.default
+    #else
+    @ObservationIgnored private let cloud: any CloudKeyValueStore = NSUbiquitousKeyValueStore.default
+    #endif
     @ObservationIgnored private weak var store: ConnectionStore?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var pending: Task<Void, Never>?
@@ -551,7 +565,7 @@ final class CloudSync {
         started = true
         self.store = store
         let center = NotificationCenter.default
-        center.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloud, queue: .main) { [weak self] _ in
+        center.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloud as? NSUbiquitousKeyValueStore, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.syncNow() }
         }
         // A setting changed here (or was just applied from the cloud, which the merge sees as
@@ -560,7 +574,7 @@ final class CloudSync {
             MainActor.assumeIsolated { self?.localChanged() }
         }
         Task { @MainActor in
-            self.cloud.synchronize()
+            self.cloud.flush()
             self.syncNow()
             self.watchGateways()
         }
@@ -651,7 +665,7 @@ final class CloudSync {
     /// Settings joins afresh and puts this device's settings up.
     private func stoppedByErase() -> Bool {
         let defaults = UserDefaults.standard
-        let erased = max(cloud.double(forKey: Self.erasedAtCloudKey), CloudGateways.load().erasedAt ?? 0)
+        let erased = max((cloud.cloudValue(Self.erasedAtCloudKey) as? Double ?? 0), CloudGateways.load().erasedAt ?? 0)
         guard erased > defaults.double(forKey: Self.erasedSeenKey) else { return false }
         defaults.set(erased, forKey: Self.erasedSeenKey)
         let joined = defaults.double(forKey: CloudMerge.joinedKey)
@@ -682,7 +696,7 @@ final class CloudSync {
 
     /// Asks iCloud for its latest and waits a moment for it: on a new device the store starts empty.
     func refresh() async -> CloudSummary {
-        cloud.synchronize()
+        cloud.flush()
         for _ in 0..<8 {
             let s = summary()
             if !s.isEmpty { return s }
@@ -717,7 +731,7 @@ final class CloudSync {
         merge.reconcile(.backUp)
         lastLocalFingerprint = localFingerprint()
         if let store { CloudGateways.reconcile(store: store, importNew: false) }
-        cloud.synchronize()
+        cloud.flush()
         lastSyncedAt = Date()
         revision += 1
     }
@@ -730,17 +744,17 @@ final class CloudSync {
     func eraseCloud() {
         let now = Date().timeIntervalSince1970
         for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix) || key.hasPrefix(CloudMerge.devicePrefix) {
-            cloud.removeObject(forKey: key)
+            cloud.setCloudValue(nil, for: key)
         }
-        cloud.set(now, forKey: Self.erasedAtCloudKey)
+        cloud.setCloudValue(now, for: Self.erasedAtCloudKey)
         CloudGateways.Storage.keychain.save(CloudGatewayFile(erasedAt: now))
-        cloud.synchronize()
+        cloud.flush()
         revision += 1
     }
 
     /// This device's own "last change from" entry, for a reset: it joins again under a new id.
     func removeOwnDeviceEntry() {
-        cloud.removeObject(forKey: CloudMerge.devicePrefix + deviceID)
+        cloud.setCloudValue(nil, for: CloudMerge.devicePrefix + deviceID)
     }
 
     /// After a reset: this device joins again as a new one. An erase it just did itself is not
@@ -750,7 +764,7 @@ final class CloudSync {
         suspended = false
         lastSyncedAt = nil
         lastLocalFingerprint = ""
-        let erased = max(cloud.double(forKey: Self.erasedAtCloudKey), CloudGateways.load().erasedAt ?? 0)
+        let erased = max((cloud.cloudValue(Self.erasedAtCloudKey) as? Double ?? 0), CloudGateways.load().erasedAt ?? 0)
         if erased > 0 { UserDefaults.standard.set(erased, forKey: Self.erasedSeenKey) }
         enabled = true
     }

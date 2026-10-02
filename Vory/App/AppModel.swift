@@ -125,6 +125,9 @@ final class AppModel {
     init() {
         // Settings, looks and gateways through the person's iCloud (it reads nothing until the
         // next turn of the run loop, when this model exists).
+        #if DEBUG
+        DemoMode.addGateway(to: store)
+        #endif
         CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
