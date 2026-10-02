@@ -157,13 +157,16 @@ final class AppModel {
         selectedTab = .chats
         if url.host == "chat", let id = url.pathComponents.dropFirst().first {
             let profile = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "profile" }?.value
-            pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: (profile?.isEmpty == false ? profile : nil) ?? runtime?.selectedProfile)
+            // A link without its bot stays without one: the chat's owner is then asked of the
+            // gateway when it opens, rather than taken from whichever bot is selected.
+            pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
         }
         // From the Live Activity's Approve / Deny: open the chat on its card and apply the choice.
         if url.host == "approval", let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
            let sid = items.first(where: { $0.name == "session" })?.value, !sid.isEmpty {
             let choice = items.first(where: { $0.name == "choice" })?.value ?? "once"
-            var r = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: sid, profile: runtime?.selectedProfile)
+            let profile = items.first(where: { $0.name == "profile" })?.value
+            var r = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: sid, profile: profile?.isEmpty == false ? profile : nil)
             r.action = choice == "deny" ? LocalNotifier.denyAction : LocalNotifier.approveOnceAction
             pendingRoute = r
             Task { await ensureConnection(for: r) }

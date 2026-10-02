@@ -1106,7 +1106,7 @@ final class PushSetupModel {
         let cmd = installCommand(for: rt) + " --uninstall"
         if let chat = try? await rt.newChat() {
             await chat.send("Run this exact command in the terminal and show me its full output: `\(cmd)`. It stops the Vory companion service and deletes its files. If it fails, tell me the error verbatim.")
-            model.pendingRoute = PendingRoute(connectionID: rt.connection.id, storedSessionID: chat.storedID, profile: rt.selectedProfile)
+            model.pendingRoute = PendingRoute(connectionID: rt.connection.id, storedSessionID: chat.storedID, profile: chat.profile)
             model.selectedTab = .chats
         }
         startOver(runtime: rt)
@@ -1783,7 +1783,7 @@ final class PushSetupModel {
             let chat = try await rt.newChat()
             let cmd = installCommand(for: rt)
             await chat.send("Run this exact command in the terminal and show me its full output: `\(cmd)`. Do not edit any file under \(pushDir(for: rt)). If it fails, tell me the error verbatim.")
-            model.pendingRoute = PendingRoute(connectionID: rt.connection.id, storedSessionID: chat.storedID, profile: rt.selectedProfile)
+            model.pendingRoute = PendingRoute(connectionID: rt.connection.id, storedSessionID: chat.storedID, profile: chat.profile)
             model.selectedTab = .chats
         } catch { self.error = error.localizedDescription }
     }
