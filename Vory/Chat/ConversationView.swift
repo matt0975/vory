@@ -87,7 +87,8 @@ struct ConversationView: View {
             // the selected bot alone; a chat of ours selects its bot first.
             if !route.readOnly, let p = route.profile, !p.isEmpty, runtime.selectedProfile != p { runtime.selectedProfile = p }
             // Stored chats return at once with the cached transcript and sync behind the header.
-            if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.readOnly ? route.profile : nil) }
+            // The chat keeps the bot it belongs to for as long as it is open, whatever is selected later.
+            if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
             // The first message from the compose sheet goes out as soon as the chat exists.

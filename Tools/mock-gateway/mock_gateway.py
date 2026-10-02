@@ -88,6 +88,7 @@ def session_info(title: str, running: bool, profile: str) -> dict:
 
 # ── REST ──────────────────────────────────────────────────────────────────────────────────────
 
+RESUMES: list[dict] = []
 STORED_SESSIONS: list[dict] = [
     {"id": "20260921_154212_a1b2c3", "title": "Disk cleanup on the log host",
      "preview": "I'll look at what's filling the disk on that host, then clean up safely.",
@@ -198,7 +199,21 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
         if int(query.get("limit") or 20) > 100:
             return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
-        return 200, {"sessions": STORED_SESSIONS, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+        # The mock lists every chat under every bot (the demo data is small), but each row says
+        # whose store it is in, as the real gateway's rows do.
+        return 200, {"sessions": [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS],
+                     "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+    if base == "/api/_mock/resumes":
+        # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
+        return 200, {"resumes": RESUMES}
+    if base.startswith("/api/sessions/") and base.count("/") == 3 and base.split("/")[3] not in ("search", "stats"):
+        # One stored row, from the store of the bot that was asked: 404 from every other bot.
+        sid = base.split("/")[3]
+        row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
+        asked = query.get("profile") or "default"
+        if not row or (row.get("profile") or "default") != asked:
+            return 404, {"detail": "session not found"}
+        return 200, {**row, "profile": asked, "is_default_profile": asked == "default"}
     if base == "/api/sessions/search":
         q = (query.get("q") or "").lower()
         return 200, {"sessions": [s for s in STORED_SESSIONS if q in json.dumps(s).lower()]}
@@ -668,6 +683,14 @@ class Gateway:
                        "messages": [], "info": session_info(s.title, False, profile)})
         if method in ("session.resume", "session.activate"):
             stored = p.get("session_id", "")
+            if method == "session.resume":
+                RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
+                # What the real gateway does with a chat of the default store resumed under a
+                # named bot: it moves the chat into that bot's store.
+                moved = next((r for r in STORED_SESSIONS if r["id"] == stored), None)
+                if moved is not None and (moved.get("profile") or "default") == "default" and (p.get("profile") or "default") != "default":
+                    moved["profile"] = p["profile"]
+                    print(f"[mock] adopted stranded session {stored} from default store into profile {p['profile']}", flush=True)
             live = next((l for l in LIVE.values() if l.stored == stored or l.sid == stored), None)
             if live is None:
                 sid = uuid.uuid4().hex[:8]

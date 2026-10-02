@@ -176,7 +176,7 @@ final class WatchModel {
         pendingChat = sid
         guard let rt = runtime, let action else { return }
         Task {
-            guard let chat = try? await rt.openChat(storedID: sid, title: nil) else { return }
+            guard let chat = try? await rt.openChat(storedID: sid, title: nil, profile: hermes["profile"] as? String) else { return }
             if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty { await chat.send(text); return }
             let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
             let deadline = Date().addingTimeInterval(8)

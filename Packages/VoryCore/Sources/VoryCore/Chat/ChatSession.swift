@@ -125,15 +125,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var inlineAnswers: [String: CheckedContinuation<JSONValue?, Never>] = [:]
     private let activity: any TurnActivityReporting
 
-    /// The bot this chat belongs to when it is not the selected one (another bot's chat opened
-    /// read-only): every call carries it, and the header names it.
+    /// The bot this chat belongs to, fixed when the chat is opened or created: every call
+    /// carries it and the header names it. Never the bot selected at the time of a call. A
+    /// reconnect that resumed the chat under whichever bot was selected by then made the
+    /// gateway move the chat into that bot's store.
     public let profile: String?
 
     public init(runtime: GatewayRuntime, storedID: String?, title: String?, profile: String? = nil) {
         self.runtime = runtime
         self.activity = runtime.activityReporterFactory()
         self.storedID = storedID ?? ""
-        self.profile = profile
+        self.profile = (profile?.isEmpty == false ? profile : nil) ?? runtime.selectedProfile
         self.title = title ?? "New chat"
     }
 
@@ -141,7 +143,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// The runtime's call with this chat's bot attached.
     private func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
-        try await runtime.rpc(method, params, profile: profile, timeout: timeout)
+        try await runtime.rpc(method, params, owner: profile, timeout: timeout)
     }
     public var modelName: String { info?.model ?? "" }
     public var subtitle: String {
@@ -225,7 +227,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private func prefetchFromREST() async {
         guard let r: JSONValue = try? await runtime.api.get("/api/sessions/\(storedID)/messages",
                                                             query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: "60")],
-                                                            profile: runtime.selectedProfile) else { return }
+                                                            profile: profile) else { return }
         guard isResuming, items.isEmpty else { return }
         let msgs = (r["messages"]?.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
         items = msgs.enumerated().compactMap { TranscriptItem.fromHistory($1, index: $0) }
