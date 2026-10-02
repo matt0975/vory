@@ -488,6 +488,8 @@ final class CloudSync {
         var gateways = 0
         /// Restored gateways whose sign-in stays per device: they need one here.
         var needSignIn = 0
+        /// Those gateways, for the sign-in that follows a restore.
+        var pending: [GatewayConnection] = []
     }
 
     /// On unless switched off in Settings › iCloud Sync.
@@ -699,7 +701,10 @@ final class CloudSync {
         if let store {
             let out = CloudGateways.reconcile(store: store, importNew: true)
             result.gateways = out.added.count
-            result.needSignIn = out.added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }.count
+            let pending = out.added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }.map(\.connection)
+            result.needSignIn = pending.count
+            // As saved here: the restore may have given the gateway a new id on this device.
+            result.pending = pending.compactMap { p in store.connections.first { $0.id == p.id } ?? store.connections.first { $0.gateway == p.gateway } }
             reconnectIfChanged(out.changed)
         }
         lastSyncedAt = Date()

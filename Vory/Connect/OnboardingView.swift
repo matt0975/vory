@@ -103,6 +103,8 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(isPresented: $showRestore) {
             CloudRestoreSheet { outcome in
+                // A gateway that came back without its sign-in: asked for before the app is used.
+                model.signInPrompt = outcome.pending
                 if outcome.gateways > 0 {
                     // A gateway is saved now: the root view moves on by itself, and this connects it.
                     Task { await model.activateSavedConnection() }

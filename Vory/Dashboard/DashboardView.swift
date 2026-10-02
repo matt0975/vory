@@ -33,6 +33,8 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                // Home opens first on a restored device: the sign-in it still owes is asked for here too.
+                if let waiting = model.needsSignIn { GatewaySignInBanner(connection: waiting) }
                 if let runtime, !runtime.needsAttention.isEmpty { needsYou(runtime) }
                 ForEach(layout.items) { item in
                     editableCard(item)
@@ -40,7 +42,7 @@ struct DashboardView: View {
                         // aside; otherwise a long press races the drag and the menu won.
                         .contextMenu(menuItems: { if !editingHome { cardMenu(item) } })
                 }
-                if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
+                if let error, model.needsSignIn == nil { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
                 // Edit: the cards can be dragged onto one another until Done; Settings has the
                 // sizes, the hidden cards, the name and the opening tab.
                 HStack(spacing: 10) {

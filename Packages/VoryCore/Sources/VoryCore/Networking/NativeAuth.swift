@@ -89,14 +89,7 @@ public final class NativeAuthClient: NSObject {
                     }
                 }
                 listener.onCallback = { code, st in finish(.success((code, st))) }
-                let session = ASWebAuthenticationSession(url: url, callback: .customScheme("hermesremote")) { _, error in
-                    if let error {
-                        if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { finish(.failure(NativeAuthError.cancelled)) }
-                        else { finish(.failure(error)) }
-                    } else {
-                        finish(.failure(NativeAuthError.noCallback))
-                    }
-                }
+                let session = ASWebAuthenticationSession(url: url, callback: .customScheme("hermesremote"), completionHandler: Self.sessionEnded(finish))
                 session.presentationContextProvider = self
                 session.prefersEphemeralWebBrowserSession = false
                 self.webSession = session
@@ -107,6 +100,21 @@ public final class NativeAuthClient: NSObject {
         }
         guard callback.state == state else { throw NativeAuthError.stateMismatch }
         return try await Self.exchange(gateway: gateway, code: callback.code, verifier: pkce.verifier, access: access)
+    }
+
+    /// What the browser session calls when it ends. The system calls it on a thread of its own
+    /// (on the Mac, the one its Safari helper answers on), so it must not belong to the main
+    /// actor: written inline in `signInWithBrowser` it did, and the Mac app aborted the moment
+    /// the browser handed back, which is when the session is told to close.
+    nonisolated static func sessionEnded(_ finish: @escaping @Sendable (Result<(code: String, state: String), Error>) -> Void) -> ASWebAuthenticationSession.CompletionHandler {
+        { @Sendable _, error in
+            if let error {
+                if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { finish(.failure(NativeAuthError.cancelled)) }
+                else { finish(.failure(error)) }
+            } else {
+                finish(.failure(NativeAuthError.noCallback))
+            }
+        }
     }
     #endif
 

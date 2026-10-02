@@ -403,7 +403,9 @@ struct ChatListView: View {
         let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
         ScrollViewReader { proxy in
         List {
-            if let errorText { Text(errorText).foregroundStyle(.red).font(.footnote) }
+            // Not signed in on this device: the banner above says so and has the button; the
+            // gateway's own "session expired" line under it would only repeat it in red.
+            if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
             // Which project the list is narrowed to, since the rows' own chips are hidden then.
             if !projectFilter.isEmpty {
                 HStack(spacing: 8) {
@@ -424,9 +426,15 @@ struct ChatListView: View {
             } else {
                 let entries = Self.merge(rows, visibleRooms, sort: sortKey)
                 if entries.isEmpty && !loading {
-                    ContentUnavailableView(searchText.isEmpty ? "No chats yet" : "No results", systemImage: "bubble.left.and.bubble.right",
-                                           description: Text(searchText.isEmpty ? "Start a new chat with the compose button." : "Try another search."))
-                        .listRowSeparator(.hidden)
+                    if let waiting = model.needsSignIn {
+                        ContentUnavailableView("Sign in to see your chats", systemImage: "person.badge.key",
+                                               description: Text("\(waiting.name) has no sign-in on \(DeviceWords.this) yet."))
+                            .listRowSeparator(.hidden)
+                    } else {
+                        ContentUnavailableView(searchText.isEmpty ? "No chats yet" : "No results", systemImage: "bubble.left.and.bubble.right",
+                                               description: Text(searchText.isEmpty ? "Start a new chat with the compose button." : "Try another search."))
+                            .listRowSeparator(.hidden)
+                    }
                 }
                 ForEach(entries) { entry in
                     switch entry {
@@ -460,13 +468,21 @@ struct ChatListView: View {
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in BotAmbient.shared.scrolled(dy: new - old) }
         .overlay { if loading && sessions.isEmpty { ProgressView() } }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let msg = runtime.restartRequired {
-                RestartRequiredBanner(runtime: runtime, message: msg)
-                    .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 0) {
+                if let waiting = model.needsSignIn {
+                    GatewaySignInBanner(connection: waiting)
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                if let msg = runtime.restartRequired {
+                    RestartRequiredBanner(runtime: runtime, message: msg)
+                        .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
         }
         .animation(.snappy, value: runtime.restartRequired == nil)
+        .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in
             let first = Self.merge(rows, groupsOnly ? rooms : [], sort: sortKey).first?.id ?? rows.first?.id
             if let first { withAnimation(.snappy) { proxy.scrollTo(first, anchor: .top) } }

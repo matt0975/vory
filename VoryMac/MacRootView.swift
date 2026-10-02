@@ -40,14 +40,18 @@ struct MacRootView: View {
         }
         // The first time a gateway comes up on this Mac (its own first connection, or one the
         // keychain already held): what the Companion needs from here, if anything.
-        .onChange(of: model.runtime?.connection.id, initial: true) { _, id in
-            guard id != nil, !companionPromptShown, let rt = model.runtime else { return }
-            companionPromptShown = true
-            Task {
-                try? await Task.sleep(for: .milliseconds(700))
-                companionFound = await CompanionPromptSheet.installedVersion(on: rt)
-                showCompanionPrompt = true
-            }
+        .onChange(of: model.runtime?.connection.id, initial: true) { _, _ in offerCompanion() }
+        #if DEBUG
+        .task { if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] } }
+        #endif
+        // One sheet at a time, and none over the lock: the sign-in a restore owes comes first,
+        // the Companion prompt once that is settled (its check needs a signed-in gateway).
+        .onChange(of: model.signInPrompt.isEmpty) { _, _ in offerCompanion() }
+        .onChange(of: model.needsSignIn == nil) { _, _ in offerCompanion() }
+        .onChange(of: model.lock.isLocked) { _, _ in offerCompanion() }
+        .sheet(isPresented: Binding(get: { !model.signInPrompt.isEmpty && !model.lock.isLocked && !showCompanionPrompt && !showInstaller },
+                                    set: { if !$0 { model.signInPrompt = [] } })) {
+            GatewaySignInSheet(connections: model.signInPrompt)
         }
         .sheet(isPresented: $showCompanionPrompt) {
             CompanionPromptSheet(found: companionFound, install: {
@@ -69,6 +73,19 @@ struct MacRootView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
             .frame(minWidth: 560, minHeight: 680)
+        }
+    }
+}
+
+extension MacRootView {
+    /// Shows the Companion prompt, once, when a gateway is up and nothing stands in its way.
+    private func offerCompanion() {
+        guard !companionPromptShown, let rt = model.runtime, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
+        companionPromptShown = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            companionFound = await CompanionPromptSheet.installedVersion(on: rt)
+            showCompanionPrompt = true
         }
     }
 }

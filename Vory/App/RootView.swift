@@ -26,6 +26,9 @@ struct RootView: View {
     @AppStorage(TabLayout.storageKey) private var rootLayoutRaw = ""
     @AppStorage("notificationsSetupCardDone") private var setupCardDone = false
     @State private var showCompanionPrompt = false
+    /// The first gateway was just saved: the Companion prompt is owed once the gateway is
+    /// signed in and nothing else is asking.
+    @State private var companionDue = false
     @State private var showInstaller = false
     /// The Companion's version when the gateway already runs one: the prompt then only asks to allow notifications.
     @State private var companionFound: String?
@@ -57,18 +60,20 @@ struct RootView: View {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-vory-show-companion-prompt") { showCompanionPrompt = true }
             if ProcessInfo.processInfo.arguments.contains("-vory-show-setup") { showInstaller = true }
+            if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] }
             #endif
         }
         .onChange(of: model.hasConnections) { had, has in
-            if !had, has, !companionPromptShown {
-                companionPromptShown = true
-                Task {
-                    try? await Task.sleep(for: .milliseconds(700))
-                    // A gateway set up from another device already has the Companion: no install to offer.
-                    if let rt = model.runtime { companionFound = await CompanionPromptSheet.installedVersion(on: rt) }
-                    showCompanionPrompt = true
-                }
-            }
+            if !had, has, !companionPromptShown { companionDue = true; offerCompanion() }
+        }
+        // One sheet at a time, and none over the lock: the sign-in a restore owes comes first,
+        // the Companion prompt once that is settled (its check needs a signed-in gateway).
+        .onChange(of: model.signInPrompt.isEmpty) { _, _ in offerCompanion() }
+        .onChange(of: model.needsSignIn == nil) { _, _ in offerCompanion() }
+        .onChange(of: model.lock.isLocked) { _, _ in offerCompanion() }
+        .sheet(isPresented: Binding(get: { !model.signInPrompt.isEmpty && !model.lock.isLocked && !showCompanionPrompt && !showInstaller },
+                                    set: { if !$0 { model.signInPrompt = [] } })) {
+            GatewaySignInSheet(connections: model.signInPrompt)
         }
         .sheet(isPresented: $showCompanionPrompt) {
             CompanionPromptSheet(found: companionFound, install: {
@@ -91,6 +96,21 @@ struct RootView: View {
                 SetupWizardHost()
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
+        }
+    }
+}
+
+extension RootView {
+    /// Shows the Companion prompt when it is owed and nothing stands in its way.
+    private func offerCompanion() {
+        guard companionDue, !companionPromptShown, model.hasConnections, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
+        companionDue = false
+        companionPromptShown = true
+        Task {
+            try? await Task.sleep(for: .milliseconds(700))
+            // A gateway set up from another device already has the Companion: no install to offer.
+            if let rt = model.runtime { companionFound = await CompanionPromptSheet.installedVersion(on: rt) }
+            showCompanionPrompt = true
         }
     }
 }

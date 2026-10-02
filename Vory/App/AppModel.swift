@@ -136,6 +136,31 @@ final class AppModel {
 
     var hasConnections: Bool { !store.connections.isEmpty }
 
+    #if DEBUG
+    /// `-vory-show-signin`: the gateway in use is treated as needing a sign-in, so the banner
+    /// and the sheet can be looked at without signing anything out.
+    static let forceSignIn = ProcessInfo.processInfo.arguments.contains("-vory-show-signin")
+    #endif
+
+    /// Saved gateways waiting for a sign-in on this device, asked for one at a time by the
+    /// sheet at the root: set after a restore, and by the Sign In banner.
+    var signInPrompt: [GatewayConnection] = []
+
+    /// The gateway in use, when this device cannot use it until it signs in: it came back
+    /// from iCloud without its sign-in, or the gateway turned the session down.
+    var needsSignIn: GatewayConnection? {
+        #if DEBUG
+        if Self.forceSignIn, let c = runtime?.connection ?? store.active { return c }
+        #endif
+        if let rt = runtime {
+            if rt.connection.lacksCredentials(rt.secrets) { return rt.connection }
+            if case .authRejected = rt.socketState { return rt.connection }
+            return nil
+        }
+        guard let c = store.active, c.lacksCredentials(store.secrets(for: c.id)) else { return nil }
+        return c
+    }
+
     func activateSavedConnection() async {
         if let c = store.active { await activate(c) }
     }

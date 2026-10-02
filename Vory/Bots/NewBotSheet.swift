@@ -84,15 +84,16 @@ struct NewBotSheet: View {
                     Section {
                         Button(role: .destructive) { confirmDelete = true } label: { Label("Delete \(e.label)", systemImage: "trash") }
                             .disabled(busy || e.isDefault == true)
+                            // Asked from its own button, so the bubble opens beside it and not at the top of the form.
+                            .confirmationDialog("Delete \(editing?.label ?? "this bot")?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                                Button("Delete bot", role: .destructive) { Task { await deleteBot() } }
+                            } message: { Text("Its SOUL.md, config and chats on the gateway are removed. This cannot be undone.") }
                     } footer: {
                         Text(e.isDefault == true ? "The default bot cannot be deleted." : "Removes the profile and its folder from the gateway: its SOUL.md, config and chats go with it.")
                     }
                 }
             }
             .navigationTitle(editing == nil ? "New Bot" : "Edit Bot")
-            .confirmationDialog("Delete \(editing?.label ?? "this bot")?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                Button("Delete bot", role: .destructive) { Task { await deleteBot() } }
-            } message: { Text("Its SOUL.md, config and chats on the gateway are removed. This cannot be undone.") }
             // The preview starts right under the bar; the studio is the first thing to touch.
             .contentMargins(.top, 6, for: .scrollContent)
             .navigationBarTitleDisplayMode(.inline)

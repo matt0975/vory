@@ -33,11 +33,25 @@ struct CloudSyncView: View {
             } header: { Text(sync.signedIn ? "In iCloud" : "Saved for iCloud") }
 
             Section {
+                // Each question hangs from its own button: asked from the whole list, the
+                // bubble opened at the top of the page, pointing at the Sync switch.
                 Button { confirmRestore = true } label: { Label("Restore from iCloud…", systemImage: "icloud.and.arrow.down") }
                     .disabled(summary.isEmpty)
                     .accessibilityIdentifier("cloud.restore")
+                    .confirmationDialog("Restore from iCloud?", isPresented: $confirmRestore, titleVisibility: .visible) {
+                        Button("Restore") { restore() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The settings and bot looks in iCloud replace the ones on \(DeviceWords.this), and gateways \(DeviceWords.this) does not have are added. Nothing on \(DeviceWords.this) is removed.")
+                    }
                 Button { confirmBackUp = true } label: { Label("Back Up \(DeviceWords.ThisTitle) Now", systemImage: "icloud.and.arrow.up") }
                     .accessibilityIdentifier("cloud.backUp")
+                    .confirmationDialog("Back up \(DeviceWords.this)?", isPresented: $confirmBackUp, titleVisibility: .visible) {
+                        Button("Back Up") { sync.backUpNow(); note = "Backed up \(Date().formatted(date: .omitted, time: .shortened))." }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("The settings, bot looks and gateways on \(DeviceWords.this) replace the ones in iCloud, and your other devices take them.")
+                    }
             } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     if let note { Text(note).foregroundStyle(.primary) }
@@ -55,18 +69,6 @@ struct CloudSyncView: View {
             }
         }
         .untitledPage()
-        .confirmationDialog("Restore from iCloud?", isPresented: $confirmRestore, titleVisibility: .visible) {
-            Button("Restore") { restore() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The settings and bot looks in iCloud replace the ones on \(DeviceWords.this), and gateways \(DeviceWords.this) does not have are added. Nothing on \(DeviceWords.this) is removed.")
-        }
-        .confirmationDialog("Back up \(DeviceWords.this)?", isPresented: $confirmBackUp, titleVisibility: .visible) {
-            Button("Back Up") { sync.backUpNow(); note = "Backed up \(Date().formatted(date: .omitted, time: .shortened))." }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The settings, bot looks and gateways on \(DeviceWords.this) replace the ones in iCloud, and your other devices take them.")
-        }
     }
 
     /// Read again whenever the sync says the cloud may have changed.
@@ -98,6 +100,8 @@ struct CloudSyncView: View {
     private func restore() {
         let r = sync.restore()
         note = CloudRestoreSheet.words(for: r)
+        // A gateway that came back without its sign-in is asked for it now.
+        model.signInPrompt = r.pending
         if model.runtime == nil { Task { await model.activateSavedConnection() } }
     }
 }
@@ -166,7 +170,7 @@ struct CloudRestoreSheet: View {
                 .buttonStyle(.borderless)
                 #endif
         }
-        Text("Notifications are set up per device, and a gateway signed in with the browser asks once here.")
+        Text("Notifications are set up per device. A gateway signed in with the browser asks for its sign-in next.")
             .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
     }
 
@@ -181,7 +185,7 @@ struct CloudRestoreSheet: View {
         if r.gateways > 0 { parts.append(r.gateways == 1 ? "1 gateway added" : "\(r.gateways) gateways added") }
         if parts.isEmpty { return "\(DeviceWords.This) already matches iCloud." }
         var s = parts.joined(separator: ", ").prefix(1).uppercased() + parts.joined(separator: ", ").dropFirst() + "."
-        if r.needSignIn > 0 { s += r.needSignIn == 1 ? " One gateway needs its sign-in here: open it in Settings › Gateways." : " \(r.needSignIn) gateways need their sign-in here: open them in Settings › Gateways." }
+        if r.needSignIn > 0 { s += r.needSignIn == 1 ? " One gateway needs its sign-in on \(DeviceWords.this)." : " \(r.needSignIn) gateways need their sign-in on \(DeviceWords.this)." }
         return s
     }
 }
