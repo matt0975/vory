@@ -47,6 +47,13 @@ final class MenuBarTurnReporter: TurnActivityReporting {
     private var startedAt = Date()
 
     func start(for chat: ChatSession) {
+        // Called again for each part of a reply and when the session's snapshot arrives: a turn
+        // already on the board keeps its start, so its timer runs on instead of going back to 0:00.
+        if let id {
+            if id != chat.storedID { TurnBoard.shared.remove(id); self.id = chat.storedID }
+            update(for: chat, attention: chat.firstCard != nil, detail: nil)
+            return
+        }
         startedAt = Date()
         id = chat.storedID
         TurnBoard.shared.upsert(turn(chat, detail: "Thinking…", attention: false))
