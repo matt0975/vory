@@ -93,7 +93,13 @@ final class ChatSummarizer {
     /// What the row shows: the summary with the switched-off half replaced by the gateway's own text.
     func shown(_ s: Summary?, title: String, preview: String) -> Summary? {
         guard let s, enabled else { return nil }
-        return Summary(title: Self.titlesOn ? s.title : title, summary: Self.previewsOn ? s.summary : preview, stamp: s.stamp)
+        return Summary(title: Self.titlesOn ? Self.plain(s.title) : title, summary: Self.previewsOn ? Self.plain(s.summary) : preview, stamp: s.stamp)
+    }
+
+    /// The model likes to mark code with backticks and words with asterisks; a list row shows
+    /// plain text, so the marks would show as marks.
+    static func plain(_ text: String) -> String {
+        text.replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "**", with: "")
     }
 
     /// Drops every stored summary; rows fall back to the gateway's text until new ones are made.
@@ -190,7 +196,9 @@ final class ChatSummarizer {
     private func generate(_ session: StoredSession, runtime: GatewayRuntime, profile: String?) async {
         if Self.pretend {
             try? await Task.sleep(for: .seconds(2))
-            summaries[session.id] = Summary(title: session.displayTitle, summary: "A stand-in summary for testing: where this chat stands, in a sentence.", stamp: session.lastActive ?? 0)
+            // The chat's own words, so a simulator's list reads like a real one.
+            let own = (session.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            summaries[session.id] = Summary(title: session.displayTitle, summary: own.isEmpty ? "Nothing said yet." : own, stamp: session.lastActive ?? 0)
             save()
             return
         }

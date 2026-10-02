@@ -226,6 +226,7 @@ final class ChatGoals {
     /// The model's words made fit for one line: no quotes, no period, a capital, and not long.
     nonisolated static func clean(_ raw: String) -> String? {
         var t = raw.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        t = t.replacingOccurrences(of: "`", with: "").replacingOccurrences(of: "**", with: "")
         t = t.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "\"'“”‘’`*"))
         while let last = t.last, ".…!:;,".contains(last) { t.removeLast() }
         t = t.trimmingCharacters(in: .whitespaces)
