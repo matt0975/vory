@@ -7,6 +7,10 @@ struct VoryApp: App {
     @State private var model: AppModel
 
     init() {
+        #if DEBUG
+        // The demo copy (its own bundle id): credentials in memory, iCloud a dictionary.
+        DemoMode.prepare()
+        #endif
         // Widgets and the watch app read the same Keychain group; existing items move over once.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()

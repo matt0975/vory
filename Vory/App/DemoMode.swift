@@ -4,7 +4,8 @@ import VoryCore
 #if DEBUG
 /// The demo copy of the app, for recording it: the same debug build under its own bundle id
 /// (ending in `.demo`), ad-hoc signed, so it has its own settings and never sees the real
-/// app's gateways, chats or iCloud. It is made by `Tools/dev/make-demo-app.sh`.
+/// app's gateways, chats or iCloud. It is made by `Tools/dev/make-demo-app.sh` (the Mac app) or
+/// `Tools/dev/make-demo-app-sim.sh` (the iPhone app, on a simulator).
 ///
 /// Such a copy has no Keychain it may use and no iCloud, so credentials are kept in memory
 /// and iCloud is a dictionary. What it shows comes from launch arguments:
@@ -49,7 +50,14 @@ enum DemoMode {
         for (bot, hex, look) in [("default", "#3B7BFF", "studio:cloud:classic"), ("work", "#30D158", "studio:blob:curious")] {
             store.values[CloudMerge.lookKey(bot)] = ["n": bot, "hex": hex, "avatar": look, "t": t]
         }
-        store.values[CloudMerge.devicePrefix + "demo-phone"] = ["name": "Sam\u{2019}s iPhone", "t": t]
+        // The backup was made on the other kind of device: the Mac restores what the iPhone
+        // saved, and the iPhone what the Mac saved.
+        #if os(macOS)
+        let other = "Sam\u{2019}s iPhone"
+        #else
+        let other = "Sam\u{2019}s Mac"
+        #endif
+        store.values[CloudMerge.devicePrefix + "demo-other"] = ["name": other, "t": t]
         return store
     }()
 

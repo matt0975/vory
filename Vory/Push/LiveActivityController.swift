@@ -167,8 +167,13 @@ final class LiveActivityController: TurnActivityReporting {
         #if DEBUG
         // For screenshots where the on-device model cannot run (the simulator):
         // `-vory-test-goal "Finding why the export times out"` stands in for it.
+        // `-vory-test-goal-delay 4` makes it take as long as the model would.
         if let line = UserDefaults.standard.string(forKey: "vory-test-goal"), !line.isEmpty {
-            ChatGoals.shared.writer = { _ in line }
+            let wait = UserDefaults.standard.double(forKey: "vory-test-goal-delay")
+            ChatGoals.shared.writer = { _ in
+                if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                return line
+            }
         }
         #endif
         goalObserver = NotificationCenter.default.addObserver(forName: .voryGoalChanged, object: nil, queue: .main) { n in
