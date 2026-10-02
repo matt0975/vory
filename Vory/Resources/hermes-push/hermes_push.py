@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.36"
+VERSION = "1.0.37"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -306,6 +306,7 @@ def prune_origins() -> None:
         except OSError:
             pass
     prune_goals()
+    prune_answers()
 
 
 # ── what a working chat is after ──────────────────────────────────────────────────────────
@@ -352,6 +353,57 @@ def prune_goals() -> None:
                 os.remove(f)
         except OSError:
             pass
+
+
+# ── who answered an approval ───────────────────────────────────────────────────────────────
+#
+# The app writes <push dir>/answers/<request id>.json = {device_id, session_id, at} when an
+# approval is answered on it. The gateway tells nobody when an approval is answered, so this
+# companion finds out by asking what is still pending; the marker then says which device
+# needs no "answered" note of its own.
+
+def answers_dir() -> Path:
+    return devices_dir().parent / "answers"
+
+
+def approval_answered_by(*request_ids: str) -> str | None:
+    """The device that answered one of these request ids, when its marker is there."""
+    for rid in request_ids:
+        if not rid:
+            continue
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", rid)
+        try:
+            o = json.loads((answers_dir() / f"{safe}.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(o, dict) and o.get("device_id") and time.time() - float(o.get("at") or 0) < 3600:
+            return str(o["device_id"])
+    return None
+
+
+def prune_answers() -> None:
+    now = time.time()
+    for f in glob.glob(str(answers_dir() / "*.json")):
+        try:
+            if now - os.path.getmtime(f) > 3600:
+                os.remove(f)
+        except OSError:
+            pass
+
+
+def pending_request_ids(reply) -> set | None:
+    """The request ids in an ``approval.pending`` reply, or None when the reply is not a list
+    (an older gateway answers with one approval, which says nothing about the others)."""
+    if not isinstance(reply, dict):
+        return None
+    items = reply.get("approvals") if isinstance(reply.get("approvals"), list) else reply.get("pending") if isinstance(reply.get("pending"), list) else None
+    if items is None:
+        return None
+    ids = set()
+    for it in items:
+        if isinstance(it, dict):
+            ids |= {str(v) for v in (it.get("request_id"), it.get("id")) if v}
+    return ids
 
 
 def idle_long_enough(first_seen_idle: float | None, now: float, grace: float) -> bool:
@@ -647,15 +699,22 @@ class Relay:
         self._status(connected=True, gateway=self.gw.public_url, transport=self.gw.transport, attached=len(self.attached), devices=len(load_devices(self.gw.url)))
         log.info("test notification %s sent to %d device(s)", nonce[:8], sent)
 
-    def push_all(self, kind: str, title: str, body: str, meta: dict, collapse: str | None = None, skip: set | frozenset = frozenset()) -> int:
+    def push_all(self, kind: str, title: str, body: str, meta: dict, collapse: str | None = None, skip: set | frozenset = frozenset(),
+                 only: set | None = None, reached: set | None = None) -> int:
         """Returns how many devices accepted the push. ``skip`` names devices already reached another
-        way (their Live Activity alerted), so they do not get a second buzz for the same thing."""
+        way (their Live Activity alerted), so they do not get a second buzz for the same thing.
+        ``only`` limits it to those devices; ``reached`` collects the ids that accepted it. A
+        "settled" push is quiet: it replaces an earlier banner (same collapse id) with a line
+        that asks for nothing, without sound or waking the screen."""
+        quiet = kind == "settled"
         payload = {
-            "aps": {"alert": {"title": title, "body": body}, "sound": "default", "thread-id": meta.get("session_id", ""),
-                    "category": {"approval": "HERMES_APPROVAL", "clarify": "HERMES_CLARIFY", "error": "HERMES_ERROR"}.get(kind, "HERMES_TURN"),
-                    "interruption-level": "time-sensitive" if kind in {"approval", "clarify"} else "active"},
+            "aps": {"alert": {"title": title, "body": body}, "thread-id": meta.get("session_id", ""),
+                    "category": {"approval": "HERMES_APPROVAL", "clarify": "HERMES_CLARIFY", "error": "HERMES_ERROR", "settled": "HERMES_INFO"}.get(kind, "HERMES_TURN"),
+                    "interruption-level": "passive" if quiet else "time-sensitive" if kind in {"approval", "clarify"} else "active"},
             "hermes": {"kind": kind, "gateway": self.gw.public_url, **meta},
         }
+        if not quiet:
+            payload["aps"]["sound"] = "default"
         # Apple caps a push at 4 KB and the relay encrypts this part: drop thread lines, then
         # shorten the text, until it fits comfortably.
         h = payload["hermes"]
@@ -675,11 +734,15 @@ class Relay:
         for d in load_devices(self.gw.url):
             if d.get("platform") == "watchos" or d.get("device_id") in skip:
                 continue  # the phone's alert is mirrored to the watch; a direct one would double up
-            if from_mac and d.get("platform") == "ios" and d.get("mute_desktop_origin"):
+            if only is not None and d.get("device_id") not in only:
+                continue
+            if from_mac and d.get("platform") == "ios" and d.get("mute_desktop_origin") and not quiet:
                 log.info("push %s → %s: skipped, the chat is being driven from a Mac and this phone asked for quiet", kind, d.get("device_name") or d.get("device_id"))
                 continue
             ok = self.apns.send(d, payload, collapse_id=collapse)
             sent += 1 if ok else 0
+            if ok and reached is not None:
+                reached.add(d.get("device_id"))
             log.info("push %s → %s: %s (%s)", kind, d.get("device_name") or d.get("device_id"), "sent" if ok else "FAILED", title[:60])
         self.refresh_complications()
         return sent
@@ -1169,6 +1232,66 @@ class Relay:
         a = self.attached.get(sid, {})
         return {"session_id": a.get("stored", sid), "profile": a.get("profile", "default")}
 
+    #: Approvals this companion announced and has not seen settled: push id → what was sent.
+    open_approvals: dict[str, dict] = {}
+    #: push id → when the gateway first stopped listing it as pending.
+    _approval_missing_since: dict[str, float] = {}
+
+    def settle_approval(self, rid: str, why: str = "answered") -> None:
+        """An approval this companion announced is no longer waiting, and the phone may be asleep:
+        its Live Activity leaves "Needs approval", and the banner that offered Approve is
+        replaced, quietly, on every device that got one except the one that answered."""
+        o = self.open_approvals.pop(rid, None)
+        self._approval_missing_since.pop(rid, None)
+        if not o:
+            return
+        sid, stored = o["sid"], o["stored"]
+        a = self.attached.get(sid)
+        if a and (a.get("status") or "idle") not in ("idle", "", "done", "finished"):
+            phase = (self.la_phase.get(sid) or ("streaming", 0))[0]
+            self.update_live_activities(stored, {**self.la_usage.get(sid, {}), "phase": phase, "needsAttention": False,
+                                                 "detail": {"thinking": "Thinking…", "streaming": "Writing…", "tool": "Running a tool…"}.get(phase, "Working…")}, runtime_id=sid)
+        by = approval_answered_by(o["req"], rid)
+        targets = {d for d in o["banner"] if d and d != by}
+        if targets:
+            body = f"{o['title']}: answered on another device." if why == "answered" else f"{o['title']}: no longer waiting for an answer."
+            self.push_all("settled", f"{o['bot']} · approval answered" if why == "answered" else o["bot"], body,
+                          {**self.meta(sid), "request_id": o["req"]}, collapse=rid, only=targets)
+        log.info("approval %s settled (%s): %d banner(s) replaced%s", rid[:16], why, len(targets), f", answered on {by}" if by else "")
+
+    async def settle_answered(self) -> int:
+        """Asks the gateway what is still pending for each session with an open approval, and
+        settles the ones it no longer lists (seen missing on two polls, so the answering
+        device's marker has had time to land)."""
+        now = time.time()
+        settled = 0
+        by_sid: dict[str, list[str]] = {}
+        for rid, o in self.open_approvals.items():
+            if now - o["at"] > 4:
+                by_sid.setdefault(o["sid"], []).append(rid)
+        for sid, rids in by_sid.items():
+            a = self.attached.get(sid)
+            if a is None:
+                for rid in rids:   # the session is gone: nothing can be waiting on it
+                    self.settle_approval(rid, "gone"); settled += 1
+                continue
+            try:
+                reply = await asyncio.wait_for(self.gw.call("approval.pending", {"profile": a.get("profile"), "session_id": sid}), timeout=3)
+            except Exception:  # noqa: BLE001
+                continue
+            ids = pending_request_ids(reply)
+            if ids is None:
+                continue
+            for rid in rids:
+                o = self.open_approvals[rid]
+                if o["req"] in ids or rid in ids or rid.removeprefix("queue-") in ids:
+                    self._approval_missing_since.pop(rid, None)
+                    continue
+                first = self._approval_missing_since.setdefault(rid, now)
+                if now - first >= 2:
+                    self.settle_approval(rid); settled += 1
+        return settled
+
     def handle_request(self, sid: str, rid: str, method: str, params: dict) -> None:
         if not rid or rid in self.notified:
             return
@@ -1180,7 +1303,10 @@ class Relay:
             body = params.get("description") or params.get("command") or "A command is waiting for your decision"
             via_la = self.update_live_activities(a.get("stored", sid), {**self.la_usage.get(sid, {}), "phase": "waiting", "detail": str(body)[:80], "needsAttention": True},
                                                  alert={"title": bot, "body": "Approval needed — tap to answer. It waits for you."}, runtime_id=sid)
-            self.push_all("approval", f"{bot} · approval needed", f"{title}: {str(body)[:180]}", {**self.meta(sid), "request_id": params.get("request_id", rid)}, collapse=rid, skip=via_la)
+            banner: set = set()
+            self.push_all("approval", f"{bot} · approval needed", f"{title}: {str(body)[:180]}", {**self.meta(sid), "request_id": params.get("request_id", rid)}, collapse=rid, skip=via_la, reached=banner)
+            self.open_approvals[rid] = {"sid": sid, "stored": a.get("stored", sid), "req": str(params.get("request_id") or rid), "at": time.time(),
+                                        "bot": bot, "title": title, "banner": banner}
         elif method == "clarify":
             q = params.get("question") or (params.get("questions") or [{}])[0].get("question") or "Hermes has a question"
             self.push_all("clarify", f"{bot} · question", f"{title}: {str(q)[:180]}", {**self.meta(sid), "request_id": rid}, collapse=rid)
@@ -1212,6 +1338,10 @@ class Relay:
                             self.reap_live_activities()
                         except Exception as exc:  # noqa: BLE001
                             log.debug("reap: %s", exc)
+                        try:
+                            await self.settle_answered()
+                        except Exception as exc:  # noqa: BLE001
+                            log.debug("settle approvals: %s", exc)
                         try:
                             await self.check_bot_chats()
                         except Exception as exc:  # noqa: BLE001
@@ -1429,6 +1559,8 @@ class Relay:
             a["title"] = p.get("title") or a["title"]
         elif kind == "message.complete" and a:
             self.la_phase.pop(sid, None)
+            for rid in [r for r, o in self.open_approvals.items() if o["sid"] == sid]:
+                self.settle_approval(rid)   # the turn is over: nothing of its can still be waiting
             if not isinstance(p.get("usage"), dict) and sid in self.la_usage:
                 p = {**p, "usage": {"output": self.la_usage[sid].get("outputTokens"), "context_used": self.la_usage[sid].get("contextUsed"),
                                     "context_max": self.la_usage[sid].get("contextMax"), "context_percent": self.la_usage[sid].get("contextPercent")}}
@@ -1438,6 +1570,8 @@ class Relay:
             self.push_all("error", f"{a.get('bot') or a.get('profile', 'Hermes')} · error", f"{a['title']}: {str(p.get('message', ''))[:180]}", self.meta(sid), collapse=f"err-{sid}")
         elif kind == "request.cancel":
             self.notified.discard(p.get("id", ""))
+            if p.get("id", "") in self.open_approvals:
+                self.settle_approval(p.get("id", ""), "withdrawn")
             # The ask was answered (from the phone, or elsewhere): the Live Activity stops asking.
             if a and self.la_phase.get(sid):
                 phase = self.la_phase[sid][0]

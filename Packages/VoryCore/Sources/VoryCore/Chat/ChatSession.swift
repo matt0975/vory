@@ -717,6 +717,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
+        if card.method == "approval" {
+            runtime.pushRegistrar?.noteAnswer(requestID: card.approval?.requestId ?? card.id, session: storedID, runtime: runtime)
+        }
         if card.viaApprovalRPC, let rid = card.approval?.requestId {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "request_id": .string(rid)]
             params["choice"] = result["choice"] ?? "deny"

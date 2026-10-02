@@ -200,6 +200,21 @@ final class PushRegistrar: PushRegistrationSyncing {
         }
     }
 
+    /// `<profile home>/push/answers/<request id>.json`: this device answered that approval. The
+    /// Companion takes the request's banner down on the other devices and leaves this one be.
+    func noteAnswer(requestID: String, session: String, runtime: GatewayRuntime) {
+        guard notificationsEnabled, !requestID.isEmpty, let home = runtime.profileHome else { return }
+        let safe = requestID.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || "._-".unicodeScalars.contains($0) ? Character($0) : "_" }
+        let path = "\(home)/push/answers/\(String(safe)).json"
+        let marker: JSONValue = ["device_id": .string(installID), "session_id": .string(session), "at": .number(Date().timeIntervalSince1970)]
+        Task {
+            guard let data = try? JSONEncoder().encode(marker) else { return }
+            let body: JSONValue = ["path": .string(path), "data_url": .string("data:application/json;base64," + data.base64EncodedString()), "overwrite": true]
+            do { let _: ManagedUploadResult = try await runtime.api.send("POST", "/api/files/upload", json: body) }
+            catch { LiveActivityController.note("answer marker failed: \(error.localizedDescription)") }
+        }
+    }
+
     /// `<profile home>/push/goals/<stored session id>.json`: the goal line Vory Summaries wrote
     /// for a working chat. The Companion puts it into the Live Activity updates it pushes (its
     /// own updates would otherwise wipe the line from the card while the app is away), and a
@@ -290,6 +305,7 @@ extension Notification.Name {
 final class LocalCardNotifier: CardNotifying {
     func cardArrived(_ card: PendingCard, chat: ChatSession) { LocalNotifier.cardArrived(card, chat: chat) }
     func turnFinished(chat: ChatSession, error: String?) { LocalNotifier.turnFinished(chat: chat, error: error) }
+    func cardSettled(_ card: PendingCard, chat: ChatSession) { LocalNotifier.cardSettled(card) }
 }
 
 /// Local notifications for cards and finished turns while the app is not in the foreground.
@@ -340,6 +356,25 @@ enum LocalNotifier {
                 return ((c.userInfo["hermes"] as? [String: Any])?["session_id"] as? String) == storedID
             }.map(\.request.identifier)
             if !ids.isEmpty { center.removeDeliveredNotifications(withIdentifiers: ids) }
+        }
+    }
+
+    /// A card answered on another device: the notification that offered Approve for it comes
+    /// down, whether this app posted it ("card-<id>") or the Companion pushed it (its payload
+    /// names the request).
+    static func cardSettled(_ card: PendingCard) {
+        let center = UNUserNotificationCenter.current()
+        let local = "card-\(card.id)"
+        center.removePendingNotificationRequests(withIdentifiers: [local])
+        let request = card.approval?.requestId
+        let ids = Set([card.id, request, request.map { "queue-" + $0 }].compactMap { $0 })
+        center.getDeliveredNotifications { delivered in
+            let stale = delivered.filter { n in
+                if n.request.identifier == local || ids.contains(n.request.identifier) { return true }
+                let h = n.request.content.userInfo["hermes"] as? [String: Any]
+                return (h?["request_id"] as? String).map(ids.contains) ?? false
+            }.map(\.request.identifier)
+            if !stale.isEmpty { center.removeDeliveredNotifications(withIdentifiers: stale) }
         }
     }
 
