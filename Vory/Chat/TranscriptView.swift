@@ -42,8 +42,13 @@ struct TranscriptView: View {
     /// no dock position this view had measured could explain, so the floor holds on its own.
     private var bottomInset: CGFloat {
         let measured = dockTop > 0 && visibleBottom > dockTop ? visibleBottom - dockTop : fallbackInset
-        return max(measured, keyboardInset > 0 ? keyboardInset + 44 : 0)
+        return max(measured, keyboardFloor > 0 ? keyboardFloor + 44 : 0)
     }
+    /// The keyboard's height once it has settled. The floor is not applied while the keyboard
+    /// rises: a content margin does not animate, so the thread jumped up a beat before the
+    /// dock's spring brought the composer there.
+    @State private var keyboardFloor: CGFloat = 0
+    @State private var floorTask: Task<Void, Never>?
     /// Height of the floating header (the nav bar is hidden in a chat).
     var topInset: CGFloat = 96
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
@@ -230,6 +235,15 @@ struct TranscriptView: View {
                 withAnimation(.interpolatingSpring(mass: 3, stiffness: 1000, damping: 500, initialVelocity: 0)) {
                     keyboardInset = inset
                     if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
+                }
+                floorTask?.cancel()
+                if inset == 0 { keyboardFloor = 0 } else {
+                    floorTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard !Task.isCancelled else { return }
+                        keyboardFloor = inset
+                        if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+                    }
                 }
             }
             #endif
@@ -1048,7 +1062,7 @@ struct SubagentRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: activity.isRunning ? "person.2.circle" : activity.failed ? "person.2.slash" : "person.2.circle.fill")
-                    .font(.body)
+                    .font(.body).frame(width: 22)   // the slash glyph is wider: the text lines up across states
                     .foregroundStyle(activity.failed ? Color.red : activity.isRunning ? Color.accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(activity.goal).lineLimit(3)
@@ -1250,23 +1264,36 @@ struct MarkdownView: View, Equatable {
         return a
     }
 
+    /// Cards (fenced html) whose source is showing instead, by block position.
+    @State private var sourceShown: Set<Int> = []
+
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text }
+
     var body: some View {
         let _ = Perf.tick("markdown")
         let blocks = Self.blocks(text)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                render(block)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
+                render(block, at: i)
             }
         }
         .textSelection(.enabled)
     }
 
-    @ViewBuilder private func render(_ block: MarkdownBlock) -> some View {
+    @ViewBuilder private func render(_ block: MarkdownBlock, at index: Int) -> some View {
         switch block {
         case .paragraph(let t):
             Text(Self.inline(t))
         case .heading(let level, let t):
             Text(Self.inline(t)).font(level <= 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline)
+        case .code(let lang, let code, let closed) where closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
+            // A card the bot drew in HTML, once its fence has closed; while it streams it is
+            // the code block below. Show Source turns it back into one.
+            HTMLCardView(html: code)
+                .contextMenu {
+                    Button { withAnimation(.snappy) { _ = sourceShown.insert(index) } } label: { Label("Show Source", systemImage: "chevron.left.forwardslash.chevron.right") }
+                    Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
+                }
         case .code(let lang, let code, let closed):
             // Wrapped, not side-scrolling: a horizontal pan inside a bubble used to fight the
             // timestamp reveal. Long lines wrap; a copy button sits in the corner.
@@ -1274,6 +1301,12 @@ struct MarkdownView: View, Equatable {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
                     Spacer(minLength: 0)
+                    if closed, HTMLCard.isCard(language: lang) {
+                        Button { withAnimation(.snappy) { _ = sourceShown.remove(index) } } label: {
+                            Label("Show Card", systemImage: "rectangle.on.rectangle").font(.caption2).labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.tint).padding(.trailing, 6)
+                    }
                     if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)

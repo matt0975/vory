@@ -68,6 +68,27 @@ upstream that is gone; the rest is fine. On disk, 34 rotated logs older than 90 
 4.2 GB. Say the word and I'll drop the stale block and clear those files."""
 
 
+CARD_PART_1 = """Here is the last week of disk use on the log host, as a card."""
+
+CARD_HTML = """<h3 style="margin:0 0 8px">/var/log, last 7 days</h3>
+<canvas id="c" height="140"></canvas>
+<table style="margin-top:10px;width:100%">
+<tr><th>Directory</th><th>Size</th><th>Change</th></tr>
+<tr><td>nginx</td><td>2.1 GB</td><td>+120 MB</td></tr>
+<tr><td>postgres</td><td>1.4 GB</td><td>+40 MB</td></tr>
+<tr><td>app</td><td>0.7 GB</td><td>−300 MB</td></tr>
+</table>
+<p style="margin:10px 0 0;font-size:90%;opacity:.7">Source: <a href="https://example.com/logs">du, nightly</a></p>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+new Chart(document.getElementById('c'), {type: 'line', data: {labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+  datasets: [{label: 'GB used', data: [3.6, 3.7, 3.9, 4.0, 4.1, 4.2, 4.2], tension: 0.3, fill: true}]},
+  options: {plugins: {legend: {display: false}}, scales: {y: {beginAtZero: false}}}});
+</script>"""
+
+CARD_PART_2 = """nginx is still the one growing. Say the word and I'll set its logrotate to `rotate 8`."""
+
+
 def usage(output: int, calls: int = 1) -> dict:
     used = 18_400 + output * 4
     return {
@@ -531,6 +552,20 @@ class Gateway:
         for r in rows + tools:
             s.history.append({**r, "row_id": len(s.history) + 1})
 
+    async def _card_turn(self, s: Session, prompt: str) -> None:
+        """A reply with a card in it: a fenced html block (a small table and a Chart.js chart
+        from a CDN) between two paragraphs, as any bot can answer today."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, CARD_PART_1)
+        # The fence streams like any other text: the app shows the code block until it closes.
+        await self.stream_words(s, "\n\n```html\n" + CARD_HTML + "\n```\n\n", delay=0.004)
+        await self.stream_words(s, CARD_PART_2)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        full = CARD_PART_1 + "\n\n```html\n" + CARD_HTML + "\n```\n\n" + CARD_PART_2
+        self.store_turn(s, prompt, [full])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": full, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _delegate_turn(self, s: Session, prompt: str) -> None:
         """A turn that hands part of the work to two helpers: the `subagent.*` events the
         gateway raises on the parent's session (payload fields as its `_SUBAGENT_FIELDS`),
@@ -581,6 +616,9 @@ class Gateway:
             await asyncio.sleep(20)
         if prompt.strip().lower().startswith("delegate"):
             await self._delegate_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
+            await self._card_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
