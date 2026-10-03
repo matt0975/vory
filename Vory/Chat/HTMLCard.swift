@@ -57,15 +57,25 @@ enum HTMLCard {
         return "<!doctype html><html><head>\(head)</head><body>\(html)</body></html>"
     }
 
-    /// Where a navigation may go. Only the card's own first load stays inside it; a link or
-    /// any later top-level navigation leaves for the browser (https, http or mail), and frames
-    /// are never loaded.
+    /// Where a navigation may go. Only the card's own document stays inside it (loaded from a
+    /// string, so its URL is about:blank: the first time, and again when the appearance
+    /// changes and the document is made anew); a link or any other top-level navigation
+    /// leaves for the browser (https, http or mail), and frames are never loaded.
     enum Navigation: Equatable { case allow, openOutside, block }
-    static func navigation(to url: URL?, isMainFrame: Bool, initialLoad: Bool) -> Navigation {
+    static func navigation(to url: URL?, isMainFrame: Bool) -> Navigation {
         guard isMainFrame else { return .block }
-        if initialLoad, url == nil || url?.absoluteString == "about:blank" { return .allow }
+        if url == nil || url?.absoluteString == "about:blank" { return .allow }
         guard let url, let scheme = url.scheme?.lowercased() else { return .block }
         return ["https", "http", "mailto"].contains(scheme) ? .openOutside : .block
+    }
+
+    /// What the card's own menu offers. On the Mac the web view owns the right-click, so a
+    /// SwiftUI context menu over it never opens; the view's menu is replaced with these.
+    struct Actions {
+        var full: () -> Void
+        /// Turns the card back into its code block; nil where the thread does not offer it.
+        var showSource: (() -> Void)?
+        var copy: () -> Void
     }
 
     /// Subresource loads the page may make: https only. Plain http, file, ws and the rest are
@@ -132,6 +142,8 @@ enum HTMLCard {
 /// is in, a button to open it full screen, and Show source / Copy HTML in its menu.
 struct HTMLCardView: View {
     var html: String
+    /// The thread's Show Source, for the card's own menu.
+    var onShowSource: (() -> Void)? = nil
     @Environment(\.colorScheme) private var scheme
     @State private var height: CGFloat = 96
     @State private var loaded = false
@@ -139,8 +151,9 @@ struct HTMLCardView: View {
 
     var body: some View {
         let cap = HTMLCard.heightCap
+        let actions = HTMLCard.Actions(full: { full = true }, showSource: onShowSource, copy: { UIPasteboard.general.string = html })
         ZStack(alignment: .topLeading) {
-            HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark), scrolls: false, height: $height, loaded: $loaded)
+            HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark), scrolls: false, height: $height, loaded: $loaded, actions: actions)
                 .frame(height: min(max(height, 48), cap))
                 .opacity(loaded ? 1 : 0.01)
             if !loaded {
@@ -218,6 +231,8 @@ struct HTMLWebView {
     var scrolls: Bool
     @Binding var height: CGFloat
     @Binding var loaded: Bool
+    /// The card's menu (the Mac's right-click and ⌘-click); nil in the sheet, which has its own.
+    var actions: HTMLCard.Actions? = nil
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
         var parent: HTMLWebView
@@ -236,8 +251,7 @@ struct HTMLWebView {
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            let initial = navigationAction.navigationType == .other && webView.url == nil
-            switch HTMLCard.navigation(to: navigationAction.request.url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true, initialLoad: initial) {
+            switch HTMLCard.navigation(to: navigationAction.request.url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
             case .allow: decisionHandler(.allow)
             case .openOutside: if let u = navigationAction.request.url { HTMLCard.openOutside(u) }; decisionHandler(.cancel)
             case .block: decisionHandler(.cancel)
@@ -246,7 +260,7 @@ struct HTMLWebView {
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
             // window.open and target=_blank: outside, never a second web view.
-            if let u = navigationAction.request.url, HTMLCard.navigation(to: u, isMainFrame: true, initialLoad: false) == .openOutside { HTMLCard.openOutside(u) }
+            if let u = navigationAction.request.url, HTMLCard.navigation(to: u, isMainFrame: true) == .openOutside { HTMLCard.openOutside(u) }
             return nil
         }
 
@@ -276,20 +290,23 @@ struct HTMLWebView {
     @MainActor func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     @MainActor func makeWebView(_ coordinator: Coordinator) -> WKWebView {
-        let web = WKWebView(frame: .zero, configuration: HTMLCard.configuration())
-        web.navigationDelegate = coordinator
-        web.uiDelegate = coordinator
-        web.allowsLinkPreview = false
-        web.allowsBackForwardNavigationGestures = false
         #if os(iOS)
+        let web = WKWebView(frame: .zero, configuration: HTMLCard.configuration())
         web.isOpaque = false
         web.backgroundColor = .clear
         web.scrollView.backgroundColor = .clear
         web.scrollView.isScrollEnabled = scrolls
         web.scrollView.bounces = scrolls
         #else
+        let web = CardWebView(frame: .zero, configuration: HTMLCard.configuration())
+        web.scrolls = scrolls
+        web.actions = actions
         web.setValue(false, forKey: "drawsBackground")
         #endif
+        web.navigationDelegate = coordinator
+        web.uiDelegate = coordinator
+        web.allowsLinkPreview = false
+        web.allowsBackForwardNavigationGestures = false
         coordinator.load(into: web)
         return web
     }
@@ -299,9 +316,43 @@ struct HTMLWebView {
         coordinator.load(into: web)
         #if os(iOS)
         web.scrollView.isScrollEnabled = scrolls
+        #else
+        if let card = web as? CardWebView { card.scrolls = scrolls; card.actions = actions }
         #endif
     }
 }
+
+#if os(macOS)
+/// The Mac's web view for a card. In the thread the wheel scrolls the thread, not the card
+/// (the card is sized to its content, and what runs past the cap is in Full Screen); in the
+/// sheet the card scrolls itself. The right-click menu is the card's own, not WebKit's, and
+/// ⌘-click opens the card full screen.
+final class CardWebView: WKWebView {
+    var scrolls = false
+    var actions: HTMLCard.Actions?
+
+    override func scrollWheel(with event: NSEvent) {
+        if scrolls { super.scrollWheel(with: event) } else { nextResponder?.scrollWheel(with: event) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command), let actions { actions.full(); return }
+        super.mouseDown(with: event)
+    }
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        guard let actions else { super.willOpenMenu(menu, with: event); return }
+        menu.removeAllItems()
+        menu.addItem(withTitle: "Open Full Screen", action: #selector(openFull), keyEquivalent: "").target = self
+        if actions.showSource != nil { menu.addItem(withTitle: "Show Source", action: #selector(showSource), keyEquivalent: "").target = self }
+        menu.addItem(withTitle: "Copy HTML", action: #selector(copyHTML), keyEquivalent: "").target = self
+    }
+
+    @objc private func openFull() { actions?.full() }
+    @objc private func showSource() { actions?.showSource?() }
+    @objc private func copyHTML() { actions?.copy() }
+}
+#endif
 
 #if os(iOS)
 extension HTMLWebView: UIViewRepresentable {

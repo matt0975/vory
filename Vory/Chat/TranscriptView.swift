@@ -1289,7 +1289,7 @@ struct MarkdownView: View, Equatable {
         case .code(let lang, let code, let closed) where closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
-            HTMLCardView(html: code)
+            HTMLCardView(html: code, onShowSource: { withAnimation(.snappy) { _ = sourceShown.insert(index) } })
                 .contextMenu {
                     Button { withAnimation(.snappy) { _ = sourceShown.insert(index) } } label: { Label("Show Source", systemImage: "chevron.left.forwardslash.chevron.right") }
                     Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }

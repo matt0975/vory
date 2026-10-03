@@ -43,15 +43,18 @@ import Testing
         #expect(doc.components(separatedBy: "<head").count == 2)
     }
 
-    @Test func onlyTheFirstLoadStaysInsideAndLinksGoOutside() {
-        #expect(HTMLCard.navigation(to: URL(string: "about:blank"), isMainFrame: true, initialLoad: true) == .allow)
-        #expect(HTMLCard.navigation(to: nil, isMainFrame: true, initialLoad: true) == .allow)
-        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/logs"), isMainFrame: true, initialLoad: false) == .openOutside)
-        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/"), isMainFrame: true, initialLoad: true) == .openOutside)
-        #expect(HTMLCard.navigation(to: URL(string: "mailto:a@b.c"), isMainFrame: true, initialLoad: false) == .openOutside)
-        #expect(HTMLCard.navigation(to: URL(string: "javascript:alert(1)"), isMainFrame: true, initialLoad: false) == .block)
-        #expect(HTMLCard.navigation(to: URL(string: "file:///etc/passwd"), isMainFrame: true, initialLoad: false) == .block)
-        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/frame"), isMainFrame: false, initialLoad: false) == .block)
+    @Test func onlyTheCardsOwnDocumentStaysInsideAndLinksGoOutside() {
+        // The document is loaded from a string, so it is about:blank: the first time, and again
+        // when the appearance changes and the document is made anew (that reload used to be
+        // refused, and a card kept the old appearance).
+        #expect(HTMLCard.navigation(to: URL(string: "about:blank"), isMainFrame: true) == .allow)
+        #expect(HTMLCard.navigation(to: nil, isMainFrame: true) == .allow)
+        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/logs"), isMainFrame: true) == .openOutside)
+        #expect(HTMLCard.navigation(to: URL(string: "mailto:a@b.c"), isMainFrame: true) == .openOutside)
+        #expect(HTMLCard.navigation(to: URL(string: "javascript:alert(1)"), isMainFrame: true) == .block)
+        #expect(HTMLCard.navigation(to: URL(string: "file:///etc/passwd"), isMainFrame: true) == .block)
+        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/frame"), isMainFrame: false) == .block)
+        #expect(HTMLCard.navigation(to: URL(string: "about:blank"), isMainFrame: false) == .block)
     }
 
     @Test func theRuleListIsValidAndBlocksEverythingButHTTPS() throws {
