@@ -174,6 +174,8 @@ struct MainTabView: View {
         .contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
         // No blank band under the bar at the top of any page: the first card sits right there.
         .contentMargins(.top, 0, for: .scrollContent)
+        // "Read replies aloud" listens for finished replies in the chat in front.
+        .task { VoiceCoordinator.shared.observeReplies() }
         .onChange(of: tabs) { _, now in
             // The selected tab was removed from the layout: fall back to Chats instead of a blank pane.
             if !now.contains(model.selectedTab) { model.selectedTab = .chats }

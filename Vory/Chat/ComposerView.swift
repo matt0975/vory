@@ -294,7 +294,10 @@ struct ComposerView: View {
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
     @ViewBuilder private var trailingControl: some View {
         if dictation.isListening {
-            TalkButton(dictation: dictation) { transcript in text = transcript; focused = true }
+            TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
+        } else if dictation.isTranscribing {
+            // The recording is being turned into words (on the gateway or here).
+            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Transcribing")
         } else if chat.isRunning, text.isEmpty {
             Button { Task { await chat.stop() } } label: {
                 Image(systemName: "stop.fill").font(.caption.weight(.bold)).foregroundStyle(.white)
@@ -303,7 +306,7 @@ struct ComposerView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
         } else if text.isEmpty && chat.staged.isEmpty {
-            TalkButton(dictation: dictation) { transcript in text = transcript; focused = true }
+            TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {

@@ -39,6 +39,7 @@ struct SettingsView: View {
             Row(id: "appearance", title: "Appearance", symbol: "circle.lefthalf.filled", color: .black, destination: AnyView(AppearanceView())),
             Row(id: "home", title: "Home", symbol: "house.fill", color: .blue, destination: AnyView(HomeSettingsView())),
             Row(id: "summaries", title: "Vory Summaries", symbol: "sparkles", color: .purple, destination: AnyView(SummariesSettingsView())),
+            Row(id: "voice", title: "Voice", symbol: "waveform", color: .pink, destination: AnyView(VoiceSettingsView())),
             Row(id: "companion", title: "Companion", symbol: "puzzlepiece.fill", color: .blue, destination: AnyView(CompanionView())),
             Row(id: "troubleshooting", title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, destination: AnyView(TroubleshootingView())),
             Row(id: "about", title: "About", symbol: "info.circle", color: .blue, destination: AnyView(AboutView())),

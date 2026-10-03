@@ -830,6 +830,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "message.complete":
             let text = p["text"]?.stringValue
             let lastAssistantIndex = finishStreaming(finalText: text)
+            if let spoken = text, !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, p["status"]?.stringValue != "interrupted" {
+                NotificationCenter.default.post(name: .hermesReplyCompleted, object: nil, userInfo: ["storedID": storedID, "text": spoken])
+            }
             if let u = try? p["usage"]?.decode(Usage.self) { usage = u }
             if let idx = lastAssistantIndex, let started = turnStartedAt {
                 items[idx].stats = TurnStats.make(outputBefore: outputTokensAtTurnStart, outputAfter: usage?.output,

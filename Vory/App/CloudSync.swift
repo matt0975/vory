@@ -96,7 +96,7 @@ struct CloudMerge {
         ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies,
         BotAvatarStore.glassAllKey, GatewayRuntime.defaultProfileKey,
         ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey, ChatGoals.enabledKey,
-    ]
+    ] + VoiceSettings.syncedKeys
 
     /// The name Home greets the person by.
     static let nameKey = "user.name"

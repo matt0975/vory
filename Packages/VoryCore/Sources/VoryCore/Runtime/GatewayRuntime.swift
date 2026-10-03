@@ -45,6 +45,8 @@ public final class GatewayRuntime {
     public let projects = ProjectsStore()
     /// The gateway's kanban board (its bundled plugin), when it has one.
     public let kanban = KanbanStore()
+    /// Speech in and out, by the Speech setting: the gateway's providers or this device's engines.
+    public let voice = VoiceEngine()
 
     public init(connection: GatewayConnection, store: ConnectionStore) {
         self.connection = connection
@@ -131,6 +133,7 @@ public final class GatewayRuntime {
     public func start() async {
         projects.attach(self)
         kanban.attach(self)
+        voice.attach(self)
         await socket.connect()
         await loadProfiles()
         await refreshCapabilities()
@@ -415,6 +418,8 @@ public extension Notification.Name {
     public static let hermesNewChatRequested = Notification.Name("hermesNewChatRequested")
     /// A piece of reply text arrived for a chat (`storedID`, `count` characters).
     public static let hermesStreamDelta = Notification.Name("hermesStreamDelta")
+    /// A reply finished (`storedID`, `text`: the whole assistant turn), for reading it aloud.
+    public static let hermesReplyCompleted = Notification.Name("hermesReplyCompleted")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")
     public static let hermesOpenSession = Notification.Name("hermesOpenSession")
 }

@@ -706,9 +706,87 @@ async def kanban_events(ws, query):
         await asyncio.sleep(1)
 
 
+# ── Audio (hermes_cli/web_routers/audio.py): a canned transcript, a tone for speech ────────────
+import array, math, struct, wave, io
+
+MOCK_TRANSCRIPT = "Clear the rotated logs older than ninety days, but keep anything still open."
+
+
+def _tone_pcm(seconds: float, rate: int = 24000) -> bytes:
+    """Int16 mono samples with a speech-like cadence: a low tone pulsed four times a second."""
+    n = int(seconds * rate)
+    out = array.array("h")
+    for i in range(n):
+        t = i / rate
+        env = 0.5 * (1 + math.sin(2 * math.pi * 4 * t))          # the syllable pulse
+        fade = min(1.0, t / 0.05, (seconds - t) / 0.1)              # no click at the ends
+        v = 0.35 * env * fade * (math.sin(2 * math.pi * 196 * t) + 0.4 * math.sin(2 * math.pi * 392 * t))
+        out.append(int(max(-1.0, min(1.0, v)) * 32767))
+    return out.tobytes()
+
+
+def _tone_wav_data_url(seconds: float, rate: int = 24000) -> str:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(_tone_pcm(seconds, rate))
+    import base64 as _b64
+    return "data:audio/wav;base64," + _b64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _speech_seconds(text: str) -> float:
+    return min(12.0, 0.33 * max(1, len(text.split())) + 0.4)
+
+
+def audio_rest(method, base, payload):
+    if base == "/api/audio/transcribe":
+        data_url = str(payload.get("data_url") or "")
+        if not data_url.startswith("data:") or ";base64," not in data_url:
+            return 400, {"detail": "Invalid audio payload"}
+        size = len(data_url.split(",", 1)[1]) * 3 // 4
+        if size < 400:
+            return 200, {"ok": True, "transcript": "", "provider": "mock-whisper"}
+        return 200, {"ok": True, "transcript": MOCK_TRANSCRIPT, "provider": "mock-whisper"}
+    if base == "/api/audio/speak":
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return 400, {"detail": "Text is required"}
+        return 200, {"ok": True, "data_url": _tone_wav_data_url(_speech_seconds(text)), "mime_type": "audio/wav", "provider": "mock-tts"}
+    if base == "/api/audio/tts-lease":
+        return 200, {"ok": True, "lease": payload.get("lease") or "vory", "active": bool(payload.get("active")), "leases": ["vory"], "action": "acquired"}
+    if base == "/api/audio/voice-config":
+        return 404, {"detail": "Not found"}
+    return None
+
+
+async def speak_stream(ws):
+    """The speak-stream socket: text frames in, {start}, int16 PCM frames and {end} out; {stop}
+    or a disconnect ends it. The audio is the tone above, as long as the words would take."""
+    text = ""
+    async for raw in ws:
+        if isinstance(raw, bytes):
+            continue
+        try:
+            frame = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if frame.get("text"):
+            text += str(frame["text"])
+        if frame.get("stop"):
+            return
+        if frame.get("done"):
+            break
+    pcm = _tone_pcm(_speech_seconds(text))
+    await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
+    step = 4800  # 100 ms a frame
+    for i in range(0, len(pcm), step):
+        await ws.send(pcm[i:i + step])
+        await asyncio.sleep(0.03)
+    await ws.send(json.dumps({"type": "end"}))
+
+
 def process_request(connection, request):
     path = request.path
-    if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events"):
+    if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events", "/api/audio/speak-stream"):
         return None  # let the WebSocket handshake proceed
     query = {}
     if "?" in path:
@@ -717,12 +795,13 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
-    if base.startswith("/api/plugins/kanban/"):
+    if base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
         try:
             payload = json.loads(getattr(request, "body", b"") or b"{}")
         except json.JSONDecodeError:
             payload = {}
-        result = kanban_rest(method, base, query, payload if isinstance(payload, dict) else {})
+        payload = payload if isinstance(payload, dict) else {}
+        result = kanban_rest(method, base, query, payload) if base.startswith("/api/plugins/kanban/") else audio_rest(method, base, payload)
     elif method == "PATCH" and base.startswith("/api/sessions/"):
         # Title rename from the chat info sheet; the body is not readable here (websockets only
         # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
@@ -1335,6 +1414,12 @@ class Gateway:
 async def ws_handler(ws):
     # The kanban plugin's event stream has its own path; everything else is the gateway's JSON-RPC.
     req_path = getattr(getattr(ws, "request", None), "path", "") or ""
+    if req_path.split("?")[0] == "/api/audio/speak-stream":
+        try:
+            await speak_stream(ws)
+        except Exception:
+            pass
+        return
     if req_path.split("?")[0] == "/api/plugins/kanban/events":
         query = dict(pair.partition("=")[::2] for pair in req_path.split("?", 1)[1].split("&")) if "?" in req_path else {}
         try:
