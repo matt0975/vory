@@ -354,7 +354,8 @@ struct KanbanCardRow: View {
             }
             HStack(spacing: 10) {
                 if let a = task.assignee, !a.isEmpty {
-                    HStack(spacing: 4) { BotAvatar(profile: a, size: 16); Text(a).font(.caption) }
+                    // On one line whatever the width: the name broke mid-word in a narrow Mac column.
+                    HStack(spacing: 4) { BotAvatar(profile: a, size: 16); Text(a).font(.caption).lineLimit(1) }.fixedSize()
                 } else {
                     Label("Unassigned", systemImage: "person.slash").font(.caption).foregroundStyle(.tertiary)
                 }
@@ -371,6 +372,7 @@ struct KanbanCardRow: View {
                 Spacer(minLength: 0)
                 if let s = task.age?.createdAgeSeconds {
                     Text(Date(timeIntervalSinceNow: -Double(s)), format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(1).fixedSize().layoutPriority(-1)
                 }
             }
             .labelStyle(.titleAndIcon)
