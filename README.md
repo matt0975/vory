@@ -459,6 +459,12 @@ the assistant" error, and one that starts with `interrupt` ends with the gateway
 projects and answers `session.workspace.move`, so moving a chat between projects can be tried;
 a folder under `/nowhere` is refused the way a missing folder is.
 
+## Updates
+
+Releases and the fixes in progress are posted on X at [@_mattwagner_](https://x.com/_mattwagner_) as they
+happen. Every TestFlight build carries its notes, and the [tracker](https://github.com/matt0975/vory/issues)
+shows what is open and what shipped.
+
 ## License
 
 Vory is open source under the [MIT License](LICENSE). The name Vory, the app icon and the Vory
