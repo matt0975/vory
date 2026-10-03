@@ -1320,7 +1320,10 @@ final class PushSetupModel {
         case "Preparing Update…", "Installing…": return "About 1 minute remaining"
         case "Restart to finish": return "Waiting for the restart"
         case "Restarting Gateway…": return "About 1 minute remaining"
-        case "Verifying…": return "Less than a minute remaining"
+        // The wait really is up to two minutes; "less than a minute" had a tester sitting on
+        // a bar that said so for longer than that.
+        case "Verifying…": return "Up to 2 minutes"
+        case "Still verifying…": return "Giving it another minute"
         default: return nil
         }
     }
@@ -1423,7 +1426,8 @@ final class PushSetupModel {
         done += 1; withAnimation(.snappy) { updateProgress = done / total }
 
         updateStage = "Verifying…"
-        let deadline = Date().addingTimeInterval(120)
+        let verifyStarted = Date()
+        let deadline = verifyStarted.addingTimeInterval(120)
         var announced = ""
         while Date() < deadline {
             try? await Task.sleep(for: .seconds(3))
@@ -1433,9 +1437,15 @@ final class PushSetupModel {
                 if line != announced { console(line); announced = line }
             }
             if companionHealthy, installedVersion == target { break }
+            // The bar keeps moving through the wait, and the label says so after the first minute.
+            let elapsed = Date().timeIntervalSince(verifyStarted)
+            withAnimation(.snappy) { updateProgress = (done + min(0.9, elapsed / 120)) / total }
+            if elapsed > 60, updateStage == "Verifying…" { updateStage = "Still verifying…"; console("no new heartbeat yet after a minute; waiting another") }
         }
         guard companionHealthy, installedVersion == target else {
-            updateOutcome = (false, "The files are on the gateway but the new companion did not report in within two minutes. Check the status above and restart the gateway again.")
+            updateStage = "Not verified"
+            let seen = heartbeat.map { "The last heartbeat is from v\($0.version)\($0.connected == true ? ", connected" : ", not connected")." } ?? "No heartbeat has been read."
+            updateOutcome = (false, "The files are on the gateway but the new companion did not report in within two minutes. \(seen) Restart the gateway once more (Settings › Gateway), then Check again here; if it still does not report, open the Companion page and run the setup's Test.")
             return
         }
         withAnimation(.snappy) { updateProgress = 1 }
@@ -1469,11 +1479,20 @@ final class PushSetupModel {
         return s
     }
 
+    /// The tests asked for this session that have not landed yet, by when each was asked. A push
+    /// can take a while (a tester measured 80 s on their network), so one asked for earlier may
+    /// land during a later attempt; that is still a pass, not "could not be decrypted".
+    static var testNonces: [String: Date] = [:]
+    /// How long one attempt waits. Apple sometimes takes well over a minute.
+    static let testWait: TimeInterval = 180
+
     /// Drops a request file next to the companion's config; the companion sends one push to every
     /// registered phone and records the nonce in its heartbeat. Received = the full chain works.
     func sendTest(runtime rt: GatewayRuntime) async {
         testPhase = .waiting; testStartedAt = Date(); testStage = "Handing the request to the gateway…"
         let nonce = UUID().uuidString.lowercased()
+        Self.testNonces = Self.testNonces.filter { Date().timeIntervalSince($0.value) < 1800 }
+        Self.testNonces[nonce] = Date()
         let body: JSONValue = ["nonce": .string(nonce), "requested_at": .number(Date().timeIntervalSince1970)]
         do {
             let data = try JSONEncoder().encode(body)
@@ -1484,23 +1503,33 @@ final class PushSetupModel {
         testStage = "Waiting for the companion to pick it up (it looks every 3 s)…"
         var sentTo: Int?
         var detail = ""
+        var unreadable = false
         Self.presentedNonces.remove(nonce); Self.lastPresentedAt = nil
-        while Date().timeIntervalSince(started) < 60 {
+        while Date().timeIntervalSince(started) < Self.testWait {
             try? await Task.sleep(for: .seconds(1))
             let secs = Int(Date().timeIntervalSince(started))
-            var decrypted = Self.presentedNonces.contains(nonce)
-            var arrived = decrypted || (Self.lastPresentedAt.map { $0 >= started } ?? false)
-            if !decrypted {
-                let seen = await Self.testDelivered(nonce: nonce, since: started)
-                arrived = arrived || seen.arrived
-                decrypted = decrypted || seen.decrypted
+            let known = Set(Self.testNonces.keys)
+            var hit = Self.presentedNonces.first { known.contains($0) }
+            var stray = Self.lastPresentedAt.map { $0 >= started } ?? false
+            if hit == nil {
+                let seen = await Self.testDelivered(known: known, since: started)
+                hit = seen.nonce; stray = stray || seen.unreadable
             }
-            if arrived {
-                testPhase = decrypted
+            if let hit {
+                let askedAt = Self.testNonces.removeValue(forKey: hit) ?? started
+                Self.presentedNonces.remove(hit)
+                testPhase = hit == nonce
                     ? .done(ok: true, text: "Received on \(DeviceWords.this) \(secs)s after asking, content decrypted. The whole chain works.")
-                    : .done(ok: true, text: "Received on \(DeviceWords.this) \(secs)s after asking — but its content could not be decrypted, so it showed the placeholder text. Register \(DeviceWords.this) again (step 1) so the relay key matches, then test once more.")
+                    : .done(ok: true, text: "An earlier test just arrived on \(DeviceWords.this), \(Int(Date().timeIntervalSince(askedAt)))s after it was asked for, content decrypted. The whole chain works; pushes take a while to get through here.")
                 return
             }
+            // Something arrived that is not a test we know: the extension's own word on it decides.
+            // "decrypted OK" is not taken as a pass (it may have been a reply); a failure is one.
+            if stray, let crumb = Self.freshBreadcrumb(since: started), crumb.contains("decrypt failed") || crumb.contains("no relay credentials") {
+                testPhase = .done(ok: false, text: "A push arrived on \(DeviceWords.this) \(secs)s after asking, but its content could not be decrypted (\(crumb)). Register \(DeviceWords.this) again (step 1) so the relay key matches, then test once more.")
+                return
+            }
+            unreadable = unreadable || stray
             if sentTo == nil, secs % 2 == 0 {
                 await checkCompanion(runtime: rt)
                 if heartbeat?.lastTestNonce == nonce {
@@ -1509,28 +1538,41 @@ final class PushSetupModel {
                     testStage = sentTo == 0 ? "The companion found no device to send to" : "Sent to Apple by the companion · waiting for it to arrive…"
                 }
             }
+            if secs == 45 {
+                testStage = sentTo == nil ? "Still waiting for the companion to pick it up…"
+                                          : "Still on its way. Apple sometimes takes a minute or more; no need to ask again."
+            }
         }
         let relayNote = detail.isEmpty ? "" : (detail.contains("1010") ? " Cloudflare blocked the companion's request to the relay (error 1010, browser check) — update the companion; newer ones identify themselves."
                                                                         : " The relay answered: \(detail).")
+        let strayNote = unreadable ? " A push did arrive meanwhile that Vory could not read; if that happens again, register \(DeviceWords.this) again (step 1)." : ""
         if let n = sentTo {
             testPhase = .done(ok: false, text: n == 0 ? "The companion tried, but the relay refused the push for \(DeviceWords.this).\(relayNote)\(detail.contains("1010") ? "" : " If it says \"unknown device\", register \(DeviceWords.this) again (step 1).")"
-                                                     : "The companion sent it to \(n) device\(n == 1 ? "" : "s") but nothing arrived here within a minute.\(relayNote) Check that notifications are allowed for Vory, and the relay registration in step 1.")
+                                                     : "The companion sent it to \(n) device\(n == 1 ? "" : "s") but nothing arrived here within three minutes.\(relayNote) Check that notifications are allowed for Vory, and the relay registration in step 1. If it turns up later, the next test will say so.\(strayNote)")
         } else {
-            testPhase = .done(ok: false, text: "The companion never picked the request up within a minute. Is it connected (step 5)?")
+            testPhase = .done(ok: false, text: "The companion never picked the request up within three minutes. Is it connected (step 5)?\(strayNote)")
         }
     }
 
-    /// Anything Vory received since the request counts as arrived; the nonce inside means the
-    /// notification service extension also managed to decrypt it.
-    private static func testDelivered(nonce: String, since: Date) async -> (arrived: Bool, decrypted: Bool) {
+    /// What Notification Center holds since the request: a test whose nonce we know (the
+    /// extension decrypted it, so the nonce is there), or a push still encrypted (no nonce at all).
+    private static func testDelivered(known: Set<String>, since: Date) async -> (nonce: String?, unreadable: Bool) {
         let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
-        var arrived = false, decrypted = false
+        var unreadable = false
         for n in delivered {
             let info = n.request.content.userInfo
-            if (((info["hermes"] as? [String: Any])?["nonce"] as? String) == nonce) { arrived = true; decrypted = true; break }
-            if n.date >= since.addingTimeInterval(-2), info["enc"] != nil || info["hermes"] != nil { arrived = true }
+            if let nonce = (info["hermes"] as? [String: Any])?["nonce"] as? String, known.contains(nonce) { return (nonce, false) }
+            if n.date >= since.addingTimeInterval(-2), info["enc"] != nil, info["hermes"] == nil { unreadable = true }
         }
-        return (arrived, decrypted)
+        return (nil, unreadable)
+    }
+
+    /// The extension's breadcrumb ("<ISO date> <what>") when it was written since `since`.
+    private static func freshBreadcrumb(since: Date) -> String? {
+        guard let d = Keychain.get(account: "push.nse.last"), let line = String(data: d, encoding: .utf8),
+              let space = line.firstIndex(of: " "), let at = ISO8601DateFormatter().date(from: String(line[..<space])),
+              at >= since.addingTimeInterval(-2) else { return nil }
+        return String(line[line.index(after: space)...])
     }
 
     enum Credential { case sessionToken, needsSignIn, ready(provider: String?) }

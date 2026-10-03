@@ -203,7 +203,8 @@ struct ConversationView: View {
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 400 { dockHeight = $0 } }
+            // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
             .padding(.bottom, keyboardInset)
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this.

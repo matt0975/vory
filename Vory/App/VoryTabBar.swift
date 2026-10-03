@@ -197,6 +197,8 @@ struct VoryTabBar: View {
     /// A tap on the selected tab while it is deeper than its root page goes back to that page,
     /// like the system bar.
     private func select(_ tab: AppModel.AppTab) {
+        // A tab chosen by hand is where the person wants to be: no going back after a chat.
+        model.composeReturnTab = nil
         if tab == model.selectedTab {
             if model.tabAtRoot[tab] == false { model.popToRoot[tab, default: 0] += 1 }
             model.tabReselected[tab, default: 0] += 1

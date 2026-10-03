@@ -152,6 +152,84 @@ public struct AttachmentPreview: Hashable, Sendable, Identifiable {
     }
 }
 
+/// A helper the bot spun up for part of the work. The gateway raises every `subagent.*` event
+/// on the parent's session and names the helper by id; this is the one row that follows it
+/// from the spawn request to its report (a tester saw only "running" and then nothing).
+public struct SubagentActivity: Hashable, Sendable {
+    public var id: String
+    public var goal: String
+    /// `running` until the gateway says `completed`, `failed`… on `subagent.complete`.
+    public var status: String
+    /// What it is on right now: the tool it is running, or the last line of its thinking.
+    public var step: String?
+    public var model: String?
+    public var toolCount: Int?
+    public var durationSeconds: Double?
+    /// What it came back with, from `subagent.complete`.
+    public var summary: String?
+    /// Its place in a batch of helpers started together (0-based, as the gateway counts).
+    public var taskIndex: Int?
+    public var taskCount: Int?
+
+    public init(id: String, goal: String, status: String = "running", step: String? = nil, model: String? = nil, toolCount: Int? = nil,
+                durationSeconds: Double? = nil, summary: String? = nil, taskIndex: Int? = nil, taskCount: Int? = nil) {
+        self.id = id; self.goal = goal; self.status = status; self.step = step; self.model = model; self.toolCount = toolCount
+        self.durationSeconds = durationSeconds; self.summary = summary; self.taskIndex = taskIndex; self.taskCount = taskCount
+    }
+
+    public var isRunning: Bool { status == "running" }
+    public var failed: Bool { status == "failed" || status == "error" }
+
+    /// The line under the goal: the step while it runs, the outcome once it is back.
+    public var detailLine: String? {
+        var parts: [String] = []
+        if let i = taskIndex, let n = taskCount, n > 1 { parts.append("\(i + 1) of \(n)") }
+        if isRunning {
+            parts.append(step ?? "Working…")
+        } else {
+            var done = failed ? "Failed" : "Done"
+            if let s = durationSeconds, s > 0 { done += s < 60 ? " in \(Int(s.rounded()))s" : " in \(Int((s / 60).rounded()))m" }
+            parts.append(done)
+            if let n = toolCount, n > 0 { parts.append("\(n) tool call\(n == 1 ? "" : "s")") }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// The transcript row id for the helper a `subagent.*` payload names, if it names one.
+    public static func rowID(for p: JSONValue) -> String? {
+        let hid = p["subagent_id"]?.stringValue ?? p["child_session_id"]?.stringValue ?? p["delegation_id"]?.stringValue ?? ""
+        return hid.isEmpty ? nil : "sub-" + hid
+    }
+
+    /// The row after one more `subagent.*` event: made by whichever event comes first and
+    /// kept up to date by the rest (the official TUI does the same).
+    public static func applying(_ type: String, _ p: JSONValue, to current: SubagentActivity?) -> SubagentActivity {
+        var act = current ?? SubagentActivity(id: p["subagent_id"]?.stringValue ?? p["child_session_id"]?.stringValue ?? "", goal: "Subagent")
+        if let g = p["goal"]?.stringValue, !g.isEmpty { act.goal = g }
+        if let m = p["model"]?.stringValue, !m.isEmpty { act.model = m }
+        if let n = p["tool_count"]?.intValue { act.toolCount = n }
+        if let i = p["task_index"]?.intValue { act.taskIndex = i }
+        if let n = p["task_count"]?.intValue { act.taskCount = n }
+        func oneLine(_ s: String) -> String { s.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces) }
+        switch type {
+        case "subagent.tool":
+            let name = p["tool_name"]?.stringValue ?? "tool"
+            let preview = oneLine(p["tool_preview"]?.stringValue ?? "")
+            act.step = preview.isEmpty ? name : "\(name): \(preview.prefix(120))"
+        case "subagent.thinking", "subagent.progress":
+            if let t = p["text"]?.stringValue.map(oneLine), !t.isEmpty { act.step = String(t.suffix(160)) }
+        case "subagent.complete":
+            act.status = p["status"]?.stringValue ?? "completed"
+            if let s = p["summary"]?.stringValue, !s.isEmpty { act.summary = s }
+            if let d = p["duration_seconds"]?.doubleValue { act.durationSeconds = d }
+            act.step = nil
+        default:
+            break   // spawn_requested, start: the row itself is the news
+        }
+        return act
+    }
+}
+
 /// One row of the conversation transcript.
 public struct TranscriptItem: Hashable, Sendable, Identifiable {
     public enum Kind: Hashable, Sendable {
@@ -160,7 +238,7 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
         case tool(ToolActivity)
         case system(text: String, symbol: String)
         case error(text: String)
-        case subagent(goal: String, status: String)
+        case subagent(SubagentActivity)
         /// A message steered into a running turn (queued or delivered), shown as the user's own
         /// bubble but grey.
         case steer(text: String, status: String)
@@ -303,6 +381,14 @@ public struct InjectedNote: Hashable, Sendable {
         if lower.hasPrefix("[cronjob") {
             let name = t.firstMatch(of: /\[Cronjob "([^"]+)"/).map { String($0.1) }
             return InjectedNote(title: name.map { "Scheduled run: \($0)" } ?? "Scheduled run", body: t)
+        }
+        // A helper's report, filed in the user's seat for the bot to read on: "[ASYNC DELEGATION
+        // COMPLETE — id]", "…BATCH COMPLETE…", "…TASK FAILED…". It read as the person's own words.
+        if lower.hasPrefix("[async delegation") {
+            let head = t.prefix { $0 != "]" }.lowercased()
+            let failed = head.contains("fail")
+            let batch = head.contains("batch")
+            return InjectedNote(title: failed ? "Subagent failed" : batch ? "Subagents reported back" : "Subagent reported back", body: t)
         }
         if lower.hasPrefix("[important:") || lower.hasPrefix("[system") || lower.hasPrefix("[note") {
             return InjectedNote(title: "Note from the gateway", body: t)

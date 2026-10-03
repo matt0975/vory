@@ -71,6 +71,10 @@ struct DashboardView: View {
             .padding(.horizontal, 12)
             #endif
         }
+        .scrollPosition($scrollPosition)
+        // A tap on the Home tab while it is in front brings the page back to its top, as the
+        // other tabs' lists do (a tester asked for it).
+        .onChange(of: model.tabReselected[.dashboard]) { _, _ in withAnimation(.snappy) { scrollPosition.scrollTo(edge: .top) } }
         .untitledPage()
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
@@ -83,6 +87,7 @@ struct DashboardView: View {
     }
 
     @State private var editingHome = false
+    @State private var scrollPosition = ScrollPosition()
 
     @ViewBuilder private func cardMenu(_ item: HomeLayout.Item) -> some View {
                             Section("Size") {

@@ -776,7 +776,9 @@ struct ResetView: View {
 }
 
 struct AboutView: View {
+    static let feedbackAddress = "matt@vory.dev"
     @Environment(AppModel.self) private var model
+    @State private var copiedAddress = false
     @State private var taps = 0
     @State private var lastTap = Date.distantPast
     @State private var raining = false
@@ -836,7 +838,18 @@ struct AboutView: View {
                 Text("What Vory puts on your gateway and inside this app. Updates arrive under Software Update.")
             }
             Section {
-                Link(destination: URL(string: "mailto:matt@vory.dev?subject=Vory%20feedback")!) { Label("Send feedback", systemImage: "envelope") }
+                Link(destination: URL(string: "mailto:\(Self.feedbackAddress)?subject=Vory%20feedback")!) { Label("Send feedback", systemImage: "envelope") }
+                // The address in plain sight, and a tap copies it: a tester with no mail account
+                // on the device could not find where "Send feedback" went.
+                Button {
+                    UIPasteboard.general.string = Self.feedbackAddress
+                    withAnimation(.snappy) { copiedAddress = true }
+                    Task { try? await Task.sleep(for: .seconds(2)); withAnimation(.snappy) { copiedAddress = false } }
+                } label: {
+                    LabeledContent { Text(copiedAddress ? "Copied" : Self.feedbackAddress).foregroundStyle(.secondary).contentTransition(.opacity) }
+                           label: { Label("Feedback address", systemImage: copiedAddress ? "checkmark" : "doc.on.doc") }
+                }
+                .accessibilityHint("Copies the address")
                 Link(destination: URL(string: "https://vory.dev/privacy/")!) { Label("Privacy policy", systemImage: "hand.raised") }
                 Link(destination: URL(string: "https://vory.dev")!) { Label("vory.dev", systemImage: "safari") }
             } header: { Text("Vory") } footer: {

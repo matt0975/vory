@@ -189,8 +189,8 @@ final class ChatGoals {
             case .tool(let act):
                 let detail = (act.context ?? act.summary ?? "").replacingOccurrences(of: "\n", with: " ")
                 steps.append(detail.isEmpty ? act.displayName : "\(act.displayName): \(detail.prefix(120))")
-            case .subagent(let goal, _):
-                steps.append("handed a helper this: \(goal.prefix(120))")
+            case .subagent(let a):
+                steps.append("handed a helper this: \(a.goal.prefix(120))")
             case .assistant(let text, _, _):
                 let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !t.isEmpty { said = String(t.suffix(320)) }

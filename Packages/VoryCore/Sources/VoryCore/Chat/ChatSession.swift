@@ -891,11 +891,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 act.risk = p["risk"]?.stringValue
                 items[idx].kind = .tool(act)
             }
-        case "subagent.start", "subagent.spawn_requested":
-            items.append(TranscriptItem(id: "sub-\(p["subagent_id"]?.stringValue ?? UUID().uuidString)", kind: .subagent(goal: p["goal"]?.stringValue ?? "Subagent", status: "running")))
-        case "subagent.complete":
-            let sid = "sub-\(p["subagent_id"]?.stringValue ?? "")"
-            if let idx = items.firstIndex(where: { $0.id == sid }) { items[idx].kind = .subagent(goal: p["goal"]?.stringValue ?? "Subagent", status: p["status"]?.stringValue ?? "completed") }
+        case let t where t.hasPrefix("subagent."):
+            updateSubagent(t, p)
         case "error":
             appendError(p["message"]?.stringValue ?? "Unknown error")
             endPhase = "error"
@@ -920,6 +917,21 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             break
         default:
             log.debug("unhandled event \(ev.type, privacy: .public)")
+        }
+    }
+
+    /// One row per helper, made on whichever `subagent.*` event comes first and kept up to date
+    /// by the rest (the official TUI does the same). The row used to be made on `start` and
+    /// touched again only on `complete`, so a helper's tools and progress went nowhere.
+    private func updateSubagent(_ type: String, _ p: JSONValue) {
+        let rowID = SubagentActivity.rowID(for: p) ?? "sub-" + UUID().uuidString
+        let idx = items.firstIndex { $0.id == rowID }
+        let current: SubagentActivity? = idx.flatMap { if case .subagent(let a) = items[$0].kind { return a }; return nil }
+        let act = SubagentActivity.applying(type, p, to: current)
+        if let idx { items[idx].kind = .subagent(act) } else {
+            // As with a tool call: what the bot says after its helpers goes in a new bubble below them.
+            sealStreamingForTool()
+            items.append(TranscriptItem(id: rowID, kind: .subagent(act)))
         }
     }
 

@@ -560,8 +560,8 @@ struct WatchTranscriptRow: View {
             Label(t, systemImage: sym).font(.caption2).foregroundStyle(.secondary)
         case .error(let t):
             Label(t, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(.red)
-        case .subagent(let g, let s):
-            Label("\(g) · \(s)", systemImage: "person.2").font(.caption2).foregroundStyle(.secondary)
+        case .subagent(let a):
+            Label(a.detailLine.map { "\(a.goal) · \($0)" } ?? a.goal, systemImage: "person.2").font(.caption2).foregroundStyle(.secondary)
         case .steer(let t, _):
             Text(t).font(.caption).padding(6).background(Color.gray.opacity(0.3), in: .rect(cornerRadius: 10))
                 .frame(maxWidth: .infinity, alignment: .trailing)

@@ -182,12 +182,18 @@ struct MainTabView: View {
 
     /// The compose circle: a chat with the bot whose page is in front, otherwise a new chat on Chats.
     private func compose() {
-        if model.selectedTab != .bots || model.composeProfile == nil { model.selectedTab = .chats }
+        if model.selectedTab != .bots || model.composeProfile == nil { leaveForChats() }
         model.newChatRequest = UUID()
     }
     private func composeFull() {
-        model.selectedTab = .chats
+        leaveForChats()
         model.newChatSheetRequest = UUID()
+    }
+    /// Over to Chats for the new chat, remembering where the tap came from: a tester composed
+    /// from Settings, closed the chat without sending, and found himself on Chats.
+    private func leaveForChats() {
+        model.composeReturnTab = model.selectedTab == .chats ? nil : model.selectedTab
+        model.selectedTab = .chats
     }
 
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {

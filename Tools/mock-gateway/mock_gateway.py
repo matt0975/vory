@@ -61,6 +61,13 @@ config at `/etc/logrotate.d/nginx`; it just has `rotate 52` set, which is why a 
 accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB."""
 
 
+DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
+
+DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
+upstream that is gone; the rest is fine. On disk, 34 rotated logs older than 90 days add up to
+4.2 GB. Say the word and I'll drop the stale block and clear those files."""
+
+
 def usage(output: int, calls: int = 1) -> dict:
     used = 18_400 + output * 4
     return {
@@ -516,13 +523,65 @@ class Gateway:
             if isinstance(part, int):
                 rows += tools[:part]
                 tools = tools[part:]
+            elif isinstance(part, dict):
+                # A row as the gateway files it (a helper's report in the user's seat, say).
+                rows.append({**part, "timestamp": time.time()})
             else:
                 rows.append({"role": "assistant", "text": part, "timestamp": time.time()})
         for r in rows + tools:
             s.history.append({**r, "row_id": len(s.history) + 1})
 
+    async def _delegate_turn(self, s: Session, prompt: str) -> None:
+        """A turn that hands part of the work to two helpers: the `subagent.*` events the
+        gateway raises on the parent's session (payload fields as its `_SUBAGENT_FIELDS`),
+        then the report it files in the user's seat for the bot to read on (seen by the app
+        with the next snapshot), then the bot's own answer."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, DELEGATE_PART_1)
+        helpers = [("sa-1", "Audit the nginx config for server blocks nothing points at"),
+                   ("sa-2", "List the rotated logs older than 90 days with their sizes")]
+        for i, (hid, goal) in enumerate(helpers):
+            await self.event("subagent.spawn_requested", s.sid, {"subagent_id": hid, "parent_id": s.sid, "delegation_id": "dlg-1",
+                                                                "goal": goal, "depth": 1, "task_index": i, "task_count": 2})
+        await asyncio.sleep(0.5)
+        for i, (hid, goal) in enumerate(helpers):
+            await self.event("subagent.start", s.sid, {"subagent_id": hid, "parent_id": s.sid, "delegation_id": "dlg-1", "goal": goal,
+                                                      "model": "anthropic/claude-sonnet-4.6", "depth": 1, "task_index": i, "task_count": 2})
+        await asyncio.sleep(0.8)
+        await self.event("subagent.thinking", s.sid, {"subagent_id": "sa-1", "text": "Reading the enabled sites first"})
+        await asyncio.sleep(1.0)
+        await self.event("subagent.tool", s.sid, {"subagent_id": "sa-1", "tool_name": "terminal", "tool_preview": "ls /etc/nginx/sites-enabled", "tool_count": 1})
+        await self.event("subagent.tool", s.sid, {"subagent_id": "sa-2", "tool_name": "terminal", "tool_preview": "find /var/log -name '*.log.*' -mtime +90 -printf '%s %p\\n'", "tool_count": 1})
+        await asyncio.sleep(1.4)
+        await self.event("subagent.progress", s.sid, {"subagent_id": "sa-1", "text": "3 server blocks, one with no upstream behind it", "tool_count": 2})
+        await asyncio.sleep(1.2)
+        done_2 = "34 rotated files older than 90 days, 4.2 GB in all, every one under /var/log/nginx or /var/log/postgres."
+        await self.event("subagent.complete", s.sid, {"subagent_id": "sa-2", "delegation_id": "dlg-1", "status": "completed", "summary": done_2,
+                                                     "duration_seconds": 3.4, "tool_count": 1, "task_index": 1, "task_count": 2})
+        await asyncio.sleep(1.1)
+        done_1 = "The staging.example server block proxies to an upstream that no longer exists; the other two are fine."
+        await self.event("subagent.complete", s.sid, {"subagent_id": "sa-1", "delegation_id": "dlg-1", "status": "completed", "summary": done_1,
+                                                     "duration_seconds": 4.6, "tool_count": 2, "task_index": 0, "task_count": 2})
+        report = ("[ASYNC DELEGATION BATCH COMPLETE — dlg-1]\n\n"
+                  f"Task 1 of 2 ({helpers[0][1]}): completed in 4.6s.\n{done_1}\n\n"
+                  f"Task 2 of 2 ({helpers[1][1]}): completed in 3.4s.\n{done_2}")
+        await asyncio.sleep(0.6)
+        await self.stream_words(s, "\n\n" + DELEGATE_PART_2)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [DELEGATE_PART_1, {"role": "user", "text": report}, DELEGATE_PART_2])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": DELEGATE_PART_1 + "\n\n" + DELEGATE_PART_2, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        if prompt.strip().lower().startswith("think"):
+            # A long first think, as a real model has before its first word: the prompt sits
+            # alone in the thread with the typing bubble for a while (a tester's first message
+            # in a new chat ended up under the composer in exactly this state).
+            await asyncio.sleep(20)
+        if prompt.strip().lower().startswith("delegate"):
+            await self._delegate_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
             # subscription plugin): the gateway cannot start the turn.

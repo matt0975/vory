@@ -37,8 +37,13 @@ struct TranscriptView: View {
     /// layouts seen in the wild: a frame that stops at the safe area (the inset is virtual) and
     /// one that runs to the screen edge (the inset is real). This reads the same in both.
     private var visibleBottom: CGFloat { min(scrollBottom, UIScreen.main.bounds.height - autoInset) }
-    /// The margin to add so the last line ends 8 pt above the dock.
-    private var bottomInset: CGFloat { dockTop > 0 && visibleBottom > dockTop ? visibleBottom - dockTop : fallbackInset }
+    /// The margin to add so the last line ends 8 pt above the dock. Never less than the keyboard
+    /// plus a one-line composer: a tester's first message in a new chat sat under both, which
+    /// no dock position this view had measured could explain, so the floor holds on its own.
+    private var bottomInset: CGFloat {
+        let measured = dockTop > 0 && visibleBottom > dockTop ? visibleBottom - dockTop : fallbackInset
+        return max(measured, keyboardInset > 0 ? keyboardInset + 44 : 0)
+    }
     /// Height of the floating header (the nav bar is hidden in a chat).
     var topInset: CGFloat = 96
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
@@ -212,7 +217,12 @@ struct TranscriptView: View {
             #if os(iOS)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
                 guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-                let covered = max(0, UIScreen.main.bounds.maxY - end.minY)
+                let screen = UIScreen.main.bounds
+                // The same rule as the dock's: a frame that is not a keyboard's (a floating or
+                // hardware keyboard's bar, another scene's, the whole screen) must not count.
+                let onScreen = end.intersection(screen)
+                guard end.height < screen.height * 0.66, onScreen.isNull || onScreen.maxY >= screen.maxY - 1 || end.minY >= screen.maxY else { return }
+                let covered = max(0, screen.maxY - end.minY)
                 let safeBottom = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }.first ?? 0
                 let inset = max(0, covered - safeBottom)
                 // The keyboard moves on UIKit's own spring; this spring tracks it closely, so the
@@ -987,16 +997,8 @@ struct TranscriptRow: View, Equatable {
                 .background(.red.opacity(0.12), in: .rect(cornerRadius: 12))
                 .foregroundStyle(.red)
                 .textSelection(.enabled)
-        case .subagent(let goal, let status):
-            HStack(spacing: 8) {
-                Image(systemName: status == "running" ? "person.2.circle" : "person.2.circle.fill")
-                Text(goal).lineLimit(2)
-                Spacer()
-                Text(status).font(.caption2).foregroundStyle(.secondary)
-            }
-            .font(.footnote)
-            .padding(10)
-            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        case .subagent(let a):
+            SubagentRow(activity: a)
         }
     }
 }
@@ -1037,6 +1039,49 @@ struct StartFailureCard: View {
 }
 
 /// A gateway note that arrived in the user's seat: one quiet line, the words folded under it.
+/// A helper the bot spun up: its goal, what it is on while it runs, and its report once it is
+/// back, folded under the row like a tool card's output.
+struct SubagentRow: View {
+    var activity: SubagentActivity
+    @State private var open = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: activity.isRunning ? "person.2.circle" : activity.failed ? "person.2.slash" : "person.2.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(activity.failed ? Color.red : activity.isRunning ? Color.accentColor : Color.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(activity.goal).lineLimit(3)
+                    if let line = activity.detailLine {
+                        Text(line).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            .contentTransition(.opacity)
+                    }
+                }
+                Spacer(minLength: 4)
+                if activity.isRunning {
+                    ProgressView().controlSize(.small)
+                } else if activity.summary?.isEmpty == false {
+                    Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                }
+            }
+            if open, let s = activity.summary, !s.isEmpty {
+                Text(s).font(.caption).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .font(.footnote)
+        .padding(10)
+        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .contentShape(.rect)
+        .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
+        .animation(.snappy, value: activity.detailLine)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Subagent: \(activity.goal). \(activity.detailLine ?? "")")
+    }
+}
+
 struct InjectedNoteRow: View {
     var note: InjectedNote
     @State private var open = false
@@ -1044,7 +1089,7 @@ struct InjectedNoteRow: View {
         VStack(spacing: 6) {
             Button { withAnimation(.snappy) { open.toggle() } } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : "gearshape.2")
+                    Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
                     Text(note.title).font(.caption)
                     Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption2.weight(.bold))
                 }

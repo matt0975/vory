@@ -47,6 +47,8 @@ struct ChatListView: View {
     /// Every profile's chats in one list, newest first, with the bot's avatar on each row.
     @AppStorage("chats.allBots") private var allBots = false
     @State private var showNewChat = false
+    /// The New Message sheet started a chat (as against being cancelled).
+    @State private var sheetStarted = false
     @State private var showNewBot = false
     @AppStorage(ChatSummarizer.titlesKey) private var aiTitles = ChatSummarizer.titlesOn
     @AppStorage(ChatSummarizer.previewsKey) private var aiPreviews = ChatSummarizer.previewsOn
@@ -123,8 +125,11 @@ struct ChatListView: View {
     #endif
 
     /// Opens a chat or a group chat: pushed on the phone; on the Mac it replaces whatever the
-    /// detail column shows, the way selecting a conversation does in Messages.
-    private func open(_ route: some Hashable) {
+    /// detail column shows, the way selecting a conversation does in Messages. `back` is the tab
+    /// to return to when this chat closes (the compose circle tapped elsewhere); any other way
+    /// in forgets a pending one.
+    private func open(_ route: some Hashable, returningTo back: AppModel.AppTab? = nil) {
+        model.composeReturnTab = back
         #if os(macOS)
         if var chat = route as? ChatRoute, chat.storedID == nil {
             chat.token = UUID()
@@ -160,7 +165,11 @@ struct ChatListView: View {
             .background(InteractivePopEnabler())
             // Driven by the stack's own path rather than by the pushed screen: the bar starts
             // coming back the instant a pop begins instead of after the transition settles.
-            .onChange(of: path.wrappedValue.isEmpty, initial: true) { _, empty in model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty }
+            .onChange(of: path.wrappedValue.isEmpty, initial: true) { was, empty in
+                model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
+                // A chat composed from another tab closes back onto that tab, not onto this list.
+                if !was, empty { returnFromCompose() }
+            }
             .onChange(of: model.popToRoot[.chats]) { _, _ in path.wrappedValue = NavigationPath() }
             // A tap on the Chats tab while it is selected also brings the list back to the top.
             .onChange(of: model.tabReselected[.chats]) { _, _ in scrollToTop += 1 }
@@ -190,7 +199,8 @@ struct ChatListView: View {
             // Messages-style sheet (To: bots, project, first message, files).
             .onChange(of: model.newChatRequest) { _, r in if r != nil { openFreshChat() } }
             .onChange(of: model.newChatSheetRequest) { _, r in
-                guard r != nil, model.selectedTab == .chats, runtime != nil else { return }
+                guard r != nil, model.selectedTab == .chats, runtime != nil else { returnFromCompose(); return }
+                sheetStarted = false
                 showNewChat = true
             }
             .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame() } }
@@ -200,12 +210,15 @@ struct ChatListView: View {
                     MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact)
                 }
             }
-            .sheet(isPresented: $showNewChat) {
+            // Cancelled from another tab's compose circle: straight back to that tab.
+            .sheet(isPresented: $showNewChat, onDismiss: { if !sheetStarted { returnFromCompose() } }) {
                 if let runtime {
                     NewChatSheet(runtime: runtime, initialProjectID: projectFilter.isEmpty || projectFilter == "__none__" ? runtime.projects.activeID : projectFilter) { start in
+                        sheetStarted = true
+                        let back = model.composeReturnTab
                         switch start {
-                        case .chat(let profile, let text, let attachments, let cwd): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd))
-                        case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text))
+                        case .chat(let profile, let text, let attachments, let cwd): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd), returningTo: back)
+                        case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text), returningTo: back)
                         }
                     }
                     .sheetFrame()
@@ -249,11 +262,18 @@ struct ChatListView: View {
     /// The compose circle's tap: a fresh chat with the current bot, in the project the list is
     /// narrowed to, with nothing to fill in first.
     private func openFreshChat() {
-        guard model.selectedTab == .chats, let runtime else { return }
+        guard model.selectedTab == .chats, let runtime else { returnFromCompose(); return }
         let profile = model.composeProfile ?? runtime.selectedProfile
         var cwd: String? = nil
         if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
-        open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd))
+        open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd), returningTo: model.composeReturnTab)
+    }
+
+    /// Back to the tab the compose circle was tapped on, if it was not this one.
+    private func returnFromCompose() {
+        guard let back = model.composeReturnTab else { return }
+        model.composeReturnTab = nil
+        withAnimation(.snappy(duration: 0.28)) { model.selectedTab = back }
     }
 
     private var profileMenu: some View {
