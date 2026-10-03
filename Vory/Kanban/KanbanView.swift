@@ -126,29 +126,29 @@ struct KanbanView: View {
         }
     }
 
-    /// The columns as chips with their counts; one is open at a time.
+    /// The columns as chips with their counts, four to a row so all eight are in view; one
+    /// is open at a time. (A scrolling row inside a safe-area inset would not scroll.)
     private func columns(_ board: KanbanBoard) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(KanbanStatus.columns, id: \.self) { s in
-                    let n = board.count(s)
-                    Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: s.symbol).font(.caption)
-                            Text(s.title).font(.subheadline.weight(.medium))
-                            if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
-                        }
-                        .padding(.horizontal, 12).padding(.vertical, 7)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+            ForEach(KanbanStatus.columns, id: \.self) { s in
+                let n = board.count(s)
+                Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: s.symbol).font(.caption2)
+                        Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
                     }
-                    .buttonStyle(.plain)
-                    .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
-                    .foregroundStyle(column == s ? Color.accentColor : .primary)
-                    .accessibilityLabel("\(s.title), \(n)")
-                    .accessibilityAddTraits(column == s ? .isSelected : [])
+                    .padding(.horizontal, 6).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.plain)
+                .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
+                .foregroundStyle(column == s ? Color.accentColor : .primary)
+                .accessibilityLabel("\(s.title), \(n)")
+                .accessibilityAddTraits(column == s ? .isSelected : [])
             }
-            .padding(.horizontal, 16).padding(.vertical, 8)
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
     }
 
@@ -436,7 +436,8 @@ struct KanbanTaskSheet: View {
         let t = d.task
         List {
             Section {
-                LabeledContent("Status") { Label(t.column?.title ?? t.status, systemImage: t.column?.symbol ?? "circle") }
+                // Plain views in the value slot: a `Label` there stretched the row to the screen's height.
+                LabeledContent("Status") { HStack(spacing: 6) { Image(systemName: t.column?.symbol ?? "circle"); Text(t.column?.title ?? t.status) } }
                 LabeledContent("Bot") {
                     if let a = t.assignee, !a.isEmpty { HStack(spacing: 6) { BotAvatar(profile: a, size: 18); Text(a) } } else { Text("Unassigned").foregroundStyle(.secondary) }
                 }

@@ -693,7 +693,13 @@ async def kanban_events(ws, query):
             # Nothing happened: every 25 s the running worker reports a heartbeat-ish event so a
             # watcher sees the stream is alive.
             await asyncio.sleep(25)
-            ev = _kbump("k-101", "edited", {"heartbeat": True})
+            # A liveness frame only: the running worker's heartbeat moves, which the real
+            # server does not file as a task event, so it is not kept in the task's history.
+            KANBAN_CURSOR[0] += 1
+            t = _kfind("default", "k-101")
+            if t and t["status"] == "running":
+                t["last_heartbeat_at"] = int(time.time())
+            ev = {"id": KANBAN_CURSOR[0], "task_id": "k-101", "run_id": 8, "kind": "heartbeat", "payload": None, "created_at": int(time.time())}
             await ws.send(json.dumps({"events": [ev], "cursor": ev["id"]}))
             cursor = ev["id"]
             continue

@@ -29,7 +29,7 @@ public final class KanbanStore {
     private var cursor = KanbanEventCursor()
     private var eventsTask: Task<Void, Never>?
     private var refetch: Task<Void, Never>?
-    private var refreshing = false
+    private var refreshTask: Task<Void, Never>?
     private static let socketSession = HermesAPI.makeSession()
 
     public init() {}
@@ -78,10 +78,21 @@ public final class KanbanStore {
 
     // MARK: Reads
 
+    /// Reads the board and the workers. The read runs in its own task, so a page whose task is
+    /// restarted mid-read (a tab change, a re-appear) does not cancel the request under it;
+    /// callers that arrive while one is in flight wait for that one.
     public func refresh() async {
-        guard let api, isPresent, !refreshing else { return }
-        refreshing = true; loading = board == nil
-        defer { refreshing = false; loading = false }
+        guard let api, isPresent else { return }
+        if let t = refreshTask { await t.value; return }
+        let t = Task { @MainActor [weak self] in if let self { await self.read(api) } }
+        refreshTask = t
+        await t.value
+        refreshTask = nil
+    }
+
+    private func read(_ api: KanbanAPI) async {
+        loading = board == nil
+        defer { loading = false }
         do {
             async let b = api.board()
             async let w = api.workers()
