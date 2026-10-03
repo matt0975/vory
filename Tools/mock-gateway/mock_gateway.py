@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import os
 import json
+import re
 import random
 import time
 import uuid
@@ -24,6 +25,34 @@ import uuid
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
+from websockets import http11 as _http11
+
+
+def _lenient_request_parse(cls, read_line):
+    """websockets parses handshakes only: GET, no body. The app's REST calls are POST, PATCH and
+    DELETE with JSON bodies, so the request line is read leniently and the method and the body
+    are kept on the request."""
+    request_line = yield from _http11.parse_line(read_line)
+    try:
+        method, raw_path, _protocol = request_line.split(b" ", 2)
+    except ValueError:
+        raise ValueError(f"invalid HTTP request line: {request_line!r}") from None
+    headers = yield from _http11.parse_headers(read_line)
+    # The body too, when there is one: `read_line` is a bound method of the protocol's reader,
+    # which can read an exact count as well. Left in the stream it would be taken for a second
+    # request and the connection closed twice over.
+    body = b""
+    length = int(headers.get("Content-Length", "0") or 0)
+    reader = getattr(read_line, "__self__", None)
+    if length and reader is not None:
+        body = yield from reader.read_exact(length)
+    req = cls(raw_path.decode("ascii", "surrogateescape"), headers)
+    req.method = method.decode("ascii", "replace")
+    req.body = body
+    return req
+
+
+_http11.Request.parse = classmethod(_lenient_request_parse)
 
 TOKEN = "mock-token"
 PROFILES = ["default", "work"]
@@ -337,9 +366,6 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             {"name": "kanban", "version": "0.4.2", "description": "A board of the agent's tasks on the dashboard.",
              "source": "bundled", "runtime_status": "bundled", "has_dashboard_manifest": True, "path": "/opt/hermes/plugins/kanban",
              "can_remove": False, "can_update_git": False, "auth_required": False, "user_hidden": False},
-            {"name": "dispatcher", "version": "1.2.0", "description": "Routes cron deliveries and channel messages to the right profile.",
-             "source": "git", "runtime_status": "enabled", "has_dashboard_manifest": True, "path": "/home/hermes/.hermes/plugins/dispatcher",
-             "can_remove": True, "can_update_git": True, "auth_required": False, "user_hidden": False},
             {"name": "memory-sqlite", "version": "0.9.0", "description": "Long-term memory in a local SQLite file.",
              "source": "user", "runtime_status": "disabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/memory-sqlite",
              "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
@@ -395,9 +421,288 @@ ROOMS: list = []
 ROOM_LOGS: dict = {}
 
 
+# ── Kanban (the gateway's bundled plugin, /api/plugins/kanban/…) ─────────────────────────────
+# A board in the real shape (plugins/kanban/dashboard/plugin_api.py): a few tasks per status on
+# two boards, one running worker, a task with comments and two runs, a worker log. Writes answer
+# the lenient parser below hands over the method and the body, so a move, a create, a comment
+# and a reassign are applied; done without a result (and not from review) and a second
+# terminate of the same run are 409s, as on the server. The event socket at /events sends a frame now
+# and then; a write bumps the cursor too so the app refetches.
+
+KANBAN_NOW = int(time.time())
+
+
+def _ktask(tid, title, status, assignee, priority=0, body=None, created_ago=7200, started_ago=None, completed_ago=None,
+           tenant=None, summary=None, comments=0, progress=None, parents=0, children=0, session_id=None, run_id=None,
+           worker_pid=None, diagnostics=None, result=None):
+    created = KANBAN_NOW - created_ago
+    started = KANBAN_NOW - started_ago if started_ago is not None else None
+    completed = KANBAN_NOW - completed_ago if completed_ago is not None else None
+    d = {"id": tid, "title": title, "body": body, "assignee": assignee, "status": status, "priority": priority,
+         "created_by": "dashboard", "created_at": created, "started_at": started, "completed_at": completed,
+         "workspace_kind": "scratch", "workspace_path": None, "claim_lock": f"w-{tid}" if status == "running" else None,
+         "claim_expires": KANBAN_NOW + 3600 if status == "running" else None, "tenant": tenant, "branch_name": None,
+         "project_id": None, "result": result, "idempotency_key": None, "consecutive_failures": 0, "worker_pid": worker_pid,
+         "last_failure_error": None, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 12 if worker_pid else None,
+         "current_run_id": run_id, "workflow_template_id": None, "current_step_key": None, "skills": None,
+         "model_override": None, "provider_override": None, "reasoning_effort": None, "max_retries": None,
+         "goal_mode": False, "goal_max_turns": None, "session_id": session_id, "block_kind": None, "block_recurrences": 0,
+         "completion_contract": None,
+         "age": {"created_age_seconds": created_ago, "started_age_seconds": started_ago,
+                 "time_to_complete_seconds": (completed - (started or created)) if completed else None},
+         "latest_summary": summary, "current_run_started_at": started if status == "running" else None,
+         "link_counts": {"parents": parents, "children": children}, "comment_count": comments, "progress": progress}
+    if diagnostics:
+        d["diagnostics"] = diagnostics
+        d["warnings"] = [x["message"] for x in diagnostics]
+    return d
+
+
+KANBAN_TASKS = {
+    "default": [
+        _ktask("k-101", "Rewrite the nightly export job", "running", "work", priority=1, created_ago=14400, started_ago=720,
+               body="The export times out because the query has no index on created_at. Add the index, re-run, confirm the time.",
+               summary="Index added on created_at; re-running the export to time it.", comments=2, children=2,
+               progress={"done": 1, "total": 2}, session_id="20260921_154212_a1b2c3", run_id=8, worker_pid=4243),
+        _ktask("k-102", "Clear rotated logs older than 90 days", "ready", "default", created_ago=5400,
+               body="34 files under /var/log, 4.2 GB. Keep anything still open.", comments=1),
+        _ktask("k-103", "Add a logrotate rule for nginx", "todo", "default", priority=2, created_ago=4000,
+               body="rotate 8 instead of 52.", parents=1),
+        _ktask("k-104", "Weekly dependency audit", "blocked", "work", created_ago=90000, started_ago=86000,
+               body="Three advisories this week.", summary="Needs the GitHub token to read the private repo.",
+               diagnostics=[{"code": "blocked_waiting", "severity": "warning", "message": "Blocked for a day: waiting on a key"}]),
+        _ktask("k-105", "Write the summary of the disk cleanup", "review", "default", created_ago=3600, started_ago=3000,
+               summary="Draft written; two numbers to check.", comments=1),
+        _ktask("k-106", "Measure /var/log", "done", "work", created_ago=200000, started_ago=199000, completed_ago=198000,
+               summary="4.2 GB in rotated logs, almost all nginx and postgres.", result="4.2 GB in rotated logs, almost all nginx and postgres."),
+        _ktask("k-107", "Propose the cleanup command", "done", "default", created_ago=190000, started_ago=189000, completed_ago=188000,
+               result="find /var/log -name '*.log.*' -mtime +90 -delete"),
+        _ktask("k-108", "Look into the staging upstream", "triage", None, created_ago=600, body="staging.example points at an upstream that is gone."),
+        _ktask("k-109", "Backfill last month's metrics", "scheduled", "work", created_ago=50000),
+    ],
+    "homelab": [
+        _ktask("k-201", "Rotate the Tailscale key", "todo", "default", created_ago=30000, body="Expires next week."),
+        _ktask("k-202", "Snapshot the NAS before the upgrade", "done", "default", created_ago=400000, started_ago=399000, completed_ago=398000,
+               result="Snapshot nas-2026-10-01 taken, 1.2 TB."),
+    ],
+}
+KANBAN_BOARDS = [
+    {"slug": "default", "name": "Default", "description": "", "icon": "", "color": "", "default_workdir": None, "project_id": None,
+     "created_at": None, "archived": False, "default_workspace_kind": "scratch", "project_name": None},
+    {"slug": "homelab", "name": "Homelab", "description": "The house", "icon": "", "color": "", "default_workdir": None, "project_id": None,
+     "created_at": KANBAN_NOW - 800000, "archived": False, "default_workspace_kind": "scratch", "project_name": "Homelab"},
+]
+KANBAN_COMMENTS = {
+    "k-101": [{"id": 1, "task_id": "k-101", "author": "matt", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
+              {"id": 2, "task_id": "k-101", "author": "work", "body": "Will do; the index build takes about a minute.", "created_at": KANBAN_NOW - 700}],
+    "k-102": [{"id": 3, "task_id": "k-102", "author": "matt", "body": "Leave nginx/access.log alone.", "created_at": KANBAN_NOW - 5000}],
+    "k-105": [{"id": 4, "task_id": "k-105", "author": "default", "body": "Ready for a look.", "created_at": KANBAN_NOW - 2900}],
+}
+KANBAN_RUNS = {
+    "k-101": [{"id": 7, "task_id": "k-101", "profile": "work", "step_key": None, "status": "ended", "claim_lock": None, "claim_expires": None,
+               "worker_pid": 4242, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 1300, "started_at": KANBAN_NOW - 1500,
+               "ended_at": KANBAN_NOW - 1250, "outcome": "crashed", "summary": None, "metadata": None, "error": "worker exited 1"},
+              {"id": 8, "task_id": "k-101", "profile": "work", "step_key": None, "status": "running", "claim_lock": "w-k-101", "claim_expires": KANBAN_NOW + 3600,
+               "worker_pid": 4243, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 12, "started_at": KANBAN_NOW - 720,
+               "ended_at": None, "outcome": None, "summary": None, "metadata": None, "error": None}],
+    "k-106": [{"id": 3, "task_id": "k-106", "profile": "work", "step_key": None, "status": "ended", "claim_lock": None, "claim_expires": None,
+               "worker_pid": 3001, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 198100, "started_at": KANBAN_NOW - 199000,
+               "ended_at": KANBAN_NOW - 198000, "outcome": "completed", "summary": "4.2 GB in rotated logs, almost all nginx and postgres.",
+               "metadata": None, "error": None}],
+}
+KANBAN_EVENTS = {
+    "k-101": [{"id": 38, "task_id": "k-101", "run_id": None, "kind": "status", "payload": {"from": "todo", "to": "ready"}, "created_at": KANBAN_NOW - 9000},
+              {"id": 39, "task_id": "k-101", "run_id": 7, "kind": "status", "payload": {"from": "ready", "to": "running"}, "created_at": KANBAN_NOW - 1500},
+              {"id": 40, "task_id": "k-101", "run_id": 7, "kind": "reclaimed", "payload": {"reason": "worker exited 1"}, "created_at": KANBAN_NOW - 1250},
+              {"id": 41, "task_id": "k-101", "run_id": 8, "kind": "status", "payload": {"from": "ready", "to": "running"}, "created_at": KANBAN_NOW - 720}],
+}
+KANBAN_LOG = ("[12:01:03] claimed k-101 (run 8) as work\n[12:01:04] reading the export job\n[12:01:09] EXPLAIN shows a sequential scan on events\n"
+              "[12:01:10] CREATE INDEX CONCURRENTLY idx_events_created_at ON events (created_at)\n[12:02:14] index built\n[12:02:15] re-running the export…\n")
+KANBAN_CURSOR = [41]
+KANBAN_ENDED_RUNS = set()
+
+
+def _kboard_slug(query):
+    s = query.get("board") or "default"
+    return s if s in KANBAN_TASKS else None
+
+
+def _kfind(slug, tid):
+    return next((t for t in KANBAN_TASKS[slug] if t["id"] == tid), None)
+
+
+def _kbump(tid, kind, payload=None):
+    KANBAN_CURSOR[0] += 1
+    ev = {"id": KANBAN_CURSOR[0], "task_id": tid, "run_id": None, "kind": kind, "payload": payload, "created_at": int(time.time())}
+    KANBAN_EVENTS.setdefault(tid, []).append(ev)
+    return ev
+
+
+def kanban_rest(method, base, query, payload=None):
+    payload = payload or {}
+    slug = _kboard_slug(query)
+    if slug is None:
+        return 404, {"detail": f"board '{query.get('board')}' not found"}
+    tasks = KANBAN_TASKS[slug]
+    sub = base[len("/api/plugins/kanban"):]
+    if sub == "/boards":
+        out = []
+        for b in KANBAN_BOARDS:
+            counts = {}
+            for t in KANBAN_TASKS[b["slug"]]:
+                counts[t["status"]] = counts.get(t["status"], 0) + 1
+            out.append({**b, "is_current": b["slug"] == "default", "counts": counts,
+                        "total": sum(n for s, n in counts.items() if s != "archived")})
+        return 200, {"boards": out, "current": "default"}
+    if sub == "/board":
+        cols = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done"]
+        if query.get("include_archived") == "true":
+            cols.append("archived")
+        return 200, {"columns": [{"name": c, "tasks": [t for t in tasks if t["status"] == c]} for c in cols],
+                     "tenants": sorted({t["tenant"] for t in tasks if t["tenant"]}),
+                     "assignees": sorted({t["assignee"] for t in tasks if t["assignee"] and t["status"] != "archived"}),
+                     "latest_event_id": KANBAN_CURSOR[0], "now": int(time.time())}
+    if sub == "/assignees":
+        return 200, {"assignees": [{"name": n, "on_disk": True, "counts": {}} for n in ("default", "work")]}
+    if sub == "/stats":
+        by = {}
+        for t in tasks:
+            by[t["status"]] = by.get(t["status"], 0) + 1
+        return 200, {"by_status": by, "by_assignee": {}, "oldest_ready_age_seconds": 5400}
+    if sub == "/workers/active":
+        workers = [{"run_id": t["current_run_id"], "task_id": t["id"], "task_title": t["title"], "task_status": t["status"],
+                    "task_assignee": t["assignee"], "profile": t["assignee"], "worker_pid": t["worker_pid"], "started_at": t["started_at"],
+                    "claim_lock": t["claim_lock"], "claim_expires": t["claim_expires"], "last_heartbeat_at": t["last_heartbeat_at"],
+                    "max_runtime_seconds": 3600} for t in tasks if t["status"] == "running" and t["worker_pid"]]
+        return 200, {"workers": workers, "count": len(workers), "checked_at": int(time.time())}
+    if sub == "/dispatch":
+        return 200, {"spawned": 0, "promoted": 0, "dry_run": query.get("dry_run") == "true", "reasons": []}
+    if sub == "/tasks":
+        tid = f"k-{900 + len(tasks)}"
+        assignee = payload.get("assignee") or None
+        status = "triage" if payload.get("triage") else ("ready" if assignee else "todo")
+        t = _ktask(tid, payload.get("title") or "Untitled", status, assignee, priority=int(payload.get("priority") or 0),
+                   body=payload.get("body") or None, created_ago=0, tenant=payload.get("tenant") or None)
+        tasks.insert(0, t)
+        _kbump(tid, "status", {"from": None, "to": status})
+        out = {"task": t}
+        if status == "ready" and assignee:
+            out["warning"] = "No gateway is running for this profile; the task will sit in 'ready' until one is started."
+        return 200, out
+    m = re.match(r"^/runs/(\d+)(/terminate)?$", sub)
+    if m:
+        rid = int(m.group(1))
+        run = next((r for rs in KANBAN_RUNS.values() for r in rs if r["id"] == rid), None)
+        if run is None:
+            return 404, {"detail": f"run {rid} not found"}
+        if m.group(2):
+            if run["ended_at"] is not None or rid in KANBAN_ENDED_RUNS:
+                return 409, {"detail": f"run {rid} already ended"}
+            KANBAN_ENDED_RUNS.add(rid)
+            run["ended_at"] = int(time.time()); run["outcome"] = "reclaimed"; run["status"] = "ended"
+            t = _kfind("default", run["task_id"])
+            if t:
+                t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+            _kbump(run["task_id"], "reclaimed", {"reason": "stopped from Vory"})
+            return 200, {"ok": True, "run_id": rid, "task_id": run["task_id"]}
+        return 200, {"run": run}
+    m = re.match(r"^/tasks/([^/]+)(/.*)?$", sub)
+    if not m:
+        return None
+    tid, tail = m.group(1), m.group(2) or ""
+    t = _kfind(slug, tid)
+    if t is None:
+        return 404, {"detail": f"task {tid} not found"}
+    if tail == "" and method == "DELETE":
+        tasks.remove(t)
+        _kbump(tid, "archived")
+        return 200, {"deleted": True, "task_id": tid}
+    if tail == "" and method == "PATCH":
+        if "assignee" in payload:
+            t["assignee"] = payload["assignee"] or None
+        if "status" in payload and payload["status"]:
+            to = payload["status"]
+            if to == "running":
+                return 409, {"detail": "status 'running' is set by the dispatcher when a worker claims the task"}
+            if to == "done" and t["status"] != "review" and not (payload.get("result") or payload.get("summary") or t.get("result")):
+                return 409, {"detail": "a task can only be marked done from review, or with a result or summary"}
+            if to == "ready" and t["status"] == "running":
+                return 409, {"detail": f"cannot move {tid} to ready while a worker holds it; reclaim it first"}
+            frm = t["status"]; t["status"] = to
+            if to == "done":
+                t["completed_at"] = int(time.time()); t["result"] = payload.get("result") or payload.get("summary") or t.get("result")
+            if to == "blocked" and payload.get("block_reason"):
+                t["latest_summary"] = payload["block_reason"]
+            _kbump(tid, "status", {"from": frm, "to": to})
+        if "priority" in payload and payload["priority"] is not None:
+            t["priority"] = int(payload["priority"]); _kbump(tid, "reprioritized", {"priority": t["priority"]})
+        if payload.get("title"):
+            t["title"] = payload["title"]
+        if "body" in payload:
+            t["body"] = payload["body"]
+        if payload.get("summary") and t["status"] != "done":
+            t["latest_summary"] = payload["summary"]
+        _kbump(tid, "edited")
+        return 200, {"task": t}
+    if tail == "":
+        return 200, {"task": t, "comments": KANBAN_COMMENTS.get(tid, []), "events": KANBAN_EVENTS.get(tid, []), "attachments": [],
+                     "links": {"parents": [], "children": ["k-106", "k-107"] if tid == "k-101" else []}, "link_tasks": {},
+                     "child_results": ([{"id": "k-106", "title": "Measure /var/log", "status": "done", "latest_summary": None,
+                                         "result": "4.2 GB in rotated logs, almost all nginx and postgres."},
+                                        {"id": "k-107", "title": "Propose the cleanup command", "status": "done", "latest_summary": None,
+                                         "result": "find /var/log -name '*.log.*' -mtime +90 -delete"}] if tid == "k-101" else []),
+                     "runs": KANBAN_RUNS.get(tid, [])}
+    if tail == "/comments":
+        c = {"id": 100 + sum(len(v) for v in KANBAN_COMMENTS.values()), "task_id": tid, "author": payload.get("author") or "dashboard",
+             "body": payload.get("body") or "", "created_at": int(time.time())}
+        KANBAN_COMMENTS.setdefault(tid, []).append(c)
+        t["comment_count"] = len(KANBAN_COMMENTS[tid])
+        _kbump(tid, "commented", {"author": "vory"})
+        return 200, {"ok": True}
+    if tail == "/reassign":
+        if t["status"] == "running" and not payload.get("reclaim_first"):
+            return 409, {"detail": f"cannot reassign {tid}: unknown id, or still running (pass reclaim_first=true to release the claim first)"}
+        if t["status"] == "running":
+            t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+        t["assignee"] = payload.get("profile") or None
+        _kbump(tid, "edited", {"assignee": t["assignee"]})
+        return 200, {"ok": True, "task_id": tid, "assignee": t["assignee"]}
+    if tail == "/reclaim":
+        if t["status"] != "running":
+            return 409, {"detail": f"cannot reclaim {tid}: not in a claimable state (not running, or unknown id)"}
+        t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+        _kbump(tid, "reclaimed", {"reason": "reclaimed from Vory"})
+        return 200, {"ok": True, "task_id": tid}
+    if tail == "/log":
+        content = KANBAN_LOG if tid == "k-101" else ""
+        return 200, {"task_id": tid, "path": f"/home/hermes/.hermes/kanban/logs/{tid}.log", "exists": bool(content),
+                     "size_bytes": len(content), "content": content, "truncated": False}
+    return None
+
+
+async def kanban_events(ws, query):
+    """The plugin's own socket: a frame when something happened, nothing otherwise. A frame every
+    so often here, so the app's refetch path runs; `since` replays what came after it."""
+    cursor = int(query.get("since") or KANBAN_CURSOR[0])
+    while True:
+        new = sorted((e for evs in KANBAN_EVENTS.values() for e in evs if e["id"] > cursor), key=lambda e: e["id"])
+        if new:
+            cursor = new[-1]["id"]
+            await ws.send(json.dumps({"events": new, "cursor": cursor}))
+        else:
+            # Nothing happened: every 25 s the running worker reports a heartbeat-ish event so a
+            # watcher sees the stream is alive.
+            await asyncio.sleep(25)
+            ev = _kbump("k-101", "edited", {"heartbeat": True})
+            await ws.send(json.dumps({"events": [ev], "cursor": ev["id"]}))
+            cursor = ev["id"]
+            continue
+        await asyncio.sleep(1)
+
+
 def process_request(connection, request):
     path = request.path
-    if path.split("?")[0] == "/api/ws":
+    if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events"):
         return None  # let the WebSocket handshake proceed
     query = {}
     if "?" in path:
@@ -406,7 +711,13 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
-    if method == "PATCH" and base.startswith("/api/sessions/"):
+    if base.startswith("/api/plugins/kanban/"):
+        try:
+            payload = json.loads(getattr(request, "body", b"") or b"{}")
+        except json.JSONDecodeError:
+            payload = {}
+        result = kanban_rest(method, base, query, payload if isinstance(payload, dict) else {})
+    elif method == "PATCH" and base.startswith("/api/sessions/"):
         # Title rename from the chat info sheet; the body is not readable here (websockets only
         # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
         sid = base.split("/")[3]
@@ -1016,6 +1327,15 @@ class Gateway:
 
 
 async def ws_handler(ws):
+    # The kanban plugin's event stream has its own path; everything else is the gateway's JSON-RPC.
+    req_path = getattr(getattr(ws, "request", None), "path", "") or ""
+    if req_path.split("?")[0] == "/api/plugins/kanban/events":
+        query = dict(pair.partition("=")[::2] for pair in req_path.split("?", 1)[1].split("&")) if "?" in req_path else {}
+        try:
+            await kanban_events(ws, query)
+        except Exception:
+            pass
+        return
     gw = Gateway(ws)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
         "type": "gateway.ready", "session_id": "",

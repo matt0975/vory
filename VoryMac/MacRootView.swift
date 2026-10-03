@@ -151,6 +151,7 @@ private struct MainSplitView: View {
         case .status: NavigationStack { StatusView() }
         case .sessions: NavigationStack { SessionsView() }
         case .cron: NavigationStack { CronView() }
+        case .kanban: NavigationStack { KanbanView() }   // the phone's page until the Mac has its own board
         case .approvals: NavigationStack { ApprovalsView() }
         case .system: NavigationStack { SystemView() }
         // Settings pages are Forms; grouped is the Mac's System Settings look.

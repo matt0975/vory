@@ -23,6 +23,7 @@ struct SettingsView: View {
             Row(id: "mcp", title: "MCP Servers", symbol: "point.3.connected.trianglepath.dotted", color: .mint, destination: AnyView(MCPView())),
             Row(id: "approvals", title: "Approvals", symbol: "checkmark.shield", color: .green, destination: AnyView(ApprovalsView())),
             Row(id: "cron", title: "Scheduled Tasks", symbol: "timer", color: .pink, destination: AnyView(CronView())),
+            Row(id: "kanban", title: "Board", symbol: "rectangle.split.3x1", color: .orange, destination: AnyView(KanbanView(embedded: true))),
             Row(id: "sessions", title: "Sessions", symbol: "list.bullet.rectangle", color: .cyan, destination: AnyView(SessionsView())),
             Row(id: "channels", title: "Channels", symbol: "antenna.radiowaves.left.and.right", color: .brown, destination: AnyView(ChannelsView())),
             Row(id: "system", title: "System", symbol: "server.rack", color: .secondary, destination: AnyView(SystemView())),
@@ -44,7 +45,11 @@ struct SettingsView: View {
         ]
     }
 
-    private func filtered(_ rows: [Row]) -> [Row] { search.isEmpty ? rows : rows.filter { $0.title.localizedCaseInsensitiveContains(search) } }
+    /// The search, and the Board only when the gateway has its kanban plugin.
+    private func filtered(_ rows: [Row]) -> [Row] {
+        let shown = rows.filter { $0.id != "kanban" || model.runtime?.kanban.isPresent == true }
+        return search.isEmpty ? shown : shown.filter { $0.title.localizedCaseInsensitiveContains(search) }
+    }
     @AppStorage(BotColors.storageKey) private var botColorsRaw = ""
     @AppStorage(BotAvatarStore.storageKey) private var botAvatarsRaw = ""
     @AppStorage(BotAvatarStore.glassAllKey) private var glassAll = false
@@ -635,9 +640,14 @@ struct AppearanceView: View {
                 }
                 ForEach(AppModel.AppTab.allCases.filter { !layout.contains($0) }, id: \.self) { tab in
                     HStack(spacing: 10) {
-                        Label(tab.title, systemImage: tab.symbol).foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label(tab.title, systemImage: tab.symbol).foregroundStyle(.secondary)
+                            if model.hiddenTabs.contains(tab), let plugin = tab.needsPlugin {
+                                Text("Needs the \(plugin) plugin turned on on the gateway.").font(.caption).foregroundStyle(.tertiary)
+                            }
+                        }
                         Spacer()
-                        Toggle("Show \(tab.title) in the sidebar", isOn: tabBinding(tab)).labelsHidden()
+                        Toggle("Show \(tab.title) in the sidebar", isOn: tabBinding(tab)).labelsHidden().disabled(model.hiddenTabs.contains(tab))
                     }
                 }
             } header: { Text("Sidebar") } footer: {
@@ -669,14 +679,22 @@ struct AppearanceView: View {
                     let missing = AppModel.AppTab.allCases.filter { !layout.contains($0) }
                     if missing.isEmpty { Text("Everything is on the bar.").foregroundStyle(.secondary).font(.footnote) }
                     ForEach(missing, id: \.self) { tab in
+                        // A page the gateway cannot show (the Board without its plugin) is listed
+                        // greyed, with the one line that says what it needs.
+                        let unavailable = model.hiddenTabs.contains(tab)
                         Button { var l = layout; l.set(tab, enabled: true); layoutRaw = l.encoded } label: {
                             HStack {
-                                Image(systemName: "plus.circle.fill").foregroundStyle(layout.isFull ? .gray : .green)
-                                Label(tab.title, systemImage: tab.symbol)
+                                Image(systemName: "plus.circle.fill").foregroundStyle(layout.isFull || unavailable ? .gray : .green)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Label(tab.title, systemImage: tab.symbol)
+                                    if unavailable, let plugin = tab.needsPlugin {
+                                        Text("Needs the \(plugin) plugin turned on on the gateway.").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
                             }
                         }
-                        .tint(.primary)
-                        .disabled(layout.isFull)
+                        .tint(unavailable ? .secondary : .primary)
+                        .disabled(layout.isFull || unavailable)
                     }
                 } header: { Text("Not on the bar") } footer: {
                     if layout.isFull { Text("Remove one to add another.") }

@@ -61,7 +61,7 @@ final class AppModel {
 
     enum AppTab: String, Hashable, CaseIterable, Sendable, Identifiable {
         var id: String { rawValue }
-        case chats, dashboard, bots, files, sessions, cron, approvals, system, projects, status, settings
+        case chats, dashboard, bots, files, sessions, cron, kanban, approvals, system, projects, status, settings
 
         var title: String {
             switch self {
@@ -71,6 +71,7 @@ final class AppModel {
             case .files: return "Files"
             case .sessions: return "Sessions"
             case .cron: return "Tasks"
+            case .kanban: return "Board"
             case .approvals: return "Approvals"
             case .system: return "System"
             case .projects: return "Projects"
@@ -87,6 +88,7 @@ final class AppModel {
             case .files: return "folder"
             case .sessions: return "list.bullet.rectangle"
             case .cron: return "calendar.badge.clock"
+            case .kanban: return "rectangle.split.3x1"
             case .approvals: return "checkmark.shield"
             case .system: return "server.rack"
             case .projects: return "folder.fill"
@@ -94,7 +96,14 @@ final class AppModel {
             case .settings: return "gear"
             }
         }
+
+        /// Pages that exist only when the gateway has the plugin behind them.
+        var needsPlugin: String? { self == .kanban ? "Kanban" : nil }
     }
+
+    /// Pages the gateway cannot show right now: the Board without the kanban plugin (or with no
+    /// gateway). They stay in the saved layout and come back when the plugin does.
+    var hiddenTabs: Set<AppTab> { runtime?.kanban.isPresent == true ? [] : [.kanban] }
 
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.

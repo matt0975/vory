@@ -43,6 +43,8 @@ public final class GatewayRuntime {
 
     /// The gateway's projects for the selected bot, and which chat is in which.
     public let projects = ProjectsStore()
+    /// The gateway's kanban board (its bundled plugin), when it has one.
+    public let kanban = KanbanStore()
 
     public init(connection: GatewayConnection, store: ConnectionStore) {
         self.connection = connection
@@ -110,10 +112,25 @@ public final class GatewayRuntime {
         return (url, secrets.access.headers)
     }
 
+    /// A socket URL for a plugin's own endpoint (the kanban event stream), credentialled the
+    /// same way as the main socket: a minted ticket for bearer gateways, `?token=` otherwise.
+    nonisolated func pluginWebsocketURL(path: String, query: [URLQueryItem]) async throws -> (URL, [String: String]) {
+        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        var items = query
+        if authMode.usesBearer {
+            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody())
+            if let t = r["ticket"]?.stringValue, !t.isEmpty { items.append(URLQueryItem(name: "ticket", value: t)) }
+        } else if let t = secrets.sessionToken, !t.isEmpty {
+            items.append(URLQueryItem(name: "token", value: t))
+        }
+        return (gateway.websocket(path, query: items), secrets.access.headers)
+    }
+
     // MARK: Lifecycle
 
     public func start() async {
         projects.attach(self)
+        kanban.attach(self)
         await socket.connect()
         await loadProfiles()
         await refreshCapabilities()
@@ -200,6 +217,7 @@ public final class GatewayRuntime {
                 profileHome = cfg["home"]?.stringValue
             }
             await projects.refresh()
+            await kanban.probe()
             await pushRegistrar?.syncRegistration(runtime: self)
             await probeCodeSkew()
         } catch {

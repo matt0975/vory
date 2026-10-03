@@ -139,7 +139,7 @@ struct MainTabView: View {
     @AppStorage(TabLayout.storageKey) private var layoutRaw = ""
 
     var body: some View {
-        let tabs = TabLayout.parse(layoutRaw).visible()
+        let tabs = TabLayout.parse(layoutRaw).visible(hiding: model.hiddenTabs)
         ZStack {
             // Every page stays alive (its navigation stack, scroll position, drafts); only the
             // selected one is visible and touchable, which is what the system TabView does too.
@@ -204,6 +204,7 @@ struct MainTabView: View {
         case .settings: SettingsView()
         case .sessions: NavigationStack { SessionsView().navigationTitle("Sessions").tabRoot(.sessions) }
         case .cron: NavigationStack { CronView().navigationTitle("Scheduled Tasks").tabRoot(.cron) }
+        case .kanban: NavigationStack { KanbanView().tabRoot(.kanban) }
         case .approvals: NavigationStack { ApprovalsView().navigationTitle("Approvals").tabRoot(.approvals) }
         case .system: NavigationStack { SystemView().navigationTitle("System").tabRoot(.system) }
         case .dashboard: NavigationStack { DashboardView().tabRoot(.dashboard) }
