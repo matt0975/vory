@@ -1,8 +1,8 @@
-#if os(iOS)
 import AVFAudio
 import VoryCore
 
-/// Plays the voice engine's audio chunks on the phone through an AVAudioEngine of its own:
+/// Plays the voice engine's audio chunks through an AVAudioEngine of its own (the Mac's output
+/// follows the system's chosen device; the phone also takes the audio session):
 /// a player node, each chunk converted to the standard float format at its own rate (the
 /// mixer resamples to the hardware), scheduled in order, with `stop()` cutting it short.
 /// Keeping playback in an engine of ours is what lets voice processing cancel the bot's own
@@ -62,9 +62,11 @@ final class VoicePlayer {
     }
 
     private func beginSession() throws {
+        #if os(iOS)
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try session.setActive(true)
+        #endif
         // The engine starts in `connect(for:)`, once the player node is wired to the mixer:
         // starting it with no connections raises (not throws) inside AVAudioEngine.
     }
@@ -72,7 +74,9 @@ final class VoicePlayer {
     private func endSession() {
         node.stop()
         engine.stop()
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     private func connect(for format: AVAudioFormat) throws {
@@ -107,4 +111,3 @@ final class VoicePlayer {
         return buffer
     }
 }
-#endif

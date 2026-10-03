@@ -52,11 +52,9 @@ struct VoiceSettingsView: View {
                     } label: { Label("Allow Personal Voice", systemImage: "person.wave.2") }
                     .disabled(personalVoice == .denied || personalVoice == .unsupported)
                 }
-                #if os(iOS)
                 Button {
                     VoiceCoordinator.shared.toggleSpeaking("Hi, this is how I sound on \(DeviceWords.this).")
                 } label: { Label(VoiceCoordinator.shared.isSpeaking ? "Stop" : "Try the voice", systemImage: VoiceCoordinator.shared.isSpeaking ? "stop.circle" : "play.circle") }
-                #endif
             } header: { Text("Voice on \(DeviceWords.this)") } footer: {
                 Text(personalVoice == .denied ? "Personal Voice is off for Vory in Settings › Accessibility › Personal Voice."
                      : "Used when speech is handled on \(DeviceWords.this). Automatic picks the best installed voice for your language; a Personal Voice comes first once it is allowed.")

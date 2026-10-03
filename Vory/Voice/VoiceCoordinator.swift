@@ -1,8 +1,7 @@
-#if os(iOS)
 import Foundation
 import VoryCore
 
-/// Speaking on the phone: the one thing being read right now, started from a bubble's Speak
+/// Speaking: the one thing being read right now, started from a bubble's Speak
 /// or by "Read replies aloud" when a reply finishes in the chat in front. One at a time: a new
 /// one stops the last.
 @MainActor
@@ -39,6 +38,17 @@ final class VoiceCoordinator {
         }
     }
 
+    /// The last finished reply in a chat: what "Speak Last Reply" reads.
+    nonisolated static func lastReply(in items: [TranscriptItem]) -> String? {
+        for item in items.reversed() {
+            if case .assistant(let text, _, let streaming) = item.kind, !streaming {
+                let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { return t }
+            }
+        }
+        return nil
+    }
+
     func stop() {
         AppModel.shared.runtime?.voice.stop()
         player.stop()
@@ -58,4 +68,3 @@ final class VoiceCoordinator {
         }
     }
 }
-#endif

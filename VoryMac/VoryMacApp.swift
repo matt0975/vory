@@ -22,6 +22,9 @@ struct VoryMacApp: App {
     }
 
     @State private var boardCommands = BoardCommands.shared
+    @State private var voice = VoiceCoordinator.shared
+    /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
+    private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
     /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
     private var boardInFront: Bool { model.selectedTab == .kanban }
 
@@ -103,6 +106,13 @@ struct VoryMacApp: App {
                 Button("Deny") { answerApproval("deny") }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
+                Divider()
+                // The open chat's newest reply, read aloud by the Speech setting; again stops it.
+                Button(voice.isSpeaking ? "Stop Speaking" : "Speak Last Reply") {
+                    if voice.isSpeaking { voice.stop() } else if let text = lastReply { voice.speak(text) }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                .disabled(!voice.isSpeaking && lastReply == nil)
             }
             // The Board page's commands; they do nothing unless it is in front.
             CommandMenu("Board") {

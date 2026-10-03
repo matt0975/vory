@@ -41,6 +41,8 @@ struct MacRootView: View {
         // The first time a gateway comes up on this Mac (its own first connection, or one the
         // keychain already held): what the Companion needs from here, if anything.
         .onChange(of: model.runtime?.connection.id, initial: true) { _, _ in offerCompanion() }
+        // "Read replies aloud": a reply that finishes in the chat on screen is spoken.
+        .task { VoiceCoordinator.shared.observeReplies() }
         #if DEBUG
         .task { if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] } }
         #endif
