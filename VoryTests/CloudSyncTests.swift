@@ -351,4 +351,46 @@ struct CloudGatewayTests {
         #expect(cloud.file.gateways.isEmpty)
         #expect(phone.sync().added.isEmpty)
     }
+
+    // MARK: Gateways that arrive after the restore (#181)
+
+    @Test func aDeviceOwedGatewaysTakesThemWhenTheirItemArrives() throws {
+        // Restore ran before the Keychain item reached this device: nothing came, the device has none.
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        #expect(mac.sync(importNew: CloudSync.importsGateways(hasConnections: false, awaiting: false)).added.isEmpty)
+        // The phone's copy lands later; a pass that is still owed the gateways takes it.
+        let (g, s) = try gateway("Home", "https://hermes.example.com")
+        try phone.store.upsert(g, secrets: s)
+        phone.sync()
+        #expect(mac.sync(importNew: CloudSync.importsGateways(hasConnections: false, awaiting: true)).added.count == 1)
+        #expect(mac.store.connections.count == 1)
+        // Not owed, with none: still Restore's job.
+        #expect(!CloudSync.importsGateways(hasConnections: false, awaiting: false))
+        #expect(CloudSync.importsGateways(hasConnections: true, awaiting: false))
+    }
+
+    @Test func onlyAGatewayWithoutItsSignInIsPending() throws {
+        let store = FakeStore()
+        let (withToken, s) = try gateway("Home", "https://hermes.example.com")
+        var browser = GatewayConnection(name: "Work", gateway: try GatewayURL.normalize("https://work.example.com", pathPrefix: nil), authMode: .oauth)
+        browser.authProvider = "github"
+        try store.upsert(withToken, secrets: s)
+        try store.upsert(browser, secrets: GatewaySecrets())
+        let added = [CloudGateway(connection: withToken, sessionToken: "t", access: s.access, updatedAt: 1),
+                     CloudGateway(connection: browser, sessionToken: nil, access: CloudflareAccess(), updatedAt: 1)]
+        #expect(CloudSync.pendingSignIns(added, in: store).map(\.name) == ["Work"])
+        // A token that travelled empty needs a sign-in too.
+        let empty = [CloudGateway(connection: withToken, sessionToken: "", access: s.access, updatedAt: 1)]
+        #expect(CloudSync.pendingSignIns(empty, in: store).map(\.name) == ["Home"])
+    }
+
+    @Test func theRestoreSheetSaysWhenItIsStillLookingForGateways() {
+        #expect(CloudRestoreSheet.gatewayLine(count: 0, waiting: true) == "Looking for your gateways…")
+        #expect(CloudRestoreSheet.gatewayLine(count: 0, waiting: false) == "No saved gateways yet")
+        #expect(CloudRestoreSheet.gatewayLine(count: 2, waiting: false) == "2 gateways")
+        var r = CloudSync.RestoreOutcome(settings: 3, gatewaysAwaited: true)
+        #expect(CloudRestoreSheet.words(for: r).contains("have not reached"))
+        r.gatewaysAwaited = false
+        #expect(!CloudRestoreSheet.words(for: r).contains("have not reached"))
+    }
 }

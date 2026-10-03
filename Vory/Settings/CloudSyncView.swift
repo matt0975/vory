@@ -112,6 +112,9 @@ struct CloudRestoreSheet: View {
     var onRestored: (CloudSync.RestoreOutcome) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var summary: CloudSummary?
+    /// Settings are there and the gateways are not yet: they come through iCloud Keychain,
+    /// which can take a while longer on a new device, so the sheet keeps looking for a bit.
+    @State private var waitingForGateways = false
     private let sync = CloudSync.shared
 
     var body: some View {
@@ -128,7 +131,23 @@ struct CloudRestoreSheet: View {
             .padding(.horizontal, 28).padding(.bottom, 24)
             .frame(maxWidth: 440)
         }
-        .task { summary = await sync.refresh() }
+        .task {
+            let s = await sync.refresh()
+            summary = s
+            guard !s.isEmpty, s.gateways == 0 else { return }
+            waitingForGateways = true
+            let n = await sync.waitForGateways(upTo: Self.gatewayWait)
+            if !Task.isCancelled { summary?.gateways = n; waitingForGateways = false }
+        }
+    }
+
+    /// How long the sheet looks for the gateway item after the settings have arrived.
+    static let gatewayWait: Double = 20
+
+    /// The gateway line of the box: what iCloud holds, or that it is still being looked for.
+    static func gatewayLine(count: Int, waiting: Bool) -> String {
+        if count > 0 { return count == 1 ? "1 gateway" : "\(count) gateways" }
+        return waiting ? "Looking for your gateways…" : "No saved gateways yet"
     }
 
     @ViewBuilder private var empty: some View {
@@ -149,7 +168,10 @@ struct CloudRestoreSheet: View {
             Text("Last changed on \(device), \(date.formatted(date: .abbreviated, time: .shortened))").font(.callout).foregroundStyle(.secondary)
         }
         VStack(alignment: .leading, spacing: 10) {
-            line("network", s.gateways == 0 ? "No saved gateways" : (s.gateways == 1 ? "1 gateway" : "\(s.gateways) gateways"))
+            HStack(spacing: 8) {
+                line("network", Self.gatewayLine(count: s.gateways, waiting: waitingForGateways))
+                if waitingForGateways { ProgressView().controlSize(.small) }
+            }
             line("cloud", s.bots == 0 ? "No bot looks" : (s.bots == 1 ? "Looks for 1 bot" : "Looks for \(s.bots) bots"))
             line("slider.horizontal.3", s.settings == 0 ? "No settings" : (s.name == nil ? "Your settings" : "Your settings and your name on Home"))
         }
@@ -170,8 +192,11 @@ struct CloudRestoreSheet: View {
                 .buttonStyle(.borderless)
                 #endif
         }
-        Text("Notifications are set up per device. A gateway signed in with the browser asks for its sign-in next.")
+        Text(s.gateways == 0 && !waitingForGateways
+             ? "Your gateways travel through iCloud Keychain, which can take a few minutes to reach a new device and must be on for both devices. Restore now and they are added when they arrive; until then the gateway can be entered by hand."
+             : "Notifications are set up per device. A gateway signed in with the browser asks for its sign-in next.")
             .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func line(_ symbol: String, _ text: String) -> some View {
@@ -183,8 +208,9 @@ struct CloudRestoreSheet: View {
         var parts: [String] = []
         if r.settings > 0 { parts.append("settings and looks restored") }
         if r.gateways > 0 { parts.append(r.gateways == 1 ? "1 gateway added" : "\(r.gateways) gateways added") }
-        if parts.isEmpty { return "\(DeviceWords.This) already matches iCloud." }
+        if parts.isEmpty { return r.gatewaysAwaited ? "Your gateways have not reached \(DeviceWords.this) yet; they are added when they arrive." : "\(DeviceWords.This) already matches iCloud." }
         var s = parts.joined(separator: ", ").prefix(1).uppercased() + parts.joined(separator: ", ").dropFirst() + "."
+        if r.gatewaysAwaited { s += " Your gateways have not reached \(DeviceWords.this) yet; they are added when they arrive." }
         if r.needSignIn > 0 { s += r.needSignIn == 1 ? " One gateway needs its sign-in on \(DeviceWords.this)." : " \(r.needSignIn) gateways need their sign-in on \(DeviceWords.this)." }
         return s
     }

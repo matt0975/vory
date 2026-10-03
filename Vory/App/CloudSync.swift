@@ -494,7 +494,13 @@ final class CloudSync {
         var needSignIn = 0
         /// Those gateways, for the sign-in that follows a restore.
         var pending: [GatewayConnection] = []
+        /// No gateway came and this device has none: they are taken when their iCloud
+        /// Keychain item arrives.
+        var gatewaysAwaited = false
     }
+    /// Set by a restore that brought no gateway to a device with none: the running sync
+    /// takes them when their item arrives.
+    static let awaitingGatewaysKey = "cloudSync.awaitingGateways"
 
     /// On unless switched off in Settings › iCloud Sync.
     var enabled: Bool {
@@ -597,11 +603,54 @@ final class CloudSync {
     }
 
     /// A device with no gateway yet takes none: that is Restore's job, on the first screen,
-    /// where the person chooses it.
+    /// where the person chooses it. Unless a restore already asked for them and they had not
+    /// arrived: gateways travel as an iCloud Keychain item, which can reach a new device
+    /// minutes after the settings do, so they are taken when it shows up (#181).
     private func syncGateways() {
         guard let store else { return }
-        let out = CloudGateways.reconcile(store: store, importNew: !store.connections.isEmpty)
+        let defaults = UserDefaults.standard
+        let awaiting = defaults.bool(forKey: Self.awaitingGatewaysKey)
+        let out = CloudGateways.reconcile(store: store, importNew: Self.importsGateways(hasConnections: !store.connections.isEmpty, awaiting: awaiting))
         reconnectIfChanged(out.changed)
+        if awaiting, !store.connections.isEmpty {
+            defaults.removeObject(forKey: Self.awaitingGatewaysKey)
+            if !out.added.isEmpty { gatewaysArrived(out.added, store: store) }
+        }
+    }
+
+    /// Whether a sync pass takes gateways only the cloud has: a device with gateways follows
+    /// the list; one with none waits for Restore, or for the gateways a restore is owed.
+    nonisolated static func importsGateways(hasConnections: Bool, awaiting: Bool) -> Bool {
+        hasConnections || awaiting
+    }
+
+    /// The gateways a restore was owed came in: the first is connected, the way the restore
+    /// itself would have, and the ones whose sign-in stays per device are asked for.
+    private func gatewaysArrived(_ added: [CloudGateway], store: ConnectionStore) {
+        let model = AppModel.shared
+        model.signInPrompt = Self.pendingSignIns(added, in: store)
+        if model.runtime == nil { Task { await model.activateSavedConnection() } }
+    }
+
+    /// Among restored gateways, the ones this device cannot use until it signs in: a session
+    /// token travels, a browser or password sign-in does not. As saved here: the restore may
+    /// have given a gateway a new id on this device.
+    static func pendingSignIns(_ added: [CloudGateway], in store: any GatewayStoring) -> [GatewayConnection] {
+        added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }
+            .compactMap { p in store.connections.first { $0.id == p.connection.id } ?? store.connections.first { $0.gateway == p.connection.gateway } }
+    }
+
+    /// Looks for the gateway item for a while: on a new device it can arrive after the
+    /// settings. Returns how many gateways iCloud holds once it is there or the time is up.
+    func waitForGateways(upTo seconds: Double) async -> Int {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            let n = CloudGateways.load().gateways.count
+            if n > 0 { revision += 1; return n }
+            try? await Task.sleep(for: .seconds(1))
+            if Task.isCancelled { break }
+        }
+        return CloudGateways.load().gateways.count
     }
 
     /// A gateway whose address or token came down while the app is connected to it: connect again.
@@ -715,11 +764,13 @@ final class CloudSync {
         if let store {
             let out = CloudGateways.reconcile(store: store, importNew: true)
             result.gateways = out.added.count
-            let pending = out.added.filter { $0.connection.authMode != .sessionToken || ($0.sessionToken ?? "").isEmpty }.map(\.connection)
-            result.needSignIn = pending.count
-            // As saved here: the restore may have given the gateway a new id on this device.
-            result.pending = pending.compactMap { p in store.connections.first { $0.id == p.id } ?? store.connections.first { $0.gateway == p.gateway } }
+            result.pending = Self.pendingSignIns(out.added, in: store)
+            result.needSignIn = result.pending.count
             reconnectIfChanged(out.changed)
+            // Nothing came and this device has none: the gateway item has not reached this
+            // device yet (or iCloud Keychain is off). The running sync takes them when it does.
+            result.gatewaysAwaited = out.added.isEmpty && store.connections.isEmpty
+            UserDefaults.standard.set(result.gatewaysAwaited, forKey: Self.awaitingGatewaysKey)
         }
         lastSyncedAt = Date()
         revision += 1
