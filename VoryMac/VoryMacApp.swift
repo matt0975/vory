@@ -21,6 +21,10 @@ struct VoryMacApp: App {
         _model = State(initialValue: AppModel.shared)
     }
 
+    @State private var boardCommands = BoardCommands.shared
+    /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
+    private var boardInFront: Bool { model.selectedTab == .kanban }
+
     /// The approval the open chat waits on, if any.
     private var pendingApproval: PendingCard? { model.visibleChat?.cards.first { $0.method == "approval" } }
 
@@ -68,9 +72,10 @@ struct VoryMacApp: App {
             // File › Import from iPhone or iPad: Continuity Camera into the composer.
             ImportFromDevicesCommands()
             CommandMenu("Chat") {
+                // ⌘N is New Task while the Board is in front (the Board menu has it there).
                 Button("New Chat") { model.selectedTab = .chats; model.newChatRequest = UUID() }
                     .keyboardShortcut("n", modifiers: .command)
-                    .disabled(model.runtime == nil)
+                    .disabled(model.runtime == nil || boardInFront)
                 Button("New Chat With…") { model.selectedTab = .chats; model.newChatSheetRequest = UUID() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.runtime == nil)
@@ -83,7 +88,7 @@ struct VoryMacApp: App {
                     .disabled(model.runtime == nil)
                 Button("Refresh Chats") { NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil) }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(model.runtime == nil)
+                    .disabled(model.runtime == nil || boardInFront)
                 Button("Find Chats") { model.selectedTab = .chats; model.focusSearchRequest = UUID() }
                     .keyboardShortcut("f", modifiers: .command)
                     .disabled(model.runtime == nil)
@@ -98,6 +103,28 @@ struct VoryMacApp: App {
                 Button("Deny") { answerApproval("deny") }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
+            }
+            // The Board page's commands; they do nothing unless it is in front.
+            CommandMenu("Board") {
+                Button("New Task") { boardCommands.newTaskRequest = UUID() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
+                Button("Open Card") { boardCommands.openRequest = UUID() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Divider()
+                Button("Move Card Left") { boardCommands.move(-1) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Button("Move Card Right") { boardCommands.move(1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Divider()
+                Button("Nudge Dispatcher") { Task { await model.runtime?.kanban.nudge() } }
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
+                Button("Refresh Board") { Task { await model.runtime?.kanban.refresh() } }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
             }
         }
 

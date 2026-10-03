@@ -113,7 +113,8 @@ private struct MainSplitView: View {
     /// The detail column's stack: the chat (or group chat) beside the list.
     @State private var chatPath = NavigationPath()
 
-    private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible() }
+    /// The pages in the rail, less the ones the gateway cannot show (the Board without its plugin).
+    private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs) }
 
     var body: some View {
         Group {
@@ -151,7 +152,7 @@ private struct MainSplitView: View {
         case .status: NavigationStack { StatusView() }
         case .sessions: NavigationStack { SessionsView() }
         case .cron: NavigationStack { CronView() }
-        case .kanban: NavigationStack { KanbanView() }   // the phone's page until the Mac has its own board
+        case .kanban: NavigationStack { MacBoardView() }
         case .approvals: NavigationStack { ApprovalsView() }
         case .system: NavigationStack { SystemView() }
         // Settings pages are Forms; grouped is the Mac's System Settings look.
@@ -283,18 +284,30 @@ private struct RailPages: View {
     var body: some View {
         // The ones in the rail first, in their order, then the rest.
         ForEach(layout.tabs + AppModel.AppTab.allCases.filter { !layout.contains($0) }, id: \.self) { tab in
+            // A page the gateway cannot show (the Board without its plugin) stays listed,
+            // greyed, with the one line that says what it needs.
+            let unavailable = model.hiddenTabs.contains(tab)
             if rows {
                 HStack(spacing: 10) {
                     RailIcon(tab: tab, size: 14).frame(width: 24).foregroundStyle(.secondary)
-                    Text(tab.title)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(tab.title).foregroundStyle(unavailable ? .secondary : .primary)
+                        if unavailable, let plugin = tab.needsPlugin {
+                            Text("Needs the \(plugin) plugin turned on on the gateway.").font(.caption2).foregroundStyle(.tertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     Spacer(minLength: 12)
                     Toggle("Show \(tab.title) in the sidebar", isOn: shown(tab)).labelsHidden()
                         .toggleStyle(.switch).controlSize(.small)
-                        .disabled(TabLayout.required.contains(tab))
+                        .disabled(TabLayout.required.contains(tab) || unavailable)
                 }
             } else {
-                Toggle(isOn: shown(tab)) { Label(tab.title, systemImage: tab.symbol) }
-                    .disabled(TabLayout.required.contains(tab))
+                Toggle(isOn: shown(tab)) {
+                    if unavailable, let plugin = tab.needsPlugin { Label("\(tab.title) (needs the \(plugin) plugin)", systemImage: tab.symbol) }
+                    else { Label(tab.title, systemImage: tab.symbol) }
+                }
+                .disabled(TabLayout.required.contains(tab) || unavailable)
             }
         }
     }
