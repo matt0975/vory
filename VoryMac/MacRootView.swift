@@ -83,8 +83,21 @@ extension MacRootView {
         guard !companionPromptShown, let rt = model.runtime, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
         companionPromptShown = true
         Task {
-            try? await Task.sleep(for: .milliseconds(700))
-            companionFound = await CompanionPromptSheet.installedVersion(on: rt)
+            // The gateway must have answered before it can be asked about the Companion: asked
+            // too soon, the probe found nothing and offered an install to a gateway that had
+            // one (a restored gateway, with the Companion set up from the phone, got that).
+            for _ in 0..<40 where rt.profileHome == nil {
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            guard model.runtime === rt, rt.profileHome != nil else {
+                // Not connected within ten seconds: not asked now, and asked again next time.
+                companionPromptShown = false
+                return
+            }
+            let probe = PushSetupModel()
+            await probe.checkCompanion(runtime: rt)
+            guard probe.companionCheckError == nil else { companionPromptShown = false; return }
+            companionFound = probe.installedVersion
             showCompanionPrompt = true
         }
     }
@@ -165,7 +178,9 @@ private struct Sidebar: View {
             VStack(spacing: 2) {
                 ForEach(Array(tabs.enumerated()), id: \.element) { i, tab in
                     RailItem(tab: tab, selected: model.selectedTab == tab, badge: badge(tab), shortcut: i < 9 ? Character("\(i + 1)") : nil) {
-                        model.selectedTab = tab
+                        // The page already showing, chosen again (a click or its ⌘ number): back to
+                        // its top, as a second tap on the phone's tab bar does.
+                        if model.selectedTab == tab { model.tabReselected[tab, default: 0] += 1 } else { model.selectedTab = tab }
                     }
                 }
                 RailMore()
