@@ -65,7 +65,8 @@ final class VoicePlayer {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try session.setActive(true)
-        if !engine.isRunning { try engine.start() }
+        // The engine starts in `connect(for:)`, once the player node is wired to the mixer:
+        // starting it with no connections raises (not throws) inside AVAudioEngine.
     }
 
     private func endSession() {
