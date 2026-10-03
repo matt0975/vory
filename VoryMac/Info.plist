@@ -55,8 +55,9 @@
 		     scheme is http and the host is not on a private network. -->
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
+		<!-- Nothing else in this dictionary: NSAllowsLocalNetworking (or the media and web
+		     content keys) beside NSAllowsArbitraryLoads makes the system ignore the latter, and
+		     plain http to a Tailscale or LAN host was refused on the Mac (ATS error -1022). -->
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Take a photo to attach to a chat with your Hermes agent.</string>
