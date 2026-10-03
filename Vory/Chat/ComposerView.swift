@@ -307,6 +307,10 @@ struct ComposerView: View {
             .accessibilityLabel("Stop")
         } else if text.isEmpty && chat.staged.isEmpty {
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
+                #if os(iOS)
+                // Held: the whole conversation by voice, not one message.
+                .onLongPressGesture(minimumDuration: 0.45) { HandsFreeSession.shared.start(chat: chat) }
+                #endif
         } else {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {
@@ -346,6 +350,9 @@ struct ComposerView: View {
             attachRow("Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true }
             attachRow("Files", symbol: "folder.fill", color: .blue) { showFiles = true }
             attachRow("Audio", symbol: "waveform", color: .red) { showRecorder = true }
+            #if os(iOS)
+            attachRow("Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) }
+            #endif
             attachRow("Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() }
             attachRow("Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true }
         }

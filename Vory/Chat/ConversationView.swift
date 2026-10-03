@@ -143,6 +143,16 @@ struct ConversationView: View {
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
             .overlay(alignment: .top) { header(chat) }
+            // Voice mode runs out of sight under its pill, and in front on its own screen.
+            .overlay(alignment: .top) {
+                if HandsFreeSession.shared.isActive(for: chat), HandsFreeSession.shared.minimized {
+                    HandsFreePill(chat: chat).padding(.top, headerHeight + 6).transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .fullScreenCover(isPresented: Binding(get: { HandsFreeSession.shared.isActive(for: chat) && !HandsFreeSession.shared.minimized },
+                                                   set: { if !$0, HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.minimized = true } })) {
+                HandsFreeView(chat: chat)
+            }
         #endif
     }
 
@@ -486,6 +496,9 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        #if os(iOS)
+        Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
+        #endif
         ChatProjectMenu(chat: chat)
         Divider()
         Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }

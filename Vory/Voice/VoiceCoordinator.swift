@@ -63,6 +63,10 @@ final class VoiceCoordinator {
             guard VoiceSettings.readAloud, let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
             Task { @MainActor in
                 guard AppModel.shared.visibleChatID == id else { return }
+                #if os(iOS)
+                // Hands-free speaks its own replies: not twice.
+                if HandsFreeSession.shared.isActive { return }
+                #endif
                 self?.speak(text)
             }
         }

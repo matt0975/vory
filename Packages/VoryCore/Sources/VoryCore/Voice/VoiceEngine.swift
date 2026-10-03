@@ -16,8 +16,9 @@ public final class VoiceEngine {
     public private(set) var gatewaySTTUnableUntil: Date?
     public private(set) var gatewayTTSUnableUntil: Date?
     public private(set) var lastError: String?
-    /// The speak-stream session open right now, so a stop can reach it.
-    private var stream: SpeakStreamClient?
+    /// The speak-stream sessions open right now, so a stop can reach them. More than one can
+    /// be open: a reply still being spoken and a line queued behind it, or the next reply.
+    private var streams: [SpeakStreamClient] = []
 
     public init() {}
     public func attach(_ runtime: GatewayRuntime) { self.runtime = runtime }
@@ -94,9 +95,8 @@ public final class VoiceEngine {
     private func speakOnGateway(_ text: String, into continuation: AsyncThrowingStream<AudioChunk, Error>.Continuation) async throws -> Bool {
         guard let runtime else { return false }
         let client = SpeakStreamClient()
-        stream?.stop()
-        stream = client
-        defer { if stream === client { stream = nil } }
+        streams.append(client)
+        defer { streams.removeAll { $0 === client } }
         do {
             try await client.open(runtime: runtime, profile: runtime.selectedProfile)
         } catch {
@@ -128,6 +128,7 @@ public final class VoiceEngine {
             }
         }
         if produced { noteTTS(VoiceRouting.label(route: .gateway, provider: provider)) }
+        else if client.wasStopped { return true }   // cut short on purpose: nothing to fall back to
         else if VoiceSettings.speech == .automatic { gatewayTTSUnableUntil = Date().addingTimeInterval(VoiceRouting.retryAfter) }
         else if VoiceSettings.speech == .gateway { throw HermesAPIError.transport("The gateway made no speech. Check its TTS provider.") }
         return produced
@@ -145,11 +146,196 @@ public final class VoiceEngine {
         noteTTS(VoiceRouting.label(route: .device, provider: nil))
     }
 
+    // MARK: Speech as a reply streams
+
+    /// Speech for a reply as it is written: deltas go in as they arrive, audio comes out as
+    /// sentences finish, so the bot starts talking before it has finished writing. Markdown is
+    /// filtered on the way (the same filter as `SpokenText.forSpeech`). On the gateway the words
+    /// are forwarded to the speak-stream; on this device each sentence is rendered as it completes.
+    public func speakStreaming() -> SpeechStream {
+        let speech = SpeechStream()
+        let route = route(for: .speak)
+        speech.task = Task { @MainActor [weak self] in
+            guard let self else { speech.finishOutput(); return }
+            do {
+                var spoken = false
+                if route == .gateway { spoken = try await self.streamOnGateway(speech) }
+                if !spoken, !Task.isCancelled { try await self.streamOnDevice(speech) }
+                speech.finishOutput()
+            } catch {
+                self.lastError = error.localizedDescription
+                speech.finishOutput(throwing: error)
+            }
+        }
+        return speech
+    }
+
+    /// Forwards the words to the gateway's speak-stream as they are released. False when the
+    /// gateway could not (no provider, no audio) and the device should speak instead.
+    private func streamOnGateway(_ speech: SpeechStream) async throws -> Bool {
+        guard let runtime else { return false }
+        let client = SpeakStreamClient()
+        streams.append(client)
+        speech.client = client
+        defer { streams.removeAll { $0 === client } }
+        do {
+            try await client.open(runtime: runtime, profile: runtime.selectedProfile)
+        } catch {
+            if VoiceSettings.speech == .gateway { throw error }
+            return false
+        }
+        var rate = 24000
+        var channels = 1
+        var produced = false
+        var fellBack = false
+        var provider: String? = nil
+        // The words go up apart from the audio coming down: each piece as the filter releases
+        // it, `done` once the reply is complete.
+        let pump = Task { @MainActor in
+            for await piece in speech.pieces { client.send(delta: piece + " ") }
+            client.finish()
+        }
+        for await frame in client.frames {
+            if Task.isCancelled { client.stop(); pump.cancel(); return true }
+            switch frame {
+            case .start(let sr, let ch): rate = sr; channels = ch
+            case .pcm(let data):
+                produced = true
+                speech.yield(AudioChunk(sampleRate: Double(rate), channels: channels, isFloat32: false, data: data))
+            case .end: break
+            case .fallback: fellBack = true
+            }
+        }
+        // Whatever the socket did, every piece is read (into `text`) before any other route speaks.
+        await pump.value
+        if Task.isCancelled { return true }
+        if fellBack, !produced, let gv = gatewayVoice, !speech.text.isEmpty {
+            // Sentence synthesis made nothing: the one-shot route with the whole reply.
+            if let s = try? await gv.speak(speech.text), let audio = s.audio,
+               let chunks = try? AudioDecoding.chunks(from: audio, mimeType: s.mimeType), !chunks.isEmpty {
+                provider = s.provider
+                for c in chunks { speech.yield(c) }
+                produced = true
+            }
+        }
+        if produced { noteTTS(VoiceRouting.label(route: .gateway, provider: provider)) }
+        else if client.wasStopped { return true }   // cut short on purpose: nothing to fall back to
+        else if VoiceSettings.speech == .automatic { gatewayTTSUnableUntil = Date().addingTimeInterval(VoiceRouting.retryAfter) }
+        else if VoiceSettings.speech == .gateway { throw HermesAPIError.transport("The gateway made no speech. Check its TTS provider.") }
+        // Nothing came of it: the device speaks what has been released, then the rest.
+        speech.piecesConsumed = true
+        return produced
+    }
+
+    /// Renders sentences on this device as they complete; the last one waits for its end or
+    /// the end of the reply.
+    private func streamOnDevice(_ speech: SpeechStream) async throws {
+        let voice = DeviceSpeaker.voice(identifier: VoiceSettings.deviceVoice)
+        var pending = ""
+        var spoke = false
+        func render(_ sentence: String) async {
+            for await chunk in DeviceSpeaker.render(sentence, voice: voice) {
+                if Task.isCancelled { return }
+                spoke = true
+                speech.yield(chunk)
+            }
+        }
+        func flush(final: Bool) async {
+            var sentences = SpokenText.sentences(pending)
+            var held = ""
+            if !final, let last = sentences.last, !SpokenText.endsSentence(last) { held = sentences.removeLast() }
+            pending = held
+            for s in sentences {
+                if Task.isCancelled { return }
+                await render(s)
+            }
+        }
+        if speech.piecesConsumed {
+            pending = speech.text
+        } else {
+            for await piece in speech.pieces {
+                if Task.isCancelled { return }
+                pending += (pending.isEmpty ? "" : " ") + piece
+                await flush(final: false)
+            }
+        }
+        await flush(final: true)
+        if spoke { noteTTS(VoiceRouting.label(route: .device, provider: nil)) }
+    }
+
     /// Barge-in or a tap on stop: whatever is being synthesized stops.
     public func stop() {
-        stream?.stop(); stream = nil
+        for s in streams { s.stop() }
+        streams = []
+    }
+
+    /// Hands-free is starting (true) or over (false): the gateway's TTS provider is warmed for
+    /// the conversation, or released. Nothing to do when speech is handled here.
+    public func lease(_ active: Bool) async {
+        guard route(for: .speak) == .gateway, let gv = gatewayVoice else { return }
+        await gv.lease(active)
     }
 
     private func noteSTT(_ s: String) { lastSTT = s; UserDefaults.standard.set(s, forKey: VoiceSettings.lastSTTKey) }
     private func noteTTS(_ s: String) { lastTTS = s; UserDefaults.standard.set(s, forKey: VoiceSettings.lastTTSKey) }
+}
+
+/// One reply being spoken as it streams: `send(delta:)` the words as they come, `finish()`
+/// when the reply is complete, and play `chunks` as they arrive. `stop()` is the barge-in.
+@MainActor
+public final class SpeechStream {
+    public let chunks: AsyncThrowingStream<AudioChunk, Error>
+    private let output: AsyncThrowingStream<AudioChunk, Error>.Continuation
+    /// The speakable pieces of the reply, in order, once the filter releases them.
+    let pieces: AsyncStream<String>
+    private let piecesIn: AsyncStream<String>.Continuation
+    private var filter = SpokenText.Incremental()
+    /// Everything released so far, as one text, for a route that speaks in one go.
+    public private(set) var text = ""
+    public private(set) var isFinished = false
+    /// The gateway route read every piece (into `text`) before giving up.
+    var piecesConsumed = false
+    var task: Task<Void, Never>?
+    var client: SpeakStreamClient?
+
+    init() {
+        var out: AsyncThrowingStream<AudioChunk, Error>.Continuation!
+        chunks = AsyncThrowingStream { out = $0 }
+        output = out
+        var pin: AsyncStream<String>.Continuation!
+        pieces = AsyncStream { pin = $0 }
+        piecesIn = pin
+    }
+
+    public func send(delta: String) {
+        guard !isFinished else { return }
+        for piece in filter.feed(delta) { release(piece) }
+    }
+
+    /// The reply is complete: what is held is released and the audio runs to its end.
+    public func finish() {
+        guard !isFinished else { return }
+        isFinished = true
+        for piece in filter.finish() { release(piece) }
+        piecesIn.finish()
+    }
+
+    /// Stops the words and the audio now.
+    public func stop() {
+        isFinished = true
+        piecesIn.finish()
+        task?.cancel()
+        client?.stop()
+        output.finish()
+    }
+
+    private func release(_ piece: String) {
+        text += (text.isEmpty ? "" : " ") + piece
+        piecesIn.yield(piece)
+    }
+
+    func yield(_ chunk: AudioChunk) { output.yield(chunk) }
+    func finishOutput(throwing error: Error? = nil) {
+        if let error { output.finish(throwing: error) } else { output.finish() }
+    }
 }

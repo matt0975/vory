@@ -9,6 +9,8 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.readAloudKey) private var readAloud = false
     @AppStorage(VoiceSettings.sendAfterDictationKey) private var sendAfterDictation = false
     @AppStorage(VoiceSettings.deviceVoiceKey) private var deviceVoice = ""
+    @AppStorage(VoiceSettings.bargeInKey) private var bargeIn = true
+    @AppStorage(VoiceSettings.endOfTurnKey) private var endOfTurn = 0.8
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var personalVoice: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
 
@@ -39,6 +41,16 @@ struct VoiceSettingsView: View {
             } header: { Text("Chats") } footer: {
                 Text("Read replies aloud speaks each reply as it finishes in the chat you have open. Send after dictation sends what you dictated as soon as it is in words, with nothing to tap.")
             }
+            #if os(iOS)
+            Section {
+                Picker("Pause that ends your turn", selection: $endOfTurn) {
+                    ForEach(VoiceSettings.EndOfTurn.allCases) { p in Text(p.title).tag(p.rawValue) }
+                }
+                Toggle("Talking over the bot stops it", isOn: $bargeIn)
+            } header: { Text("Voice mode") } footer: {
+                Text("Voice mode is in a chat's + menu, or hold the mic. It listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
+            }
+            #endif
             Section {
                 Picker("Voice", selection: $deviceVoice) {
                     Text("Automatic").tag("")

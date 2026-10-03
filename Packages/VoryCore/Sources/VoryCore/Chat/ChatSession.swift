@@ -6,9 +6,36 @@ import UniformTypeIdentifiers
 public struct QueuedMessage: Identifiable, Hashable, Sendable {
     public var id = UUID()
     public var text: String
+    /// Set when the message was spoken (hands-free): it goes out with the voice params.
+    public var voice: VoiceTurn? = nil
 
-    public init(text: String) {
+    public init(text: String, voice: VoiceTurn? = nil) {
         self.text = text
+        self.voice = voice
+    }
+}
+
+/// What a spoken turn carries beyond its words (tui_gateway/methods_prompt.py, prompt.submit):
+/// `surface: "voice-live"` has the gateway prepend its spoken-conversation note to the MODEL
+/// INPUT only (a transcript in, short plain sentences out; the stored user row stays the words
+/// said), `voice_context` the recent spoken exchange so "yes" and "Thursday, not Friday" make
+/// sense, `interrupted` that the bot's last reply was cut off by the person.
+public struct VoiceTurn: Hashable, Sendable {
+    public static let surface = "voice-live"
+    /// The gateway keeps at most this much of the context.
+    public static let contextLimit = 6000
+    public var context: String
+    public var interrupted: Bool
+
+    public init(context: String = "", interrupted: Bool = false) {
+        self.context = context
+        self.interrupted = interrupted
+    }
+
+    func apply(to params: inout [String: JSONValue]) {
+        params["surface"] = .string(Self.surface)
+        if !context.isEmpty { params["voice_context"] = .string(String(context.suffix(Self.contextLimit))) }
+        if interrupted { params["interrupted"] = true }
     }
 }
 
@@ -434,7 +461,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// Sends text (with staged attachments). Returns prefill text when a slash command asks the composer to prefill.
     @discardableResult
-    public func send(_ rawText: String) async -> String? {
+    /// Sends a message (queued behind a running turn). `voice` marks a spoken turn: the gateway
+    /// then answers in short plain sentences, with the recent spoken exchange in mind.
+    public func send(_ rawText: String, voice: VoiceTurn? = nil) async -> String? {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !staged.isEmpty else { return nil }
         await awaitResume()
@@ -442,14 +471,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if !text.isEmpty { composerHistory.append(text) }
         if text.hasPrefix("/"), staged.isEmpty { return await dispatchSlash(text) }
         if isRunning {
-            queue.append(QueuedMessage(text: text))
+            queue.append(QueuedMessage(text: text, voice: voice))
             return nil
         }
-        await submit(text: text, queued: false)
+        await submit(text: text, queued: false, voice: voice)
         return nil
     }
 
-    private func submit(text: String, queued: Bool) async {
+    private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async {
         interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
@@ -469,6 +498,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(outgoing)]
             if queued { params["queued"] = true }
+            voice?.apply(to: &params)
             let r = try await rpc("prompt.submit", params)
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
@@ -540,10 +570,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func removeQueued(_ id: UUID) { queue.removeAll { $0.id == id } }
     public func updateQueued(_ id: UUID, text: String) { if let i = queue.firstIndex(where: { $0.id == id }) { queue[i].text = text } }
 
+    /// Voice mode is on for this chat with this state line (nil: it ended); the platform's turn
+    /// surface shows it.
+    public func noteVoiceMode(_ line: String?) { activity.voiceMode(for: self, line: line) }
+
     private func drainQueue() {
         guard !isRunning, !queue.isEmpty else { return }
         let next = queue.removeFirst()
-        Task { await submit(text: next.text, queued: true) }
+        Task { await submit(text: next.text, queued: true, voice: next.voice) }
     }
 
     // MARK: Slash commands
@@ -810,7 +844,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             streamedCharactersThisTurn += delta.count
             assembler.appendDelta(delta)
             scheduleStreamingUpdate()
-            if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count]) }
+            if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count, "text": delta]) }
         case "reasoning.delta", "thinking.delta":
             if streamingItemID == nil { beginStreaming() }
             if statusLine != "Thinking…" { statusLine = "Thinking…" }

@@ -54,6 +54,8 @@ struct HermesTurnLiveActivity: Widget {
                             .padding(.trailing, 2)
                     } else if context.state.needsAttention {
                         Image(systemName: "keyboard").font(.title3).foregroundStyle(.yellow).padding(.trailing, 6)
+                    } else if context.state.voiceMode != nil {
+                        VoiceEndButton(attributes: context.attributes).padding(.trailing, 2)
                     } else {
                         ElapsedTimer(state: context.state)
                             .font(.headline.monospacedDigit())
@@ -95,6 +97,10 @@ struct HermesTurnLiveActivity: Widget {
             } compactTrailing: {
                 if context.state.needsAttention {
                     Image(systemName: "exclamationmark").font(.caption.weight(.bold)).foregroundStyle(.yellow)
+                } else if context.state.voiceMode != nil {
+                    Image(systemName: "waveform").font(.caption.weight(.bold)).foregroundStyle(.pink)
+                        .symbolEffect(.variableColor.iterative, isActive: context.state.phase == "voice")
+                        .padding(.trailing, 2)
                 } else {
                     // Ticks while the turn runs; once it ends this is the total time it took.
                     ElapsedTimer(state: context.state).font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(.secondary)
@@ -132,6 +138,7 @@ enum PhaseStyle {
         case "done": return .green
         case "error": return .red
         case "waiting": return .yellow
+        case "voice": return .pink
         default: return .purple
         }
     }
@@ -143,7 +150,25 @@ enum PhaseStyle {
         case "thinking": return "brain.fill"
         case "done": return "checkmark"
         case "error": return "xmark"
+        case "voice": return "waveform"
         default: return "ellipsis.message.fill"
+        }
+    }
+}
+
+/// Voice mode's End, from the Lock Screen or the Island: opens the app and ends the conversation.
+struct VoiceEndButton: View {
+    var attributes: HermesTurnAttributes
+    private var url: URL {
+        var c = URLComponents(); c.scheme = "vory"; c.host = "voice"
+        c.queryItems = [URLQueryItem(name: "session", value: attributes.storedSessionID), URLQueryItem(name: "action", value: "end")]
+        return c.url!
+    }
+    var body: some View {
+        Link(destination: url) {
+            Label("End", systemImage: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 12).padding(.vertical, 6).frame(minWidth: 68)
+                .background(Color.red.opacity(0.85), in: .capsule)
         }
     }
 }
@@ -159,6 +184,7 @@ extension Color {
 enum PhaseText {
     static func headline(for s: HermesTurnAttributes.ContentState) -> String {
         if s.needsAttention { return s.attentionKind == "input" ? "Input needed" : "Approval needed" }
+        if let v = s.voiceMode { return s.phase == "voice" ? v : "Voice mode" }
         switch s.phase {
         case "tool": return "Running a tool"
         case "thinking": return "Thinking"
@@ -379,6 +405,11 @@ struct LockScreenTurnView: View {
                 Spacer(minLength: 4)
                 if state.needsAttention {
                     if state.attentionKind != "input" { ApprovalButtons(attributes: attributes) }
+                } else if state.voiceMode != nil {
+                    VStack(alignment: .trailing, spacing: 6) {
+                        VoiceEndButton(attributes: attributes)
+                        Text(PhaseText.headline(for: state)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 } else {
                     // A fixed width: the ticking timer text otherwise claims the whole row and
                     // squeezes the title down to a few letters.

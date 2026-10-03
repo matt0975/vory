@@ -17,16 +17,21 @@ final class VoicePlayer {
     private var pending = 0
     private var ended = false
     private var finish: CheckedContinuation<Void, Never>?
+    /// Hands-free holds the session and the engine open for the whole conversation; `play`
+    /// then neither takes nor drops them.
+    private(set) var handsFree = false
+    private var inputTapInstalled = false
+    private var configObserver: Any?
 
     init() { engine.attach(node) }
 
     /// Plays every chunk of the stream in order and returns once the last one has sounded
     /// (or the stream failed, or `stop()` was called).
     func play(_ chunks: AsyncThrowingStream<AudioChunk, Error>) async throws {
-        try beginSession()
+        if !handsFree { try beginSession() }
         isPlaying = true
         pending = 0; ended = false
-        defer { isPlaying = false; endSession() }
+        defer { isPlaying = false; if !handsFree { endSession() } }
         do {
             for try await chunk in chunks {
                 guard isPlaying else { break }
@@ -80,7 +85,10 @@ final class VoicePlayer {
     }
 
     private func connect(for format: AVAudioFormat) throws {
-        if let f = connectedFormat, f.sampleRate == format.sampleRate, f.channelCount == format.channelCount { return }
+        if let f = connectedFormat, f.sampleRate == format.sampleRate, f.channelCount == format.channelCount {
+            if !engine.isRunning { engine.prepare(); try engine.start() }
+            return
+        }
         let wasRunning = engine.isRunning
         if wasRunning { engine.stop() }
         node.stop()
@@ -89,6 +97,74 @@ final class VoicePlayer {
         connectedFormat = format
         engine.prepare()
         try engine.start()
+    }
+
+    // MARK: Hands-free: the microphone on the same engine
+
+    /// The input node's format while hands-free is on (what the tap delivers).
+    var inputFormat: AVAudioFormat? { handsFree ? engine.inputNode.outputFormat(forBus: 0) : nil }
+
+    /// Opens the microphone on this engine with voice processing (so the bot's own voice,
+    /// played through the same engine, is cancelled out of what the mic hears) and keeps the
+    /// session open: play and record at once, the speaker by default, Bluetooth headsets and
+    /// car kits allowed. `onInput` is called on the audio thread with each buffer the mic
+    /// delivers; with `tap` false the engine opens but no buffers are read (a stand-in input).
+    func beginHandsFree(tap: Bool = true, onInput: @escaping @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void) throws {
+        if handsFree { return }
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
+        try session.setActive(true)
+        #endif
+        if engine.isRunning { engine.stop() }
+        node.stop()
+        handsFree = true
+        let input = engine.inputNode
+        if tap {
+            // Echo cancellation is best effort: a simulator or an odd route may refuse it, and
+            // the loop then runs without barge-in protection rather than not at all.
+            if !input.isVoiceProcessingEnabled { try? input.setVoiceProcessingEnabled(true) }
+            let format = input.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                handsFree = false
+                throw HermesAPIError.transport("No microphone input is available.")
+            }
+            input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in onInput(buffer, time) }
+            inputTapInstalled = true
+        }
+        // The player's path exists before the engine starts (starting with no connections raises).
+        if connectedFormat == nil, let f = AVAudioFormat(standardFormatWithSampleRate: 24000, channels: 1) {
+            engine.connect(node, to: engine.mainMixerNode, format: f)
+            connectedFormat = f
+        }
+        engine.prepare()
+        try engine.start()
+        // A route change (headphones in, a car kit) resets the engine: it is started again.
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.restartAfterChange() }
+        }
+    }
+
+    /// After an interruption or a route change: the engine runs again.
+    func restartAfterChange() {
+        guard handsFree, !engine.isRunning else { return }
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+        engine.prepare()
+        try? engine.start()
+    }
+
+    func endHandsFree() {
+        guard handsFree else { return }
+        stop()
+        handsFree = false
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        if inputTapInstalled { engine.inputNode.removeTap(onBus: 0); inputTapInstalled = false }
+        engine.stop()
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 
     /// The chunk as a non-interleaved Float32 buffer at its own rate, the one format a player

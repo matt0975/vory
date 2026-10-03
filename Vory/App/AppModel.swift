@@ -215,6 +215,15 @@ final class AppModel {
             selectedTab = TabLayout.parse(UserDefaults.standard.string(forKey: TabLayout.storageKey)).visible().contains(.dashboard) ? .dashboard : .chats
             return
         }
+        if url.host == "voice" {
+            // From the Live Activity's End: voice mode ends, the app stays where it is.
+            #if os(iOS)
+            if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "action" })?.value == "end" {
+                HandsFreeSession.shared.end()
+            }
+            #endif
+            return
+        }
         selectedTab = .chats
         if url.host == "chat", let id = url.pathComponents.dropFirst().first {
             let profile = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "profile" }?.value

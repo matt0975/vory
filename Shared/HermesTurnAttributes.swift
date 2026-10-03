@@ -22,6 +22,9 @@ public struct HermesTurnAttributes: ActivityAttributes, Sendable {
         /// Vory Summaries has written one. Leads the card while the turn runs; `detail` is then
         /// the step under it. Absent on pushes from a Companion older than 1.0.36.
         public var goal: String? = nil
+        /// Voice mode is on for this chat: its state line ("Listening…", "Speaking", "Paused").
+        /// The card then carries End, and stays up between turns. Absent otherwise.
+        public var voiceMode: String? = nil
         /// When the turn started, as Unix seconds; the widget renders a live elapsed timer from it.
         /// Plain numbers so the `hermes-push` companion can set them in a `liveactivity` push.
         public var startedAtUnix: Double

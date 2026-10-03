@@ -707,7 +707,7 @@ async def kanban_events(ws, query):
 
 
 # ── Audio (hermes_cli/web_routers/audio.py): a canned transcript, a tone for speech ────────────
-import array, math, struct, wave, io
+import array, math, struct, wave, io, sys
 
 MOCK_TRANSCRIPT = "Clear the rotated logs older than ninety days, but keep anything still open."
 
@@ -751,37 +751,74 @@ def audio_rest(method, base, payload):
         if not text:
             return 400, {"detail": "Text is required"}
         return 200, {"ok": True, "data_url": _tone_wav_data_url(_speech_seconds(text)), "mime_type": "audio/wav", "provider": "mock-tts"}
-    if base == "/api/audio/tts-lease":
+    if base in ("/api/audio/tts-lease", "/api/audio/stt-lease"):
         return 200, {"ok": True, "lease": payload.get("lease") or "vory", "active": bool(payload.get("active")), "leases": ["vory"], "action": "acquired"}
+    if base == "/api/audio/voice-live/status":
+        # GPT-Live (tools/voice_live.py resolve_gpt_live_status): off unless the mock is started
+        # with --voice-live; a real run needs a gateway with an OpenAI key.
+        if VOICE_LIVE:
+            return 200, {"ok": True, "mode": "gpt-live", "available": True, "reason": None, "model": "gpt-live-1", "voice": "marin"}
+        return 200, {"ok": True, "mode": "chained", "available": False,
+                     "reason": "no OpenAI API key (set OPENAI_API_KEY or voice.gpt_live.api_key)", "model": "gpt-live-1", "voice": "marin"}
+    if base == "/api/audio/voice-live/session":
+        return 503, {"detail": "GPT-Live is not configured on this gateway"}
+    if base == "/api/audio/elevenlabs/voices":
+        return 200, {"ok": True, "voices": []}
     if base == "/api/audio/voice-config":
         return 404, {"detail": "Not found"}
     return None
 
 
+VOICE_LIVE = "--voice-live" in sys.argv
+
+
 async def speak_stream(ws):
     """The speak-stream socket: text frames in, {start}, int16 PCM frames and {end} out; {stop}
-    or a disconnect ends it. The audio is the tone above, as long as the words would take."""
-    text = ""
-    async for raw in ws:
-        if isinstance(raw, bytes):
-            continue
-        try:
-            frame = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if frame.get("text"):
-            text += str(frame["text"])
-        if frame.get("stop"):
+    or a disconnect ends it. Like the real one it cuts sentences as the text arrives and speaks
+    each at once (the tone above, as long as the words would take), so a reply is heard while
+    it is still being written."""
+    pending = ""
+    started = False
+
+    async def say(piece: str) -> None:
+        nonlocal started
+        if not piece.strip():
             return
-        if frame.get("done"):
-            break
-    pcm = _tone_pcm(_speech_seconds(text))
-    await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
-    step = 4800  # 100 ms a frame
-    for i in range(0, len(pcm), step):
-        await ws.send(pcm[i:i + step])
-        await asyncio.sleep(0.03)
-    await ws.send(json.dumps({"type": "end"}))
+        if not started:
+            await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
+            started = True
+        pcm = _tone_pcm(_speech_seconds(piece))
+        step = 4800  # 100 ms a frame
+        for i in range(0, len(pcm), step):
+            await ws.send(pcm[i:i + step])
+            await asyncio.sleep(0.03)
+
+    try:
+        async for raw in ws:
+            if isinstance(raw, bytes):
+                continue
+            try:
+                frame = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if frame.get("text"):
+                pending += str(frame["text"])
+                while True:
+                    m = re.search(r"[.!?…]\s", pending)
+                    if not m:
+                        break
+                    piece, pending = pending[:m.end()], pending[m.end():]
+                    await say(piece)
+            if frame.get("stop"):
+                return
+            if frame.get("done"):
+                break
+        await say(pending)
+        if not started:
+            await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
+        await ws.send(json.dumps({"type": "end"}))
+    except websockets.exceptions.ConnectionClosed:
+        return
 
 
 def process_request(connection, request):
@@ -1373,6 +1410,11 @@ class Gateway:
             s = self.sessions.get(p.get("session_id", ""))
             if s is None:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
+            # A spoken turn (hands-free) carries the voice params the real gateway reads
+            # (tui_gateway/methods_prompt.py): logged so a client can be checked against them.
+            if p.get("surface") or p.get("interrupted"):
+                print(f"prompt.submit surface={p.get('surface')!r} interrupted={bool(p.get('interrupted'))} "
+                      f"voice_context={len(str(p.get('voice_context') or ''))} chars", flush=True)
             asyncio.create_task(self.run_turn(s, str(p.get("text", ""))))
             return ok({"status": "streaming"})
         if method == "session.interrupt":

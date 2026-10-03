@@ -44,8 +44,12 @@ public enum VoiceSettings {
     /// What was used last, for Settings › Voice's footnote; per device.
     public static let lastSTTKey = "voice.lastSTT"
     public static let lastTTSKey = "voice.lastTTS"
+    /// Hands-free: speaking over the bot stops it (on unless turned off); synced.
+    public static let bargeInKey = "voice.handsFree.bargeIn"
+    /// Hands-free: how long a silence ends the person's turn, in seconds; synced.
+    public static let endOfTurnKey = "voice.handsFree.endOfTurn"
 
-    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey]
+    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey]
 
     public static var speech: SpeechSource {
         UserDefaults.standard.string(forKey: speechKey).flatMap(SpeechSource.init(rawValue:)) ?? .automatic
@@ -53,6 +57,18 @@ public enum VoiceSettings {
     public static var readAloud: Bool { UserDefaults.standard.bool(forKey: readAloudKey) }
     public static var sendAfterDictation: Bool { UserDefaults.standard.bool(forKey: sendAfterDictationKey) }
     public static var deviceVoice: String? { UserDefaults.standard.string(forKey: deviceVoiceKey) }
+    public static var bargeIn: Bool { UserDefaults.standard.object(forKey: bargeInKey) as? Bool ?? true }
+    /// The end-of-turn pause: the choices offered, and the one in force.
+    public enum EndOfTurn: Double, CaseIterable, Sendable, Identifiable {
+        case short = 0.5, normal = 0.8, long = 1.4
+        public var id: Double { rawValue }
+        public var title: String {
+            switch self { case .short: return "Short"; case .normal: return "Normal"; case .long: return "Long" }
+        }
+    }
+    public static var endOfTurn: EndOfTurn {
+        EndOfTurn(rawValue: UserDefaults.standard.double(forKey: endOfTurnKey)) ?? .normal
+    }
 }
 
 /// Which engine a job goes to.

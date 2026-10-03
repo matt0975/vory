@@ -282,9 +282,11 @@ final class LiveActivityController: TurnActivityReporting {
                                               connectionID: chat.runtime.connection.id.uuidString, profile: chat.profileName,
                                               model: shortModel, tintHex: BotColors.hex(for: chat.profileName), botName: botName,
                                               avatar: BotAvatarStore.choice(for: chat.profileName).raw)
-        let state = HermesTurnAttributes.ContentState(phase: "thinking", detail: "Thinking…", outputTokens: chat.usage?.output ?? 0,
-                                                       contextPercent: chat.usage?.contextPercent, needsAttention: false, startedAt: startedAt,
-                                                       contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
+        let idleVoice = voiceLine != nil && !chat.isRunning
+        var state = HermesTurnAttributes.ContentState(phase: idleVoice ? "voice" : "thinking", detail: idleVoice ? (voiceLine ?? "") : "Thinking…",
+                                                       outputTokens: chat.usage?.output ?? 0, contextPercent: chat.usage?.contextPercent, needsAttention: false,
+                                                       startedAt: startedAt, contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
+        state.voiceMode = voiceLine
         do {
             let a = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: Date().addingTimeInterval(3600)), pushType: .token)
             let h = ActivityHandle(a)
@@ -312,11 +314,14 @@ final class LiveActivityController: TurnActivityReporting {
             : (detail ?? chat.statusLine ?? "").hasPrefix("Running") || (chat.statusLine ?? "").hasPrefix("Preparing") ? "tool"
             : (chat.statusLine ?? "Thinking…").hasPrefix("Thinking") || (chat.statusLine ?? "").hasPrefix("Sending") || (chat.statusLine ?? "").hasPrefix("Queued") ? "thinking"
             : "streaming"
-        var state = HermesTurnAttributes.ContentState(phase: phase, detail: text, outputTokens: chat.usage?.output ?? 0,
-                                                       contextPercent: chat.usage?.contextPercent, needsAttention: attention, startedAt: startedAt,
-                                                       contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
+        // Voice mode between turns: the card is the conversation's, not a turn's.
+        let idleVoice = voiceLine != nil && !chat.isRunning && !attention
+        var state = HermesTurnAttributes.ContentState(phase: idleVoice ? "voice" : phase, detail: idleVoice ? (voiceLine ?? text) : text,
+                                                       outputTokens: chat.usage?.output ?? 0, contextPercent: chat.usage?.contextPercent, needsAttention: attention,
+                                                       startedAt: startedAt, contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
         state.attentionKind = attention ? (inputKind ? "input" : "approval") : nil
-        state.goal = ChatGoals.shared.goal(for: chat.storedID)
+        state.goal = idleVoice ? nil : ChatGoals.shared.goal(for: chat.storedID)
+        state.voiceMode = voiceLine
         // Away from the app the alert (the Island expanding, the buzz) comes from the
         // companion's push when one is installed; only without it does the app raise its own.
         if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
@@ -330,8 +335,30 @@ final class LiveActivityController: TurnActivityReporting {
         handle.update(state)
     }
 
+    /// Voice mode's state line, while it is on for this chat.
+    private var voiceLine: String?
+
+    func voiceMode(for chat: ChatSession, line: String?) {
+        let was = voiceLine
+        voiceLine = line
+        if line != nil {
+            if handle == nil { start(for: chat) } else { update(for: chat, attention: !chat.cards.isEmpty) }
+            if was == nil { Self.note("voice mode on for “\(chat.title.prefix(24))”") }
+        } else if was != nil {
+            Self.note("voice mode off")
+            // The turn's own end closes the card; with no turn running it goes now.
+            if chat.isRunning { update(for: chat, attention: !chat.cards.isEmpty) } else if handle != nil { end(for: chat, phase: "done") }
+        }
+    }
+
     func end(for chat: ChatSession, phase: String) {
         BotAmbient.shared.turnFinished(profile: chat.profileName)
+        // Voice mode keeps the card up between turns: it shows the conversation's state instead.
+        if voiceLine != nil, handle != nil {
+            update(for: chat, attention: false)
+            Self.note("turn \(phase); voice mode keeps the card")
+            return
+        }
         tokenTask?.cancel()
         tokenTask = nil
         stateTask?.cancel()

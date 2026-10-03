@@ -98,6 +98,8 @@ public final class SpeakStreamClient {
     private var reader: Task<Void, Never>?
     private static let session = HermesAPI.makeSession()
     public private(set) var isOpen = false
+    /// Ended by `stop()` rather than by the server: no audio then is not the gateway's failing.
+    public private(set) var wasStopped = false
 
     public init() {
         var c: AsyncStream<SpeakStreamFrame>.Continuation?
@@ -149,6 +151,7 @@ public final class SpeakStreamClient {
 
     /// Barge-in: stop synthesizing now.
     public func stop() {
+        wasStopped = true
         socket?.send(.string(SpeakStreamFrame.clientStop)) { _ in }
         finishStream()
     }
