@@ -123,6 +123,16 @@ struct ConversationView: View {
                     .help(macSubtitle(chat))
                     .accessibilityIdentifier("chat.bot")
                 }
+                // The whole conversation by voice, in its own small window.
+                ToolbarItem(placement: .primaryAction) {
+                    let on = HandsFreeSession.shared.isActive(for: chat)
+                    Button { if on { HandsFreeSession.shared.end() } else { HandsFreeSession.shared.start(chat: chat) } } label: {
+                        Label(on ? "End Voice Mode" : "Voice Mode", systemImage: on ? "waveform.badge.mic" : "mic")
+                    }
+                    .tint(on ? .accentColor : nil)
+                    .help(on ? "End Voice Mode (⇧⌘V)" : "Voice Mode (⇧⌘V)")
+                    .accessibilityIdentifier("chat.voice")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
@@ -496,9 +506,7 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
-        #if os(iOS)
         Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
-        #endif
         ChatProjectMenu(chat: chat)
         Divider()
         Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }

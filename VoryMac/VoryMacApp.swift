@@ -23,6 +23,17 @@ struct VoryMacApp: App {
 
     @State private var boardCommands = BoardCommands.shared
     @State private var voice = VoiceCoordinator.shared
+    @State private var voiceSession = HandsFreeSession.shared
+
+    /// Voice mode on the open chat; with none open, a new chat with the default bot, and the
+    /// loop starts on it as soon as it is in front.
+    private func toggleVoiceMode() {
+        if voiceSession.isActive { voiceSession.end(); return }
+        if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
+        VoiceWindowBridge.shared.pendingStart = true
+        model.selectedTab = .chats
+        model.newChatRequest = UUID()
+    }
     /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
     private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
     /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
@@ -68,6 +79,12 @@ struct VoryMacApp: App {
         }
         .defaultSize(width: 980, height: 700)
         .commands {
+            // Voice mode: the open chat by voice, in the floating window; ⇧⌘V again ends it.
+            CommandGroup(after: .toolbar) {
+                Button(voiceSession.isActive ? "End Voice Mode" : "Voice Mode") { toggleVoiceMode() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .disabled(model.runtime == nil)
+            }
             // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { model.selectedTab = .settings }.keyboardShortcut(",", modifiers: .command)
@@ -143,12 +160,28 @@ struct VoryMacApp: App {
         MenuBarExtra {
             TurnMenu().environment(model)
         } label: {
-            Image(systemName: board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
+            // A waveform while a voice session is live, else the turns and approvals.
+            Image(systemName: voiceSession.isActive ? "waveform.badge.mic" : board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
         }
         .menuBarExtraStyle(.window)
+
+        // Voice mode's window: small, above the others, opened by the main window when a
+        // session starts and closed when it ends.
+        Window("Voice Mode", id: MacWindow.voice) {
+            MacVoiceHUD()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .windowLevel(.floating)
+        .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultSize(width: MacVoiceHUD.size.width, height: MacVoiceHUD.size.height)
     }
 }
 
 enum MacWindow {
     static let main = "main"
+    static let voice = "voice"
 }

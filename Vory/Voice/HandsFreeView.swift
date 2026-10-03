@@ -1,7 +1,7 @@
-#if os(iOS)
 import SwiftUI
 import VoryCore
 
+#if os(iOS)
 /// The hands-free screen: the bot large, what it is doing under it, the last words heard or
 /// said, the approval card when one waits, and Mute / Pause / End along the bottom. A swipe
 /// of the chevron puts it away while the loop goes on.
@@ -167,6 +167,8 @@ struct HandsFreeView: View {
     }
 }
 
+#endif
+
 /// The listener's loudness as bars, newest at the right.
 struct HandsFreeWaveform: View {
     var levels: [Float]
@@ -192,6 +194,7 @@ struct HandsFreeWaveform: View {
     }
 }
 
+#if os(iOS)
 /// The pill in a chat while voice mode runs out of sight: tap to bring the screen back.
 struct HandsFreePill: View {
     @Bindable var chat: ChatSession

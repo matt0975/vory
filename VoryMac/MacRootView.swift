@@ -11,6 +11,8 @@ struct MacRootView: View {
     @State private var showCompanionPrompt = false
     @State private var showInstaller = false
     @State private var companionFound: String?
+    @State private var voiceSession = HandsFreeSession.shared
+    @Environment(\.openWindow) private var openWindow
     /// DEBUG: `-vory-show-welcome` shows the first screen over a configured app.
     static let forceWelcome: Bool = {
         #if DEBUG
@@ -43,6 +45,15 @@ struct MacRootView: View {
         .onChange(of: model.runtime?.connection.id, initial: true) { _, _ in offerCompanion() }
         // "Read replies aloud": a reply that finishes in the chat on screen is spoken.
         .task { VoiceCoordinator.shared.observeReplies() }
+        // Voice mode's window opens when a session starts, wherever it was started from.
+        .onChange(of: voiceSession.isActive) { _, on in if on { openWindow(id: MacWindow.voice) } }
+        // Voice mode asked for with no chat open: it starts on the chat that was made for it.
+        .onChange(of: model.visibleChat?.storedID) { _, _ in
+            if VoiceWindowBridge.shared.pendingStart, let chat = model.visibleChat {
+                VoiceWindowBridge.shared.pendingStart = false
+                voiceSession.start(chat: chat)
+            }
+        }
         #if DEBUG
         .task { if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] } }
         #endif

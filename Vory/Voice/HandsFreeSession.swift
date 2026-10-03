@@ -1,11 +1,10 @@
-#if os(iOS)
 import AVFAudio
 import Foundation
 import SwiftUI
 import VoryCore
 
-/// Hands-free on the phone: one conversation at a time, run by the loop's rules
-/// (`HandsFreeState`) with the phone's ears and voice. The listener hears the person and
+/// Hands-free: one conversation at a time, run by the loop's rules
+/// (`HandsFreeState`) with the device's ears and voice (the phone's full screen, the Mac's floating window). The listener hears the person and
 /// records each turn, the engine turns it into words and the reply into audio, the player
 /// plays through the same engine the microphone is on (so the bot's voice is cancelled out of
 /// what it hears), and the chat itself carries the messages: everything said lands in the
@@ -134,7 +133,9 @@ final class HandsFreeSession {
             return
         }
         guard state.phase == .listening else { listener.cancelCapture(); return }
+        #if os(iOS)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
         run(state.handle(.speechStarted))
     }
 
@@ -211,6 +212,7 @@ final class HandsFreeSession {
                 self.run(self.state.handle(.replyCompleted(text)))
             }
         })
+        #if os(iOS)
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] n in
             guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             let options = (n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
@@ -225,6 +227,7 @@ final class HandsFreeSession {
                 }
             }
         })
+        #endif
     }
 
     // MARK: Effects
@@ -288,7 +291,9 @@ final class HandsFreeSession {
             let words = listener.takeWords()
             guard let url = pendingRecording else { run(state.handle(.transcript(words))); return }
             pendingRecording = nil
+            #if os(iOS)
             UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            #endif
             if !words.isEmpty, engine?.route(for: .transcribe) == .device {
                 // Apple's transcriber already heard it: no second pass over the recording.
                 try? FileManager.default.removeItem(at: url)
@@ -432,4 +437,3 @@ final class HandsFreeSession {
         }
     }
 }
-#endif
