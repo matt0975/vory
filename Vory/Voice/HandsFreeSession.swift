@@ -228,7 +228,9 @@ final class HandsFreeSession {
         guard isLive else { return }
         UtteranceListener.log.notice("live ended: \(reason, privacy: .public); continuing in Standard")
         closeLive()
-        state.note = "Live ended: \(reason). Continuing in Standard."
+        // Google's prose becomes one sentence (a free-tier limit, a refused key, no network).
+        let plain = GeminiLive.Trouble.plain(reason, what: "live sessions")
+        state.note = "Live ended: \(plain.headline) Continuing in Standard."
         player.endHandsFree()
         do { try player.beginHandsFree(tap: !Self.fakeInput, onInput: listener.ingest) } catch { lastError = error.localizedDescription; end(); return }
         listener.endOfTurnPause = VoiceSettings.endOfTurn.rawValue

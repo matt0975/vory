@@ -73,6 +73,39 @@ import Testing
     }
 }
 
+/// The end of a sound, and what Google's errors become.
+@Suite struct VoicePlaybackTests {
+    @Test func aChunkKnowsItsFramesAndFadesToSilenceAtTheEnd() {
+        // 24,000 bytes of int16 mono are 12,000 frames; the player's buffer must agree.
+        var samples = [Int16](repeating: 10_000, count: 12_000)
+        samples[0] = -20_000
+        let chunk = samples.withUnsafeBytes { AudioChunk(sampleRate: 24000, channels: 1, isFloat32: false, data: Data($0)) }
+        #expect(chunk.frameCount == 12_000 && chunk.pcmBuffer()?.frameLength == 12_000)
+        let faded = chunk.fadedOut(seconds: 0.02)   // 480 frames
+        #expect(faded.frameCount == 12_000 && faded.data.count == chunk.data.count)
+        let out = faded.data.withUnsafeBytes { Array($0.bindMemory(to: Int16.self)) }
+        #expect(out[0] == -20_000 && out[11_000] == 10_000)
+        #expect(out[11_999] == 0 || abs(Int(out[11_999])) <= 21)
+        #expect(out[11_520] == 10_000 && out[11_760] < 10_000 && out[11_760] > 0)
+        // Floats, stereo, the same ramp; a chunk shorter than the fade is left alone.
+        let floats: [Float] = [1, 1, 1, 1, 1, 1, 1, 1]
+        let f = floats.withUnsafeBytes { AudioChunk(sampleRate: 1000, channels: 2, isFloat32: true, data: Data($0)) }
+        let ff = f.fadedOut(seconds: 0.004).data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        #expect(ff[0] == 1 && ff[6] == 0.25 && ff[7] == 0.25)
+        #expect(f.fadedOut(seconds: 0.001).data == f.data)
+    }
+
+    @Test func googlesErrorsBecomeOneSentenceWithTheRetryTime() {
+        let quota = GeminiLive.Trouble.plain("You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 3, model: gemini-3.8-flash-tts. Please retry in 4.08s.")
+        #expect(quota.headline == "Google's free tier allows only a few voice previews a minute. Try again in 5 seconds." && quota.retryAfter == 5)
+        #expect(GeminiLive.Trouble.plain("API key not valid. Please pass a valid API key.").headline == "Google did not accept this key.")
+        #expect(GeminiLive.Trouble.plain("The Internet connection appears to be offline.").headline == "Google could not be reached. Check the connection.")
+        #expect(GeminiLive.Trouble.plain("something else", what: "live sessions").headline == "Google answered with an error.")
+        #expect(GeminiLive.Trouble.plain("RESOURCE_EXHAUSTED", what: "live sessions").headline == "Google's free tier allows only a few live sessions a minute. Try again in a minute.")
+        #expect(quota.raw.hasPrefix("You exceeded"))
+    }
+}
+
 /// The speak-stream socket's frames, both ways.
 @Suite struct SpeakStreamTests {
     @Test func serverFramesParse() {

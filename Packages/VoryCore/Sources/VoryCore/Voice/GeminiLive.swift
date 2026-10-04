@@ -43,6 +43,38 @@ public enum GeminiLive {
         text.replacing(/key=[^&\s"']+/) { _ in "key=…" }
     }
 
+    // MARK: What Google's errors mean
+
+    /// Google answers with a paragraph of API prose; the person gets one plain sentence, with
+    /// the retry time when there is one, and the prose behind Details.
+    public enum Trouble {
+        public struct Plain: Equatable, Sendable {
+            public var headline: String
+            /// Seconds to wait, rounded up, when Google said so.
+            public var retryAfter: Int?
+            public var raw: String
+        }
+
+        public static func plain(_ raw: String, what: String = "voice previews") -> Plain {
+            let lower = raw.lowercased()
+            let retry = raw.firstMatch(of: /retry in (\d+(?:\.\d+)?)\s*s/.ignoresCase()).flatMap { Double($0.1) }.map { Int($0.rounded(.up)) }
+            if lower.contains("quota") || lower.contains("resource_exhausted") || lower.contains("429") || lower.contains("rate limit") {
+                let wait = retry.map { " Try again in \($0) second\($0 == 1 ? "" : "s")." } ?? " Try again in a minute."
+                return Plain(headline: "Google's free tier allows only a few \(what) a minute.\(wait)", retryAfter: retry, raw: raw)
+            }
+            if lower.contains("api key not valid") || lower.contains("api_key_invalid") || lower.contains("permission_denied") || lower.contains("401") || lower.contains("403") || lower.contains("unauthenticated") {
+                return Plain(headline: "Google did not accept this key.", retryAfter: nil, raw: raw)
+            }
+            if lower.contains("offline") || lower.contains("network connection") || lower.contains("timed out") || lower.contains("could not connect") {
+                return Plain(headline: "Google could not be reached. Check the connection.", retryAfter: nil, raw: raw)
+            }
+            if lower.contains("not found") || lower.contains("404") {
+                return Plain(headline: "Google does not offer that model to this key.", retryAfter: nil, raw: raw)
+            }
+            return Plain(headline: "Google answered with an error.", retryAfter: nil, raw: raw)
+        }
+    }
+
     // MARK: The person's key
 
     public enum Key {
@@ -78,6 +110,32 @@ public enum GeminiLive {
             }
         }
         public struct CheckFailure: Error, Equatable, Sendable { public var message: String }
+
+        /// The last four characters of the saved key, for "ends in ••3F7A".
+        public static var suffix: String? { value.map { String($0.suffix(4)) } }
+
+        /// Previews already fetched, on disk: a voice is heard once for free and replayed from
+        /// here, so flicking through the voices does not spend the free tier's few calls.
+        static var previewDirectory: URL {
+            let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+            let d = base.appendingPathComponent("vory-voice-previews", isDirectory: true)
+            try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+            return d
+        }
+        static func previewFile(voice: String, rate: Double) -> URL {
+            previewDirectory.appendingPathComponent("\(voice.lowercased())-\(Int(rate)).pcm")
+        }
+        public static func cachedPreview(voice: String) -> AudioChunk? {
+            for rate in [24000.0, 22050.0, 16000.0, 48000.0] {
+                let url = previewFile(voice: voice, rate: rate)
+                if let data = try? Data(contentsOf: url), !data.isEmpty { return AudioChunk(sampleRate: rate, channels: 1, isFloat32: false, data: data) }
+            }
+            return nil
+        }
+        public static func storePreview(_ chunk: AudioChunk, voice: String) {
+            guard !chunk.isFloat32, chunk.channels == 1 else { return }
+            try? chunk.data.write(to: previewFile(voice: voice, rate: chunk.sampleRate), options: .atomic)
+        }
 
         /// A few words in a voice through the TTS model (one small call), as a chunk to play.
         public static func preview(voice: String, key: String, text: String = "Hi. This is how I sound.", session: URLSession = HermesAPI.makeSession()) async throws -> AudioChunk {

@@ -32,25 +32,38 @@ final class VoicePlayer {
         isPlaying = true
         pending = 0; ended = false
         defer { isPlaying = false; if !handsFree { endSession() } }
+        // One chunk is held back so the last one is known when the stream ends: it goes out
+        // with a short fade, and the output never stops on a mid-wave sample (a loud crackle
+        // at the end of every voice test, as a tester heard).
+        var held: AudioChunk?
         do {
             for try await chunk in chunks {
                 guard isPlaying else { break }
-                guard let buffer = Self.standardBuffer(from: chunk) else { continue }
-                try connect(for: buffer.format)
-                pending += 1
-                node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
-                    Task { @MainActor in self?.played() }
-                }
-                if !node.isPlaying { node.play() }
+                if let h = held { try schedule(h) }
+                held = chunk
             }
         } catch {
             stop()
             throw error
         }
+        if let h = held, isPlaying { try schedule(h.fadedOut(seconds: 0.02)) }
         ended = true
         if pending > 0, isPlaying {
             await withCheckedContinuation { c in finish = c }
         }
+        // The last callback comes as the data reaches the output; a beat before the engine
+        // stops lets the hardware finish it.
+        if isPlaying, !handsFree { try? await Task.sleep(for: .milliseconds(80)) }
+    }
+
+    private func schedule(_ chunk: AudioChunk) throws {
+        guard let buffer = Self.standardBuffer(from: chunk) else { return }
+        try connect(for: buffer.format)
+        pending += 1
+        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
+            Task { @MainActor in self?.played() }
+        }
+        if !node.isPlaying { node.play() }
     }
 
     private func played() {

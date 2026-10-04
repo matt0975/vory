@@ -16,10 +16,17 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.geminiVoiceKey) private var geminiVoice = GeminiLive.defaultVoice
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var personalVoice: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
-    /// The key lives in the Keychain; this is the field's copy.
+    /// The key lives in the Keychain; this is the field's copy while one is being entered.
     @State private var geminiKey = ""
-    @State private var keyStatus: String?
+    @State private var savedKeySuffix: String?
+    @State private var editingKey = false
+    @State private var keyStatus: ActionStatus?
+    @State private var previewStatus: ActionStatus?
     @State private var checkingKey = false
+    @State private var previewing = false
+
+    /// One action's outcome: a sentence, and Google's own words when there were some.
+    struct ActionStatus { var headline: String; var ok: Bool; var raw: String? }
     @State private var gatewayLive: GatewayVoiceAPI.LiveStatus?
     @State private var gatewayLiveError: String?
 
@@ -72,24 +79,55 @@ struct VoiceSettingsView: View {
             }
             if liveProvider == .gemini {
                 Section {
-                    SecureField("Gemini API key", text: $geminiKey)
-                        .textContentType(.password).autocorrectionDisabled()
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .onChange(of: geminiKey) { _, v in GeminiLive.Key.value = v; keyStatus = nil }
-                    HStack {
-                        Button { checkKey() } label: { Label(checkingKey ? "Checking…" : "Check key", systemImage: "checkmark.seal") }
-                            .disabled(geminiKey.trimmingCharacters(in: .whitespaces).isEmpty || checkingKey)
-                        Spacer()
-                        if let keyStatus { Text(keyStatus).font(.caption).foregroundStyle(keyStatus == "OK" ? .green : .orange).multilineTextAlignment(.trailing) }
+                    // A saved key is shown as saved (a tester could not tell one was there), with
+                    // Change and Remove; the field only while one is being entered.
+                    if let suffix = savedKeySuffix, !editingKey {
+                        LabeledContent("Gemini API key") { Text("Saved · ends in ••\(suffix)").foregroundStyle(.secondary) }
+                        HStack {
+                            Button("Change") { geminiKey = ""; editingKey = true }
+                            Spacer()
+                            Button("Remove", role: .destructive) { GeminiLive.Key.value = nil; savedKeySuffix = nil; geminiKey = ""; keyStatus = nil; previewStatus = nil }
+                        }
+                    } else {
+                        SecureField("Gemini API key", text: $geminiKey)
+                            .textContentType(.password).autocorrectionDisabled()
+                            #if os(iOS)
+                            .textInputAutocapitalization(.never)
+                            #endif
+                            .onSubmit { saveKey() }
+                        HStack {
+                            Button("Save key") { saveKey() }.disabled(geminiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                            Spacer()
+                            if savedKeySuffix != nil { Button("Cancel") { editingKey = false; geminiKey = "" } }
+                        }
+                    }
+                    // Each action shows its own result: the key check's next to Check key, the
+                    // preview's next to Preview, Google's prose behind Details.
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Button { checkKey() } label: { Label(checkingKey ? "Checking…" : "Check key", systemImage: "checkmark.seal") }
+                                .disabled(savedKeySuffix == nil || checkingKey)
+                            Spacer()
+                            if let keyStatus { Text(keyStatus.headline).font(.caption).foregroundStyle(keyStatus.ok ? Color.green : Color.orange).multilineTextAlignment(.trailing) }
+                        }
+                        if let raw = keyStatus?.raw { ActionDetails(raw: raw) }
                     }
                     Link(destination: GeminiLive.Key.getURL) { Label("Get a key at Google AI Studio", systemImage: "arrow.up.right.square") }
                     Picker("Voice", selection: $geminiVoice) {
                         ForEach(GeminiLive.voices, id: \.name) { v in Text("\(v.name) · \(v.character)").tag(v.name) }
                     }
-                    Button { previewVoice() } label: { Label(VoiceCoordinator.shared.isSpeaking ? "Stop" : "Preview the voice", systemImage: VoiceCoordinator.shared.isSpeaking ? "stop.circle" : "play.circle") }
-                        .disabled(geminiKey.trimmingCharacters(in: .whitespaces).isEmpty)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Button { previewVoice() } label: {
+                                Label(VoiceCoordinator.shared.isSpeaking ? "Stop" : previewing ? "Fetching…" : "Preview the voice",
+                                      systemImage: VoiceCoordinator.shared.isSpeaking ? "stop.circle" : "play.circle")
+                            }
+                            .disabled(savedKeySuffix == nil || previewing)
+                            Spacer()
+                            if let previewStatus { Text(previewStatus.headline).font(.caption).foregroundStyle(previewStatus.ok ? Color.secondary : Color.orange).multilineTextAlignment(.trailing) }
+                        }
+                        if let raw = previewStatus?.raw { ActionDetails(raw: raw) }
+                    }
                 } header: { Text("Gemini") } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Your key stays in your Keychain (and your iCloud Keychain, so your other devices have it). It is sent to Google only, never to the gateway or anyone else.")
@@ -137,31 +175,61 @@ struct VoiceSettingsView: View {
         .task {
             voices = DeviceSpeaker.voices()
             personalVoice = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
-            geminiKey = GeminiLive.Key.value ?? ""
+            savedKeySuffix = GeminiLive.Key.suffix
             await loadGatewayLive()
         }
     }
 
-    private func checkKey() {
-        let key = geminiKey.trimmingCharacters(in: .whitespaces)
+    private func saveKey() {
+        let key = geminiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
+        GeminiLive.Key.value = key
+        savedKeySuffix = GeminiLive.Key.suffix
+        geminiKey = ""
+        editingKey = false
+        keyStatus = nil
+        previewStatus = nil
+    }
+
+    private func checkKey() {
+        guard let key = GeminiLive.Key.value else { return }
         checkingKey = true
+        keyStatus = nil
         Task {
             switch await GeminiLive.Key.check(key) {
-            case .success: keyStatus = "OK"
-            case .failure(let f): keyStatus = f.message
+            case .success: keyStatus = ActionStatus(headline: "Key works", ok: true, raw: nil)
+            case .failure(let f):
+                let plain = GeminiLive.Trouble.plain(f.message, what: "key checks")
+                keyStatus = ActionStatus(headline: plain.headline, ok: false, raw: plain.raw)
             }
             checkingKey = false
         }
     }
 
+    /// A voice is fetched once and replayed from the device after that, so flicking through
+    /// the voices does not spend the free tier's few calls a minute.
     private func previewVoice() {
         if VoiceCoordinator.shared.isSpeaking { VoiceCoordinator.shared.stop(); return }
-        let key = geminiKey.trimmingCharacters(in: .whitespaces)
-        guard !key.isEmpty else { return }
+        let voice = geminiVoice
+        if let cached = GeminiLive.Key.cachedPreview(voice: voice) {
+            previewStatus = ActionStatus(headline: "\(voice), from the device", ok: true, raw: nil)
+            VoiceCoordinator.shared.play(cached)
+            return
+        }
+        guard let key = GeminiLive.Key.value, !previewing else { return }
+        previewing = true
+        previewStatus = nil
         Task {
-            do { VoiceCoordinator.shared.play(try await GeminiLive.Key.preview(voice: geminiVoice, key: key)) }
-            catch { keyStatus = error.localizedDescription }
+            do {
+                let chunk = try await GeminiLive.Key.preview(voice: voice, key: key)
+                GeminiLive.Key.storePreview(chunk, voice: voice)
+                previewStatus = ActionStatus(headline: "\(voice), fetched once; replays are free", ok: true, raw: nil)
+                VoiceCoordinator.shared.play(chunk)
+            } catch {
+                let plain = GeminiLive.Trouble.plain(error.localizedDescription)
+                previewStatus = ActionStatus(headline: plain.headline, ok: false, raw: plain.raw)
+            }
+            previewing = false
         }
     }
 
@@ -169,6 +237,19 @@ struct VoiceSettingsView: View {
         guard let rt = model.runtime else { return }
         do { gatewayLive = try await GatewayVoiceAPI(api: rt.api, profile: rt.selectedProfile).liveStatus() }
         catch { gatewayLiveError = "The gateway did not answer about live voice: \(error.localizedDescription)" }
+    }
+
+    /// Google's own words, folded away under the plain sentence.
+    private struct ActionDetails: View {
+        var raw: String
+        @State private var open = false
+        var body: some View {
+            DisclosureGroup("Details", isExpanded: $open) {
+                Text(raw).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
+        }
     }
 
     static func name(of v: AVSpeechSynthesisVoice) -> String {

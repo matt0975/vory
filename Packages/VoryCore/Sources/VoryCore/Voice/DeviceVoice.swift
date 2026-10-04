@@ -24,6 +24,33 @@ public struct AudioChunk: Sendable {
     public var frameCount: Int { data.count / (isFloat32 ? 4 : 2) / max(1, channels) }
     public var seconds: Double { Double(frameCount) / sampleRate }
 
+    /// The same audio with its last `seconds` ramped down to silence, so playback that ends
+    /// on it ends without a click.
+    public func fadedOut(seconds: Double) -> AudioChunk {
+        let frames = frameCount
+        let n = min(frames, Int(seconds * sampleRate))
+        guard n > 1 else { return self }
+        var out = data
+        let channels = max(1, self.channels)
+        let start = frames - n
+        out.withUnsafeMutableBytes { raw in
+            if isFloat32 {
+                let s = raw.bindMemory(to: Float.self)
+                for f in start..<frames {
+                    let gain = Float(frames - f) / Float(n)
+                    for c in 0..<channels { s[f * channels + c] *= gain }
+                }
+            } else {
+                let s = raw.bindMemory(to: Int16.self)
+                for f in start..<frames {
+                    let gain = Double(frames - f) / Double(n)
+                    for c in 0..<channels { s[f * channels + c] = Int16((Double(s[f * channels + c]) * gain).rounded()) }
+                }
+            }
+        }
+        return AudioChunk(sampleRate: sampleRate, channels: channels, isFloat32: isFloat32, data: out)
+    }
+
     /// The chunk as a buffer in its own format, for a player node or a converter.
     public func pcmBuffer() -> AVAudioPCMBuffer? {
         guard let format = AVAudioFormat(commonFormat: isFloat32 ? .pcmFormatFloat32 : .pcmFormatInt16, sampleRate: sampleRate,
