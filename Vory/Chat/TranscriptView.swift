@@ -77,6 +77,8 @@ struct TranscriptView: View {
     /// Reasoning disclosures that are open, keyed by item id — kept here so a re-rendered row
     /// does not forget it (the earlier "can't collapse again" bug).
     @State private var openReasoning: Set<String> = []
+    /// The rows' actions, one object for the view's life (see `RowContext`).
+    @State private var actions = RowActions()
     @State private var selectText: String?
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
@@ -115,7 +117,7 @@ struct TranscriptView: View {
             }
         }
     }
-    private static func isStreaming(_ item: TranscriptItem) -> Bool {
+    static func isStreaming(_ item: TranscriptItem) -> Bool {
         if case .assistant(_, _, let streaming) = item.kind { return streaming }
         return false
     }
@@ -346,65 +348,44 @@ extension TranscriptView {
     /// every row at once, and the layer tree that made could exhaust memory in the render
     /// commit (abort in CA::Render::Encoder::grow, three crash reports on 1.1 (6)).
     @ViewBuilder private var threadRows: some View {
-        #if os(macOS)
-        ForEach(rows) { row in rowView(row) }
-        #else
-        // On the phone only the older rows are lazy. A lazy stack gives a row it has not drawn
-        // the average height of the ones it has, and a row added under a pinned thread starts
-        // out undrawn: after one long reply the thread claimed hundreds of points it did not
-        // have, the scroll to the end went there, and the thread showed its top or nothing
-        // for a moment (any new message, most plainly one sent from another device).
+        // Only the older rows are lazy. A lazy stack gives a row it has not drawn the average
+        // height of the ones it has, and a row added under a pinned thread starts out undrawn:
+        // after one long reply the thread claimed hundreds of points it did not have, the
+        // scroll to the end went there, and the thread showed its top or nothing for a moment
+        // (any new message, most plainly one sent from another device). On the Mac, where
+        // the whole thread was one lazy stack, a long history never settled at all: each scroll
+        // to the end re-laid out the stack, which moved the end, which scrolled again, and
+        // the app sat at full CPU until it was force-quit (a tester's "beachball on send").
         // Rows the lazy stack takes over start out undrawn too, so their height changes as
         // they cross: that happens between messages (`settleTail`), not as one arrives.
         let all = rows
         let split = TranscriptRowModel.split(count: all.count, tailFrom: tailFrom)
+        let ctx = rowContext
         if split > 0 {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(all[..<split])) { row in rowView(row) }
-            }
+            // The older rows in a view of their own, equal when nothing they draw with has
+            // changed: a token landing in the reply at the end used to re-evaluate every row
+            // the lazy stack had drawn, which with a long history was most of a core for the
+            // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
+            OlderRows(rows: Array(all[..<split]), context: ctx).equatable()
         }
-        ForEach(Array(all[split...])) { row in rowView(row) }
-        #endif
+        ForEach(Array(all[split...])) { row in ctx.rowView(row) }
     }
 
-    /// One row of the thread: the time separator before it when there is one, and the message
-    /// with the time waiting past its right edge. Its own function: inside the thread's body
-    /// this call tipped the type checker over its limit.
-    @ViewBuilder private func rowView(_ row: TranscriptRowModel) -> some View {
-                if let sep = row.separator {
-                    Text(sep).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
-                }
-                TranscriptRow(item: row.item, profile: showBots ? chat.profileName : nil, botShown: row.lastOfRun,
-                              typingTool: typingTool,
-                              showReasoning: showReasoning && (!currentStepOnly || Self.isStreaming(row.item)), showStats: showTurnStats, onEdit: onEditMessage, onOpenBot: onOpenBot, onReply: onReply, onChooseModel: { showModelSheet = true },
-                              interruptCause: row.item.id == chat.items.last?.id ? chat.interruptCause : nil, onKeepRunning: { showAwayGrace = true },
-                              reasoningOpen: Binding(get: { openReasoning.contains(row.item.id) },
-                                                     set: { if $0 { openReasoning.insert(row.item.id) } else { openReasoning.remove(row.item.id) } }),
-                              onSelectText: { selectText = $0 },
-                              toolOpen: Binding(get: { openTools.contains(row.item.id) },
-                                                set: { if $0 { openTools.insert(row.item.id) } else { openTools.remove(row.item.id) } }),
-                              showToolOutput: showToolOutput, compactTools: compactTools, wide: wideReplies, maxBubble: bubbleCap)
-                    // Equatable on what it draws (the closures and the binding are
-                    // compared by value): a row whose message did not change is not
-                    // rebuilt when the thread re-evaluates for a scroll or a token.
-                    .equatable()
-                    .id(row.item.id)
-                    .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
-                    #if os(macOS)
-                    // The Mac has no slide for times: hovering a message says when it arrived.
-                    .help(row.item.timestamp.formatted(date: .abbreviated, time: .shortened))
-                    #else
-                    // The time waits just past the right edge; the column slides left to show it.
-                    .overlay(alignment: .trailing) {
-                        Text(row.item.timestamp, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                            // Its leading edge sits 20 pt past the row (beyond the screen's
-                            // 16 pt margin), so nothing of it shows until the column slides.
-                            .fixedSize().alignmentGuide(.trailing) { d in d[.leading] - 20 }
-                            .accessibilityHidden(true)
-                    }
-                    #endif
-            
+    /// Everything the rows are drawn with, apart from the rows themselves. The actions live in
+    /// one object kept for the view's life, so their closures do not make the context unequal.
+    private var rowContext: RowContext {
+        actions.onEdit = onEditMessage
+        actions.onOpenBot = onOpenBot
+        actions.onReply = onReply
+        actions.onChooseModel = { showModelSheet = true }
+        actions.onKeepRunning = { showAwayGrace = true }
+        actions.onSelectText = { selectText = $0 }
+        actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
+        actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
+        return RowContext(profile: showBots ? chat.profileName : nil, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
+                          showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
+                          openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
+                          wide: wideReplies, maxBubble: bubbleCap, actions: actions)
     }
 
     /// A tool card or reasoning block opened: keeps its top where the finger found it while it
@@ -458,13 +439,9 @@ extension TranscriptView {
     /// A row came or went under a locked thread: the thread eases to its end with it.
     private func followRows(from old: Int, to new: Int) {
         guard metrics.stickToBottom, !metrics.userScrolling else { return }
-        #if os(iOS)
         // Rows crossing into the lazy stack change the height above the screen: the thread
         // lands at its end at once then, with nothing to glide through.
         let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
-        #else
-        let crossed = false
-        #endif
         if settling || crossed { scrollPosition.scrollTo(edge: .bottom) }
         else { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
     }
@@ -474,7 +451,6 @@ extension TranscriptView {
     /// the screen then, and the thread is put back on its end in the same pass, so nothing
     /// shows. Not while the reader is up the thread, where the rows on screen would shift.
     private func settleTail() async {
-        #if os(iOS)
         try? await Task.sleep(for: .milliseconds(400))
         let count = visibleItems.count
         let wanted = TranscriptRowModel.tailStart(count)
@@ -482,7 +458,6 @@ extension TranscriptView {
         let moves = TranscriptRowModel.split(count: count, tailFrom: tailFrom) != wanted
         tailFrom = wanted
         if moves { scrollPosition.scrollTo(edge: .bottom) }
-        #endif
     }
 
     private func scheduleOverscrollFix() {
@@ -532,13 +507,122 @@ extension TranscriptView {
     }
 }
 
-/// What holds the thread: the Mac's whole thread is one lazy stack; the phone's is a plain
-/// stack with the lazy part inside it (see `threadRows`).
-#if os(macOS)
-private typealias ThreadStack<Content: View> = LazyVStack<Content>
-#else
+/// What holds the thread: a plain stack with the lazy part inside it (see `threadRows`), on
+/// both platforms.
 private typealias ThreadStack<Content: View> = VStack<Content>
-#endif
+
+/// The thread's older rows, lazy, in a view that is equal as long as the rows and what they
+/// are drawn with are: a reply streaming at the end then leaves them alone.
+@MainActor
+private struct OlderRows: View, Equatable {
+    var rows: [TranscriptRowModel]
+    var context: RowContext
+
+    static func == (a: OlderRows, b: OlderRows) -> Bool { a.context == b.context && a.rows == b.rows }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 10) {
+            ForEach(rows) { row in context.rowView(row) }
+        }
+    }
+}
+
+/// What a row does when tapped: one object for the thread's life, so the context that carries
+/// it compares equal from one update to the next (closures never do).
+final class RowActions {
+    var onEdit: (String) -> Void = { _ in }
+    var onOpenBot: (String) -> Void = { _ in }
+    var onReply: (String) -> Void = { _ in }
+    var onChooseModel: () -> Void = {}
+    var onKeepRunning: () -> Void = {}
+    var onSelectText: (String) -> Void = { _ in }
+    var setReasoningOpen: (String, Bool) -> Void = { _, _ in }
+    var setToolOpen: (String, Bool) -> Void = { _, _ in }
+}
+
+/// Everything a row is drawn with apart from the row: the settings, what the chat is doing,
+/// which cards are open, and the actions. Equatable, so a thread update that changed none of
+/// it leaves the rows it already drew alone.
+@MainActor
+struct RowContext: Equatable {
+    var profile: String?
+    var typingTool: String?
+    var showReasoning: Bool
+    var currentStepOnly: Bool
+    var showStats: Bool
+    var interruptCause: InterruptedTurn.Cause?
+    var lastID: String?
+    var openReasoning: Set<String>
+    var openTools: Set<String>
+    var showToolOutput: Bool
+    var compactTools: Bool
+    var wide: Bool
+    var maxBubble: CGFloat
+    var actions: RowActions
+
+    static func == (a: RowContext, b: RowContext) -> Bool {
+        a.actions === b.actions && a.profile == b.profile && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
+            && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
+            && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
+            && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
+    }
+
+    /// One row of the thread: the time separator before it when there is one, and the message
+    /// with the time waiting past its right edge.
+    @ViewBuilder func rowView(_ row: TranscriptRowModel) -> some View {
+        if let sep = row.separator {
+            Text(sep).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity).padding(.vertical, 6)
+        }
+        let id = row.item.id
+        let actions = actions
+        TranscriptRow(item: row.item, profile: profile, botShown: row.lastOfRun,
+                      typingTool: typingTool,
+                      showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
+                      onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
+                      interruptCause: id == lastID ? interruptCause : nil, onKeepRunning: actions.onKeepRunning,
+                      reasoningOpen: Binding(get: { [open = openReasoning.contains(id)] in open }, set: { actions.setReasoningOpen(id, $0) }),
+                      onSelectText: actions.onSelectText,
+                      toolOpen: Binding(get: { [open = openTools.contains(id)] in open }, set: { actions.setToolOpen(id, $0) }),
+                      showToolOutput: showToolOutput, compactTools: compactTools, wide: wide, maxBubble: maxBubble)
+            // Equatable on what it draws (the closures and the binding are
+            // compared by value): a row whose message did not change is not
+            // rebuilt when the thread re-evaluates for a scroll or a token.
+            .equatable()
+            .id(id)
+            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+            #if os(macOS)
+            // The Mac has no slide for times: hovering a message says when it arrived. The
+            // words are made once per minute of the day, not once per row per token.
+            .help(TimeLabels.hover(row.item.timestamp))
+            #else
+            // The time waits just past the right edge; the column slides left to show it.
+            .overlay(alignment: .trailing) {
+                Text(row.item.timestamp, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    // Its leading edge sits 20 pt past the row (beyond the screen's
+                    // 16 pt margin), so nothing of it shows until the column slides.
+                    .fixedSize().alignmentGuide(.trailing) { d in d[.leading] - 20 }
+                    .accessibilityHidden(true)
+            }
+            #endif
+    }
+}
+
+/// Formatted times, kept: formatting goes through ICU and a thread re-evaluates rows often.
+@MainActor
+enum TimeLabels {
+    private static var hover: [Int: String] = [:]
+
+    /// "Oct 3, 2026 at 5:34 PM", once per minute of the day.
+    static func hover(_ date: Date) -> String {
+        let key = Int(date.timeIntervalSinceReferenceDate / 60)
+        if let s = hover[key] { return s }
+        if hover.count > 4096 { hover.removeAll(keepingCapacity: true) }
+        let s = date.formatted(date: .abbreviated, time: .shortened)
+        hover[key] = s
+        return s
+    }
+}
 
 #if os(macOS)
 /// No UIKit scroll view to find here: scrolling by a measured distance falls back to the
@@ -729,7 +813,7 @@ enum ChatStyle {
 
 /// A transcript item plus the "Tue, Sep 22 at 6:30 PM" separator that precedes it when the
 /// conversation paused for a while, the way Messages breaks up a thread.
-struct TranscriptRowModel: Identifiable {
+struct TranscriptRowModel: Identifiable, Equatable {
     var item: TranscriptItem
     var separator: String?
     /// The last reply before something that is not a reply (the bot sits beside this one).
