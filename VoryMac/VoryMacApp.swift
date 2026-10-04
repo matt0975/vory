@@ -77,12 +77,6 @@ struct VoryMacApp: App {
         }
         .defaultSize(width: 980, height: 700)
         .commands {
-            // Voice mode: the open chat by voice, in the floating window; ⇧⌘V again ends it.
-            CommandGroup(after: .toolbar) {
-                Button(voiceSession.isActive ? "End Voice Mode" : "Voice Mode") { toggleVoiceMode() }
-                    .keyboardShortcut("v", modifiers: [.command, .shift])
-                    .disabled(model.runtime == nil)
-            }
             // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { model.selectedTab = .settings }.keyboardShortcut(",", modifiers: .command)
@@ -128,6 +122,10 @@ struct VoryMacApp: App {
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
                 .disabled(!voice.isSpeaking && lastReply == nil)
+                // Voice mode: the open chat by voice, in the floating window; ⇧⌘V again ends it.
+                Button(voiceSession.isActive ? "End Voice Mode" : "Voice Mode") { toggleVoiceMode() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .disabled(model.runtime == nil)
             }
             // The Board page's commands; they do nothing unless it is in front.
             CommandMenu("Board") {

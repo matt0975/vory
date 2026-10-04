@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import VoryCore
 
@@ -16,7 +17,6 @@ struct MacBoardView: View {
     @State private var answer = ""
     @State private var notice: String?
     @State private var targeted: KanbanStatus?
-    @FocusState private var boardFocused: Bool
 
     /// The gateway's board, else one handed in (previews and tests draw a board without a gateway).
     private let ownStore: KanbanStore?
@@ -101,18 +101,28 @@ struct MacBoardView: View {
                 .allowsHitTesting(true)
             }
         }
-        // The board takes the keys once a card is clicked: arrows move the choice, Return
-        // opens the card, Delete asks to delete it.
-        .focusable()
-        .focused($boardFocused)
-        .focusEffectDisabled()
-        .onKeyPress(.leftArrow) { step(columns: -1) }
-        .onKeyPress(.rightArrow) { step(columns: 1) }
-        .onKeyPress(.upArrow) { step(rows: -1) }
-        .onKeyPress(.downArrow) { step(rows: 1) }
-        .onKeyPress(.return) { if let id = selectedID { openTaskID = id; return .handled }; return .ignored }
-        .onKeyPress(.delete) { if let t = selectedTask { ask = .delete(t); return .handled }; return .ignored }
-        .onKeyPress(.escape) { if selectedID != nil { selectedID = nil; return .handled }; return .ignored }
+        // The keys while the Board is in front: arrows move the choice, Return opens the card,
+        // Delete asks to delete it, Escape clears the choice. Taken from the window's key
+        // events rather than SwiftUI focus, which the inspector took away from the board each
+        // time it appeared beside it; a text field being typed in keeps its keys.
+        .task(id: active) {
+            guard active else { return }
+            let monitor = BoardKeys { key in handle(key) }
+            defer { monitor.remove() }
+            while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
+        }
+    }
+
+    private func handle(_ key: BoardKeys.Key) -> Bool {
+        switch key {
+        case .left: return step(columns: -1) == .handled
+        case .right: return step(columns: 1) == .handled
+        case .up: return step(rows: -1) == .handled
+        case .down: return step(rows: 1) == .handled
+        case .return: if let id = selectedID { openTaskID = id; return true }; return false
+        case .delete: if let t = selectedTask { ask = .delete(t); return true }; return false
+        case .escape: if selectedID != nil { selectedID = nil; return true }; return false
+        }
     }
 
     private func column(_ s: KanbanStatus, _ store: KanbanStore, _ board: KanbanBoard) -> some View {
@@ -165,7 +175,7 @@ struct MacBoardView: View {
             }
             .contentShape(.rect)
             .onTapGesture(count: 2) { selectedID = task.id; openTaskID = task.id }
-            .onTapGesture { selectedID = task.id; boardFocused = true }
+            .onTapGesture { selectedID = task.id }
             .draggable(task.id) {
                 Text(task.title).font(.subheadline.weight(.medium)).lineLimit(2)
                     .padding(10).frame(width: Self.columnWidth - 16, alignment: .leading)
@@ -325,6 +335,42 @@ struct MacBoardView: View {
             try? await Task.sleep(for: .seconds(60))
             guard !Task.isCancelled else { break }
             await store.refresh()
+        }
+    }
+}
+
+/// The Board's keys, read from the window's key events while the page is in front. Nothing is
+/// taken while a text field or text view is being typed in, and modifier keys are left to the
+/// menus, so ⌘[ and ⌘] still reach the Board menu.
+@MainActor
+final class BoardKeys {
+    enum Key { case left, right, up, down, `return`, delete, escape }
+    private var monitor: Any?
+
+    init(handler: @escaping (Key) -> Bool) {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+                  let key = Self.key(for: event.keyCode),
+                  let window = event.window, window.isKeyWindow,
+                  !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField) else { return event }
+            return MainActor.assumeIsolated { handler(key) } ? nil : event
+        }
+    }
+
+    func remove() {
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+    }
+
+    private static func key(for code: UInt16) -> Key? {
+        switch code {
+        case 123: return .left
+        case 124: return .right
+        case 126: return .up
+        case 125: return .down
+        case 36, 76: return .return
+        case 51, 117: return .delete
+        case 53: return .escape
+        default: return nil
         }
     }
 }
