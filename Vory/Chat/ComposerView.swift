@@ -277,6 +277,11 @@ struct ComposerView: View {
         #endif
         // Why the mic did nothing (no permission, no recognizer): said in the banner, not swallowed.
         .onChange(of: dictation.error) { _, e in if let e { chat.banner = e; dictation.error = nil } }
+        #if os(macOS)
+        // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
+        // the box, ready to type, as the box is after a message goes out (#212).
+        .onAppear { if chat.items.isEmpty { focused = true } }
+        #endif
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
