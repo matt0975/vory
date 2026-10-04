@@ -333,6 +333,10 @@ struct ComposerView: View {
     /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
         Button {
+            // The panel takes the keyboard's place, as the + tray does in Messages: with the
+            // keyboard up it grew over the thread and covered the header (a tester, on the
+            // first build with Voice mode in it).
+            if !showAttach { focused = false }
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
