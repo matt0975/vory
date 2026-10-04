@@ -36,7 +36,8 @@ struct MacVoiceHUD: View {
     }
 
     private func content(_ chat: ChatSession) -> some View {
-        let p = VoiceHUDPresentation.make(state: session.state, spoken: session.spoken, liveText: session.listener.liveText,
+        // `levels` and `liveText` are the session's, whichever engine is on (Standard's listener or Live).
+        let p = VoiceHUDPresentation.make(state: session.state, spoken: session.spoken, liveText: session.liveText,
                                           goal: ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine, error: session.lastError)
         let tint = BotColors.color(for: chat.profileName)
         return ZStack {
@@ -56,8 +57,15 @@ struct MacVoiceHUD: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             Text(p.title).font(.headline).contentTransition(.numericText())
+                            if session.isLive, let label = session.liveLabel {
+                                // A Live conversation (the person's own key, billed per minute): which model.
+                                Text("Live · \(label)").font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.white.opacity(0.14), in: .capsule)
+                                    .help("A Live conversation with \(label), on your own key")
+                            }
                             Spacer(minLength: 0)
-                            Text(chat.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).frame(maxWidth: 130, alignment: .trailing)
+                            Text(chat.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).frame(maxWidth: 120, alignment: .trailing)
                         }
                         if let line = p.line {
                             Text(line).font(.caption).foregroundStyle(p.lineIsWarning ? Color.orange : Color.secondary).lineLimit(2)
@@ -66,7 +74,7 @@ struct MacVoiceHUD: View {
                             .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
                             .animation(.default, value: p.caption)
                         if p.showsWaveform {
-                            HandsFreeWaveform(levels: session.listener.levels, tint: tint).frame(height: 18).transition(.opacity)
+                            HandsFreeWaveform(levels: session.levels, tint: tint).frame(height: 18).transition(.opacity)
                         }
                     }
                 }
