@@ -128,8 +128,6 @@ struct HandsFreeView: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 28)
         .frame(minHeight: 90, alignment: .top)
-        .animation(.default, value: session.spoken)
-        .animation(.default, value: session.liveText)
     }
 
     static func tail(_ s: String, max: Int = 220) -> String {

@@ -108,6 +108,18 @@ final class AppModel {
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.
     var newChatRequest: UUID?
+    /// "Start voice mode" (Siri, a Shortcut, the Action Button): the next new chat starts hands-free.
+    var voiceModeRequested = false
+    func requestVoiceMode() {
+        voiceModeRequested = true
+        composeProfile = nil
+        selectedTab = .chats
+        // Launched for the intent, the chat list may still be mounting: a moment before it is asked.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            newChatRequest = UUID()
+        }
+    }
     /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.
     struct ChatStepRequest { let direction: Int; let id = UUID() }
     var chatStepRequest: ChatStepRequest?

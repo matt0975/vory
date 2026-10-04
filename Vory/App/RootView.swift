@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import VoryCore
 
@@ -61,6 +62,18 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-show-companion-prompt") { showCompanionPrompt = true }
             if ProcessInfo.processInfo.arguments.contains("-vory-show-setup") { showInstaller = true }
             if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] }
+            // The intents' work without Siri: `-vory-start-voice` does what "Start voice mode" does;
+            // `-vory-ask <question>` runs "Ask Vory" and logs the answer (subsystem dev.vory).
+            let args = ProcessInfo.processInfo.arguments
+            if args.contains("-vory-start-voice") { model.requestVoiceMode() }
+            if let i = args.firstIndex(of: "-vory-ask"), i + 1 < args.count {
+                let question = args[i + 1]
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1))
+                    let answer = await SiriAsk.ask(question)
+                    UtteranceListener.log.notice("Ask Vory → \(answer, privacy: .public)")
+                }
+            }
             #endif
         }
         .onChange(of: model.hasConnections) { had, has in
