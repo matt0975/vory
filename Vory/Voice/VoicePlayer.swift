@@ -38,7 +38,7 @@ final class VoicePlayer {
                 guard let buffer = Self.standardBuffer(from: chunk) else { continue }
                 try connect(for: buffer.format)
                 pending += 1
-                node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+                node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
                     Task { @MainActor in self?.played() }
                 }
                 if !node.isPlaying { node.play() }
@@ -129,7 +129,9 @@ final class VoicePlayer {
                 handsFree = false
                 throw HermesAPIError.transport("No microphone input is available.")
             }
-            input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in onInput(buffer, time) }
+            // `@Sendable`: a plain closure made here would be main-actor isolated (and trap on the
+            // audio thread); the tap must run wherever Core Audio calls it.
+            input.installTap(onBus: 0, bufferSize: 2048, format: format) { @Sendable buffer, time in onInput(buffer, time) }
             inputTapInstalled = true
         }
         // The player's path exists before the engine starts (starting with no connections raises).

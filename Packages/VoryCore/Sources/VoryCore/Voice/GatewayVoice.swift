@@ -50,6 +50,19 @@ public struct GatewayVoiceAPI: Sendable {
     public func lease(_ active: Bool, name: String = "vory") async {
         let _: JSONValue? = try? await api.send("POST", "/api/audio/tts-lease", profile: profile, json: .object(["lease": .string(name), "active": .bool(active)]))
     }
+
+    /// GET /api/audio/voice-live/status: whether GPT-Live can start on the gateway (never the key).
+    public struct LiveStatus: Decodable, Sendable, Equatable {
+        public var mode: String?
+        public var available: Bool
+        public var reason: String?
+        public var model: String?
+        public var voice: String?
+    }
+
+    public func liveStatus() async throws -> LiveStatus {
+        try await api.get("/api/audio/voice-live/status", profile: profile)
+    }
 }
 
 /// One message from the speak-stream socket.

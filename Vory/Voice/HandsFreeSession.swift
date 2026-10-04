@@ -47,6 +47,56 @@ final class HandsFreeSession {
     var isActive: Bool { chat != nil && state.phase != .ended }
     func isActive(for chat: ChatSession) -> Bool { isActive && self.chat === chat }
 
+    // MARK: Live mode
+
+    /// In Live mode a full-duplex voice model (Gemini, the person's key) owns the microphone
+    /// and the speaker; the loop's state follows its events instead of the reducer, and every
+    /// real request reaches the bot through the model's one tool.
+    private(set) var live: GeminiLive.Session?
+    var isLive: Bool { live != nil }
+    /// What the live provider is called, for the screen ("Live · Gemini").
+    private(set) var liveLabel: String?
+    private let liveMic = LiveMic()
+    private var liveLevels: [Float] = []
+    private var liveHeard = ""
+    private var liveSaid = ""
+    private var livePlayback: AsyncThrowingStream<AudioChunk, Error>.Continuation?
+    private var livePlayTask: Task<Void, Never>?
+    private var liveTimer: Timer?
+    private var liveHearingUntil = Date.distantPast
+    private var liveReplyWaiters: [(id: UUID, c: CheckedContinuation<String, Never>)] = []
+    private var liveToolsPending = 0
+    private var livePausedMute = false
+
+    /// The waveform and the live caption, whichever engine is at work.
+    var levels: [Float] { isLive ? liveLevels : listener.levels }
+    var liveText: String { isLive ? liveHeard : listener.liveText }
+
+    /// Whether the next conversation is Live, and with what; nil means Standard (with a note
+    /// when Live was asked for and cannot run).
+    static func liveChoice(botName: String) -> (config: GeminiLive.Session.Config?, note: String?) {
+        #if DEBUG
+        // `-vory-gemini-live-url ws://127.0.0.1:9121`: the stand-in server (Tools/fake-gemini-live), no key needed.
+        let args = ProcessInfo.processInfo.arguments
+        if GeminiLive.overrideURL == nil, let i = args.firstIndex(of: "-vory-gemini-live-url"), i + 1 < args.count, let u = URL(string: args[i + 1]) { GeminiLive.overrideURL = u }
+        #endif
+        switch VoiceSettings.conversation {
+        case .standard:
+            return (nil, nil)
+        case .live, .automatic:
+            let forced = VoiceSettings.conversation == .live
+            switch VoiceSettings.liveProvider {
+            case .gemini:
+                guard let key = GeminiLive.Key.value ?? (GeminiLive.overrideURL != nil ? "stand-in" : nil) else {
+                    return (nil, forced ? "Live needs your Gemini key in Settings › Voice." : nil)
+                }
+                return (GeminiLive.Session.Config(voice: VoiceSettings.geminiVoice, systemInstruction: LivePersona.instruction(botName: botName), key: key), nil)
+            case .openai:
+                return (nil, forced ? "OpenAI Live through the gateway comes in a later build." : nil)
+            }
+        }
+    }
+
     /// DEBUG: `-vory-voice-fake-input` speaks a canned line into the loop with the device's own
     /// voice instead of listening to the microphone, so the whole loop runs on a simulator.
     static let fakeInput: Bool = {
@@ -84,25 +134,34 @@ final class HandsFreeSession {
 
     private func open() {
         guard let chat else { return }
+        let botName = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
+        let choice = Self.liveChoice(botName: botName)
+        if let note = choice.note { state.note = note }
+        let onInput = choice.config == nil ? listener.ingest : liveMic.ingest
         do {
-            try player.beginHandsFree(tap: !Self.fakeInput, onInput: listener.ingest)
+            try player.beginHandsFree(tap: !Self.fakeInput, onInput: onInput)
         } catch {
             lastError = error.localizedDescription
             self.chat = nil
             return
         }
-        listener.endOfTurnPause = VoiceSettings.endOfTurn.rawValue
-        listener.onSpeechStarted = { [weak self] in self?.heardStart() }
-        listener.onSpeechEnded = { [weak self] url in self?.heardEnd(url) }
         VoiceCoordinator.shared.stop()
         watch(chat)
         observeNotifications(chat)
+        if let config = choice.config {
+            openLive(config)
+            return
+        }
+        listener.endOfTurnPause = VoiceSettings.endOfTurn.rawValue
+        listener.onSpeechStarted = { [weak self] in self?.heardStart() }
+        listener.onSpeechEnded = { [weak self] url in self?.heardEnd(url) }
         Task { await engine?.lease(true) }
         run(state.handle(.start))
     }
 
     func end() {
         guard chat != nil else { return }
+        if isLive { closeLive() }
         run(state.handle(.end))
         listener.stop()
         player.endHandsFree()
@@ -117,12 +176,218 @@ final class HandsFreeSession {
         minimized = false
     }
 
-    func mute() { run(state.handle(.mute)) }
-    func unmute() { run(state.handle(.unmute)) }
-    func pause() { run(state.handle(.pause)) }
-    func resume() { player.restartAfterChange(); run(state.handle(.resume)) }
+    func mute() { isLive ? liveMute(true) : run(state.handle(.mute)) }
+    func unmute() { isLive ? liveMute(false) : run(state.handle(.unmute)) }
+    func pause() { isLive ? livePause(true) : run(state.handle(.pause)) }
+    func resume() { player.restartAfterChange(); isLive ? livePause(false) : run(state.handle(.resume)) }
     func toggleMute() { state.isMuted ? unmute() : mute() }
     func togglePause() { state.phase == .paused ? resume() : pause() }
+
+    // MARK: Live mode, driven by the model's events
+
+    private func openLive(_ config: GeminiLive.Session.Config) {
+        let session = GeminiLive.Session(config: config)
+        live = session
+        liveLabel = "Gemini"
+        liveMic.reset()
+        liveMic.muted = false
+        liveHeard = ""; liveSaid = ""; liveToolsPending = 0
+        liveMic.onChunk = { [weak self] pcm in Task { @MainActor in self?.live?.send(pcm16k: pcm) } }
+        session.onEvent = { [weak self] e in self?.liveEvent(e) }
+        session.ask = { [weak self] request, context in await self?.liveAsk(request, context) ?? "" }
+        setLivePhase(.thinking)
+        state.note = nil
+        liveTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.liveLevels = self.liveMic.levels
+                if self.state.hearing, Date() > self.liveHearingUntil { self.state.hearing = false }
+            }
+        }
+        Task { [weak self] in
+            do { try await session.start() } catch { self?.liveFailed(GeminiLive.redact(error.localizedDescription)) }
+        }
+        syncSurface()
+    }
+
+    private func closeLive() {
+        live?.stop(); live = nil
+        liveTimer?.invalidate(); liveTimer = nil
+        livePlayback?.finish(); livePlayback = nil
+        livePlayTask?.cancel(); livePlayTask = nil
+        player.stop()
+        for w in liveReplyWaiters { w.c.resume(returning: "The conversation ended.") }
+        liveReplyWaiters = []
+        liveLabel = nil
+    }
+
+    /// Live could not run or stopped: the Standard loop takes the conversation over in place.
+    private func liveFailed(_ reason: String) {
+        guard isLive else { return }
+        closeLive()
+        state.note = "Live ended: \(reason). Continuing in Standard."
+        player.endHandsFree()
+        do { try player.beginHandsFree(tap: !Self.fakeInput, onInput: listener.ingest) } catch { lastError = error.localizedDescription; end(); return }
+        listener.endOfTurnPause = VoiceSettings.endOfTurn.rawValue
+        listener.onSpeechStarted = { [weak self] in self?.heardStart() }
+        listener.onSpeechEnded = { [weak self] url in self?.heardEnd(url) }
+        Task { await engine?.lease(true) }
+        run(state.handle(.start))
+    }
+
+    private func setLivePhase(_ phase: HandsFreePhase) {
+        guard state.phase != .ended, state.phase != .paused || phase == .listening else { return }
+        state.phase = phase
+        if phase != .listening { state.hearing = false }
+        syncSurface()
+        if Self.fakeInput { fakeInputIfListening() }
+    }
+
+    private func liveEvent(_ event: LiveEvent) {
+        switch event {
+        case .ready:
+            if state.phase == .thinking, liveToolsPending == 0 { setLivePhase(.listening) }
+        case .inputTranscript(let t):
+            liveHeard = liveHeard.isEmpty ? t : (t.hasPrefix(" ") || liveHeard.hasSuffix(" ") ? liveHeard + t : liveHeard + " " + t)
+            state.caption = liveHeard
+            state.hearing = true
+            liveHearingUntil = Date().addingTimeInterval(1.2)
+        case .outputTranscript(let t):
+            liveSaid += t
+            spoken = liveSaid
+        case .audio(let chunk):
+            if state.phase != .speaking, state.phase != .paused { setLivePhase(.speaking) }
+            pushLiveAudio(chunk)
+        case .interrupted:
+            cutLivePlayback()
+            interruptedLast = true
+            liveSaid = ""
+            if state.phase == .speaking { setLivePhase(.listening) }
+            state.hearing = true
+            liveHearingUntil = Date().addingTimeInterval(1.2)
+        case .turnComplete:
+            if !liveHeard.isEmpty { state.caption = liveHeard; liveHeard = "" }
+            finishLivePlayback()
+        case .toolCall:
+            liveToolsPending += 1
+            if state.phase == .listening { setLivePhase(.thinking) }
+        case .toolCallsCancelled:
+            break
+        case .goAway:
+            state.note = "Reconnecting…"
+        case .resumption:
+            break
+        case .closed(let error):
+            liveFailed(error ?? "the connection closed")
+        }
+    }
+
+    /// Each model turn plays through its own stream; when it has sounded, the loop listens again.
+    /// A turn whose end never comes (no `turnComplete` after the last audio) is closed after a
+    /// quiet moment, so the screen cannot stay on Speaking.
+    private var liveAudioWatchdog: Task<Void, Never>?
+    private func pushLiveAudio(_ chunk: AudioChunk) {
+        liveAudioWatchdog?.cancel()
+        liveAudioWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard let self, !Task.isCancelled, self.livePlayback != nil else { return }
+            self.finishLivePlayback()
+        }
+        if livePlayback == nil {
+            let (stream, continuation) = AsyncThrowingStream<AudioChunk, Error>.makeStream()
+            livePlayback = continuation
+            livePlayTask = Task { [weak self] in
+                try? await self?.player.play(stream)
+                guard let self, !Task.isCancelled else { return }
+                self.livePlayback = nil
+                self.livePlayTask = nil
+                if self.state.phase == .speaking { self.setLivePhase(self.liveToolsPending > 0 ? .thinking : .listening) }
+            }
+        }
+        livePlayback?.yield(chunk)
+    }
+
+    private func finishLivePlayback() {
+        liveAudioWatchdog?.cancel(); liveAudioWatchdog = nil
+        livePlayback?.finish()
+        livePlayback = nil
+        if livePlayTask == nil, state.phase == .speaking || state.phase == .thinking { setLivePhase(liveToolsPending > 0 ? .thinking : .listening) }
+    }
+
+    private func cutLivePlayback() {
+        liveAudioWatchdog?.cancel(); liveAudioWatchdog = nil
+        player.stop()
+        livePlayback?.finish(); livePlayback = nil
+        livePlayTask?.cancel(); livePlayTask = nil
+    }
+
+    /// The model's `ask_bot`: the request goes to the chat as a spoken turn and the bot's reply
+    /// comes back as the tool's result, which the model then says in its own words.
+    private func liveAsk(_ request: String, _ context: String) async -> String {
+        guard let chat else { return "No chat is open." }
+        let joined = [exchange.context, context].filter { !$0.isEmpty }.joined(separator: "\n")
+        let voice = VoiceTurn(context: joined, interrupted: interruptedLast)
+        exchange.said(request)
+        interruptedLast = false
+        if let problem = await chat.send(request, voice: voice) {
+            liveToolsPending = max(0, liveToolsPending - 1)
+            return "The bot could not take that: \(problem)"
+        }
+        let id = UUID()
+        let reply: String = await withCheckedContinuation { c in
+            liveReplyWaiters.append((id, c))
+            // A bot that never answers must not hold the model's tool forever.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(240))
+                guard let self, let i = self.liveReplyWaiters.firstIndex(where: { $0.id == id }) else { return }
+                let waiter = self.liveReplyWaiters.remove(at: i)
+                waiter.c.resume(returning: "The bot is taking too long. Tell the user it is still working and to check the chat.")
+            }
+        }
+        liveToolsPending = max(0, liveToolsPending - 1)
+        if state.phase == .thinking { setLivePhase(.listening) }
+        return reply
+    }
+
+    private func liveReplyArrived(_ text: String) {
+        let waiters = liveReplyWaiters
+        liveReplyWaiters = []
+        let spoken = SpokenText.forSpeech(text)
+        for w in waiters { w.c.resume(returning: spoken.isEmpty ? "The bot answered with nothing to say aloud; it is in the chat." : String(spoken.prefix(4000))) }
+    }
+
+    private func liveMute(_ on: Bool) {
+        guard state.phase != .ended else { return }
+        state.isMuted = on
+        liveMic.muted = on || state.phase == .paused
+        if on { state.hearing = false }
+        syncSurface()
+    }
+
+    private func livePause(_ on: Bool) {
+        guard state.phase != .ended else { return }
+        if on {
+            guard state.phase != .paused else { return }
+            livePausedMute = state.isMuted
+            state.pausedBy = .person
+            state.phase = .paused
+            state.hearing = false
+            liveMic.muted = true
+            cutLivePlayback()
+        } else {
+            guard state.phase == .paused else { return }
+            state.pausedBy = nil
+            state.phase = liveToolsPending > 0 ? .thinking : .listening
+            liveMic.muted = livePausedMute
+        }
+        syncSurface()
+    }
+
+    /// The Live Activity (and the Mac's menu bar) follow the state line.
+    private func syncSurface() {
+        let line = state.phase == .ended ? nil : state.title
+        if line != activityLine { activityLine = line; chat?.noteVoiceMode(line) }
+    }
 
     // MARK: The ears
 
@@ -171,11 +436,27 @@ final class HandsFreeSession {
     private func chatChanged(_ chat: ChatSession) {
         if chat.isRunning != wasRunning {
             wasRunning = chat.isRunning
-            run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
+            if isLive {
+                // A turn that ended without a reply still answers the model's tool.
+                if !chat.isRunning, !liveReplyWaiters.isEmpty { liveReplyArrived("The bot finished without a spoken answer; the result is in the chat.") }
+            } else {
+                run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
+            }
         }
         let cards = !chat.cards.isEmpty
         if cards != hadCards {
             hadCards = cards
+            if isLive {
+                // The model says it in its own words; nothing is ever answered by voice.
+                state.cardsPending = cards
+                if cards, let card = chat.cards.first {
+                    live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to approve it on their screen; the answer comes after.")
+                    setLivePhase(.needsApproval)
+                } else if state.phase == .needsApproval {
+                    setLivePhase(liveToolsPending > 0 ? .thinking : .listening)
+                }
+                return
+            }
             if cards, let card = chat.cards.first {
                 run(state.handle(.cardArrived(summary: Self.summary(of: card))))
             } else {
@@ -200,7 +481,7 @@ final class HandsFreeSession {
         observers.append(center.addObserver(forName: .hermesStreamDelta, object: nil, queue: .main) { [weak self] n in
             guard let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
             Task { @MainActor in
-                guard let self, self.chat?.storedID == id else { return }
+                guard let self, self.chat?.storedID == id, !self.isLive else { return }
                 self.run(self.state.handle(.replyDelta(text)))
             }
         })
@@ -209,7 +490,7 @@ final class HandsFreeSession {
             Task { @MainActor in
                 guard let self, self.chat?.storedID == id else { return }
                 self.exchange.heard(SpokenText.forSpeech(text))
-                self.run(self.state.handle(.replyCompleted(text)))
+                if self.isLive { self.liveReplyArrived(text) } else { self.run(self.state.handle(.replyCompleted(text))) }
             }
         })
         #if os(iOS)
@@ -236,8 +517,7 @@ final class HandsFreeSession {
         for e in effects { perform(e) }
         updateCue()
         // The Live Activity carries the state (and End) to the Lock Screen and the Island.
-        let line = state.phase == .ended ? nil : state.title
-        if line != activityLine { activityLine = line; chat?.noteVoiceMode(line) }
+        syncSurface()
         if Self.fakeInput { fakeInputIfListening() }
     }
     private var activityLine: String?
@@ -410,11 +690,11 @@ final class HandsFreeSession {
     static let fakeLines = ["What is filling up the disk on that host?", "Yes, go ahead and clean it up."]
 
     /// Says the next canned line into the loop as soon as it listens, the way a person would.
-    private func fakeInputIfListening() {
+    func fakeInputIfListening() {
         guard state.phase == .listening, !state.isMuted, !state.hearing, fakeTask == nil, fakeTurns < Self.fakeLines.count else { return }
         let line = Self.fakeLines[fakeTurns]
         fakeTurns += 1
-        let ingest = listener.ingest
+        let ingest = isLive ? liveMic.ingest : listener.ingest
         fakeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }

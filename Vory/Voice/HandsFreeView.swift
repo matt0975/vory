@@ -51,7 +51,8 @@ struct HandsFreeView: View {
             .accessibilityLabel("Hide voice mode")
             Spacer()
             VStack(spacing: 2) {
-                Text("Voice mode").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                // Live is named when it is in use: the person's own provider, billed to them.
+                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 Text(chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             Spacer()
@@ -98,7 +99,7 @@ struct HandsFreeView: View {
             }
             .padding(.horizontal, 24)
             if state.phase == .listening, !state.isMuted {
-                HandsFreeWaveform(levels: session.listener.levels, tint: tint)
+                HandsFreeWaveform(levels: session.levels, tint: tint)
                     .frame(height: 26).padding(.horizontal, 60)
                     .transition(.opacity)
             }
@@ -111,8 +112,8 @@ struct HandsFreeView: View {
             if state.phase == .speaking || (state.phase == .thinking && !session.spoken.isEmpty) {
                 Text(Self.tail(session.spoken))
                     .font(.body).foregroundStyle(.primary)
-            } else if state.hearing, !session.listener.liveText.isEmpty {
-                Text(Self.tail(session.listener.liveText))
+            } else if state.hearing, !session.liveText.isEmpty {
+                Text(Self.tail(session.liveText))
                     .font(.body).foregroundStyle(.primary)
             } else if let heard = state.caption {
                 Text("“\(heard)”")
@@ -128,7 +129,7 @@ struct HandsFreeView: View {
         .padding(.horizontal, 28)
         .frame(minHeight: 90, alignment: .top)
         .animation(.default, value: session.spoken)
-        .animation(.default, value: session.listener.liveText)
+        .animation(.default, value: session.liveText)
     }
 
     static func tail(_ s: String, max: Int = 220) -> String {

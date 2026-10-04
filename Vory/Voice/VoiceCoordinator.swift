@@ -38,6 +38,16 @@ final class VoiceCoordinator {
         }
     }
 
+    /// Plays one chunk (a voice preview); stops whatever was being read.
+    func play(_ chunk: AudioChunk) {
+        stop()
+        speakingText = "\u{200B}preview"
+        task = Task { [weak self] in
+            try? await self?.player.play(AsyncThrowingStream { c in c.yield(chunk); c.finish() })
+            if self?.speakingText == "\u{200B}preview" { self?.speakingText = nil }
+        }
+    }
+
     /// The last finished reply in a chat: what "Speak Last Reply" reads.
     nonisolated static func lastReply(in items: [TranscriptItem]) -> String? {
         for item in items.reversed() {

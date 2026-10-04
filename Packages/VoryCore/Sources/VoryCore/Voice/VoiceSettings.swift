@@ -49,7 +49,22 @@ public enum VoiceSettings {
     /// Hands-free: how long a silence ends the person's turn, in seconds; synced.
     public static let endOfTurnKey = "voice.handsFree.endOfTurn"
 
-    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey]
+    /// Live or Standard conversation (`ConversationMode`); synced.
+    public static let conversationKey = "voice.conversation"
+    /// Which live provider (`LiveProvider`); synced.
+    public static let liveProviderKey = "voice.liveProvider"
+    /// The Gemini voice's name; synced.
+    public static let geminiVoiceKey = "voice.gemini.voice"
+
+    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey, conversationKey, liveProviderKey, geminiVoiceKey]
+
+    public static var conversation: ConversationMode {
+        UserDefaults.standard.string(forKey: conversationKey).flatMap(ConversationMode.init(rawValue:)) ?? .automatic
+    }
+    public static var liveProvider: LiveProvider {
+        UserDefaults.standard.string(forKey: liveProviderKey).flatMap(LiveProvider.init(rawValue:)) ?? .gemini
+    }
+    public static var geminiVoice: String { UserDefaults.standard.string(forKey: geminiVoiceKey)?.nilIfEmpty ?? GeminiLive.defaultVoice }
 
     public static var speech: SpeechSource {
         UserDefaults.standard.string(forKey: speechKey).flatMap(SpeechSource.init(rawValue:)) ?? .automatic
