@@ -87,7 +87,10 @@ REPLY_PART_3 = """Done — 4.2 GB freed, and the filesystem is back to 41% used.
 I left `nginx/access.log` and today's `postgres` log alone since both are still open by
 running processes. If you want this to keep happening on its own, `logrotate` already has a
 config at `/etc/logrotate.d/nginx`; it just has `rotate 52` set, which is why a year of logs
-accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB."""
+accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB.
+
+Here is the disk use before and after:
+MEDIA:/home/hermes/.hermes/images/disk-before-after.png"""
 
 
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
@@ -232,8 +235,36 @@ CRON_JOBS = [
 ]
 
 
+def _png_data_url(seed: int, width: int = 320, height: int = 200) -> str:
+    """A small PNG made on the spot (a gradient tinted by the seed): what the gateway's media
+    routes hand back as a data URL."""
+    import base64 as _b64, struct, zlib
+    rows = bytearray()
+    for y in range(height):
+        rows += b"\x00"
+        for x in range(width):
+            rows += bytes(((x * 255) // width, (y * 255) // height, (seed * 37) % 256))
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+    return "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
+    if base in ("/api/media", "/api/files/read"):
+        # hermes_cli/web_routers/files.py: a gateway-local image as a data URL. Any image path
+        # gets a picture here; anything else is refused as the real one would.
+        from urllib.parse import unquote
+        p = unquote(query.get("path", ""))
+        ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
+        if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+            return (415, {"detail": "Unsupported media type"}) if base == "/api/media" else (404, {"detail": "File not found"})
+        seed = sum(ord(c) for c in p)
+        if base == "/api/media":
+            return 200, {"data_url": _png_data_url(seed)}
+        return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": 1234, "mime_type": "image/png", "data_url": _png_data_url(seed)}
     if base == "/api/status":
         return 200, {"version": "0.21.4", "gateway": {"status": "running", "pid": 4242},
                      "gateway_running": True, "gateway_state": "running", "active_sessions": 1,
@@ -292,7 +323,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             return 200, {"session_id": sid, "profile": "work", "messages": msgs,
                          "pagination": {"limit": 60, "offset": 0, "order": "latest", "returned": len(msgs)}}
         msgs = [
-            {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look?", "timestamp": iso(row["started_at"])},
+            {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]", "timestamp": iso(row["started_at"])},
             {"id": 2, "role": "assistant", "content": [{"type": "text", "text": REPLY_PART_1 + REPLY_PART_2}], "timestamp": iso(row["last_active"]),
              "tool_calls": [{"id": "c1", "function": {"name": "terminal", "arguments": "{}"}}]},
             {"id": 3, "role": "tool", "content": "/var/log 41G", "name": "terminal", "timestamp": iso(row["last_active"])},
@@ -1277,7 +1308,7 @@ class Gateway:
                     ]
                 elif row:
                     live.history = [
-                        {"role": "user", "text": "The log host is at 94% disk. Can you take a look?",
+                        {"role": "user", "text": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]",
                          "timestamp": row["started_at"], "row_id": 1},
                         {"role": "assistant", "text": REPLY_PART_1 + REPLY_PART_2 + "\n\n" + REPLY_PART_3,
                          "timestamp": row["last_active"], "row_id": 2},
@@ -1446,7 +1477,9 @@ class Gateway:
         if method == "approval.received":
             return ok({"acknowledged": True})
         if method in ("image.attach_bytes", "pdf.attach"):
-            return ok({"attached": True, "filename": p.get("filename", "")})
+            # The real gateway writes the image into the profile's images dir and says where.
+            name = p.get("filename", "") or "upload.png"
+            return ok({"attached": True, "filename": name, "path": f"/home/hermes/.hermes/images/upload_{int(time.time())}_1.{name.rsplit('.', 1)[-1] if '.' in name else 'png'}", "count": 1})
         if method == "file.attach":
             return ok({"ref_text": f"[file: {p.get('name', 'file')}]"})
         return {"jsonrpc": "2.0", "id": rid,

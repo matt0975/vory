@@ -1,0 +1,184 @@
+import SwiftUI
+import VoryCore
+
+/// What a row scans for pictures, with a cheap look first: most rows have none, and the rows
+/// are evaluated often.
+enum TranscriptMedia {
+    static func images(in text: String) -> [MediaRef] {
+        guard text.contains("MEDIA:") || text.contains("![") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/") else { return [] }
+        return MediaScan.images(in: text)
+    }
+    static func attachedImages(in text: String, profile: String?) -> [MediaRef] {
+        guard text.contains("[User attached image:") else { return [] }
+        return MediaScan.attachedImageNames(in: text).map { MediaScan.attachedImageRef(name: $0, profile: profile) }
+    }
+}
+
+/// The pictures a row refers to, as thumbnails fetched through the gateway: never the full
+/// bitmap in the thread (a thread of screenshots is what ran phones out of memory), the file
+/// itself only in the viewer. A picture the gateway cannot give shows as its name.
+struct MediaThumbStrip: View {
+    var refs: [MediaRef]
+    var profile: String?
+    var side: CGFloat = 150
+    var alignment: HorizontalAlignment = .leading
+    @State private var viewing: MediaRef?
+
+    var body: some View {
+        let shown = Array(refs.prefix(12))
+        Group {
+            if shown.count <= 2 {
+                HStack(spacing: 8) { ForEach(shown) { thumb($0) } }
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) { ForEach(shown) { thumb($0) } }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
+        .sheet(item: $viewing) { ImageViewerSheet(ref: $0, profile: profile) }
+    }
+
+    private func thumb(_ ref: MediaRef) -> some View {
+        Button { viewing = ref } label: { MediaThumb(ref: ref, profile: profile, side: side) }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Image \(ref.name)")
+            .accessibilityHint("Opens it full screen")
+    }
+}
+
+struct MediaThumb: View {
+    var ref: MediaRef
+    var profile: String?
+    var side: CGFloat
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: side, height: side).clipShape(.rect(cornerRadius: 12))
+            } else if failed {
+                VStack(spacing: 6) {
+                    Image(systemName: "photo").font(.title2).foregroundStyle(.secondary)
+                    Text(ref.name).font(.caption2).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
+                }
+                .padding(8)
+                .frame(width: side, height: side)
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            } else {
+                ProgressView().frame(width: side, height: side)
+                    .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            }
+        }
+        .task(id: ref.id) { await load() }
+    }
+
+    private func load() async {
+        guard let rt = AppModel.shared.runtime else { failed = true; return }
+        let gateway = rt.connection.id.uuidString
+        if let url = await MediaStore.shared.cached(ref, gateway: gateway) {
+            image = AttachmentThumbs.image(at: url, side: side)
+            failed = image == nil
+            return
+        }
+        do {
+            let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            guard !Task.isCancelled else { return }
+            image = AttachmentThumbs.image(at: url, side: side)
+            failed = image == nil
+        } catch {
+            failed = true
+        }
+    }
+}
+
+/// One picture, full screen: pinch to zoom, double-tap to zoom in and out, drag when zoomed;
+/// Save to Photos and Share. Decoded once here, bounded to a few thousand pixels a side.
+struct ImageViewerSheet: View {
+    var ref: MediaRef
+    var profile: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var url: URL?
+    @State private var image: UIImage?
+    @State private var error: String?
+    @State private var scale: CGFloat = 1
+    @State private var settledScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var settledOffset: CGSize = .zero
+    @State private var saved = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .gesture(
+                            MagnifyGesture()
+                                .onChanged { v in scale = max(1, min(6, settledScale * v.magnification)) }
+                                .onEnded { _ in settledScale = scale; if scale <= 1 { withAnimation(.snappy) { offset = .zero; settledOffset = .zero } } }
+                        )
+                        .simultaneousGesture(
+                            DragGesture()
+                                .onChanged { v in if scale > 1 { offset = CGSize(width: settledOffset.width + v.translation.width, height: settledOffset.height + v.translation.height) } }
+                                .onEnded { _ in settledOffset = offset }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation(.snappy) {
+                                scale = scale > 1 ? 1 : 2.5
+                                settledScale = scale
+                                offset = .zero; settledOffset = .zero
+                            }
+                        }
+                        .accessibilityLabel("Image \(ref.name)")
+                } else if let error {
+                    VStack(spacing: 8) {
+                        Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary)
+                        Text(ref.name).font(.headline)
+                        Text(error).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
+                    .padding()
+                } else {
+                    ProgressView().tint(.white)
+                }
+            }
+            .navigationTitle(ref.name)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItemGroup(placement: .primaryAction) {
+                    #if os(iOS)
+                    if let image {
+                        Button { UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil); saved = true } label: {
+                            Label(saved ? "Saved" : "Save to Photos", systemImage: saved ? "checkmark" : "square.and.arrow.down")
+                        }
+                        .disabled(saved)
+                    }
+                    #endif
+                    if let url { ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") } }
+                }
+            }
+            .preferredColorScheme(.dark)
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        guard let rt = AppModel.shared.runtime else { error = "Connect a gateway first."; return }
+        let gateway = rt.connection.id.uuidString
+        do {
+            let file = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            url = file
+            image = AttachmentThumbs.image(at: file, side: 2400)
+            if image == nil { error = "This file is not an image the device can show." }
+        } catch {
+            self.error = "The gateway could not give this file: \(error.localizedDescription)"
+        }
+    }
+}

@@ -277,12 +277,19 @@ struct TranscriptView: View {
                 let away = distance > 120
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
-                // finger on the thread unlocks it. Scrolling back to the end locks it again.
-                if metrics.userScrolling, distance > 24 { metrics.stickToBottom = false }
-                if distance < 4 { metrics.stickToBottom = true }
+                // finger on the thread unlocks it: any upward pull from where the touch began
+                // (a tester scrolling up during a reply was pulled back to the end until the
+                // drag had covered 24 pt, and again whenever a token landed between touches).
+                // Scrolling back to the end, finger off, locks it again.
+                if metrics.userScrolling, distance > 24 || distance > metrics.touchStartDistance + 6 { metrics.stickToBottom = false }
+                if distance < 4, !metrics.userScrolling { metrics.stickToBottom = true }
             }
             .onScrollPhaseChange { _, phase in
-                metrics.userScrolling = phase == .interacting || phase == .decelerating
+                // A finger on the thread counts from the touch, before it has moved.
+                let touching = phase == .tracking || phase == .interacting || phase == .decelerating
+                if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
+                metrics.userScrolling = touching
+                if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
@@ -344,11 +351,11 @@ struct TranscriptView: View {
             // the height has settled, not per frame of the card's grow animation: a scroll per
             // frame against a moving margin overshot into blank space.
             .onChange(of: bottomInset) { _, _ in
-                guard metrics.stickToBottom else { return }
+                guard metrics.stickToBottom, !metrics.userScrolling else { return }
                 insetSettle?.cancel()
                 insetSettle = Task {
                     try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
                     if settling { scrollPosition.scrollTo(edge: .bottom) }
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
@@ -675,6 +682,8 @@ final class ScrollMetrics {
     var stickToBottom = true
     var userScrolling = false
     var distanceFromBottom: CGFloat = 0
+    /// How far from the end the thread was when the current touch began.
+    var touchStartDistance: CGFloat = 0
     var offsetY: CGFloat = 0
     var contentHeight: CGFloat = 0
     var containerHeight: CGFloat = 0
@@ -955,7 +964,7 @@ struct TranscriptRow: View, Equatable {
         case .user(let text, let attachments):
             return attachments.isEmpty && (InjectedNote.parse(text) != nil || AgentMessage.parse(text) != nil) ? .center : .trailing
         case .steer: return .trailing
-        case .system: return .center
+        case .system(_, let symbol): return symbol == "terminal" ? .leading : .center
         case .tool(let act): return act.delivery != nil ? .center : .leading
         default: return .leading
         }
@@ -978,9 +987,14 @@ struct TranscriptRow: View, Equatable {
             HStack {
                 Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 6) {
+                    // A stored row keeps "[User attached image: name]" where the picture was: the
+                    // picture comes back from the gateway's images dir, the mark leaves the bubble.
+                    let attached = attachments.isEmpty ? TranscriptMedia.attachedImages(in: text, profile: profile) : []
+                    let shownText = attached.isEmpty ? text : MediaScan.userTextWithoutAttachments(text)
                     if !attachments.isEmpty { AttachmentStrip(attachments: attachments) }
-                    if !text.isEmpty {
-                        Text(text)
+                    if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: profile, side: 120, alignment: .trailing) }
+                    if !shownText.isEmpty {
+                        Text(shownText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1032,7 +1046,11 @@ struct TranscriptRow: View, Equatable {
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id) }
-                    MarkdownView(text: text).equatable()
+                    // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
+                    // the words as thumbnails fetched through the gateway.
+                    let media = TranscriptMedia.images(in: text)
+                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text)).equatable()
+                    if !media.isEmpty { MediaThumbStrip(refs: media, profile: profile) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                             .accessibilityLabel("Turn statistics: \(s.label)")
@@ -1080,6 +1098,19 @@ struct TranscriptRow: View, Equatable {
             }
         case .tool(let act):
             ToolCardView(activity: act, itemID: item.id, open: toolOpen, showOutput: showToolOutput, compact: compactTools)
+        case .system(let text, let symbol) where symbol == "terminal":
+            // A slash command's reply: reading size, selectable, with Copy; the terminal mark
+            // and a quiet background keep it apart from the bot's words (a tester could neither
+            // read nor copy the small grey line it was).
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Command", systemImage: "terminal").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(text).font(.body).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12).padding(.trailing, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
         case .system(let text, let symbol):
             HStack(spacing: 6) {
                 Image(systemName: symbol)
@@ -1486,6 +1517,9 @@ struct ToolCardView: View {
                 if showOutput, let r = activity.resultText, !r.isEmpty {
                     Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: r, lineCap: 30)
+                    // A tool that made or found pictures (a screenshot, a render): shown, not just named.
+                    let shots = MediaScan.imagePaths(inToolOutput: r)
+                    if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
                 }
                 Button { showFull = true } label: {
                     Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))
