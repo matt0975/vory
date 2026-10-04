@@ -1,14 +1,15 @@
-#if os(iOS)
 import AppIntents
+#if canImport(UIKit)
 import UIKit
+#endif
 import VoryCore
 
-// MARK: Siri, Shortcuts and the Action Button
+// MARK: Siri, Shortcuts, Spotlight and the Action Button
 //
 // Two App Shortcuts: "Ask Vory" puts a question to the bot without opening the app and Siri
 // reads the short answer (or says it will let you know, when the bot takes longer than Siri
-// waits); "Start voice mode" opens the app on a new chat with hands-free on. Generic phrases
-// only: nothing here names anyone's bot or gateway.
+// waits); "Start voice mode" opens the app on a new chat with hands-free on (the Mac's floating
+// voice window). Generic phrases only: nothing here names anyone's bot or gateway.
 
 /// A question to the bot, answered in a few spoken sentences. The same "Siri" chat takes every
 /// question, so a follow-up ("and yesterday?") makes sense to the bot.
@@ -71,8 +72,10 @@ enum SiriAsk {
         guard !q.isEmpty else { return "I didn't catch a question." }
         let model = AppModel.shared
         guard model.hasConnections else { return "Set up a gateway in Vory first." }
+        #if os(iOS)
         let assertion = UIApplication.shared.beginBackgroundTask(withName: "vory.siri.ask")
         defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+        #endif
         if model.runtime == nil { await model.activateSavedConnection() }
         guard let rt = model.runtime else { return "Vory could not reach your gateway." }
         let deadline = Date().addingTimeInterval(10)
@@ -144,4 +147,3 @@ enum SiriAsk {
         }
     }
 }
-#endif

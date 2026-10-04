@@ -209,11 +209,3 @@ struct VoiceHUDPresentation: Equatable {
         return "…" + String(s.suffix(max - 1))
     }
 }
-
-/// Voice mode asked for with no chat open: the chat is made first, and the loop starts on it
-/// as soon as it is in front.
-@MainActor @Observable
-final class VoiceWindowBridge {
-    static let shared = VoiceWindowBridge()
-    var pendingStart = false
-}

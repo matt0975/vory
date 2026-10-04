@@ -30,9 +30,7 @@ struct VoryMacApp: App {
     private func toggleVoiceMode() {
         if voiceSession.isActive { voiceSession.end(); return }
         if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
-        VoiceWindowBridge.shared.pendingStart = true
-        model.selectedTab = .chats
-        model.newChatRequest = UUID()
+        model.requestVoiceMode()
     }
     /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
     private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }

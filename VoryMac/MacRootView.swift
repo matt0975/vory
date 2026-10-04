@@ -47,13 +47,6 @@ struct MacRootView: View {
         .task { VoiceCoordinator.shared.observeReplies() }
         // Voice mode's window opens when a session starts, wherever it was started from.
         .onChange(of: voiceSession.isActive) { _, on in if on { openWindow(id: MacWindow.voice) } }
-        // Voice mode asked for with no chat open: it starts on the chat that was made for it.
-        .onChange(of: model.visibleChat?.storedID) { _, _ in
-            if VoiceWindowBridge.shared.pendingStart, let chat = model.visibleChat {
-                VoiceWindowBridge.shared.pendingStart = false
-                voiceSession.start(chat: chat)
-            }
-        }
         #if DEBUG
         .task { if AppModel.forceSignIn, let c = model.store.active { model.signInPrompt = [c] } }
         #endif

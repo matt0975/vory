@@ -177,10 +177,9 @@ struct ConversationView: View {
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
-            #if os(iOS)
-            // Opened for "Start voice mode": hands-free begins as soon as the chat exists.
+            // Opened for "Start voice mode" (the intent, or the Mac's ⇧⌘V with no chat open):
+            // hands-free begins as soon as the chat exists.
             if let chat, model.voiceModeRequested { model.voiceModeRequested = false; HandsFreeSession.shared.start(chat: chat) }
-            #endif
             // The first message from the compose sheet goes out as soon as the chat exists.
             if let chat, !sentInitial, let t = route.initialText, !t.isEmpty || !route.initialAttachments.isEmpty {
                 sentInitial = true
