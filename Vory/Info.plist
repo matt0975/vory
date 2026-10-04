@@ -59,6 +59,8 @@
 	<string>Unlock the app and your saved gateway credentials.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to a Hermes dashboard running on your local network, such as http://192.168.x.x:9119.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save a picture from a chat to your Photos.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Record a voice memo to attach, or dictate a message.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
@@ -87,8 +89,6 @@
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
