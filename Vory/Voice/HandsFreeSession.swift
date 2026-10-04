@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import os
 import SwiftUI
 import VoryCore
 
@@ -136,6 +137,7 @@ final class HandsFreeSession {
         guard let chat else { return }
         let botName = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
         let choice = Self.liveChoice(botName: botName)
+        UtteranceListener.log.notice("voice mode: \(choice.config == nil ? "standard" : "live", privacy: .public) (conversation \(VoiceSettings.conversation.rawValue, privacy: .public), provider \(VoiceSettings.liveProvider.rawValue, privacy: .public), key \(GeminiLive.Key.isPresent ? "present" : "none", privacy: .public), override \(GeminiLive.overrideURL != nil ? "set" : "none", privacy: .public))\(choice.note.map { "; " + $0 } ?? "", privacy: .public)")
         if let note = choice.note { state.note = note }
         let onInput = choice.config == nil ? listener.ingest : liveMic.ingest
         do {
@@ -224,6 +226,7 @@ final class HandsFreeSession {
     /// Live could not run or stopped: the Standard loop takes the conversation over in place.
     private func liveFailed(_ reason: String) {
         guard isLive else { return }
+        UtteranceListener.log.notice("live ended: \(reason, privacy: .public); continuing in Standard")
         closeLive()
         state.note = "Live ended: \(reason). Continuing in Standard."
         player.endHandsFree()
@@ -695,15 +698,19 @@ final class HandsFreeSession {
         let line = Self.fakeLines[fakeTurns]
         fakeTurns += 1
         let ingest = isLive ? liveMic.ingest : listener.ingest
+        UtteranceListener.log.notice("fake input: line \(self.fakeTurns) into the \(self.isLive ? "live" : "standard", privacy: .public) mic in 1.5 s")
         fakeTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1.5))
             guard !Task.isCancelled else { return }
             let voice = DeviceSpeaker.voice(identifier: nil)
+            var fed = 0
             for await chunk in DeviceSpeaker.render(line, voice: voice) {
                 guard !Task.isCancelled, let buffer = chunk.pcmBuffer() else { break }
                 ingest(buffer, AVAudioTime(hostTime: mach_absolute_time()))
+                fed += 1
                 try? await Task.sleep(for: .seconds(chunk.seconds))
             }
+            UtteranceListener.log.notice("fake input: fed \(fed) chunks (\(voice?.name ?? "no voice", privacy: .public)); levels now \(self?.levels.suffix(4).description ?? "-", privacy: .public)")
             // Then quiet, at the mic's pace, until the loop calls the turn over.
             if let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 22050, channels: 1, interleaved: true),
                let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2205) {
