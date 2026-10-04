@@ -343,6 +343,8 @@ struct WatchChatView: View {
     @State private var chat: ChatSession?
     @State private var text = ""
     @State private var error: String?
+    /// Talk: a recording to the gateway, the reply read aloud here.
+    @State private var talk = WatchTalk()
     /// REST-polling fallback state (used when the socket cannot open, e.g. over Bluetooth).
     @State private var proxied = false
     @State private var items: [TranscriptItem] = []
@@ -418,14 +420,34 @@ struct WatchChatView: View {
         }
     }
 
-    /// The message field and its send button, one row on the bottom edge.
+    /// The message field, Talk and the send button, one row on the bottom edge. While Talk
+    /// works the row says what it is doing instead of the field.
     private func composer(send: @escaping () async -> Void) -> some View {
         HStack(spacing: 6) {
-            TextField("Message", text: $text)
-            Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }
-                .buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
-                .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+            if talk.isBusy {
+                Text(talk.phaseText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                TextField("Message", text: $text)
+            }
+            if let chat {
+                Button { talk.tap(chat: chat) } label: {
+                    Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : "mic.circle.fill")
+                        .font(.title3)
+                        .symbolEffect(.pulse, isActive: talk.phase == .recording || talk.phase == .waiting)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(talk.phase == .recording ? Color.red : talk.isBusy ? Color.accentColor : Color.secondary)
+                .disabled(talk.phase == .transcribing || talk.phase == .waiting)
+                .accessibilityLabel(talk.phase == .recording ? "Stop and send" : talk.phase == .speaking ? "Stop speaking" : "Talk")
+            }
+            if !talk.isBusy {
+                Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }
+                    .buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+            }
         }
+        .onChange(of: talk.error) { _, e in if let e { error = nil; chat?.banner = e; talk.error = nil } }
     }
 
     // MARK: REST + phone proxy

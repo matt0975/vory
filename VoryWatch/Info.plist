@@ -38,6 +38,8 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Talk to your bot: what you say is sent to your gateway to be turned into words.</string>
 	<key>UIBackgroundModes</key>
 	<array><string>remote-notification</string></array>
 	<key>WKApplication</key>
