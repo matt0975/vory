@@ -45,6 +45,9 @@ struct MacRootView: View {
         .onChange(of: model.runtime?.connection.id, initial: true) { _, _ in offerCompanion() }
         // "Read replies aloud": a reply that finishes in the chat on screen is spoken.
         .task { VoiceCoordinator.shared.observeReplies() }
+        // The window's open action, kept for the places with no view to ask (an App Intent run
+        // while the window is closed).
+        .task { MacWindow.openMain = { openWindow(id: MacWindow.main) } }
         // Voice mode's window opens when a session starts, wherever it was started from.
         .onChange(of: voiceSession.isActive) { _, on in if on { openWindow(id: MacWindow.voice) } }
         #if DEBUG
@@ -118,6 +121,9 @@ private struct MainSplitView: View {
     @State private var columns = NavigationSplitViewVisibility.all
     /// The detail column's stack: the chat (or group chat) beside the list.
     @State private var chatPath = NavigationPath()
+    /// Settings › Home › "Open Vory on": the page the window starts on, as on the phone.
+    @AppStorage("launchTab") private var launchTab = "chats"
+    @State private var openedOnLaunchTab = false
 
     /// The pages in the rail, less the ones the gateway cannot show (the Board without its plugin).
     private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs) }
@@ -146,6 +152,18 @@ private struct MainSplitView: View {
                 }
             }
         }
+        // Room for the rail, the list and a reading column with a table in it: narrower than this
+        // the bubbles squeezed to a few words a line.
+        .frame(minWidth: 860, minHeight: 520)
+        // The chosen first page, once, when it is still in the rail and the gateway can show it
+        // (the Board without its plugin opened blank on the phone).
+        .onAppear {
+            guard !openedOnLaunchTab else { return }
+            openedOnLaunchTab = true
+            if let tab = AppModel.AppTab(rawValue: launchTab), tabs.contains(tab) { model.selectedTab = tab }
+        }
+        // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
+        .onChange(of: tabs) { _, now in if !now.contains(model.selectedTab) { model.selectedTab = .chats } }
     }
 
     @ViewBuilder private func page(_ tab: AppModel.AppTab) -> some View {
@@ -245,6 +263,10 @@ private struct RailItem: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(shortcut.map { "\(tab.title) (⌘\($0))" } ?? tab.title)
+        // One name for VoiceOver (the icon and the word read as one), with what waits there.
+        .accessibilityLabel(badge > 0 ? "\(tab.title), \(badge) need\(badge == 1 ? "s" : "") you" : tab.title)
+        .accessibilityHint(shortcut.map { "Shows \(tab.title). Command \($0)." } ?? "Shows \(tab.title).")
+        .accessibilityIdentifier("rail.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? .isSelected : [])
         if let shortcut {
             button.keyboardShortcut(KeyEquivalent(shortcut), modifiers: .command)
@@ -338,6 +360,8 @@ private struct RailMore: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help("Choose the pages in the sidebar")
+        .accessibilityLabel("More pages")
+        .accessibilityHint("Chooses the pages in the sidebar.")
         .accessibilityIdentifier("rail.more")
         .popover(isPresented: $choosing, arrowEdge: .trailing) {
             VStack(alignment: .leading, spacing: 10) {
@@ -407,6 +431,9 @@ private struct GatewayFooter: View {
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state)\nClick to edit the gateway")
+        .accessibilityLabel("Gateway \(name), \(state)")
+        .accessibilityHint("Edits the gateway.")
+        .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
         .sheet(isPresented: $editing) {
             NavigationStack { GatewayFormView(existing: model.store.active) }

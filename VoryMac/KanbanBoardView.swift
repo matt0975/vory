@@ -183,6 +183,7 @@ struct MacBoardView: View {
             }
             .contextMenu { MacCardMenu(task: task, store: store, ask: $ask, notice: $notice, onOpen: { selectedID = task.id; openTaskID = task.id }, onOpenChat: { openChat($0, profile: $1) }) }
             .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityHint("Opens the task. Drag it to another column to move it.")
             .accessibilityIdentifier("board.card.\(task.id)")
     }
 
@@ -251,19 +252,25 @@ struct MacBoardView: View {
     // MARK: Moves
 
     private func drop(_ ids: [String], into s: KanbanStatus, _ store: KanbanStore) -> Bool {
-        guard let id = ids.first, let task = store.board?.task(id: id), task.column != s else { return false }
-        guard s.isMoveTarget else { notice = s.notMovableReason; return false }
-        selectedID = task.id
-        Task { await move(task, to: s, store) }
-        return true
+        let task = ids.first.flatMap { store.board?.task(id: $0) }
+        switch BoardDrop.decide(task, to: s) {
+        case .nothing: return false
+        case .refused(let why): notice = why; return false
+        case .asks(let a): selectedID = a.task.id; ask = a; return true
+        case .moves(let to):
+            guard let task else { return false }
+            selectedID = task.id
+            Task { await changed(store.move(task, to: to), store) }
+            return true
+        }
     }
 
     private func move(_ task: KanbanTask, to status: KanbanStatus, _ store: KanbanStore) async {
-        switch status {
-        case .done: ask = .done(task)
-        case .blocked: ask = .block(task)
-        case .archived: ask = .archive(task)
-        default: await changed(store.move(task, to: status), store)
+        switch BoardDrop.decide(task, to: status) {
+        case .nothing: return
+        case .refused(let why): notice = why
+        case .asks(let a): ask = a
+        case .moves(let to): await changed(store.move(task, to: to), store)
         }
     }
 
@@ -479,6 +486,30 @@ private struct MacCardMenu: View {
 
     private func reassign(_ profile: String?) async {
         if !(await store.reassign(task, to: profile)), let e = store.lastError { notice = e }
+    }
+}
+
+/// What a card dropped on a column (or sent there by ⌘[ / ⌘]) comes to: the shared rules,
+/// worked out apart from the view so they can be tested.
+enum BoardDrop {
+    /// Same column, or no such card: nothing to do, and the drop is not taken.
+    case nothing
+    /// Not a column a hand may put a card in (the gateway's own): the server's words.
+    case refused(String)
+    /// Done, blocked and archived ask first (a summary, a reason, a yes).
+    case asks(KanbanAsk)
+    /// Moved as it is.
+    case moves(KanbanStatus)
+
+    static func decide(_ task: KanbanTask?, to s: KanbanStatus) -> BoardDrop {
+        guard let task, task.column != s else { return .nothing }
+        guard s.isMoveTarget else { return .refused(s.notMovableReason ?? "Only the gateway moves a card to \(s.title).") }
+        switch s {
+        case .done: return .asks(.done(task))
+        case .blocked: return .asks(.block(task))
+        case .archived: return .asks(.archive(task))
+        default: return .moves(s)
+        }
     }
 }
 

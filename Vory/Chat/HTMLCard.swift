@@ -28,13 +28,15 @@ enum HTMLCard {
     /// The page as loaded: the bot's HTML with Vory's look folded in (the system font and label
     /// colour, both colour schemes, images and tables that never exceed the width). A fragment
     /// is wrapped in a document; a whole document gets the same head additions.
-    static func document(_ html: String, dark: Bool) -> String {
+    /// `background`: a colour for the page itself (the Mac paints the card's own colour into
+    /// the page, as a web view there always draws a background); nil keeps it transparent.
+    static func document(_ html: String, dark: Bool, background: String? = nil) -> String {
         let head = """
         <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="color-scheme" content="\(dark ? "dark" : "light")">
         <style id="vory-card">
         :root { color-scheme: \(dark ? "dark" : "light"); }
-        html, body { margin: 0; background: transparent; color: -apple-system-label; }
+        html, body { margin: 0; background: \(background ?? "transparent"); color: -apple-system-label; }
         body { padding: 12px; font: -apple-system-body; font-family: -apple-system, system-ui, sans-serif; line-height: 1.35; overflow-wrap: anywhere; }
         img, canvas, svg, video, table, pre { max-width: 100%; }
         table { border-collapse: collapse; } th, td { padding: 4px 8px; text-align: left; }
@@ -129,6 +131,24 @@ enum HTMLCard {
         #endif
     }
 
+    /// The colour the page paints behind itself. On iOS the web view is see-through and the
+    /// card's SwiftUI background shows; a Mac web view always draws a background, so the page
+    /// gets the card's own colour (the control background, in the scheme in force) and the two
+    /// cannot be told apart.
+    @MainActor static func pageBackground(dark: Bool) -> String? {
+        #if os(iOS)
+        return nil
+        #else
+        var hex: String?
+        NSAppearance(named: dark ? .darkAqua : .aqua)?.performAsCurrentDrawingAppearance {
+            if let c = NSColor.secondarySystemBackground.usingColorSpace(.sRGB) {
+                hex = String(format: "#%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+            }
+        }
+        return hex ?? (dark ? "#1E1E1E" : "#FFFFFF")
+        #endif
+    }
+
     /// The configuration every card's web view gets.
     /// One non-persistent store for every card: nothing is kept past the process, and a thread
     /// with many cards does not hold a store each.
@@ -138,6 +158,9 @@ enum HTMLCard {
         let c = WKWebViewConfiguration()
         c.websiteDataStore = store
         c.defaultWebpagePreferences.allowsContentJavaScript = true
+        // A page may not open windows by itself (the Mac's default is yes): only a link the
+        // person activated reaches `createWebViewWith`, and that goes to the browser.
+        c.preferences.javaScriptCanOpenWindowsAutomatically = false
         c.mediaTypesRequiringUserActionForPlayback = .all
         c.suppressesIncrementalRendering = false
         #if os(iOS)
@@ -163,7 +186,7 @@ struct HTMLCardView: View {
         let cap = HTMLCard.heightCap
         let actions = HTMLCard.Actions(full: { full = true }, showSource: onShowSource, copy: { UIPasteboard.general.string = html })
         ZStack(alignment: .topLeading) {
-            HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark), scrolls: false, height: $height, loaded: $loaded, actions: actions)
+            HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark, background: HTMLCard.pageBackground(dark: scheme == .dark)), scrolls: false, height: $height, loaded: $loaded, actions: actions)
                 .frame(height: min(max(height, 48), cap))
                 .opacity(loaded ? 1 : 0.01)
             if !loaded {
@@ -212,7 +235,7 @@ struct HTMLCardSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding()
                     }
                 } else {
-                    HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark), scrolls: true, height: $height, loaded: $loaded)
+                    HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark, background: HTMLCard.pageBackground(dark: scheme == .dark)), scrolls: true, height: $height, loaded: $loaded)
                         .ignoresSafeArea(edges: .bottom)
                 }
             }
@@ -294,7 +317,11 @@ struct HTMLWebView {
                 for delay in [0, 250, 800, 2000, 4000] {
                     if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) }
                     guard !Task.isCancelled, let self, let web else { return }
-                    let h = try? await web.evaluateJavaScript("Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0))")
+                    // The body's own box, not scrollHeight: that is never less than the view's
+                    // height, so a card measured that way could grow but never shrink (a
+                    // one-line card stayed at the first guess, a card that grew for a theme
+                    // change never came back down).
+                    let h = try? await web.evaluateJavaScript("Math.ceil(document.body ? document.body.getBoundingClientRect().height : document.documentElement.scrollHeight)")
                     if let n = (h as? NSNumber)?.doubleValue ?? (h as? Double), n > 0 {
                         let rounded = CGFloat(min(max(n, 24), 6000))
                         if abs(rounded - parent.height) > 1 { parent.height = rounded }
@@ -319,7 +346,8 @@ struct HTMLWebView {
         let web = CardWebView(frame: .zero, configuration: HTMLCard.configuration())
         web.scrolls = scrolls
         web.actions = actions
-        web.setValue(false, forKey: "drawsBackground")
+        // No private "drawsBackground" here: the page is given the card's colour instead (see
+        // `pageBackground`), so the web view's own white never shows.
         #endif
         web.navigationDelegate = coordinator
         web.uiDelegate = coordinator

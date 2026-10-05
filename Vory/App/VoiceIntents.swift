@@ -39,6 +39,11 @@ struct StartVoiceModeIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
+        #if os(macOS)
+        // The app may be running with its window closed (the menu bar keeps it alive): the
+        // window comes back first, or the new chat the request opens has no list to open in.
+        MacWindow.bringMainForward()
+        #endif
         AppModel.shared.requestVoiceMode()
         return .result()
     }
