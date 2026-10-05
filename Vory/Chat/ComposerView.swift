@@ -359,9 +359,7 @@ struct ComposerView: View {
         items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
         items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red) { showRecorder = true })
-        #if os(iOS)
         items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
-        #endif
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
         return AttachPanel(items: items) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }

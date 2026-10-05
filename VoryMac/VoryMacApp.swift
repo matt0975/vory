@@ -169,7 +169,7 @@ struct VoryMacApp: App {
                 .preferredColorScheme(.dark)
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .windowLevel(.floating)
         .windowBackgroundDragBehavior(.enabled)
         .restorationBehavior(.disabled)

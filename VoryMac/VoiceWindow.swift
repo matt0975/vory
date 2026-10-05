@@ -19,7 +19,8 @@ struct MacVoiceHUD: View {
         Group {
             if let chat = session.chat, session.isActive { content(chat) } else { ended }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        // Its default size, and no smaller; taller or wider when a long answer wants reading.
+        .frame(minWidth: Self.size.width, minHeight: Self.size.height)
         // The loop ended (End here, or from the chat, or the gateway went): the window goes.
         .onChange(of: session.isActive) { _, on in if !on { dismissWindow(id: MacWindow.voice) } }
         // The window closed by its own button: the loop ends with it.
@@ -70,9 +71,10 @@ struct MacVoiceHUD: View {
                         if let line = p.line {
                             Text(line).font(.caption).foregroundStyle(p.lineIsWarning ? Color.orange : Color.secondary).lineLimit(2)
                         }
-                        Text(p.caption).font(.callout).foregroundStyle(p.captionIsQuote ? Color.secondary : Color.primary)
-                            .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
-                            .animation(.default, value: p.caption)
+                        // The whole conversation, scrolling, following the newest words until the
+                        // person scrolls up to read back; the window can be made taller for it.
+                        VoiceTranscriptView(lines: session.transcriptLines, prompt: VoiceHUDPresentation.prompt)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         if p.showsWaveform {
                             HandsFreeWaveform(levels: session.levels, tint: tint).frame(height: 18).transition(.opacity)
                         }

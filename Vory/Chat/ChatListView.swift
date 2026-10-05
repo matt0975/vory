@@ -187,6 +187,7 @@ struct ChatListView: View {
                 // each for refresh, new bot, sort and filters ran past the column's edge and sat
                 // over the chat beside it, and moved about as the window was resized.
                 ToolbarItem(placement: .primaryAction) { viewMenu }
+                ToolbarItem(placement: .primaryAction) { voiceMenu }
                 ToolbarItem(placement: .primaryAction) { composeMenu }
                 #else
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -372,6 +373,24 @@ struct ChatListView: View {
         .disabled(model.runtime == nil)
         .help("New Chat (⌘N). Hold for bots, a project and a first message (⇧⌘N).")
         .accessibilityIdentifier("chats.compose")
+    }
+
+    /// Voice chat: a click is a fresh chat with the bot the list shows (the default bot under
+    /// All bots), straight into voice mode in its window; hold, or right-click, for the bots.
+    private var voiceMenu: some View {
+        Menu {
+            ForEach(model.runtime?.profiles ?? []) { p in
+                Button { model.voiceChatRequest = .init(profile: p.name) } label: { Label(p.label, systemImage: "person.fill") }
+            }
+        } label: {
+            Label("Voice Chat", systemImage: "mic.fill")
+        } primaryAction: {
+            model.voiceChatRequest = .init(profile: nil)
+        }
+        .menuIndicator(.hidden)
+        .disabled(model.runtime == nil)
+        .help("Voice chat with the current bot. Hold to choose a bot.")
+        .accessibilityIdentifier("chats.voice")
     }
     #endif
 
