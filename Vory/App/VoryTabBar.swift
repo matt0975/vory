@@ -25,6 +25,9 @@ struct VoryTabBar: View {
     /// takes the room). Applies as it is switched, no relaunch.
     @AppStorage(Self.showVoiceKey) private var showVoice = true
     static let showVoiceKey = "tabBar.showVoice"
+    /// Settings › Appearance › Tab labels: the word under the selected tab's icon, or icons only.
+    @AppStorage(Self.showLabelsKey) private var showLabels = true
+    static let showLabelsKey = "tabBar.showLabels"
 
     private func run(_ action: ComposeAction) {
         switch action {
@@ -174,10 +177,11 @@ struct VoryTabBar: View {
     }
 
     /// One tab: a large icon on its own, or a smaller icon over its label when it is selected
-    /// (no labels at all while the lens is being dragged, like the system bar).
+    /// (no labels at all while the lens is being dragged, like the system bar, or when
+    /// Settings › Appearance › Tab labels is off).
     @ViewBuilder private func slot(_ tab: AppModel.AppTab, dragging: Bool) -> some View {
         let selected = model.selectedTab == tab
-        let labelled = selected && !dragging
+        let labelled = selected && !dragging && showLabels
         VStack(spacing: 2) {
             icon(for: tab, size: labelled ? 21 : 25)
                 .frame(height: labelled ? 24 : 30)

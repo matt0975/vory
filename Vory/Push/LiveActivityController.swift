@@ -77,7 +77,13 @@ final class LiveActivityController: TurnActivityReporting {
         let stamp = Date().formatted(.dateTime.hour().minute().second())
         // The unified log too (dev.vory, "activity"): the ring buffer below is only for the
         // app's own page, and a simulator or a device read-out needs the lines in a stream.
+        // The lines name chats, so a Release build keeps them private (redacted in a
+        // sysdiagnose unless the person opts in); a Debug build shows them in full.
+        #if DEBUG
         Self.unifiedLog.notice("\(what, privacy: .public)")
+        #else
+        Self.unifiedLog.notice("\(what, privacy: .private)")
+        #endif
         logLock.lock(); defer { logLock.unlock() }
         logStorage.append("\(stamp) \(what)")
         if logStorage.count > 12 { logStorage.removeFirst(logStorage.count - 12) }
