@@ -584,6 +584,9 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.textSize) private var textSize = "default"
     @AppStorage(ComposeAction.tapKey) private var composeTap = ComposeAction.tapDefault.rawValue
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
+    #if os(iOS)
+    @AppStorage(VoryTabBar.showVoiceKey) private var showVoiceButton = true
+    #endif
     @AppStorage(ComposeAction.holdKey) private var composeHold = ComposeAction.holdDefault.rawValue
     @Environment(\.editMode) private var editMode
 
@@ -717,6 +720,11 @@ struct AppearanceView: View {
                 Toggle("Return key sends", isOn: $returnSends)
             } header: { Text("Composer") } footer: {
                 Text("Off, the on-screen keyboard's Return adds a line, as in Messages, and the arrow sends. On, Return sends. On a hardware keyboard Return sends and Shift-Return adds a line either way; ⌘-Return sends too.")
+            }
+            Section {
+                Toggle("Voice button", isOn: $showVoiceButton)
+            } header: { Text("Beside the bar") } footer: {
+                Text("The mic circle beside the tab bar starts a fresh chat by voice (held, it offers the bots). Off, the bar takes its room; voice mode still starts from a chat's mic button and the + panel.")
             }
             Section {
                 Picker("Tap", selection: $composeTap) {

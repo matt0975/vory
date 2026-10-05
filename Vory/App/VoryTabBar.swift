@@ -21,6 +21,10 @@ struct VoryTabBar: View {
     /// What a tap and a press and hold do (Settings › Appearance › New Chat button).
     @AppStorage(ComposeAction.tapKey) private var tapRaw = ComposeAction.tapDefault.rawValue
     @AppStorage(ComposeAction.holdKey) private var holdRaw = ComposeAction.holdDefault.rawValue
+    /// Settings › Appearance › Voice button: the mic circle beside the bar, or not (the capsule
+    /// takes the room). Applies as it is switched, no relaunch.
+    @AppStorage(Self.showVoiceKey) private var showVoice = true
+    static let showVoiceKey = "tabBar.showVoice"
 
     private func run(_ action: ComposeAction) {
         switch action {
@@ -38,7 +42,9 @@ struct VoryTabBar: View {
     private let barHeight: CGFloat = 56
     private let inset: CGFloat = 4
     private let sideMargin: CGFloat = 21
-    private let circleGap: CGFloat = 12
+    /// Between the capsule and the circles, and between the circles: half what it was (the
+    /// bar had a gap on each side of the mic that read as empty space).
+    private let circleGap: CGFloat = 6
     /// The window's bottom safe-area inset: 34 pt on phones with a home indicator, 0 on a
     /// home-button phone (iPhone SE), which iOS 26 still runs on.
     private static var safeBottom: CGFloat {
@@ -58,24 +64,28 @@ struct VoryTabBar: View {
                 capsule
                 // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
                 // held, it offers the bots (#237). With four tabs at most the capsule keeps 49 pt
-                // slots on the narrowest phone.
-                Menu {
-                    ForEach(model.runtime?.profiles ?? []) { p in
-                        Button { voice(p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                // slots on the narrowest phone. Off in Settings › Appearance, it is not there and
+                // the capsule is wider (voice mode still starts from a chat and the + panel).
+                if showVoice {
+                    Menu {
+                        ForEach(model.runtime?.profiles ?? []) { p in
+                            Button { voice(p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                        }
+                    } label: {
+                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
+                            .frame(width: barHeight, height: barHeight)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    } primaryAction: {
+                        voice(nil)
                     }
-                } label: {
-                    Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
-                        .frame(width: barHeight, height: barHeight)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                } primaryAction: {
-                    voice(nil)
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .disabled(model.runtime == nil)
+                    .accessibilityLabel("Voice chat")
+                    .accessibilityHint("Tap for a voice chat with the current bot; press and hold to choose a bot")
+                    .accessibilityIdentifier("chats.voice")
+                    .transition(.scale.combined(with: .opacity))
                 }
-                .menuStyle(.button)
-                .buttonStyle(.plain)
-                .disabled(model.runtime == nil)
-                .accessibilityLabel("Voice chat")
-                .accessibilityHint("Tap for a voice chat with the current bot; press and hold to choose a bot")
-                .accessibilityIdentifier("chats.voice")
                 Button { run(ComposeAction.tap(tapRaw)) } label: {
                     // Centred on the square, not the glyph: the pencil hangs off its top-right
                     // corner. Measured from a simulator screenshot (the square sat 2.5 pt low).
@@ -101,6 +111,7 @@ struct VoryTabBar: View {
         // Reserve only the part above the home-indicator area, like the system bar group; the
         // capsule itself is drawn overflowing into it.
         .frame(height: Self.reservedHeight, alignment: .top)
+        .animation(.snappy(duration: 0.25), value: showVoice)
     }
 
     private var capsule: some View {
