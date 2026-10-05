@@ -556,9 +556,9 @@ KANBAN_BOARDS = [
      "created_at": KANBAN_NOW - 800000, "archived": False, "default_workspace_kind": "scratch", "project_name": "Homelab"},
 ]
 KANBAN_COMMENTS = {
-    "k-101": [{"id": 1, "task_id": "k-101", "author": "matt", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
+    "k-101": [{"id": 1, "task_id": "k-101", "author": "sam", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
               {"id": 2, "task_id": "k-101", "author": "work", "body": "Will do; the index build takes about a minute.", "created_at": KANBAN_NOW - 700}],
-    "k-102": [{"id": 3, "task_id": "k-102", "author": "matt", "body": "Leave nginx/access.log alone.", "created_at": KANBAN_NOW - 5000}],
+    "k-102": [{"id": 3, "task_id": "k-102", "author": "sam", "body": "Leave nginx/access.log alone.", "created_at": KANBAN_NOW - 5000}],
     "k-105": [{"id": 4, "task_id": "k-105", "author": "default", "body": "Ready for a look.", "created_at": KANBAN_NOW - 2900}],
 }
 KANBAN_RUNS = {
