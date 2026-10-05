@@ -42,8 +42,13 @@ struct TranscriptView: View {
     /// no dock position this view had measured could explain, so the floor holds on its own.
     private var bottomInset: CGFloat {
         let measured = dockTop > 0 && visibleBottom > dockTop ? visibleBottom - dockTop : fallbackInset
-        return max(measured, keyboardInset > 0 ? keyboardInset + 44 : 0)
+        return max(measured, keyboardFloor > 0 ? keyboardFloor + 44 : 0)
     }
+    /// The keyboard's height once it has settled. The floor is not applied while the keyboard
+    /// rises: a content margin does not animate, so the thread jumped up a beat before the
+    /// dock's spring brought the composer there.
+    @State private var keyboardFloor: CGFloat = 0
+    @State private var floorTask: Task<Void, Never>?
     /// Height of the floating header (the nav bar is hidden in a chat).
     var topInset: CGFloat = 96
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
@@ -233,6 +238,15 @@ struct TranscriptView: View {
                     keyboardInset = inset
                     if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
                 }
+                floorTask?.cancel()
+                if inset == 0 { keyboardFloor = 0 } else {
+                    floorTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(450))
+                        guard !Task.isCancelled else { return }
+                        keyboardFloor = inset
+                        if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+                    }
+                }
             }
             #endif
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
@@ -263,12 +277,19 @@ struct TranscriptView: View {
                 let away = distance > 120
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
-                // finger on the thread unlocks it. Scrolling back to the end locks it again.
-                if metrics.userScrolling, distance > 24 { metrics.stickToBottom = false }
-                if distance < 4 { metrics.stickToBottom = true }
+                // finger on the thread unlocks it: any upward pull from where the touch began
+                // (a tester scrolling up during a reply was pulled back to the end until the
+                // drag had covered 24 pt, and again whenever a token landed between touches).
+                // Scrolling back to the end, finger off, locks it again.
+                if metrics.userScrolling, distance > 24 || distance > metrics.touchStartDistance + 6 { metrics.stickToBottom = false }
+                if distance < 4, !metrics.userScrolling { metrics.stickToBottom = true }
             }
             .onScrollPhaseChange { _, phase in
-                metrics.userScrolling = phase == .interacting || phase == .decelerating
+                // A finger on the thread counts from the touch, before it has moved.
+                let touching = phase == .tracking || phase == .interacting || phase == .decelerating
+                if touching, !metrics.userScrolling { metrics.touchStartDistance = metrics.distanceFromBottom }
+                metrics.userScrolling = touching
+                if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
@@ -330,11 +351,11 @@ struct TranscriptView: View {
             // the height has settled, not per frame of the card's grow animation: a scroll per
             // frame against a moving margin overshot into blank space.
             .onChange(of: bottomInset) { _, _ in
-                guard metrics.stickToBottom else { return }
+                guard metrics.stickToBottom, !metrics.userScrolling else { return }
                 insetSettle?.cancel()
                 insetSettle = Task {
                     try? await Task.sleep(for: .milliseconds(80))
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
                     if settling { scrollPosition.scrollTo(edge: .bottom) }
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
@@ -661,6 +682,8 @@ final class ScrollMetrics {
     var stickToBottom = true
     var userScrolling = false
     var distanceFromBottom: CGFloat = 0
+    /// How far from the end the thread was when the current touch began.
+    var touchStartDistance: CGFloat = 0
     var offsetY: CGFloat = 0
     var contentHeight: CGFloat = 0
     var containerHeight: CGFloat = 0
@@ -941,7 +964,7 @@ struct TranscriptRow: View, Equatable {
         case .user(let text, let attachments):
             return attachments.isEmpty && (InjectedNote.parse(text) != nil || AgentMessage.parse(text) != nil) ? .center : .trailing
         case .steer: return .trailing
-        case .system: return .center
+        case .system(_, let symbol): return symbol == "terminal" ? .leading : .center
         case .tool(let act): return act.delivery != nil ? .center : .leading
         default: return .leading
         }
@@ -1063,6 +1086,19 @@ struct TranscriptRow: View, Equatable {
             }
         case .tool(let act):
             ToolCardView(activity: act, itemID: item.id, open: toolOpen, showOutput: showToolOutput, compact: compactTools)
+        case .system(let text, let symbol) where symbol == "terminal":
+            // A slash command's reply: reading size, selectable, with Copy; the terminal mark
+            // and a quiet background keep it apart from the bot's words (a tester could neither
+            // read nor copy the small grey line it was).
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Command", systemImage: "terminal").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(text).font(.body).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(12).padding(.trailing, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
+            .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
         case .system(let text, let symbol):
             HStack(spacing: 6) {
                 Image(systemName: symbol)
@@ -1132,7 +1168,7 @@ struct SubagentRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: activity.isRunning ? "person.2.circle" : activity.failed ? "person.2.slash" : "person.2.circle.fill")
-                    .font(.body)
+                    .font(.body).frame(width: 22)   // the slash glyph is wider: the text lines up across states
                     .foregroundStyle(activity.failed ? Color.red : activity.isRunning ? Color.accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(activity.goal).lineLimit(3)
