@@ -460,3 +460,37 @@ actor EventCollector {
         #expect(kanban.lastRefusal == nil && kanban.lastError == nil)
     }
 }
+
+/// Quick answers against the mock: voice mode turns the chat's reasoning down and fast on, keeps
+/// what it had on disk for the restore, and puts it back when voice ends; off, it changes nothing.
+@Suite(.serialized) struct QuickAnswersIntegrationTests {
+    @MainActor @Test func voiceModeTurnsTheChatsReasoningDownAndPutsItBack() async throws {
+        guard let env = GatewayIntegrationTests.env, env.token == "mock-token" else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e quick answers", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let rt = GatewayRuntime(connection: conn, store: store)
+        await rt.start()
+        defer { Task { await rt.stop() } }
+        let chat = try await rt.newChat()
+        defer { rt.closeChat(chat) }
+        let key = "voice.quick.restore." + chat.storedID
+        let setting = UserDefaults.standard.object(forKey: VoiceSettings.quickAnswersKey)
+        defer { UserDefaults.standard.set(setting, forKey: VoiceSettings.quickAnswersKey) }
+
+        UserDefaults.standard.set(true, forKey: VoiceSettings.quickAnswersKey)
+        await chat.beginQuickAnswers()
+        #expect(chat.quickAnswersOn)
+        let kept = UserDefaults.standard.dictionary(forKey: key) as? [String: String]
+        #expect(kept?["reasoning"] == "medium" && kept?["fast"] == "off", "what the chat had is kept for the restore: \(String(describing: kept))")
+        await chat.endQuickAnswers()
+        #expect(!chat.quickAnswersOn)
+        #expect(UserDefaults.standard.dictionary(forKey: key) == nil)
+
+        // Off: voice mode leaves the chat as it is.
+        UserDefaults.standard.set(false, forKey: VoiceSettings.quickAnswersKey)
+        await chat.beginQuickAnswers()
+        #expect(!chat.quickAnswersOn && UserDefaults.standard.dictionary(forKey: key) == nil)
+    }
+}
