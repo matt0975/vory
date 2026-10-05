@@ -54,6 +54,10 @@ struct GatewayFormView: View {
             }
         }
     }
+    /// Return moves to the next field, the URL to the secret: with the URL keyboard still up, a
+    /// tap on the token field left what was typed next in the URL field (#39, on a simulator).
+    private enum Field: Hashable { case name, url, prefix, token, username, password }
+    @FocusState private var field: Field?
     @State private var kind: ConnectionKind = .local
     @State private var name = ""
     @State private var urlText = ""
@@ -85,6 +89,15 @@ struct GatewayFormView: View {
     }
     private var access: CloudflareAccess { CloudflareAccess(clientId: cfClientId.trimmingCharacters(in: .whitespaces), clientSecret: cfClientSecret.trimmingCharacters(in: .whitespaces)) }
 
+    /// Where Return goes from the URL: the field that takes this method's secret.
+    private var secretField: Field? {
+        switch authMode {
+        case .sessionToken: return .token
+        case .password: return .username
+        case .oauth: return nil
+        }
+    }
+
     var body: some View {
         Form {
             Section {
@@ -98,11 +111,14 @@ struct GatewayFormView: View {
             Section {
                 TextField("Name", text: $name, prompt: Text("Home"))
                     .accessibilityIdentifier("gateway.name")
+                    .focused($field, equals: .name).submitLabel(.next).onSubmit { field = .url }
                 TextField("Gateway URL", text: $urlText, prompt: Text(kind.placeholder))
                     .keyboardType(.URL).textContentType(.URL).autocorrectionDisabled().textInputAutocapitalization(.never)
                     .accessibilityIdentifier("gateway.url")
+                    .focused($field, equals: .url).submitLabel(.next).onSubmit { field = secretField }
                 TextField("Path prefix (optional)", text: $pathPrefix, prompt: Text("/hermes"))
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .focused($field, equals: .prefix).submitLabel(.next).onSubmit { field = secretField }
             } header: {
                 Text("Gateway")
             } footer: {
@@ -137,14 +153,17 @@ struct GatewayFormView: View {
                     SecureField("Session token", text: $sessionToken)
                         .textContentType(.password).autocorrectionDisabled()
                         .accessibilityIdentifier("gateway.sessionToken")
+                        .focused($field, equals: .token)
                     Text("The dashboard's HERMES_DASHBOARD_SESSION_TOKEN. Used when the gateway has no auth gate (loopback / trusted network).")
                         .font(.footnote).foregroundStyle(.secondary)
                 case .password:
                     providerPicker
                     TextField("Username", text: $username).textContentType(.username).autocorrectionDisabled().textInputAutocapitalization(.never)
                         .accessibilityIdentifier("gateway.username")
+                        .focused($field, equals: .username).submitLabel(.next).onSubmit { field = .password }
                     SecureField("Password", text: $password).textContentType(.password)
                         .accessibilityIdentifier("gateway.password")
+                        .focused($field, equals: .password)
                     Text("The password is exchanged for a session and never stored.").font(.footnote).foregroundStyle(.secondary)
                 case .oauth:
                     providerPicker

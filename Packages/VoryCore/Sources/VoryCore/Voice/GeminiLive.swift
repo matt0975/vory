@@ -376,6 +376,10 @@ public enum GeminiLive {
         private let makeTransport: @MainActor (URL) -> any LiveTransport
         private var transport: (any LiveTransport)?
         private var reading: Task<Void, Never>?
+        /// Frames out go through one task in order: a task per 100 ms piece of audio was a task
+        /// per piece on the main actor, and pieces sent from separate tasks could cross.
+        private var outgoing: AsyncStream<String>.Continuation?
+        private var sending: Task<Void, Never>?
         private var toolTasks: [String: Task<Void, Never>] = [:]
         private var stopped = false
         /// Audio that arrived before the setup was acknowledged is dropped, not queued forever.
@@ -398,6 +402,17 @@ public enum GeminiLive {
             try await t.connect()
             try await t.send(Framing.setup(model: config.model, voice: config.voice, systemInstruction: config.systemInstruction, resumptionHandle: resumptionHandle,
                                            bargeIn: config.bargeIn, silenceMs: config.silenceMs))
+            sending?.cancel()
+            outgoing?.finish()
+            let (frames, feed) = AsyncStream<String>.makeStream()
+            outgoing = feed
+            sending = Task { [weak self] in
+                for await frame in frames {
+                    // A connection that was retired sends nothing more; the next one has its own sender.
+                    guard let self, !Task.isCancelled, (self.transport as AnyObject?) === (t as AnyObject) else { return }
+                    try? await t.send(frame)
+                }
+            }
             reading?.cancel()
             reading = Task { [weak self] in
                 do {
@@ -446,29 +461,30 @@ public enum GeminiLive {
         }
 
         private func respond(id: String, name: String, result: String) {
-            guard let transport else { return }
-            Task { try? await transport.send(Framing.toolResponse(id: id, name: name, result: result)) }
+            guard transport != nil else { return }
+            outgoing?.yield(Framing.toolResponse(id: id, name: name, result: result))
         }
 
         /// Raw 16 kHz int16 mono PCM, in pieces of about 100 ms.
         public func send(pcm16k: Data) {
-            guard !stopped, let transport else { return }
+            guard !stopped, transport != nil else { return }
             guard isReady else { pendingAudio.append(pcm16k); if pendingAudio.count > 320_000 { pendingAudio.removeFirst(pendingAudio.count - 320_000) }; return }
-            Task { try? await transport.send(Framing.realtimeAudio(pcm16k)) }
+            outgoing?.yield(Framing.realtimeAudio(pcm16k))
         }
 
         /// A line the person typed or the app wants said to the model (never an approval).
         public func send(text: String) {
-            guard !stopped, isReady, let transport else { return }
-            Task { try? await transport.send(Framing.clientText(text)) }
+            guard !stopped, isReady, transport != nil else { return }
+            outgoing?.yield(Framing.clientText(text))
         }
 
         /// The microphone went quiet on purpose (Mute): the server closes what it was hearing
-        /// instead of waiting on a half-heard turn; audio may follow again later.
+        /// instead of waiting on a half-heard turn; audio may follow again later. It goes out
+        /// after the audio already queued, never before it.
         public func endAudioStream() {
-            guard !stopped, isReady, let transport else { return }
+            guard !stopped, isReady, transport != nil else { return }
             pendingAudio = Data()
-            Task { try? await transport.send(Framing.audioStreamEnd) }
+            outgoing?.yield(Framing.audioStreamEnd)
         }
 
         private func connectionEnded(_ error: String?) {
@@ -485,6 +501,8 @@ public enum GeminiLive {
             guard !stopped else { return }
             reconnects += 1
             reading?.cancel(); reading = nil
+            sending?.cancel(); sending = nil
+            outgoing?.finish(); outgoing = nil
             transport?.close(); transport = nil
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             do { try await open() } catch { onEvent(.closed(redact(error.localizedDescription))) }
@@ -494,6 +512,8 @@ public enum GeminiLive {
             stopped = true
             isReady = false
             reading?.cancel(); reading = nil
+            sending?.cancel(); sending = nil
+            outgoing?.finish(); outgoing = nil
             for (_, t) in toolTasks { t.cancel() }
             toolTasks = [:]
             transport?.close(); transport = nil

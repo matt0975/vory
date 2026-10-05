@@ -23,6 +23,8 @@ public final class KanbanStore {
     public private(set) var loading = false
     public private(set) var liveConnected = false
     public private(set) var lastRead: Date?
+    /// How many times the board was read, for the tests (events landing together are one read).
+    public private(set) var reads = 0
 
     private weak var runtime: GatewayRuntime?
     private var cached: Availability?
@@ -93,6 +95,7 @@ public final class KanbanStore {
     private func read(_ api: KanbanAPI) async {
         loading = board == nil
         defer { loading = false }
+        reads += 1
         let slug = selectedBoard
         do {
             async let b = api.board()

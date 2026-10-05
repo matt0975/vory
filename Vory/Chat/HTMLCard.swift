@@ -181,15 +181,27 @@ struct HTMLCardView: View {
     @State private var height: CGFloat = 96
     @State private var loaded = false
     @State private var full = false
+    /// Whether the card is near the screen: its web view (a web process each) lives only then.
+    /// A thread of cards kept every one alive wherever the reader was; a card that has been off
+    /// the screen for a while is its measured height of nothing until it comes back, when it
+    /// draws again.
+    @State private var near = true
+    @State private var leaving: Task<Void, Never>?
+    /// How long a card is off the screen before it is let go: scrolled past and back is not it.
+    static let awayGrace: TimeInterval = 4
 
     var body: some View {
         let cap = HTMLCard.heightCap
         let actions = HTMLCard.Actions(full: { full = true }, showSource: onShowSource, copy: { UIPasteboard.general.string = html })
         ZStack(alignment: .topLeading) {
-            HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark, background: HTMLCard.pageBackground(dark: scheme == .dark)), scrolls: false, height: $height, loaded: $loaded, actions: actions)
-                .frame(height: min(max(height, 48), cap))
-                .opacity(loaded ? 1 : 0.01)
-            if !loaded {
+            if near {
+                HTMLWebView(document: HTMLCard.document(html, dark: scheme == .dark, background: HTMLCard.pageBackground(dark: scheme == .dark)), scrolls: false, height: $height, loaded: $loaded, actions: actions)
+                    .frame(height: min(max(height, 48), cap))
+                    .opacity(loaded ? 1 : 0.01)
+            } else {
+                Color.clear.frame(height: min(max(height, 48), cap))
+            }
+            if near, !loaded {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Drawing the card…").font(.caption).foregroundStyle(.secondary) }
                     .padding(12)
             }
@@ -197,6 +209,19 @@ struct HTMLCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 12))
         .clipShape(.rect(cornerRadius: 12))
+        .onScrollVisibilityChange(threshold: 0.05) { visible in
+            leaving?.cancel(); leaving = nil
+            if visible {
+                near = true
+            } else {
+                leaving = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(Self.awayGrace))
+                    guard !Task.isCancelled else { return }
+                    near = false
+                    loaded = false
+                }
+            }
+        }
         .overlay(alignment: .topTrailing) {
             Button { full = true } label: {
                 Image(systemName: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.semibold))

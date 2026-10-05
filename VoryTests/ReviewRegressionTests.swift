@@ -13,6 +13,7 @@ import Testing
         #expect(layout.visible(hiding: [.kanban]) == [.chats, .settings])
     }
 
+    #if os(iOS)
     @MainActor @Test func theWatchGetsNoRefreshToken() throws {
         let store = ConnectionStore()
         let conn = GatewayConnection(name: "test watch secrets", gateway: try GatewayURL.normalize("http://127.0.0.1:1"), authMode: .sessionToken)
@@ -25,6 +26,7 @@ import Testing
         #expect(sent?.sessionToken == "session-1" && sent?.accessToken == "access-1")
         #expect(sent?.refreshToken == nil, "the refresh token stays on the phone")
     }
+    #endif
 
     @Test func thePictureScanLeavesWebImagesToTheMarkdown() {
         // A gateway picture leaves the text (it is shown under the bubble); a web image stays

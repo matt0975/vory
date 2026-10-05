@@ -20,6 +20,8 @@ final class WatchTalk {
     private let synthesizer = AVSpeechSynthesizer()
     private let synthesizerDelegate = SpeechDelegate()
     private var stopTimer: Task<Void, Never>?
+    /// The wait for the reply, while there is one; the mic button gives it up.
+    private var waiter: ReplyWaiter?
     static let maximumSeconds: TimeInterval = 30
     static let replyWait: TimeInterval = 180
 
@@ -40,15 +42,20 @@ final class WatchTalk {
         }
     }
 
-    /// The mic tapped: start, or stop and send.
+    /// The mic tapped: start, stop and send, give up the wait, or stop the voice.
     func tap(chat: ChatSession) {
         switch phase {
         case .idle: start()
         case .recording: Task { await stopAndSend(chat: chat) }
+        case .waiting: stopWaiting()
         case .speaking: stopSpeaking()
         default: break
         }
     }
+
+    /// The wait for the reply given up: it lands in the chat when it comes, unspoken. (Before,
+    /// only the header's Stop or the 180 s limit ended the wait.)
+    func stopWaiting() { waiter?.cancel() }
 
     private func start() {
         error = nil
@@ -114,6 +121,8 @@ final class WatchTalk {
         heard = words
         phase = .waiting
         let waiter = ReplyWaiter(storedID: chat.storedID)
+        self.waiter = waiter
+        defer { self.waiter = nil }
         if let problem = await chat.send(words, voice: VoiceTurn()) { waiter.stop(); error = problem; phase = .idle; return }
         guard let reply = await waiter.wait(seconds: Self.replyWait, chat: chat) else { phase = .idle; return }
         speak(SpokenText.forSpeech(reply))
@@ -155,6 +164,7 @@ final class WatchTalk {
         private var reply: String?
         private var observer: Any?
         private let storedID: String
+        private(set) var cancelled = false
 
         init(storedID: String) {
             self.storedID = storedID
@@ -171,16 +181,19 @@ final class WatchTalk {
             if let o = observer { NotificationCenter.default.removeObserver(o); observer = nil }
         }
 
+        /// Ends the wait with nothing: the reply, if it comes, stays in the chat.
+        func cancel() { cancelled = true }
+
         func wait(seconds: TimeInterval, chat: ChatSession) async -> String? {
             defer { stop() }
             let deadline = Date().addingTimeInterval(seconds)
             var sawRunning = false
-            while Date() < deadline {
+            while Date() < deadline, !cancelled {
                 if let reply { return reply }
                 if chat.isRunning { sawRunning = true } else if sawRunning { return reply }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            return reply
+            return cancelled ? nil : reply
         }
     }
 }

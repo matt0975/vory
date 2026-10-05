@@ -33,6 +33,10 @@ struct RootView: View {
     @State private var showInstaller = false
     /// The Companion's version when the gateway already runs one: the prompt then only asks to allow notifications.
     @State private var companionFound: String?
+    /// The chosen first screen while its page is still hidden: the Board is off the bar until
+    /// the plugin's probe answers, so "Open Vory on: Board" opened on Chats. It waits for the
+    /// answer, a few seconds at most, as the Mac's launch page does.
+    @State private var launchTabPending: AppModel.AppTab?
 
     var body: some View {
         ZStack {
@@ -47,6 +51,13 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        // The probe answered and the chosen page is on the bar now: open on it, unless the
+        // person has already gone somewhere else.
+        .onChange(of: model.hiddenTabs) { was, hidden in
+            guard let tab = launchTabPending, was.contains(tab), !hidden.contains(tab) else { return }
+            launchTabPending = nil
+            if model.selectedTab == TabLayout.parse(rootLayoutRaw).visible(hiding: hidden).first || model.selectedTab == .chats { model.selectedTab = tab }
+        }
         // The bar steps aside for the keyboard (a name field in Settings had it floating on top).
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in model.keyboardUp = true }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in model.keyboardUp = false }
@@ -58,7 +69,17 @@ struct RootView: View {
             }
             // The chosen first screen (Settings › Home), when it is still on the bar.
             // A page the gateway cannot show (the Board without its plugin) is not opened on: it drew blank.
-            if let tab = AppModel.AppTab(rawValue: launchTab), TabLayout.parse(rootLayoutRaw).visible(hiding: model.hiddenTabs).contains(tab) { model.selectedTab = tab }
+            if let tab = AppModel.AppTab(rawValue: launchTab), TabLayout.parse(rootLayoutRaw).visible().contains(tab) {
+                if !model.hiddenTabs.contains(tab) {
+                    model.selectedTab = tab
+                } else {
+                    launchTabPending = tab
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(8))
+                        launchTabPending = nil
+                    }
+                }
+            }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-vory-show-companion-prompt") { showCompanionPrompt = true }
             if ProcessInfo.processInfo.arguments.contains("-vory-show-setup") { showInstaller = true }
