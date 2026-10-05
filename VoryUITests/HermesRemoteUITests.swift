@@ -135,7 +135,6 @@ final class VoryUITests: XCTestCase {
         var homes: [String] = []
         if let h = e["SIMULATOR_HOST_HOME"], !h.isEmpty { homes.append(h) }
         if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir { homes.append(String(cString: dir)) }
-        homes.append("/Users/andrea")
         var seen = Set<String>()
         return homes.filter { seen.insert($0).inserted }.map { $0 + "/.config/vory/e2e.env" }
     }
@@ -232,10 +231,10 @@ final class VoryUITests: XCTestCase {
         shot("04-chats")
         newChat.tap()
         attachDiagnostics("04b-after-new-chat")
-        // On a gateway with several bots, New Message opens a "Choose a bot first" sheet; the composer
-        // only appears after one is picked. Pick the maya bot (its row label starts with "maya,").
-        let bot = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'maya,'")).firstMatch
-        if bot.waitForExistence(timeout: 10) { bot.tap() }
+        // On a gateway with several bots, New Message opens the sheet with a To: field; the composer
+        // only appears after a bot is picked. Return in the empty field takes the first bot listed.
+        let to = app.textFields["Bot name"].firstMatch
+        if to.waitForExistence(timeout: 10) { to.tap(); to.typeText("\n") }
         let composer = app.descendants(matching: .any).matching(identifier: "newchat.text").firstMatch
         let composerFound = composer.waitForExistence(timeout: 30)
         XCTAssertTrue(composerFound, "newchat.text missing. \(screenSummary())")

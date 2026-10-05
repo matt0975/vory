@@ -321,7 +321,11 @@ enum LocalNotifier {
     @MainActor static var isForeground = true
     /// Once this phone is registered with the gateway, the companion sends these; a local copy
     /// would arrive as a duplicate.
-    @MainActor static var companionDelivers: Bool { AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured }
+    /// Only a gateway with the Companion on it sends anything: registered with a gateway that has
+    /// none, the phone would have waited for pushes that never come and shown nothing itself.
+    @MainActor static var companionDelivers: Bool {
+        AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured && AppModel.shared.companionInstalledVersion != nil
+    }
     @MainActor private static func botName(_ chat: ChatSession) -> String {
         chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
     }

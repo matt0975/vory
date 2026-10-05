@@ -321,7 +321,9 @@ final class HandsFreeSession {
             interruptedLast = true
             liveSaid = ""
             if let b = liveBotLine { transcript.finish(b); liveBotLine = nil }
-            if state.phase == .speaking { setLivePhase(.listening) }
+            // Cut off while a card waits: the card still waits (the Mac's window went back to
+            // Listening… over an open approval).
+            if state.phase == .speaking { setLivePhase(state.cardsPending ? .needsApproval : .listening) }
             state.hearing = true
             liveHearingUntil = Date().addingTimeInterval(1.2)
         case .turnComplete:

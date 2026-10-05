@@ -431,3 +431,32 @@ actor EventCollector {
     func first(where p: (GatewayEvent) -> Bool) -> GatewayEvent? { events.first(where: p) }
     func count(_ p: (GatewayEvent) -> Bool) -> Int { events.filter(p).count }
 }
+
+/// The Board's writes against the mock: a change the server refuses is refused with the
+/// server's own words still there for the screen after the board has been read again (the read
+/// that follows a refusal used to wipe them, and a refused move looked like nothing at all).
+@Suite(.serialized) struct KanbanRefusalIntegrationTests {
+    @MainActor @Test func aRefusedMoveKeepsTheServersWordsAfterTheReadThatFollows() async throws {
+        guard let env = GatewayIntegrationTests.env, env.token == "mock-token" else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e board refusal", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let rt = GatewayRuntime(connection: conn, store: store)
+        await rt.start()
+        defer { Task { await rt.stop() } }
+        let kanban = rt.kanban
+        await kanban.probe()
+        await kanban.refresh()
+        let ready = try #require(kanban.board?.tasks(in: .ready).first, "the mock's board has a Ready task")
+        // Done without a summary: the mock answers 409 with its reason, as the server does.
+        let ok = await kanban.move(ready, to: .done)
+        #expect(!ok)
+        #expect(kanban.lastError?.contains("marked done") == true, "the refusal should be there for the screen: \(kanban.lastError ?? "nil")")
+        #expect(kanban.lastRefusal == kanban.lastError)
+        #expect(kanban.board?.task(id: ready.id)?.column == .ready, "the task stays where it was")
+        // The next successful write clears it.
+        #expect(await kanban.setPriority(ready, ready.priority ?? 0))
+        #expect(kanban.lastRefusal == nil && kanban.lastError == nil)
+    }
+}

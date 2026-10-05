@@ -52,6 +52,8 @@ public enum SpokenText {
         public mutating func finish() -> [String] {
             var out = consume(line: held)
             held = ""
+            // The last line had a pipe and nothing came after it: its words, not a table.
+            out += releasePending()
             if inFence != nil { out.append(Self.note(forFence: fenceLang)); inFence = nil }
             out += flushTable()
             return out

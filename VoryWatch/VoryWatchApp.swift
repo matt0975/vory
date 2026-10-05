@@ -14,7 +14,11 @@ struct VoryWatchApp: App {
         // widget snapshot are visible to the complications extension too.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()
-        _model = State(initialValue: WatchModel())
+        let model = WatchModel()
+        _model = State(initialValue: model)
+        // From the first moment, not from the first screen: a complication push or a notification
+        // action that launches the app in the background found no model and did nothing.
+        WatchAppDelegate.model = model
     }
 
     var body: some Scene {

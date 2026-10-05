@@ -1,3 +1,6 @@
+#if os(iOS)
+import Photos
+#endif
 import SwiftUI
 import VoryCore
 
@@ -142,6 +145,19 @@ struct ImageViewerSheet: View {
     @State private var offset: CGSize = .zero
     @State private var settledOffset: CGSize = .zero
     @State private var saved = false
+    @State private var saving = false
+
+    #if os(iOS)
+    private func saveToPhotos(_ url: URL) {
+        saving = true
+        PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) }) { ok, err in
+            Task { @MainActor in
+                saving = false
+                if ok { saved = true } else { error = err?.localizedDescription ?? "Photos did not take the picture." }
+            }
+        }
+    }
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -192,11 +208,14 @@ struct ImageViewerSheet: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                 ToolbarItemGroup(placement: .primaryAction) {
                     #if os(iOS)
-                    if let image {
-                        Button { UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil); saved = true } label: {
-                            Label(saved ? "Saved" : "Save to Photos", systemImage: saved ? "checkmark" : "square.and.arrow.down")
+                    if let url, image != nil {
+                        // The original file goes to Photos, and "Saved" only once Photos has it
+                        // (it used to say so before the permission was answered, and saved the
+                        // viewer's downsized copy).
+                        Button { saveToPhotos(url) } label: {
+                            Label(saved ? "Saved" : saving ? "Saving…" : "Save to Photos", systemImage: saved ? "checkmark" : "square.and.arrow.down")
                         }
-                        .disabled(saved)
+                        .disabled(saved || saving)
                     }
                     #else
                     // The Mac: the original file into Downloads under its own name, never over

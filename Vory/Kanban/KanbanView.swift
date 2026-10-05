@@ -110,9 +110,21 @@ struct KanbanView: View {
             if store.liveConnected {
                 Label("Live", systemImage: "dot.radiowaves.left.and.right").font(.caption2).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.vertical, 4).background(.thinMaterial, in: .capsule).padding(12)
+                    // Above the floating tab bar, which otherwise covered it on the phone.
+                    .padding(.bottom, Self.liveCapsuleLift(hidden: model.tabBarHidden))
                     .accessibilityLabel("Live updates on")
             }
         }
+    }
+
+    /// How far the Live capsule sits above the bottom: over the phone's floating tab bar when it
+    /// is there; the Mac has no bar.
+    static func liveCapsuleLift(hidden: Bool) -> CGFloat {
+        #if os(iOS)
+        return hidden ? 0 : VoryTabBar.reservedHeight
+        #else
+        return 0
+        #endif
     }
 
     private var emptyWords: String {

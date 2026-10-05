@@ -58,6 +58,11 @@ import Testing
         #expect(g.feed("Pick A | B\n").isEmpty)
         let late = g.feed("Then go.\n")
         #expect(late.count == 2 && late[0].hasPrefix("Pick A") && late[1] == "Then go.")
+        // A reply that ends on a pipe line with no newline after it is still said.
+        #expect(SpokenText.forSpeech("Either A | or B.").hasPrefix("Either A"))
+        var h = SpokenText.Incremental()
+        #expect(h.feed("Either A | or B.").isEmpty)
+        #expect(h.finish().first?.hasPrefix("Either A") == true)
     }
 
     @Test func sentencesAreCutForOneAtATimeSynthesisWithShortOnesJoined() {

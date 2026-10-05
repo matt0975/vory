@@ -206,13 +206,23 @@ public final class KanbanStore {
     @discardableResult
     private func change(_ work: (KanbanAPI) async throws -> Void) async -> Bool {
         guard let api else { return false }
-        var ok = true
-        do { try await work(api); lastError = nil }
-        catch { lastError = Self.message(error); ok = false }
+        var refusal: String?
+        do { try await work(api); lastError = nil; lastRefusal = nil }
+        catch { refusal = Self.message(error) }
         await refresh()
-        if ok { try? await api.dispatch() }
-        return ok
+        if let refusal {
+            // The read that follows must not wipe the refusal before the view shows it (it did,
+            // and a refused move looked like nothing at all).
+            lastError = refusal
+            lastRefusal = refusal
+            return false
+        }
+        try? await api.dispatch()
+        return true
     }
+
+    /// The server's words for the last change it refused; a later read does not clear it.
+    public private(set) var lastRefusal: String?
 
     public func move(_ task: KanbanTask, to status: KanbanStatus, summary: String? = nil, blockReason: String? = nil) async -> Bool {
         var patch = KanbanTaskPatch(status: status)
@@ -265,13 +275,11 @@ public final class KanbanStore {
             } else if runID != nil, (try? await api.reclaim(task.id, reason: reason)) != nil {
                 lastError = nil
             } else {
-                lastError = e.localizedDescription
-                await refresh()
+                await refusal(Self.message(e))
                 return false
             }
         } catch {
-            lastError = error.localizedDescription
-            await refresh()
+            await refusal(Self.message(error))
             return false
         }
         await refresh()
@@ -280,8 +288,15 @@ public final class KanbanStore {
 
     public func nudge() async {
         guard let api else { return }
-        do { try await api.dispatch(); lastError = nil } catch { lastError = Self.message(error) }
+        do { try await api.dispatch(); lastError = nil; lastRefusal = nil } catch { await refusal(Self.message(error)); return }
         await refresh()
+    }
+
+    /// A refused write: the board is read again, and the server's words stay for the view.
+    private func refusal(_ words: String) async {
+        await refresh()
+        lastError = words
+        lastRefusal = words
     }
 
     /// The server's `detail` when it refused, else the error as it describes itself.

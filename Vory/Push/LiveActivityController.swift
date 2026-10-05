@@ -216,6 +216,8 @@ final class LiveActivityController: TurnActivityReporting {
         var toAsk: [(ActivityHandle, ChatSession)] = []
         let here = runtime?.connection.id.uuidString
         for a in Activity<HermesTurnAttributes>.activities {
+            // A voice card left by a killed process: its End would reach nothing, so it goes.
+            if a.content.state.voiceMode != nil, !HandsFreeSession.shared.isActive { endNow(a); continue }
             let sid = a.attributes.storedSessionID
             let sameGateway = a.attributes.connectionID.isEmpty || a.attributes.connectionID == here
             let chat = sameGateway ? runtime?.chatForStored(sid) : nil

@@ -403,7 +403,7 @@ extension TranscriptView {
         actions.onSelectText = { selectText = $0 }
         actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
         actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
-        return RowContext(profile: showBots ? chat.profileName : nil, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
+        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
@@ -566,7 +566,11 @@ final class RowActions {
 /// it leaves the rows it already drew alone.
 @MainActor
 struct RowContext: Equatable {
+    /// The bot beside its bubbles when bots are shown; nil hides it.
     var profile: String?
+    /// The chat's bot whatever is shown: pictures live in its images dir on the gateway (with
+    /// bots hidden, a stored attachment of a non-default bot's chat came back as a placeholder).
+    var bot: String?
     var typingTool: String?
     var showReasoning: Bool
     var currentStepOnly: Bool
@@ -582,7 +586,7 @@ struct RowContext: Equatable {
     var actions: RowActions
 
     static func == (a: RowContext, b: RowContext) -> Bool {
-        a.actions === b.actions && a.profile == b.profile && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
+        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
@@ -597,7 +601,7 @@ struct RowContext: Equatable {
         }
         let id = row.item.id
         let actions = actions
-        TranscriptRow(item: row.item, profile: profile, botShown: row.lastOfRun,
+        TranscriptRow(item: row.item, profile: profile, bot: bot, botShown: row.lastOfRun,
                       typingTool: typingTool,
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
@@ -903,7 +907,7 @@ struct SelectTextItem: Identifiable { let text: String; var id: String { text } 
 
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
-        a.item == b.item && a.profile == b.profile && a.botShown == b.botShown && a.typingTool == b.typingTool
+        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
             && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
@@ -914,6 +918,8 @@ struct TranscriptRow: View, Equatable {
     /// The bot beside its bubble, as in a group chat; nil for none. Only the last bubble of a
     /// run of replies gets the bot (`botShown`); the others keep the same left margin.
     var profile: String? = nil
+    /// The chat's bot, for the pictures (its images dir on the gateway), shown or not.
+    var bot: String? = nil
     var botShown = true
     /// While the reply has no text yet: nil = a grey typing bubble, a name = the dark one with
     /// the tool badge.
@@ -989,10 +995,10 @@ struct TranscriptRow: View, Equatable {
                 VStack(alignment: .trailing, spacing: 6) {
                     // A stored row keeps "[User attached image: name]" where the picture was: the
                     // picture comes back from the gateway's images dir, the mark leaves the bubble.
-                    let attached = attachments.isEmpty ? TranscriptMedia.attachedImages(in: text, profile: profile) : []
+                    let attached = attachments.isEmpty ? TranscriptMedia.attachedImages(in: text, profile: bot) : []
                     let shownText = attached.isEmpty ? text : MediaScan.userTextWithoutAttachments(text)
                     if !attachments.isEmpty { AttachmentStrip(attachments: attachments) }
-                    if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: profile, side: 120, alignment: .trailing) }
+                    if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: bot, side: 120, alignment: .trailing) }
                     if !shownText.isEmpty {
                         Text(shownText)
                             .textSelection(.enabled)
@@ -1050,7 +1056,7 @@ struct TranscriptRow: View, Equatable {
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
                     MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text)).equatable()
-                    if !media.isEmpty { MediaThumbStrip(refs: media, profile: profile) }
+                    if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                             .accessibilityLabel("Turn statistics: \(s.label)")

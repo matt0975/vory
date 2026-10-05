@@ -12,7 +12,7 @@ public enum Keychain {
     /// The host app's bundle id, with any extension / companion suffix stripped.
     public static var baseBundleID: String {
         var base = Bundle.main.bundleIdentifier ?? "Vory"
-        for marker in [".watchkitapp", ".LiveActivity", ".widgets", ".complications", ".notifications"] {
+        for marker in [".watchkitapp", ".LiveActivity", ".widgets", ".complications", ".notificationcontent", ".notificationservice", ".notifications"] {
             if let r = base.range(of: marker) { base = String(base[..<r.lowerBound]) }
         }
         return base

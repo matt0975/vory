@@ -592,10 +592,22 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let nav, nav.viewControllers.count > 1 else { return false }
         guard let pan = g as? UIPanGestureRecognizer, g === self.pan else { return true }
+        // A row of a list keeps its own swipe (the Board's Done and Unblock are a leading swipe,
+        // which this pan ate on a Board pushed from Settings); the edge gesture still goes back there.
+        if let hit = pan.view?.hitTest(pan.location(in: pan.view), with: nil), Self.isInListRow(hit) { return false }
         // Only a clear rightward, mostly horizontal drag; vertical scrolling and the leftward
         // time-reveal drag in the thread are left alone.
         let v = pan.velocity(in: pan.view)
         return v.x > 250 && abs(v.x) > abs(v.y) * 1.8
+    }
+
+    private static func isInListRow(_ view: UIView) -> Bool {
+        var v: UIView? = view
+        while let x = v {
+            if x is UICollectionViewListCell || x is UITableViewCell { return true }
+            v = x.superview
+        }
+        return false
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { false }
