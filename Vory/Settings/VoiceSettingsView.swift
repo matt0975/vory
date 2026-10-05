@@ -44,7 +44,7 @@ struct VoiceSettingsView: View {
     private var speech: SpeechSource { SpeechSource(rawValue: speechRaw) ?? .automatic }
     private var engine: VoiceEngine? { model.runtime?.voice }
     private var conversation: ConversationMode { ConversationMode(rawValue: conversationRaw) ?? .automatic }
-    private var liveProvider: LiveProvider { LiveProvider(rawValue: liveProviderRaw) ?? .gemini }
+    private var liveProvider: LiveProvider { VoiceSettings.provider(stored: liveProviderRaw) }
 
     var body: some View {
         SettingsList {
@@ -100,11 +100,17 @@ struct VoiceSettingsView: View {
                 Picker("Conversation", selection: $conversationRaw) {
                     ForEach(ConversationMode.allCases) { m in Text(m.title).tag(m.rawValue) }
                 }
-                Picker("Live provider", selection: $liveProviderRaw) {
-                    ForEach(LiveProvider.allCases) { p in Text(p.title).tag(p.rawValue) }
+                // One provider offered (OpenAI Live is not built yet): a plain line, not a menu
+                // of one.
+                if LiveProvider.offered.count > 1 {
+                    Picker("Live provider", selection: Binding(get: { liveProvider.rawValue }, set: { liveProviderRaw = $0 })) {
+                        ForEach(LiveProvider.offered) { p in Text(p.title).tag(p.rawValue) }
+                    }
+                } else {
+                    LabeledContent("Live provider", value: liveProvider.title)
                 }
             } header: { Text("Live voice") } footer: {
-                Text("Live is a real back-and-forth with a lifelike voice: a voice model of your own listens and talks, and hands every real request to the bot. Automatic uses Live when your provider is ready, otherwise Standard. Live is billed by your provider to you: Gemini on your key, OpenAI on your gateway's key (about five cents a minute).")
+                Text("Live is a real back-and-forth with a lifelike voice: a voice model of your own listens and talks, and hands every real request to the bot. Automatic uses Live when your Gemini key is saved, otherwise Standard. Live runs on your own Gemini key, billed to you by Google.")
             }
             if liveProvider == .gemini {
                 Section {
@@ -217,7 +223,8 @@ struct VoiceSettingsView: View {
             voices = DeviceSpeaker.voices()
             personalVoice = AVSpeechSynthesizer.personalVoiceAuthorizationStatus
             savedKeySuffix = GeminiLive.Key.suffix
-            await loadGatewayLive()
+            // The gateway's GPT-Live status matters only while OpenAI is offered.
+            if LiveProvider.offered.contains(.openai) { await loadGatewayLive() }
         }
     }
 

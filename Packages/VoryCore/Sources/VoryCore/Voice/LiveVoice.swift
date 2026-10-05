@@ -41,6 +41,11 @@ public enum LiveProvider: String, CaseIterable, Sendable, Identifiable {
         case .openai: return "OpenAI (your gateway)"
         }
     }
+
+    /// The providers this build offers. OpenAI Live is not built yet, so it is not offered (a
+    /// menu entry that could only say "later" was a promise in the public build); the case
+    /// stays for when it is.
+    public static let offered: [LiveProvider] = [.gemini]
 }
 
 /// What a live voice model tells the app, provider-neutral.

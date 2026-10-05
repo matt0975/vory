@@ -94,8 +94,14 @@ public enum VoiceSettings {
     public static var conversation: ConversationMode {
         UserDefaults.standard.string(forKey: conversationKey).flatMap(ConversationMode.init(rawValue:)) ?? .automatic
     }
+    /// The provider Live uses: the stored choice when this build offers it, else the first one
+    /// offered (a device that picked OpenAI in an internal build goes on with Gemini).
     public static var liveProvider: LiveProvider {
-        UserDefaults.standard.string(forKey: liveProviderKey).flatMap(LiveProvider.init(rawValue:)) ?? .gemini
+        provider(stored: UserDefaults.standard.string(forKey: liveProviderKey))
+    }
+    public static func provider(stored raw: String?) -> LiveProvider {
+        if let p = raw.flatMap(LiveProvider.init(rawValue:)), LiveProvider.offered.contains(p) { return p }
+        return LiveProvider.offered.first ?? .gemini
     }
     public static var geminiVoice: String { UserDefaults.standard.string(forKey: geminiVoiceKey)?.nilIfEmpty ?? GeminiLive.defaultVoice }
 
