@@ -311,6 +311,8 @@ final class RouteLog: @unchecked Sendable {
         #expect(RelayWire.decompress(RelayWire.compress(Data())) == Data())
     }
 
+    #if os(iOS)
+    // RelayParts and WatchRequestHold live in the iPhone app (Vory/Watch), which the Mac build leaves out.
     @Test @MainActor func thePhoneHandsABigAnswerBackInParts() throws {
         // A long history page: noisy enough that compressing it still leaves several parts.
         let noisy = noise(200_000)
@@ -352,6 +354,7 @@ final class RouteLog: @unchecked Sendable {
         hold.finish(["ok": false])
         #expect(log.values.count == 1)
     }
+    #endif
 
     @Test func failuresKeepTheirMeaning() {
         #expect(RelayWire.isUnavailable(RelayWire.unavailable("gone")))
