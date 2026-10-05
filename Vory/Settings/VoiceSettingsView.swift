@@ -15,6 +15,7 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.liveProviderKey) private var liveProviderRaw = LiveProvider.gemini.rawValue
     @AppStorage(VoiceSettings.geminiVoiceKey) private var geminiVoice = GeminiLive.defaultVoice
     @AppStorage(VoiceSettings.quickAnswersKey) private var quickAnswers = true
+    @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     @AppStorage(VoiceSettings.lastSessionKey) private var lastSession = ""
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var personalVoice: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
@@ -66,8 +67,18 @@ struct VoiceSettingsView: View {
             Section {
                 Toggle("Read replies aloud", isOn: $readAloud)
                 Toggle("Send after dictation", isOn: $sendAfterDictation)
+                #if os(iOS)
+                Picker("Hold the mic to", selection: $holdMicRaw) {
+                    ForEach(VoiceSettings.HoldMicAction.allCases) { a in Text(a.title).tag(a.rawValue) }
+                }
+                #endif
             } header: { Text("Chats") } footer: {
-                Text("Read replies aloud speaks each reply as it finishes in the chat you have open. Send after dictation sends what you dictated as soon as it is in words, with nothing to tap.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Read replies aloud speaks each reply as it finishes in the chat you have open. Send after dictation sends what you dictated as soon as it is in words, with nothing to tap.")
+                    #if os(iOS)
+                    Text("Hold the mic to: a tap on the composer's mic always dictates into the field; Dictate makes a hold do the same, Start voice mode makes a hold open the whole conversation by voice on that chat, as the mic circle and the + panel do.")
+                    #endif
+                }
             }
             Section {
                 Picker("Pause that ends your turn", selection: $endOfTurn) {

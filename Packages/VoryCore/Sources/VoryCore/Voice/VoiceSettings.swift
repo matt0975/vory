@@ -58,11 +58,38 @@ public enum VoiceSettings {
     /// Voice answers come faster with less deep reasoning (the chat's reasoning low and fast
     /// replies on while voice runs, put back after); on unless turned off; synced.
     public static let quickAnswersKey = "voice.quickAnswers"
+    /// What holding the composer's mic does (`HoldMicAction`); a tap always dictates; synced.
+    public static let holdMicKey = "voice.holdMic"
+
+    /// Settings › Voice › Hold the mic to.
+    public enum HoldMicAction: String, CaseIterable, Sendable, Identifiable {
+        /// As a tap: dictation into the field.
+        case dictate
+        /// The whole conversation by voice on that chat, as the mic circle and the + panel start it.
+        case voiceMode
+        public var id: String { rawValue }
+        public var title: String {
+            switch self {
+            case .dictate: return "Dictate"
+            case .voiceMode: return "Start voice mode"
+            }
+        }
+    }
+    public static var holdMic: HoldMicAction {
+        UserDefaults.standard.string(forKey: holdMicKey).flatMap(HoldMicAction.init(rawValue:)) ?? .dictate
+    }
+
+    /// What the mic does for a press: a tap dictates whatever the setting; a hold dictates
+    /// too unless the setting sends it to voice mode. (The composer's one rule, kept here so
+    /// it can be tested.)
+    public static func micAction(held: Bool, setting: HoldMicAction) -> HoldMicAction {
+        held && setting == .voiceMode ? .voiceMode : .dictate
+    }
     /// The audio session the last voice session played through, for Settings › Voice (a tester's
     /// voice mode made no sound with the iPhone's switch on silent); per device.
     public static let lastSessionKey = "voice.lastSession"
 
-    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey, conversationKey, liveProviderKey, geminiVoiceKey, quickAnswersKey]
+    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey, conversationKey, liveProviderKey, geminiVoiceKey, quickAnswersKey, holdMicKey]
 
     public static var conversation: ConversationMode {
         UserDefaults.standard.string(forKey: conversationKey).flatMap(ConversationMode.init(rawValue:)) ?? .automatic

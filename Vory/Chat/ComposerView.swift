@@ -14,6 +14,15 @@ struct ComposerView: View {
     var namespace: Namespace.ID
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
+    @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
+    /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
+    private var holdStartsVoiceMode: Bool {
+        #if os(iOS)
+        return VoiceSettings.HoldMicAction(rawValue: holdMicRaw) == .voiceMode
+        #else
+        return false
+        #endif
+    }
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showCamera = false
@@ -313,11 +322,9 @@ struct ComposerView: View {
         } else if text.isEmpty && chat.staged.isEmpty && !HandsFreeSession.shared.isActive {
             // Dictation steps aside while voice mode has the microphone (its recorder reset the
             // audio session under the engine).
-            TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
-                #if os(iOS)
-                // Held: the whole conversation by voice, not one message.
-                .onLongPressGesture(minimumDuration: 0.45) { HandsFreeSession.shared.start(chat: chat) }
-                #endif
+            // Held, the mic does what Settings › Voice › Hold the mic to says: dictation, or
+            // the whole conversation by voice on this chat (the Mac's mic is a click; it keeps it).
+            TalkButton(dictation: dictation, engine: chat.runtime.voice, onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {

@@ -184,39 +184,61 @@ final class DictationController {
 
 /// The mic in the composer: a tap starts listening (the field becomes a waveform), the red stop
 /// ends it and the transcript lands in the field. Messages' audio-message bar is the pattern.
+/// With `onHold` (Settings › Voice › Hold the mic to: Start voice mode) a press held for
+/// half a second starts voice mode instead; letting go then does nothing, and a tap still
+/// dictates. Without it a hold is a tap: a button's own long press never beat it.
 struct TalkButton: View {
     var dictation: DictationController
     var engine: VoiceEngine?
+    var onHold: (() -> Void)? = nil
     var onTranscript: (String) -> Void
+    /// The press became a hold: its release is not a tap.
+    @State private var held = false
 
     var body: some View {
-        Button {
-            if dictation.isListening {
-                Task {
-                    let t = await dictation.stop(engine: engine)
-                    if !t.isEmpty { onTranscript(t) }
-                }
-            } else {
-                dictation.start()
-            }
-        } label: {
-            if dictation.isListening {
-                ZStack {
-                    Circle().fill(.red)
-                    RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10)
-                }
-                .frame(width: 28, height: 28)
-            } else {
-                Image(systemName: "mic")
-                    .font(.body.weight(.medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(.secondary)
-            }
+        if let onHold {
+            face
+                .contentShape(.circle)
+                .onTapGesture { if held { held = false } else { tapped() } }
+                .gesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in held = true; onHold() })
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { tapped() }
+                .accessibilityAction(named: "Start voice mode") { onHold() }
+                .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
+                .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Records, then turns it into words as Settings › Voice says. Hold to start voice mode")
+        } else {
+            Button { tapped() } label: { face }
+                .buttonStyle(.plain)
+                .contentShape(.circle)
+                .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
+                .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Records, then turns it into words as Settings › Voice says")
         }
-        .buttonStyle(.plain)
-        .contentShape(.circle)
-        .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
-        .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Records, then turns it into words as Settings › Voice says")
+    }
+
+    private func tapped() {
+        if dictation.isListening {
+            Task {
+                let t = await dictation.stop(engine: engine)
+                if !t.isEmpty { onTranscript(t) }
+            }
+        } else {
+            dictation.start()
+        }
+    }
+
+    @ViewBuilder private var face: some View {
+        if dictation.isListening {
+            ZStack {
+                Circle().fill(.red)
+                RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10)
+            }
+            .frame(width: 28, height: 28)
+        } else {
+            Image(systemName: "mic")
+                .font(.body.weight(.medium))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
