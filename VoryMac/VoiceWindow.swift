@@ -59,7 +59,7 @@ struct MacVoiceHUD: View {
                             Text(p.title).font(.headline).contentTransition(.numericText())
                             if session.isLive, let label = session.liveLabel {
                                 // A Live conversation (the person's own key, billed per minute): which model.
-                                Text("Live · \(label)").font(.caption2.weight(.semibold))
+                                Text("Live · \(label)").font(.caption2.weight(.semibold)).lineLimit(1).fixedSize()
                                     .padding(.horizontal, 6).padding(.vertical, 2)
                                     .background(.white.opacity(0.14), in: .capsule)
                                     .help("A Live conversation with \(label), on your own key")
