@@ -425,6 +425,11 @@ struct KanbanTaskSheet: View {
     @State private var comment = ""
     @State private var sending = false
     @State private var confirmStop = false
+    // Edit the title and the description, as the Mac's inspector does.
+    @State private var renaming = false
+    @State private var titleDraft = ""
+    @State private var editingBody = false
+    @State private var bodyDraft = ""
 
     private var store: KanbanStore? { model.runtime?.kanban }
 
@@ -441,15 +446,29 @@ struct KanbanTaskSheet: View {
             .alert("Board", isPresented: Binding(get: { error != nil && detail != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK") { error = nil }
             } message: { Text(error ?? "") }
+            .alert("Rename", isPresented: $renaming) {
+                TextField("Title", text: $titleDraft)
+                Button("Save") { Task { await saveTitle() } }
+                Button("Cancel", role: .cancel) {}
+            }
             .navigationTitle(detail?.task.title ?? "Task")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
-                if let d = detail, d.task.isWorking {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { confirmStop = true } label: { Label("Stop the Worker", systemImage: "stop.circle") }
+                if let d = detail {
+                    ToolbarItemGroup(placement: .primaryAction) {
+                        Menu {
+                            Button { titleDraft = d.task.title; renaming = true } label: { Label("Rename…", systemImage: "pencil") }
+                            Button { bodyDraft = d.task.body ?? ""; editingBody = true } label: {
+                                Label(d.task.body?.isEmpty == false ? "Edit the Description" : "Add a Description", systemImage: "text.alignleft")
+                            }
+                        } label: { Label("Edit", systemImage: "pencil") }
+                            .accessibilityIdentifier("task.edit")
+                        if d.task.isWorking {
+                            Button { confirmStop = true } label: { Label("Stop the Worker", systemImage: "stop.circle") }
+                        }
                     }
                 }
             }
@@ -493,8 +512,21 @@ struct KanbanTaskSheet: View {
                     ForEach(Array(t.warnings.enumerated()), id: \.offset) { _, w in Label(w.text, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 }
             }
-            if let b = t.body, !b.isEmpty {
-                Section("Task") { MarkdownView(text: b) }
+            Section("Task") {
+                if editingBody {
+                    TextEditor(text: $bodyDraft).font(.body).frame(minHeight: 120)
+                        .accessibilityLabel("Description")
+                    HStack {
+                        Spacer()
+                        // Bordered: in a list row, plain buttons both fire on a tap of the row.
+                        Button("Cancel") { editingBody = false }.buttonStyle(.bordered)
+                        Button("Save") { Task { await saveBody() } }.buttonStyle(.borderedProminent)
+                    }
+                } else if let b = t.body, !b.isEmpty {
+                    MarkdownView(text: b)
+                } else {
+                    Text("No description yet.").foregroundStyle(.secondary)
+                }
             }
             if let r = t.result ?? t.latestSummary, !r.isEmpty {
                 Section(t.result != nil ? "Result" : "Latest summary") { Text(r).textSelection(.enabled) }
@@ -558,6 +590,20 @@ struct KanbanTaskSheet: View {
         guard !text.isEmpty else { return }
         sending = true; defer { sending = false }
         if await store.comment(d.task, text) { comment = ""; await load() } else { error = store.lastError }
+    }
+
+    private func saveTitle() async {
+        guard let store, let t = detail?.task else { return }
+        let title = titleDraft.trimmingCharacters(in: .whitespaces)
+        guard !title.isEmpty, title != t.title else { return }
+        if await store.edit(t, title: title, body: nil) { await load() } else { error = store.lastError }
+    }
+
+    private func saveBody() async {
+        guard let store, let t = detail?.task else { return }
+        editingBody = false
+        guard bodyDraft != (t.body ?? "") else { return }
+        if await store.edit(t, title: nil, body: bodyDraft) { await load() } else { error = store.lastError }
     }
 
     static func duration(_ s: Int) -> String {

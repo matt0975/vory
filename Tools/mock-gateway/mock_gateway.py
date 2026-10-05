@@ -747,17 +747,19 @@ async def kanban_events(ws, query):
     """The plugin's own socket: a frame when something happened, nothing otherwise. A frame every
     so often here, so the app's refetch path runs; `since` replays what came after it."""
     cursor = int(query.get("since") or KANBAN_CURSOR[0])
+    quiet = 0.0
     while True:
         new = sorted((e for evs in KANBAN_EVENTS.values() for e in evs if e["id"] > cursor), key=lambda e: e["id"])
         if new:
             cursor = new[-1]["id"]
+            quiet = 0.0
             await ws.send(json.dumps({"events": new, "cursor": cursor}))
-        else:
-            # Nothing happened: every 25 s the running worker reports a heartbeat-ish event so a
-            # watcher sees the stream is alive.
-            await asyncio.sleep(25)
-            # A liveness frame only: the running worker's heartbeat moves, which the real
-            # server does not file as a task event, so it is not kept in the task's history.
+        elif quiet >= 25:
+            # Nothing happened for 25 s: the running worker reports a heartbeat-ish event so a
+            # watcher sees the stream is alive. A liveness frame only: the running worker's
+            # heartbeat moves, which the real server does not file as a task event, so it is
+            # not kept in the task's history.
+            quiet = 0.0
             KANBAN_CURSOR[0] += 1
             t = _kfind("default", "k-101")
             if t and t["status"] == "running":
@@ -766,7 +768,10 @@ async def kanban_events(ws, query):
             await ws.send(json.dumps({"events": [ev], "cursor": ev["id"]}))
             cursor = ev["id"]
             continue
+        # A write is looked for every second (the real plugin pushes at once); the loop used to
+        # sit 25 s in the quiet branch and a change made in that window reached the app late.
         await asyncio.sleep(1)
+        quiet += 1
 
 
 # ── Audio (hermes_cli/web_routers/audio.py): a canned transcript, a tone for speech ────────────

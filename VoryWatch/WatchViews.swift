@@ -301,14 +301,10 @@ struct WatchProfilePicker: View {
     }
 }
 
-/// The same deterministic palette the phone uses when no colour was picked for a bot.
+/// The same deterministic palette the phone uses when no colour was picked for a bot: the
+/// phone's list itself, from VoryCore (a copy here had every colour off by a digit).
 enum WatchBotColor {
-    static let hexes = ["#7D5CFF", "#0A85FF", "#30D159", "#FF9E0A", "#FF385E", "#63D1FF", "#BF59F2", "#FFD60A", "#FF6B36", "#59C7FA"]
-    static func hex(for profile: String) -> String {
-        var hash: UInt64 = 5381
-        for b in profile.utf8 { hash = (hash &* 33) &+ UInt64(b) }
-        return hexes[Int(hash % UInt64(hexes.count))]
-    }
+    static func hex(for profile: String) -> String { BotPalette.defaultHex(for: profile) }
     static func color(for profile: String) -> Color { Color(botHex: hex(for: profile)) ?? .accentColor }
 }
 
@@ -431,15 +427,17 @@ struct WatchChatView: View {
                 TextField("Message", text: $text)
             }
             if let chat {
+                // While the reply is awaited the same button gives the wait up (the reply still
+                // lands in the chat); before, only the header's Stop or the 180 s limit ended it.
                 Button { talk.tap(chat: chat) } label: {
-                    Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : "mic.circle.fill")
+                    Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : talk.phase == .waiting ? "xmark.circle.fill" : "mic.circle.fill")
                         .font(.title3)
                         .symbolEffect(.pulse, isActive: talk.phase == .recording || talk.phase == .waiting)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(talk.phase == .recording ? Color.red : talk.isBusy ? Color.accentColor : Color.secondary)
-                .disabled(talk.phase == .transcribing || talk.phase == .waiting)
-                .accessibilityLabel(talk.phase == .recording ? "Stop and send" : talk.phase == .speaking ? "Stop speaking" : "Talk")
+                .disabled(talk.phase == .transcribing)
+                .accessibilityLabel(talk.phase == .recording ? "Stop and send" : talk.phase == .speaking ? "Stop speaking" : talk.phase == .waiting ? "Stop waiting for the reply" : "Talk")
             }
             if !talk.isBusy {
                 Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }

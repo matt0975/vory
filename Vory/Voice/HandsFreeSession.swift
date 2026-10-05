@@ -514,17 +514,30 @@ final class HandsFreeSession {
         watchTask?.cancel()
         watchTask = Task { [weak self] in
             while !Task.isCancelled {
-                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-                    withObservationTracking {
-                        _ = chat.isRunning
-                        _ = chat.cards.count
-                    } onChange: {
-                        c.resume()
-                    }
-                }
+                await Self.nextChange(of: chat)
                 guard !Task.isCancelled, let self, self.chat === chat else { return }
                 self.chatChanged(chat)
             }
+        }
+    }
+
+    /// Returns when the chat's turn or its cards change, or when the task is cancelled. The
+    /// wait used to sit in its continuation until the next change, which kept a cancelled
+    /// watch (and the chat it held) alive past End until that chat moved again.
+    private static func nextChange(of chat: ChatSession) async {
+        let wait = ObservationWait()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                wait.take(c)
+                withObservationTracking {
+                    _ = chat.isRunning
+                    _ = chat.cards.count
+                } onChange: {
+                    wait.fire()
+                }
+            }
+        } onCancel: {
+            wait.fire()
         }
     }
 
@@ -847,6 +860,30 @@ final class HandsFreeSession {
     private var fakeTurns = 0
     static let fakeLines = ["What is filling up the disk on that host?", "Yes, go ahead and clean it up."]
 
+    /// One continuation, resumed once by whichever comes first: the observed change or the
+    /// cancellation (which may arrive from any thread, and before the continuation is taken).
+    final class ObservationWait: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        private var fired = false
+
+        func take(_ c: CheckedContinuation<Void, Never>) {
+            lock.lock()
+            if fired { lock.unlock(); c.resume(); return }
+            continuation = c
+            lock.unlock()
+        }
+
+        func fire() {
+            lock.lock()
+            fired = true
+            let c = continuation
+            continuation = nil
+            lock.unlock()
+            c?.resume()
+        }
+    }
+
     /// Says the next canned line into the loop as soon as it listens, the way a person would.
     func fakeInputIfListening() {
         guard state.phase == .listening, !state.isMuted, !state.hearing, fakeTask == nil, fakeTurns < Self.fakeLines.count else { return }
@@ -859,6 +896,16 @@ final class HandsFreeSession {
             guard !Task.isCancelled else { return }
             let voice = DeviceSpeaker.voice(identifier: nil)
             var fed = 0
+            // The device voice has sat on a render without a chunk (seen once on a Mac): the
+            // line is dropped with a word in the log rather than a loop at Listening for good.
+            let watchdog = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled, let self, let t = self.fakeTask else { return }
+                UtteranceListener.log.error("fake input: the device voice gave nothing in 15 s; the line is dropped")
+                t.cancel()
+                self.fakeTask = nil
+            }
+            defer { watchdog.cancel() }
             for await chunk in DeviceSpeaker.render(line, voice: voice) {
                 guard !Task.isCancelled, let buffer = chunk.pcmBuffer() else { break }
                 ingest(buffer, AVAudioTime(hostTime: mach_absolute_time()))
