@@ -44,8 +44,42 @@ struct MediaThumbStrip: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Image \(ref.name)")
             .accessibilityHint("Opens it full screen")
+            #if os(macOS)
+            // The Mac: drag the picture out as its original file, or right-click for the rest.
+            .onDrag { MediaSave.dragProvider(for: ref, profile: profile) }
+            .contextMenu { MacMediaMenu(ref: ref, profile: profile, onOpen: { viewing = ref }) }
+            #endif
     }
 }
+
+#if os(macOS)
+/// A picture's menu on the Mac: open it, save the original to Downloads, copy it, share it.
+struct MacMediaMenu: View {
+    var ref: MediaRef
+    var profile: String?
+    var onOpen: () -> Void
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Button { onOpen() } label: { Label("Open", systemImage: "arrow.up.left.and.arrow.down.right") }
+        Button { Task { await save() } } label: { Label("Save to Downloads", systemImage: "square.and.arrow.down") }
+        Button { Task { if let url = await file() { MediaSave.copyImage(at: url) } } } label: { Label("Copy Image", systemImage: "doc.on.doc") }
+        // The file is handed over when the share happens, fetched then if it is not here yet.
+        ShareLink(item: MediaFile(ref: ref, profile: profile), preview: SharePreview(ref.name)) { Label("Share", systemImage: "square.and.arrow.up") }
+    }
+
+    /// The original, fetched if it is not here yet.
+    private func file() async -> URL? {
+        guard let rt = model.runtime else { return nil }
+        return try? await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+    }
+
+    private func save() async {
+        guard let url = await file(), let saved = try? MediaSave.toDownloads(url, name: ref.name) else { return }
+        MediaSave.showInFinder(saved)
+    }
+}
+#endif
 
 struct MediaThumb: View {
     var ref: MediaRef
@@ -134,6 +168,10 @@ struct ImageViewerSheet: View {
                                 offset = .zero; settledOffset = .zero
                             }
                         }
+                        #if os(macOS)
+                        // Drag the original file out to the Finder, the Desktop or another app.
+                        .onDrag { MediaSave.dragProvider(for: ref, profile: profile) }
+                        #endif
                         .accessibilityLabel("Image \(ref.name)")
                 } else if let error {
                     VStack(spacing: 8) {
@@ -160,6 +198,18 @@ struct ImageViewerSheet: View {
                         }
                         .disabled(saved)
                     }
+                    #else
+                    // The Mac: the original file into Downloads under its own name, never over
+                    // another; then a word that it is there, with the Finder a click away.
+                    if let url {
+                        if let savedTo {
+                            Button { MediaSave.showInFinder(savedTo) } label: { Label("Saved · Show in Finder", systemImage: "checkmark") }
+                                .accessibilityIdentifier("media.showInFinder")
+                        } else {
+                            Button { saveToDownloads(url) } label: { Label("Save to Downloads", systemImage: "square.and.arrow.down") }
+                                .accessibilityIdentifier("media.save")
+                        }
+                    }
                     #endif
                     if let url { ShareLink(item: url) { Label("Share", systemImage: "square.and.arrow.up") } }
                 }
@@ -168,6 +218,15 @@ struct ImageViewerSheet: View {
         }
         .task { await load() }
     }
+
+    #if os(macOS)
+    /// Where the picture was saved this time, for the Show in Finder that follows.
+    @State private var savedTo: URL?
+
+    private func saveToDownloads(_ url: URL) {
+        do { savedTo = try MediaSave.toDownloads(url, name: ref.name) } catch { self.error = "Could not save: \(error.localizedDescription)" }
+    }
+    #endif
 
     private func load() async {
         guard let rt = AppModel.shared.runtime else { error = "Connect a gateway first."; return }
