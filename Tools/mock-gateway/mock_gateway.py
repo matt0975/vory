@@ -839,6 +839,44 @@ def audio_rest(method, base, payload):
 
 VOICE_LIVE = "--voice-live" in sys.argv
 
+# --neutral-models: every provider and model name the mock reports becomes a made-up one, for
+# recordings where no vendor's name may appear on screen. The default stays faithful to a real
+# gateway's catalogue (the app's model pickers and cost lines are developed against it). The
+# substitution runs on every JSON body and socket frame on its way out, longest names first.
+NEUTRAL_MODELS = "--neutral-models" in sys.argv
+NEUTRAL_NAMES = [
+    ("claude-subscription/claude-opus-4.6", "local/assistant"),
+    ("claude-subscription-directsdk-experimental", "local-assistant"),
+    ("anthropic/claude-sonnet-4.6", "workshop/assistant"),
+    ("anthropic/claude-opus-4.6", "workshop/assistant-large"),
+    ("anthropic/claude-haiku-4.5", "workshop/assistant-mini"),
+    ("openai/gpt-5.1-mini", "local/assistant-mini"),
+    ("openai/gpt-5.5", "workshop/assistant-large"),
+    ("openai/gpt-5.1", "local/assistant"),
+    ("Needs the Claude Code CLI installed and signed in on the gateway machine.", "Needs the local assistant installed on the gateway machine."),
+    ("Claude subscription", "Local assistant"),
+    ("ANTHROPIC_API_KEY", "WORKSHOP_API_KEY"),
+    ("OPENAI_API_KEY", "LOCAL_API_KEY"),
+    ("Anthropic API key", "Workshop API key"),
+    ("OpenAI API key", "Local assistant key"),
+    ("GPT-Live", "Live voice"),
+    ("gpt-live-1", "live-voice-1"),
+    ("Anthropic", "Workshop"),
+    ("anthropic", "workshop"),
+    ("OpenAI", "Local"),
+    ("openai", "local"),
+    ("claude", "assistant"),
+]
+
+
+def neutral(text: str) -> str:
+    """The outgoing JSON with vendor and model names replaced, when the flag is on."""
+    if not NEUTRAL_MODELS:
+        return text
+    for real, made_up in NEUTRAL_NAMES:
+        text = text.replace(real, made_up)
+    return text
+
 
 async def speak_stream(ws):
     """The speak-stream socket: text frames in, {start}, int16 PCM frames and {end} out; {stop}
@@ -916,7 +954,7 @@ def process_request(connection, request):
     else:
         result = rest(path, query)
     status, payload = result if result else (404, {"detail": "Not found"})
-    body = json.dumps(payload).encode()
+    body = neutral(json.dumps(payload)).encode()
     return Response(status, "OK", Headers([("Content-Type", "application/json"),
                                            ("Content-Length", str(len(body)))]), body)
 
@@ -963,7 +1001,7 @@ class Gateway:
         self.pending: dict[str, asyncio.Future] = {}
 
     async def send(self, frame: dict) -> None:
-        await self.ws.send(json.dumps(frame))
+        await self.ws.send(neutral(json.dumps(frame)))
 
     async def event(self, kind: str, sid: str, payload: dict | None = None) -> None:
         params = {"type": kind, "session_id": sid}
@@ -1590,6 +1628,9 @@ async def main() -> None:
     ap.add_argument("--port", type=int, default=9119)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="mock-token")
+    # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
+    ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
+    ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     args = ap.parse_args()
     global TOKEN
     TOKEN = args.token
