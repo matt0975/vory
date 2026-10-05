@@ -82,6 +82,9 @@ enum SiriAsk {
         while !rt.socketState.isOpen, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
         guard rt.socketState.isOpen else { return "Your gateway isn't answering right now." }
         guard let chat = await siriChat(on: rt) else { return "Vory could not open a chat on your gateway." }
+        // A spoken answer within Siri's time: quick answers for this question, put back after.
+        await chat.beginQuickAnswers()
+        defer { Task { await chat.endQuickAnswers() } }
         let waiter = ReplyWaiter(storedID: chat.storedID)
         if let problem = await chat.send(q, voice: VoiceTurn()) { waiter.stop(); return problem }
         if let reply = await waiter.wait(seconds: waitLimit, chat: chat) {

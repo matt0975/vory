@@ -742,6 +742,48 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         _ = try await rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
     }
 
+    // MARK: Quick answers (voice)
+
+    /// Voice mode is running with this chat's reasoning turned down and fast replies on.
+    public private(set) var quickAnswersOn = false
+    /// What voice mode puts back, kept on disk per session so an app killed mid-voice can
+    /// restore it on the next open (`restoreQuickAnswersIfNeeded`).
+    private static func quickRestoreKey(_ storedID: String) -> String { "voice.quick.restore." + storedID }
+    /// The effort voice mode runs with; the gateway's levels go none … ultra.
+    public static let quickEffort = "low"
+
+    /// Voice mode begins: low reasoning and fast replies for this chat only, with what it had
+    /// remembered so typed turns after are unaffected. Nothing when the setting is off.
+    public func beginQuickAnswers() async {
+        guard VoiceSettings.quickAnswers, !quickAnswersOn else { return }
+        let before = ["reasoning": info?.reasoningEffort ?? "", "fast": (info?.fast ?? false) ? "on" : "off"]
+        if !storedID.isEmpty { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
+        quickAnswersOn = true
+        try? await setReasoning(Self.quickEffort)
+        try? await setFast(true)
+    }
+
+    /// Voice mode ended: the chat's own reasoning and fast come back.
+    public func endQuickAnswers() async {
+        guard quickAnswersOn else { return }
+        quickAnswersOn = false
+        await restoreQuickAnswers(storedID.isEmpty ? nil : UserDefaults.standard.dictionary(forKey: Self.quickRestoreKey(storedID)) as? [String: String])
+    }
+
+    /// A chat opened after the app was killed mid-voice: what voice mode changed is put back.
+    public func restoreQuickAnswersIfNeeded() async {
+        guard !storedID.isEmpty, let before = UserDefaults.standard.dictionary(forKey: Self.quickRestoreKey(storedID)) as? [String: String] else { return }
+        await restoreQuickAnswers(before)
+    }
+
+    private func restoreQuickAnswers(_ before: [String: String]?) async {
+        if !storedID.isEmpty { UserDefaults.standard.removeObject(forKey: Self.quickRestoreKey(storedID)) }
+        // A chat that reported no effort of its own goes back to the gateway's usual middle.
+        let effort = before?["reasoning"] ?? ""
+        try? await setReasoning(effort.isEmpty ? "medium" : effort)
+        try? await setFast(before?["fast"] == "on")
+    }
+
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
     }

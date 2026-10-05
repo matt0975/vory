@@ -1452,6 +1452,8 @@ class Gateway:
             return ok({"status": "interrupted", "interrupted": True})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
+            # Voice mode's quick answers set reasoning and fast for the session and put them back.
+            print(f"config.set {p.get('key')}={p.get('value')!r} session={p.get('session_id')} scope={p.get('scope')}", flush=True)
             return ok({"key": p.get("key", ""), "value": str(p.get("value", "")),
                        "info": session_info(s.title if s else "", False, profile)})
         if method in ("session.close", "session.delete"):

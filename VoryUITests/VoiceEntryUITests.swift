@@ -81,11 +81,12 @@ final class VoiceEntryUITests: XCTestCase {
         compose.press(forDuration: 0.8)
         let to = app.textFields["Bot name"].firstMatch
         XCTAssertTrue(to.waitForExistence(timeout: 10), "the New Message sheet did not open")
-        // Pick the first bot card.
-        let firstBot = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'bot' OR label CONTAINS[c] 'claude' OR label CONTAINS[c] 'hermes'")).firstMatch
-        if firstBot.waitForExistence(timeout: 5) { firstBot.tap() }
+        // Return in the empty To: field takes the first bot listed.
+        to.tap()
+        to.typeText("\n")
         let attach = app.buttons["newchat.attach"].firstMatch
         XCTAssertTrue(attach.waitForExistence(timeout: 5))
+        XCTAssertTrue(attach.isEnabled, "no bot was chosen, so the + button stayed off")
         XCTAssertTrue(app.buttons["newchat.voice"].firstMatch.exists, "no mic beside Send")
         attach.tap()
         XCTAssertTrue(app.buttons["attach.voice-mode"].firstMatch.waitForExistence(timeout: 5), "no Voice mode row in the + panel")

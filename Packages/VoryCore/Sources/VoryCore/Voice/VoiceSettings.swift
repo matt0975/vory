@@ -55,8 +55,14 @@ public enum VoiceSettings {
     public static let liveProviderKey = "voice.liveProvider"
     /// The Gemini voice's name; synced.
     public static let geminiVoiceKey = "voice.gemini.voice"
+    /// Voice answers come faster with less deep reasoning (the chat's reasoning low and fast
+    /// replies on while voice runs, put back after); on unless turned off; synced.
+    public static let quickAnswersKey = "voice.quickAnswers"
+    /// The audio session the last voice session played through, for Settings › Voice (a tester's
+    /// voice mode made no sound with the iPhone's switch on silent); per device.
+    public static let lastSessionKey = "voice.lastSession"
 
-    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey, conversationKey, liveProviderKey, geminiVoiceKey]
+    public static let syncedKeys: [String] = [speechKey, readAloudKey, sendAfterDictationKey, bargeInKey, endOfTurnKey, conversationKey, liveProviderKey, geminiVoiceKey, quickAnswersKey]
 
     public static var conversation: ConversationMode {
         UserDefaults.standard.string(forKey: conversationKey).flatMap(ConversationMode.init(rawValue:)) ?? .automatic
@@ -84,6 +90,7 @@ public enum VoiceSettings {
     public static var endOfTurn: EndOfTurn {
         EndOfTurn(rawValue: UserDefaults.standard.double(forKey: endOfTurnKey)) ?? .normal
     }
+    public static var quickAnswers: Bool { UserDefaults.standard.object(forKey: quickAnswersKey) as? Bool ?? true }
 }
 
 /// Which engine a job goes to.

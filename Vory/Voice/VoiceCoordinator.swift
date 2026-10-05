@@ -27,6 +27,8 @@ final class VoiceCoordinator {
     /// device's), the markdown taken out first.
     func speak(_ markdown: String) {
         guard let engine = AppModel.shared.runtime?.voice else { lastError = "Connect a gateway first."; return }
+        // One voice at a time anywhere in the app: voice mode has the floor while it runs.
+        guard !HandsFreeSession.shared.isActive else { lastError = "Voice mode is on. End it to use Speak."; return }
         stop()
         let spoken = SpokenText.forSpeech(markdown)
         guard !spoken.isEmpty else { return }
@@ -40,6 +42,7 @@ final class VoiceCoordinator {
 
     /// Plays one chunk (a voice preview); stops whatever was being read.
     func play(_ chunk: AudioChunk) {
+        guard !HandsFreeSession.shared.isActive else { lastError = "Voice mode is on. End it to preview a voice."; return }
         stop()
         speakingText = "\u{200B}preview"
         task = Task { [weak self] in

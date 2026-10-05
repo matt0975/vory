@@ -14,6 +14,8 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.conversationKey) private var conversationRaw = ConversationMode.automatic.rawValue
     @AppStorage(VoiceSettings.liveProviderKey) private var liveProviderRaw = LiveProvider.gemini.rawValue
     @AppStorage(VoiceSettings.geminiVoiceKey) private var geminiVoice = GeminiLive.defaultVoice
+    @AppStorage(VoiceSettings.quickAnswersKey) private var quickAnswers = true
+    @AppStorage(VoiceSettings.lastSessionKey) private var lastSession = ""
     @State private var voices: [AVSpeechSynthesisVoice] = []
     @State private var personalVoice: AVSpeechSynthesizer.PersonalVoiceAuthorizationStatus = .notDetermined
     /// The key lives in the Keychain; this is the field's copy while one is being entered.
@@ -64,8 +66,13 @@ struct VoiceSettingsView: View {
                     ForEach(VoiceSettings.EndOfTurn.allCases) { p in Text(p.title).tag(p.rawValue) }
                 }
                 Toggle("Talking over the bot stops it", isOn: $bargeIn)
+                Toggle("Quick answers", isOn: $quickAnswers)
             } header: { Text("Voice mode") } footer: {
-                Text("Voice mode is in a chat's + menu, or hold the mic. Standard listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Voice mode is in a chat's + menu, the mic beside the compose button, or hold the mic. Standard listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
+                    Text("Quick answers make voice replies come faster with less deep reasoning: while voice mode runs, that chat thinks at low effort with fast replies on, and goes back to its own settings after. Turn it off here, or ask the bot to take its time.")
+                    if !lastSession.isEmpty { Text("Last voice session: \(lastSession)").font(.caption2) }
+                }
             }
             Section {
                 Picker("Conversation", selection: $conversationRaw) {
@@ -116,13 +123,20 @@ struct VoiceSettingsView: View {
                     Picker("Voice", selection: $geminiVoice) {
                         ForEach(GeminiLive.voices, id: \.name) { v in Text("\(v.name) · \(v.character)").tag(v.name) }
                     }
+                    // Another voice picked mid-sample: the sample stops before the next can start.
+                    .onChange(of: geminiVoice) { _, _ in VoiceCoordinator.shared.stop() }
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
+                            // While a sample plays the button says so and takes no second tap, so
+                            // two samples can never sound at once (#239).
                             Button { previewVoice() } label: {
-                                Label(VoiceCoordinator.shared.isSpeaking ? "Stop" : previewing ? "Fetching…" : "Preview the voice",
-                                      systemImage: VoiceCoordinator.shared.isSpeaking ? "stop.circle" : "play.circle")
+                                if VoiceCoordinator.shared.isSpeaking {
+                                    HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Playing…") }
+                                } else {
+                                    Label(previewing ? "Fetching…" : "Preview the voice", systemImage: "play.circle")
+                                }
                             }
-                            .disabled(savedKeySuffix == nil || previewing)
+                            .disabled(savedKeySuffix == nil || previewing || VoiceCoordinator.shared.isSpeaking)
                             Spacer()
                             if let previewStatus { Text(previewStatus.headline).font(.caption).foregroundStyle(previewStatus.ok ? Color.secondary : Color.orange).multilineTextAlignment(.trailing) }
                         }
@@ -158,6 +172,7 @@ struct VoiceSettingsView: View {
                         Text(Self.name(of: v)).tag(v.identifier)
                     }
                 }
+                .onChange(of: deviceVoice) { _, _ in VoiceCoordinator.shared.stop() }
                 if personalVoice != .authorized {
                     Button {
                         AVSpeechSynthesizer.requestPersonalVoiceAuthorization { status in Task { @MainActor in personalVoice = status; voices = DeviceSpeaker.voices() } }
@@ -165,8 +180,12 @@ struct VoiceSettingsView: View {
                     .disabled(personalVoice == .denied || personalVoice == .unsupported)
                 }
                 Button {
-                    VoiceCoordinator.shared.toggleSpeaking("Hi, this is how I sound on \(DeviceWords.this).")
-                } label: { Label(VoiceCoordinator.shared.isSpeaking ? "Stop" : "Try the voice", systemImage: VoiceCoordinator.shared.isSpeaking ? "stop.circle" : "play.circle") }
+                    VoiceCoordinator.shared.speak("Hi, this is how I sound on \(DeviceWords.this).")
+                } label: {
+                    if VoiceCoordinator.shared.isSpeaking { HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Playing…") } }
+                    else { Label("Try the voice", systemImage: "play.circle") }
+                }
+                .disabled(VoiceCoordinator.shared.isSpeaking)
             } header: { Text("Voice on \(DeviceWords.this)") } footer: {
                 Text(personalVoice == .denied ? "Personal Voice is off for Vory in Settings › Accessibility › Personal Voice."
                      : "Used when speech is handled on \(DeviceWords.this). Automatic picks the best installed voice for your language; a Personal Voice comes first once it is allowed.")
@@ -209,7 +228,7 @@ struct VoiceSettingsView: View {
     /// A voice is fetched once and replayed from the device after that, so flicking through
     /// the voices does not spend the free tier's few calls a minute.
     private func previewVoice() {
-        if VoiceCoordinator.shared.isSpeaking { VoiceCoordinator.shared.stop(); return }
+        guard !VoiceCoordinator.shared.isSpeaking else { return }
         let voice = geminiVoice
         if let cached = GeminiLive.Key.cachedPreview(voice: voice) {
             previewStatus = ActionStatus(headline: "\(voice), from the device", ok: true, raw: nil)

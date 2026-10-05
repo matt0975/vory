@@ -315,6 +315,8 @@ public final class GatewayRuntime {
         let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: owner)
         registry.add(session)
         session.beginResume()
+        // Voice mode's quick answers are put back if the app died with them on.
+        Task { await session.awaitResume(); if session.resumeError == nil { await session.restoreQuickAnswersIfNeeded() } }
         if waitForResume {
             await session.awaitResume()
             if let e = session.resumeError { registry.remove(session); throw HermesAPIError.transport(e) }

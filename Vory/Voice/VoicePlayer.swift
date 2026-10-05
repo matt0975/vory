@@ -1,4 +1,5 @@
 import AVFAudio
+import os
 import VoryCore
 
 /// Plays the voice engine's audio chunks through an AVAudioEngine of its own (the Mac's output
@@ -21,6 +22,9 @@ final class VoicePlayer {
     private var generation = 0
     private var ended = false
     private var finish: CheckedContinuation<Void, Never>?
+    /// The first chunk of a `play` logs the session it plays through (see `sessionLine`).
+    private var loggedFirstAudio = false
+    private static let log = Logger(subsystem: "dev.vory", category: "audio")
     /// Hands-free holds the session and the engine open for the whole conversation; `play`
     /// then neither takes nor drops them.
     private(set) var handsFree = false
@@ -34,7 +38,7 @@ final class VoicePlayer {
     func play(_ chunks: AsyncThrowingStream<AudioChunk, Error>) async throws {
         if !handsFree { try beginSession() }
         isPlaying = true
-        queued = []; ended = false
+        queued = []; ended = false; loggedFirstAudio = false
         defer { isPlaying = false; if !handsFree { endSession() } }
         // One chunk is held back so the last one is known when the stream ends: it goes out
         // with a short fade, and the output never stops on a mid-wave sample (a loud crackle
@@ -63,6 +67,13 @@ final class VoicePlayer {
     private func schedule(_ chunk: AudioChunk) throws {
         guard let buffer = Self.standardBuffer(from: chunk) else { return }
         try connect(for: buffer.format)
+        if !loggedFirstAudio {
+            loggedFirstAudio = true
+            let line = Self.sessionLine()
+            Self.log.notice("first audio out (\(self.handsFree ? "hands-free" : "speak", privacy: .public), \(Int(chunk.sampleRate)) Hz): \(line, privacy: .public)")
+            // Settings › Voice shows the last one, so a tester can read it off the phone.
+            if handsFree { UserDefaults.standard.set("\(Int(chunk.sampleRate)) Hz, " + line, forKey: VoiceSettings.lastSessionKey) }
+        }
         queued.append(chunk)
         let g = generation
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
@@ -92,10 +103,31 @@ final class VoicePlayer {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try session.setActive(true)
+        Self.log.notice("speak session: \(Self.sessionLine(), privacy: .public)")
         #endif
         // The engine starts in `connect(for:)`, once the player node is wired to the mixer:
         // starting it with no connections raises (not throws) inside AVAudioEngine.
     }
+
+    /// The session as it is, for the log: a tester's voice mode made no sound with the iPhone's
+    /// switch on silent, and the category, the route and the volume are what decide that.
+    nonisolated static func sessionLine() -> String {
+        #if os(iOS)
+        let s = AVAudioSession.sharedInstance()
+        let outs = s.currentRoute.outputs.map { $0.portType.rawValue + "(" + $0.portName + ")" }.joined(separator: "+")
+        return "category \(s.category.rawValue), mode \(s.mode.rawValue), options \(s.categoryOptions.rawValue), route \(outs.isEmpty ? "none" : outs), volume \(String(format: "%.2f", s.outputVolume)), other audio \(s.isOtherAudioPlaying)"
+        #else
+        return "macOS"
+        #endif
+    }
+
+    #if os(iOS)
+    /// Something the person wears or sits in: the sound belongs there, not on the speaker.
+    private static func routeHasHeadsetOrCar(_ s: AVAudioSession) -> Bool {
+        let worn: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothA2DP, .bluetoothLE, .headphones, .carAudio, .airPlay, .usbAudio, .HDMI, .lineOut]
+        return s.currentRoute.outputs.contains { worn.contains($0.portType) }
+    }
+    #endif
 
     private func endSession() {
         node.stop()
@@ -136,6 +168,10 @@ final class VoicePlayer {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.allowBluetoothHFP, .allowBluetoothA2DP, .defaultToSpeaker, .duckOthers])
         try session.setActive(true)
+        // The speaker, not the earpiece, unless something is worn or plugged in: `defaultToSpeaker`
+        // asks for it, the override insists (an earpiece at arm's length sounds like silence).
+        if !Self.routeHasHeadsetOrCar(session) { try? session.overrideOutputAudioPort(.speaker) }
+        Self.log.notice("hands-free session: \(Self.sessionLine(), privacy: .public)")
         #endif
         if engine.isRunning { engine.stop() }
         node.stop()
@@ -175,7 +211,10 @@ final class VoicePlayer {
     func restartAfterChange() {
         guard handsFree, !engine.isRunning else { return }
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(true)
+        if !Self.routeHasHeadsetOrCar(session) { try? session.overrideOutputAudioPort(.speaker) }
+        Self.log.notice("hands-free session restarted: \(Self.sessionLine(), privacy: .public)")
         #endif
         engine.prepare()
         try? engine.start()

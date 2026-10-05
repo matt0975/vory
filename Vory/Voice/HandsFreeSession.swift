@@ -191,6 +191,8 @@ final class HandsFreeSession {
         VoiceCoordinator.shared.stop()
         watch(chat)
         observeNotifications(chat)
+        // Quick answers: this chat thinks less and answers fast while voice runs (#238).
+        Task { await chat.beginQuickAnswers() }
         if let config = choice.config {
             openLive(config)
             return
@@ -215,9 +217,13 @@ final class HandsFreeSession {
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers = []
         Task { await engine?.lease(false) }
+        if let chat { Task { await chat.endQuickAnswers() } }
         chat = nil
         minimized = false
     }
+
+    /// For the timing lines: whether the turn ran with quick answers.
+    private var quickTag: String { chat?.quickAnswersOn == true ? " (quick answers on)" : "" }
 
     func mute() { isLive ? liveMute(true) : run(state.handle(.mute)) }
     func unmute() { isLive ? liveMute(false) : run(state.handle(.unmute)) }
@@ -362,7 +368,7 @@ final class HandsFreeSession {
                 if self.state.phase == .speaking { self.setLivePhase(self.liveIdlePhase) }
             }
             clock.mark("audio")
-            if let line = clock.report() { UtteranceListener.log.notice("live turn: \(line, privacy: .public)") }
+            if let line = clock.report() { UtteranceListener.log.notice("live turn: \(line, privacy: .public)\(self.quickTag, privacy: .public)") }
         }
         livePlayback?.yield(chunk)
     }
@@ -511,7 +517,7 @@ final class HandsFreeSession {
             } else {
                 run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
                 // A turn with nothing to say still reports where its time went.
-                if !chat.isRunning, !state.replyPending, let line = clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)") }
+                if !chat.isRunning, !state.replyPending, let line = clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)\(self.quickTag, privacy: .public)") }
             }
         }
         let cards = !chat.cards.isEmpty
@@ -761,7 +767,7 @@ final class HandsFreeSession {
                         if first {
                             first = false
                             self?.clock.mark("audio")
-                            if let line = self?.clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)") }
+                            if let line = self?.clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)\(self?.quickTag ?? "", privacy: .public)") }
                             self?.run(self?.state.handle(.audioStarted) ?? [])
                         }
                         continuation.yield(c)
