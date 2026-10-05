@@ -20,6 +20,14 @@ import Testing
         #expect(s["contextWindowCompression"]?["slidingWindow"] != nil)
         let fresh = json(GeminiLive.Framing.setup(voice: "Puck", systemInstruction: "x", resumptionHandle: nil))["setup"]!
         #expect(fresh["sessionResumption"]?["handle"] == nil && fresh["sessionResumption"] != nil)
+        // The person's voice interrupts by default, a tap does not (200 ms of sound first), and
+        // the server's own silence rule stands unless the Pause setting is passed.
+        let detection = s["realtimeInputConfig"]?["automaticActivityDetection"]
+        #expect(s["realtimeInputConfig"]?["activityHandling"]?.stringValue == "START_OF_ACTIVITY_INTERRUPTS")
+        #expect(detection?["prefixPaddingMs"]?.intValue == 200 && detection?["silenceDurationMs"] == nil)
+        let quiet = json(GeminiLive.Framing.setup(voice: "Kore", systemInstruction: "x", resumptionHandle: nil, bargeIn: false, silenceMs: 1400))["setup"]!
+        #expect(quiet["realtimeInputConfig"]?["activityHandling"]?.stringValue == "NO_INTERRUPTION")
+        #expect(quiet["realtimeInputConfig"]?["automaticActivityDetection"]?["silenceDurationMs"]?.intValue == 1400)
     }
 
     @Test func audioTextAndToolResponsesAreTheApisShape() {

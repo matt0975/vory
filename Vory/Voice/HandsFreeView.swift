@@ -16,11 +16,11 @@ struct HandsFreeView: View {
             background
             VStack(spacing: 0) {
                 top
-                Spacer(minLength: 12)
-                bot
-                Spacer(minLength: 12)
-                words
-                Spacer(minLength: 12)
+                bot.padding(.top, 12)
+                // Everything said so far, scrolling, between the state line and the controls (#235).
+                VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 6)
                 if let card = chat.firstCard {
                     PendingCardView(chat: chat, card: card)
                         .padding(.horizontal, 16)
@@ -85,6 +85,13 @@ struct HandsFreeView: View {
             }
             VStack(spacing: 6) {
                 Text(state.title).font(.title2.weight(.semibold)).contentTransition(.numericText())
+                // Muted while the bot speaks or thinks: said plainly, not only by the button (#234).
+                if state.isMuted, state.phase != .listening {
+                    Label("Mic muted", systemImage: "mic.slash.fill").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.white.opacity(0.18), in: .capsule)
+                        .transition(.opacity)
+                }
                 if state.phase == .thinking, let goal = ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine {
                     Text(goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
                 } else if state.phase == .needsApproval {
@@ -106,34 +113,8 @@ struct HandsFreeView: View {
         }
     }
 
-    /// What was heard, or what is being said.
-    private var words: some View {
-        Group {
-            if state.phase == .speaking || (state.phase == .thinking && !session.spoken.isEmpty) {
-                Text(Self.tail(session.spoken))
-                    .font(.body).foregroundStyle(.primary)
-            } else if state.hearing, !session.liveText.isEmpty {
-                Text(Self.tail(session.liveText))
-                    .font(.body).foregroundStyle(.primary)
-            } else if let heard = state.caption {
-                Text("“\(heard)”")
-                    .font(.body).foregroundStyle(.secondary)
-            } else {
-                Text("Say something. I'll answer when you pause.")
-                    .font(.body).foregroundStyle(.secondary)
-            }
-        }
-        .multilineTextAlignment(.center)
-        .lineLimit(5)
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 28)
-        .frame(minHeight: 90, alignment: .top)
-    }
-
-    static func tail(_ s: String, max: Int = 220) -> String {
-        guard s.count > max else { return s }
-        return "…" + String(s.suffix(max - 1))
-    }
+    /// What the empty transcript says.
+    private var prompt: String { session.isLive ? "Say something." : "Say something. I'll answer when you pause." }
 
     private var controls: some View {
         HStack(spacing: 28) {
@@ -167,6 +148,89 @@ struct HandsFreeView: View {
 }
 
 #endif
+
+/// The conversation so far in voice mode, scrolling: the person's words set apart from the
+/// bot's, the whole of each reply (never a tail of it), the newest at the bottom and followed
+/// as it grows. Scrolling up stops the following, as a chat's thread does (#218), until the
+/// person is back at the bottom or taps the arrow. Shared with the Mac's voice window.
+struct VoiceTranscriptView: View {
+    var lines: [VoiceLine]
+    /// Shown while nothing has been said.
+    var prompt: String
+    /// Following the newest words; off while the person reads back.
+    @State private var following = true
+    @State private var userScrolling = false
+    private let bottomID = "voice.transcript.bottom"
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if lines.isEmpty {
+                        Text(prompt).font(.body).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                    }
+                    ForEach(lines) { line in row(line).id(line.id) }
+                    Color.clear.frame(height: 1).id(bottomID)
+                }
+                .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 6)
+            }
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: CGFloat.self) { g in
+                max(0, g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY)
+            } action: { _, distance in
+                // A real pull up stops the following; back at the bottom (by hand or by the
+                // arrow) it resumes. Not while the finger is still down at the bottom.
+                if userScrolling, distance > 24 { following = false }
+                else if distance < 4, !userScrolling { following = true }
+            }
+            .onScrollPhaseChange { _, phase in userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating }
+            // Each new word: to the bottom, unanimated (the words stream several times a second).
+            .onChange(of: tail) { _, _ in if following { proxy.scrollTo(bottomID, anchor: .bottom) } }
+            .mask {
+                // The top edge fades, so a line scrolling out does not cut under the state line.
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                    Color.black
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !following, !lines.isEmpty {
+                    Button {
+                        following = true
+                        withAnimation(.snappy) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "arrow.down").font(.subheadline.weight(.bold))
+                            .frame(width: 36, height: 36).glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 20).padding(.bottom, 8)
+                    .transition(.scale(scale: 0.8).combined(with: .opacity))
+                    .accessibilityLabel("Jump to the latest words")
+                }
+            }
+            .animation(.snappy(duration: 0.2), value: following)
+        }
+    }
+
+    /// What changes as the conversation goes on: the last line's words and the count.
+    private var tail: String { "\(lines.count):" + (lines.last?.text ?? "") }
+
+    @ViewBuilder private func row(_ line: VoiceLine) -> some View {
+        if line.isPerson {
+            Text(line.text).font(.body).foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 36)
+                .accessibilityLabel("You said: \(line.text)")
+        } else {
+            Text(line.text).font(.body).foregroundStyle(.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 16)
+                .accessibilityLabel("Bot said: \(line.text)")
+        }
+    }
+}
 
 /// The listener's loudness as bars, newest at the right.
 struct HandsFreeWaveform: View {

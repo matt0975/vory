@@ -173,7 +173,18 @@ public enum GeminiLive {
 
     /// The messages, both ways, as the Live API spells them.
     public enum Framing {
-        public static func setup(model: String = defaultModel, voice: String, systemInstruction: String, resumptionHandle: String?) -> String {
+        /// How much sound has to hold before the server takes it for the start of speech: a tap
+        /// on the screen or a leak of the bot's own voice through the echo canceller is shorter,
+        /// and used to cut the bot off mid-sentence (the person had only reached for Mute).
+        public static let prefixPaddingMs = 200
+
+        /// `bargeIn` false asks the server never to cut the bot's speech for sound from the
+        /// person (the Barge-in setting); `silenceMs` is how long a pause ends the person's turn
+        /// (the Pause setting, the same as Standard's).
+        public static func setup(model: String = defaultModel, voice: String, systemInstruction: String, resumptionHandle: String?,
+                                 bargeIn: Bool = true, silenceMs: Int? = nil) -> String {
+            var detection: [String: JSONValue] = ["prefixPaddingMs": .number(Double(prefixPaddingMs))]
+            if let silenceMs { detection["silenceDurationMs"] = .number(Double(silenceMs)) }
             var setup: [String: JSONValue] = [
                 "model": .string("models/" + model),
                 "generationConfig": .object([
@@ -185,6 +196,10 @@ public enum GeminiLive {
                 "inputAudioTranscription": .object([:]),
                 "outputAudioTranscription": .object([:]),
                 "contextWindowCompression": .object(["slidingWindow": .object([:])]),
+                "realtimeInputConfig": .object([
+                    "automaticActivityDetection": .object(detection),
+                    "activityHandling": .string(bargeIn ? "START_OF_ACTIVITY_INTERRUPTS" : "NO_INTERRUPTION"),
+                ]),
             ]
             var resumption: [String: JSONValue] = [:]
             if let h = resumptionHandle { resumption["handle"] = .string(h) }
@@ -339,8 +354,13 @@ public enum GeminiLive {
             public var voice: String
             public var systemInstruction: String
             public var key: String
-            public init(voice: String, systemInstruction: String, key: String) {
+            /// Whether the person's voice cuts the bot's speech short (the Barge-in setting).
+            public var bargeIn = true
+            /// The pause that ends the person's turn, in ms (the Pause setting); nil leaves the server's own.
+            public var silenceMs: Int?
+            public init(voice: String, systemInstruction: String, key: String, bargeIn: Bool = true, silenceMs: Int? = nil) {
                 self.voice = voice; self.systemInstruction = systemInstruction; self.key = key
+                self.bargeIn = bargeIn; self.silenceMs = silenceMs
             }
         }
 
@@ -376,7 +396,8 @@ public enum GeminiLive {
             let t = makeTransport(GeminiLive.endpoint(key: config.key))
             transport = t
             try await t.connect()
-            try await t.send(Framing.setup(model: config.model, voice: config.voice, systemInstruction: config.systemInstruction, resumptionHandle: resumptionHandle))
+            try await t.send(Framing.setup(model: config.model, voice: config.voice, systemInstruction: config.systemInstruction, resumptionHandle: resumptionHandle,
+                                           bargeIn: config.bargeIn, silenceMs: config.silenceMs))
             reading?.cancel()
             reading = Task { [weak self] in
                 do {
@@ -440,6 +461,14 @@ public enum GeminiLive {
         public func send(text: String) {
             guard !stopped, isReady, let transport else { return }
             Task { try? await transport.send(Framing.clientText(text)) }
+        }
+
+        /// The microphone went quiet on purpose (Mute): the server closes what it was hearing
+        /// instead of waiting on a half-heard turn; audio may follow again later.
+        public func endAudioStream() {
+            guard !stopped, isReady, let transport else { return }
+            pendingAudio = Data()
+            Task { try? await transport.send(Framing.audioStreamEnd) }
         }
 
         private func connectionEnded(_ error: String?) {

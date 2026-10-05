@@ -14,7 +14,11 @@ final class VoicePlayer {
     private let node = AVAudioPlayerNode()
     private var connectedFormat: AVAudioFormat?
     private(set) var isPlaying = false
-    private var pending = 0
+    /// Scheduled and not yet heard, oldest first: what a restarted engine plays again.
+    private var queued: [AudioChunk] = []
+    /// Bumped whenever the schedule is thrown away (stop, a restart), so the callbacks of the
+    /// old buffers, which arrive after, are not taken for the new ones.
+    private var generation = 0
     private var ended = false
     private var finish: CheckedContinuation<Void, Never>?
     /// Hands-free holds the session and the engine open for the whole conversation; `play`
@@ -30,7 +34,7 @@ final class VoicePlayer {
     func play(_ chunks: AsyncThrowingStream<AudioChunk, Error>) async throws {
         if !handsFree { try beginSession() }
         isPlaying = true
-        pending = 0; ended = false
+        queued = []; ended = false
         defer { isPlaying = false; if !handsFree { endSession() } }
         // One chunk is held back so the last one is known when the stream ends: it goes out
         // with a short fade, and the output never stops on a mid-wave sample (a loud crackle
@@ -48,7 +52,7 @@ final class VoicePlayer {
         }
         if let h = held, isPlaying { try schedule(h.fadedOut(seconds: 0.02)) }
         ended = true
-        if pending > 0, isPlaying {
+        if !queued.isEmpty, isPlaying {
             await withCheckedContinuation { c in finish = c }
         }
         // The last callback comes as the data reaches the output; a beat before the engine
@@ -59,22 +63,26 @@ final class VoicePlayer {
     private func schedule(_ chunk: AudioChunk) throws {
         guard let buffer = Self.standardBuffer(from: chunk) else { return }
         try connect(for: buffer.format)
-        pending += 1
+        queued.append(chunk)
+        let g = generation
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { @Sendable [weak self] _ in
-            Task { @MainActor in self?.played() }
+            Task { @MainActor in self?.played(generation: g) }
         }
         if !node.isPlaying { node.play() }
     }
 
-    private func played() {
-        pending = max(0, pending - 1)
-        if ended, pending == 0, let c = finish { finish = nil; c.resume() }
+    private func played(generation g: Int) {
+        guard g == generation else { return }
+        if !queued.isEmpty { queued.removeFirst() }
+        if ended, queued.isEmpty, let c = finish { finish = nil; c.resume() }
     }
 
     /// Cuts playback short.
     func stop() {
         guard isPlaying || node.isPlaying else { return }
         isPlaying = false
+        generation += 1
+        queued = []
         node.stop()
         if let c = finish { finish = nil; c.resume() }
     }
@@ -160,7 +168,10 @@ final class VoicePlayer {
         }
     }
 
-    /// After an interruption or a route change: the engine runs again.
+    /// After an interruption or a route change: the engine runs again, and what was scheduled
+    /// and not yet heard is scheduled again. A stopped engine drops its player's buffers and
+    /// their callbacks never come; without this a reply cut by a headset connecting left the
+    /// loop on "Speaking" for good.
     func restartAfterChange() {
         guard handsFree, !engine.isRunning else { return }
         #if os(iOS)
@@ -168,6 +179,13 @@ final class VoicePlayer {
         #endif
         engine.prepare()
         try? engine.start()
+        guard isPlaying, !queued.isEmpty else { return }
+        let again = queued
+        generation += 1
+        queued = []
+        node.stop()
+        for chunk in again { try? schedule(chunk) }
+        if queued.isEmpty, ended, let c = finish { finish = nil; c.resume() }
     }
 
     func endHandsFree() {

@@ -94,6 +94,60 @@ public struct SpokenExchange: Equatable, Sendable {
     }
 }
 
+/// One thing said in voice mode, for the screen: the person's words or the bot's, growing while
+/// it is still being heard or said.
+public struct VoiceLine: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public var isPerson: Bool
+    public var text: String
+    /// Still growing: the person's words as they are heard, the reply as it streams.
+    public var isFinal: Bool
+    public init(id: UUID = UUID(), isPerson: Bool, text: String, isFinal: Bool = true) {
+        self.id = id; self.isPerson = isPerson; self.text = text; self.isFinal = isFinal
+    }
+}
+
+/// Everything said this session, both ways, oldest first, for the screen to scroll: the whole
+/// of each reply, never a tail of it. A line is written by its id as it grows and closed when
+/// its turn is over; a line closed with nothing in it goes.
+public struct VoiceTranscript: Equatable, Sendable {
+    public private(set) var lines: [VoiceLine] = []
+    /// Older lines than this are dropped; the chat has them all.
+    public static let keep = 80
+
+    public init() {}
+
+    /// Writes the line with this id (wherever it is) or adds it at the end.
+    public mutating func write(_ id: UUID, isPerson: Bool, text: String, final: Bool = false) {
+        if let i = lines.firstIndex(where: { $0.id == id }) {
+            lines[i].text = text
+            lines[i].isFinal = final
+        } else {
+            lines.append(VoiceLine(id: id, isPerson: isPerson, text: text, isFinal: final))
+            if lines.count > Self.keep { lines.removeFirst(lines.count - Self.keep) }
+        }
+        if final { prune(id) }
+    }
+
+    /// Closes the line: it will not grow any more; empty, it is removed.
+    public mutating func finish(_ id: UUID) {
+        guard let i = lines.firstIndex(where: { $0.id == id }) else { return }
+        lines[i].isFinal = true
+        prune(id)
+    }
+
+    /// Closes every open line.
+    public mutating func finishAll() {
+        for line in lines where !line.isFinal { finish(line.id) }
+    }
+
+    public var last: VoiceLine? { lines.last }
+
+    private mutating func prune(_ id: UUID) {
+        if let i = lines.firstIndex(where: { $0.id == id }), lines[i].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lines.remove(at: i) }
+    }
+}
+
 public struct HandsFreeState: Equatable, Sendable {
     public var phase: HandsFreePhase = .listening
     public var isMuted = false

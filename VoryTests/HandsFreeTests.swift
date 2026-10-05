@@ -218,3 +218,34 @@ import Testing
         #expect(SpokenText.endsSentence("Done. ") && !SpokenText.endsSentence("Done, and") && !SpokenText.endsSentence(""))
     }
 }
+
+/// What the voice screen scrolls through.
+@Suite struct VoiceTranscriptTests {
+    @Test func linesGrowByIdKeepTheirPlaceAndEmptyOnesGoWhenClosed() {
+        var t = VoiceTranscript()
+        let person = UUID(), bot = UUID()
+        t.write(person, isPerson: true, text: "What is")
+        t.write(person, isPerson: true, text: "What is filling the disk?")
+        t.write(bot, isPerson: false, text: "Let me")
+        // A late write to the person's line lands in its place, not at the end.
+        t.write(person, isPerson: true, text: "What is filling the disk?", final: true)
+        #expect(t.lines.map(\.text) == ["What is filling the disk?", "Let me"])
+        #expect(t.lines[0].isFinal && t.lines[0].isPerson && !t.lines[1].isFinal && !t.lines[1].isPerson)
+        t.write(bot, isPerson: false, text: "Let me check.", final: true)
+        #expect(t.last?.text == "Let me check." && t.last?.isFinal == true)
+        let nothing = UUID()
+        t.write(nothing, isPerson: true, text: " ")
+        #expect(t.lines.count == 3)
+        t.finish(nothing)
+        #expect(t.lines.count == 2)
+        t.write(UUID(), isPerson: false, text: "More")
+        t.finishAll()
+        #expect(t.lines.count == 3 && t.lines.allSatisfy(\.isFinal))
+    }
+
+    @Test func onlyTheLastLinesAreKept() {
+        var t = VoiceTranscript()
+        for i in 0..<(VoiceTranscript.keep + 5) { t.write(UUID(), isPerson: i % 2 == 0, text: "line \(i)", final: true) }
+        #expect(t.lines.count == VoiceTranscript.keep && t.lines.first?.text == "line 5")
+    }
+}

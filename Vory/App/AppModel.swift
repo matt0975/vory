@@ -125,6 +125,10 @@ final class AppModel {
     var chatStepRequest: ChatStepRequest?
     /// The compose circle held down: the full New Message sheet instead of a fresh chat.
     var newChatSheetRequest: UUID?
+    /// The mic circle beside it (or a bot picked under it): a fresh chat with that bot (nil:
+    /// the selected one), straight into voice mode (#237).
+    struct VoiceChatRequest { let profile: String?; let id = UUID() }
+    var voiceChatRequest: VoiceChatRequest?
     /// The tab the compose circle was tapped on when that was not Chats: the chat opens on
     /// Chats, and that tab comes back once the chat (or the sheet) is closed. Cleared by any
     /// other way of opening a chat and by a tap on the bar.

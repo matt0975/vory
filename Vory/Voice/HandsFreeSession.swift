@@ -20,6 +20,15 @@ final class HandsFreeSession {
     private(set) var state = HandsFreeState()
     /// The reply as it is being said, for the caption.
     private(set) var spoken = ""
+    /// Everything said this session, for the screen to scroll (#235).
+    private(set) var transcript = VoiceTranscript()
+    /// The reply being spoken, in the transcript (Standard).
+    private var replyLine: UUID?
+    /// The words the device's transcriber heard, shown while the turn is being transcribed.
+    private var heardWords = ""
+    private static let hearingLineID = UUID()
+    /// Where a turn's time goes, one line in the log per turn (#233).
+    private var clock = TurnClock()
     /// The full-screen view is away while the loop goes on (the chat shows a pill to come back).
     var minimized = false
     private(set) var lastError: String?
@@ -68,10 +77,28 @@ final class HandsFreeSession {
     private var liveReplyWaiters: [(id: UUID, c: CheckedContinuation<String, Never>)] = []
     private var liveToolsPending = 0
     private var livePausedMute = false
+    /// The person's and the model's lines in the transcript while they grow (Live).
+    private var livePersonLine: UUID?
+    private var liveBotLine: UUID?
 
     /// The waveform and the live caption, whichever engine is at work.
     var levels: [Float] { isLive ? liveLevels : listener.levels }
     var liveText: String { isLive ? liveHeard : listener.liveText }
+
+    /// The transcript for the screen: what has been said, plus (Standard) the words being heard
+    /// right now and the ones waiting on their transcript, which are not in it yet.
+    var transcriptLines: [VoiceLine] {
+        var lines = transcript.lines
+        if !isLive {
+            if state.hearing, !listener.liveText.isEmpty { lines.append(VoiceLine(id: Self.hearingLineID, isPerson: true, text: listener.liveText, isFinal: false)) }
+            else if state.phase == .transcribing, !heardWords.isEmpty { lines.append(VoiceLine(id: Self.hearingLineID, isPerson: true, text: heardWords, isFinal: false)) }
+        }
+        return lines
+    }
+
+    /// Where the loop goes when nothing is playing: to the card if one waits, to the bot's
+    /// pending work, else to the person.
+    private var liveIdlePhase: HandsFreePhase { state.cardsPending ? .needsApproval : (liveToolsPending > 0 ? .thinking : .listening) }
 
     /// Whether the next conversation is Live, and with what; nil means Standard (with a note
     /// when Live was asked for and cannot run).
@@ -91,7 +118,9 @@ final class HandsFreeSession {
                 guard let key = GeminiLive.Key.value ?? (GeminiLive.overrideURL != nil ? "stand-in" : nil) else {
                     return (nil, forced ? "Live needs your Gemini key in Settings › Voice." : nil)
                 }
-                return (GeminiLive.Session.Config(voice: VoiceSettings.geminiVoice, systemInstruction: LivePersona.instruction(botName: botName), key: key), nil)
+                // The Barge-in and Pause settings reach the live model too (#234).
+                return (GeminiLive.Session.Config(voice: VoiceSettings.geminiVoice, systemInstruction: LivePersona.instruction(botName: botName), key: key,
+                                                  bargeIn: VoiceSettings.bargeIn, silenceMs: Int(VoiceSettings.endOfTurn.rawValue * 1000)), nil)
             case .openai:
                 return (nil, forced ? "OpenAI Live through the gateway comes in a later build." : nil)
             }
@@ -123,12 +152,24 @@ final class HandsFreeSession {
         minimized = false
         exchange = SpokenExchange()
         interruptedLast = false
+        transcript = VoiceTranscript()
+        replyLine = nil; heardWords = ""
+        livePersonLine = nil; liveBotLine = nil
+        clock = TurnClock()
+        // The system's microphone prompt may be up for a while (on a Mac that has never been
+        // asked, until the person answers it): the screen says so rather than "Listening…".
+        state.note = "Waiting for microphone access…"
         Task { [weak self] in
             guard await AVAudioApplication.requestRecordPermission() else {
+                #if os(macOS)
+                self?.lastError = "Microphone access denied. Allow it in System Settings › Privacy & Security › Microphone."
+                #else
                 self?.lastError = "Microphone access denied. Allow it in Settings › Vory."
+                #endif
                 self?.chat = nil
                 return
             }
+            self?.state.note = nil
             self?.open()
         }
     }
@@ -257,9 +298,15 @@ final class HandsFreeSession {
             state.caption = liveHeard
             state.hearing = true
             liveHearingUntil = Date().addingTimeInterval(1.2)
+            if livePersonLine == nil { livePersonLine = UUID(); clock.start("heard") }
+            if let line = livePersonLine { transcript.write(line, isPerson: true, text: liveHeard) }
         case .outputTranscript(let t):
             liveSaid += t
             spoken = liveSaid
+            // The model answering closes the person's line; its own grows with each piece.
+            if let p = livePersonLine { transcript.finish(p); livePersonLine = nil }
+            if liveBotLine == nil { liveBotLine = UUID() }
+            if let line = liveBotLine { transcript.write(line, isPerson: false, text: liveSaid) }
         case .audio(let chunk):
             if state.phase != .speaking, state.phase != .paused { setLivePhase(.speaking) }
             pushLiveAudio(chunk)
@@ -267,14 +314,20 @@ final class HandsFreeSession {
             cutLivePlayback()
             interruptedLast = true
             liveSaid = ""
+            if let b = liveBotLine { transcript.finish(b); liveBotLine = nil }
             if state.phase == .speaking { setLivePhase(.listening) }
             state.hearing = true
             liveHearingUntil = Date().addingTimeInterval(1.2)
         case .turnComplete:
             if !liveHeard.isEmpty { state.caption = liveHeard; liveHeard = "" }
+            if let p = livePersonLine { transcript.finish(p); livePersonLine = nil }
+            if let b = liveBotLine { transcript.finish(b); liveBotLine = nil }
+            liveSaid = ""
             finishLivePlayback()
         case .toolCall:
             liveToolsPending += 1
+            clock.mark("tool")
+            if let p = livePersonLine { transcript.finish(p); livePersonLine = nil }
             if state.phase == .listening { setLivePhase(.thinking) }
         case .toolCallsCancelled:
             break
@@ -306,8 +359,10 @@ final class HandsFreeSession {
                 guard let self, !Task.isCancelled else { return }
                 self.livePlayback = nil
                 self.livePlayTask = nil
-                if self.state.phase == .speaking { self.setLivePhase(self.liveToolsPending > 0 ? .thinking : .listening) }
+                if self.state.phase == .speaking { self.setLivePhase(self.liveIdlePhase) }
             }
+            clock.mark("audio")
+            if let line = clock.report() { UtteranceListener.log.notice("live turn: \(line, privacy: .public)") }
         }
         livePlayback?.yield(chunk)
     }
@@ -316,7 +371,7 @@ final class HandsFreeSession {
         liveAudioWatchdog?.cancel(); liveAudioWatchdog = nil
         livePlayback?.finish()
         livePlayback = nil
-        if livePlayTask == nil, state.phase == .speaking || state.phase == .thinking { setLivePhase(liveToolsPending > 0 ? .thinking : .listening) }
+        if livePlayTask == nil, state.phase == .speaking || state.phase == .thinking { setLivePhase(liveIdlePhase) }
     }
 
     private func cutLivePlayback() {
@@ -334,7 +389,9 @@ final class HandsFreeSession {
         let voice = VoiceTurn(context: joined, interrupted: interruptedLast)
         exchange.said(request)
         interruptedLast = false
-        if let problem = await chat.send(request, voice: voice) {
+        let problem = await chat.send(request, voice: voice)
+        clock.mark("sent")
+        if let problem {
             liveToolsPending = max(0, liveToolsPending - 1)
             return "The bot could not take that: \(problem)"
         }
@@ -350,13 +407,14 @@ final class HandsFreeSession {
             }
         }
         liveToolsPending = max(0, liveToolsPending - 1)
-        if state.phase == .thinking { setLivePhase(.listening) }
+        if state.phase == .thinking { setLivePhase(liveIdlePhase) }
         return reply
     }
 
     private func liveReplyArrived(_ text: String) {
         let waiters = liveReplyWaiters
         liveReplyWaiters = []
+        clock.mark("reply")
         let spoken = SpokenText.forSpeech(text)
         for w in waiters { w.c.resume(returning: spoken.isEmpty ? "The bot answered with nothing to say aloud; it is in the chat." : String(spoken.prefix(4000))) }
     }
@@ -365,7 +423,12 @@ final class HandsFreeSession {
         guard state.phase != .ended else { return }
         state.isMuted = on
         liveMic.muted = on || state.phase == .paused
-        if on { state.hearing = false }
+        if on {
+            state.hearing = false
+            // The server is told the microphone went quiet on purpose, so a half-heard sound
+            // (the tap itself) is not left open as the start of a turn (#234).
+            live?.endAudioStream()
+        }
         syncSurface()
     }
 
@@ -382,7 +445,7 @@ final class HandsFreeSession {
         } else {
             guard state.phase == .paused else { return }
             state.pausedBy = nil
-            state.phase = liveToolsPending > 0 ? .thinking : .listening
+            state.phase = liveIdlePhase
             liveMic.muted = livePausedMute
         }
         syncSurface()
@@ -410,6 +473,7 @@ final class HandsFreeSession {
     }
 
     private func heardEnd(_ url: URL?) {
+        if state.phase == .listening, state.capturing { clock.start("heard") }
         pendingRecording = url
         let effects = state.handle(.speechEnded)
         if !effects.contains(.captureStop), let url { try? FileManager.default.removeItem(at: url); pendingRecording = nil }
@@ -446,6 +510,8 @@ final class HandsFreeSession {
                 if !chat.isRunning, !liveReplyWaiters.isEmpty { liveReplyArrived("The bot finished without a spoken answer; the result is in the chat.") }
             } else {
                 run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
+                // A turn with nothing to say still reports where its time went.
+                if !chat.isRunning, !state.replyPending, let line = clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)") }
             }
         }
         let cards = !chat.cards.isEmpty
@@ -458,7 +524,7 @@ final class HandsFreeSession {
                     live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to approve it on their screen; the answer comes after.")
                     setLivePhase(.needsApproval)
                 } else if state.phase == .needsApproval {
-                    setLivePhase(liveToolsPending > 0 ? .thinking : .listening)
+                    setLivePhase(liveIdlePhase)
                 }
                 return
             }
@@ -487,6 +553,7 @@ final class HandsFreeSession {
             guard let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
             Task { @MainActor in
                 guard let self, self.chat?.storedID == id, !self.isLive else { return }
+                if !self.state.replySpoken { self.clock.mark("delta") }
                 self.run(self.state.handle(.replyDelta(text)))
             }
         })
@@ -494,6 +561,7 @@ final class HandsFreeSession {
             guard let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
             Task { @MainActor in
                 guard let self, self.chat?.storedID == id else { return }
+                self.clock.mark("reply")
                 self.exchange.heard(SpokenText.forSpeech(text))
                 if self.isLive { self.liveReplyArrived(text) } else { self.run(self.state.handle(.replyCompleted(text))) }
             }
@@ -574,6 +642,7 @@ final class HandsFreeSession {
             if let url = pendingRecording { try? FileManager.default.removeItem(at: url); pendingRecording = nil }
         case .captureStop:
             let words = listener.takeWords()
+            heardWords = words
             guard let url = pendingRecording else { run(state.handle(.transcript(words))); return }
             pendingRecording = nil
             #if os(iOS)
@@ -593,8 +662,13 @@ final class HandsFreeSession {
             let voice = VoiceTurn(context: exchange.context, interrupted: interruptedLast)
             exchange.said(text)
             interruptedLast = false
+            heardWords = ""
+            transcript.write(UUID(), isPerson: true, text: text, final: true)
+            clock.mark("words")
             Task { [weak self] in
-                if let problem = await chat.send(text, voice: voice) { self?.run(self?.state.handle(.sendFailed(problem)) ?? []) }
+                let problem = await chat.send(text, voice: voice)
+                self?.clock.mark("sent")
+                if let problem { self?.run(self?.state.handle(.sendFailed(problem)) ?? []) }
                 else { self?.run(self?.state.handle(.sent) ?? []) }
             }
         case .beginReplySpeech:
@@ -602,25 +676,30 @@ final class HandsFreeSession {
             let stream = engine.speakStreaming()
             currentReply = stream
             spoken = ""
+            replyLine = UUID()
             enqueue(.reply(stream))
         case .feedReply(let delta):
             currentReply?.send(delta: delta)
             spoken = currentReply?.text ?? spoken
+            if let line = replyLine { transcript.write(line, isPerson: false, text: spoken) }
         case .finishReplySpeech:
             currentReply?.finish()
             spoken = currentReply?.text ?? spoken
             currentReply = nil
+            if let line = replyLine { transcript.write(line, isPerson: false, text: spoken, final: true); replyLine = nil }
         case .speakWhole(let text):
             guard let engine else { return }
             let stream = engine.speakStreaming()
             stream.send(delta: text)
             stream.finish()
             spoken = stream.text
+            transcript.write(UUID(), isPerson: false, text: spoken, final: true)
             enqueue(.reply(stream))
         case .announce(let line):
             enqueue(.line(line))
         case .stopSpeaking:
             currentReply?.stop(); currentReply = nil
+            if let line = replyLine { transcript.finish(line); replyLine = nil }
             queue = []
             speechTask?.cancel(); speechTask = nil
             engine?.stop()
@@ -679,7 +758,12 @@ final class HandsFreeSession {
                 var first = true
                 do {
                     for try await c in chunks {
-                        if first { first = false; self?.run(self?.state.handle(.audioStarted) ?? []) }
+                        if first {
+                            first = false
+                            self?.clock.mark("audio")
+                            if let line = self?.clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)") }
+                            self?.run(self?.state.handle(.audioStarted) ?? [])
+                        }
                         continuation.yield(c)
                     }
                     continuation.finish()
@@ -687,6 +771,28 @@ final class HandsFreeSession {
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
         }
+    }
+
+    // MARK: Where the time goes
+
+    /// One mark per stage of a turn, reported as one line when the reply sounds: "heard → words
+    /// +310 ms → sent +40 ms → delta +1900 ms → audio +450 ms; 2700 ms in all". A mark made
+    /// twice (a second delta) is kept as the first.
+    struct TurnClock {
+        private var marks: [(name: String, at: Date)] = []
+        mutating func start(_ name: String) { marks = [(name, Date())] }
+        mutating func mark(_ name: String) {
+            guard !marks.isEmpty, !marks.contains(where: { $0.name == name }) else { return }
+            marks.append((name, Date()))
+        }
+        mutating func report() -> String? {
+            defer { marks = [] }
+            guard marks.count > 1 else { return nil }
+            var parts = [marks[0].name]
+            for i in 1..<marks.count { parts.append("\(marks[i].name) +\(Self.ms(marks[i].at.timeIntervalSince(marks[i - 1].at)))") }
+            return parts.joined(separator: " → ") + "; \(Self.ms(marks[marks.count - 1].at.timeIntervalSince(marks[0].at))) in all"
+        }
+        private static func ms(_ s: TimeInterval) -> String { "\(Int((s * 1000).rounded())) ms" }
     }
 
     // MARK: A stand-in for the microphone (DEBUG)

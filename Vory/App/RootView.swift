@@ -169,7 +169,7 @@ struct MainTabView: View {
             // is never removed from the tree: an insert/remove transition got stuck on the first
             // chat opened after launch (the bar stayed, tappable, over the composer). It slides
             // and fades instead, and its reserved height collapses to nothing.
-            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() })
+            VoryTabBar(tabs: tabs, compose: { compose() }, composeFull: { composeFull() }, voice: { voiceChat($0) })
                 .offset(y: model.tabBarHidden ? 140 : 0)
                 .opacity(model.tabBarHidden ? 0 : 1)
                 // The slide and fade animate; the reserved height below does not. Animating the
@@ -203,6 +203,13 @@ struct MainTabView: View {
     private func composeFull() {
         leaveForChats()
         model.newChatSheetRequest = UUID()
+    }
+    /// The mic circle: a fresh chat with the bot named under it, else the bot whose page is in
+    /// front, else the selected one, straight into voice mode (#237).
+    private func voiceChat(_ profile: String?) {
+        let front = model.selectedTab == .bots ? model.composeProfile : nil
+        leaveForChats()
+        model.voiceChatRequest = AppModel.VoiceChatRequest(profile: profile ?? front)
     }
     /// Over to Chats for the new chat, remembering where the tap came from: a tester composed
     /// from Settings, closed the chat without sending, and found himself on Chats.

@@ -16,6 +16,8 @@ struct VoryTabBar: View {
     var compose: () -> Void
     /// The full New Message sheet (bots, project, files).
     var composeFull: () -> Void = {}
+    /// A fresh chat straight into voice mode, with the bot named (nil: the current one).
+    var voice: (String?) -> Void = { _ in }
     /// What a tap and a press and hold do (Settings › Appearance › New Chat button).
     @AppStorage(ComposeAction.tapKey) private var tapRaw = ComposeAction.tapDefault.rawValue
     @AppStorage(ComposeAction.holdKey) private var holdRaw = ComposeAction.holdDefault.rawValue
@@ -54,6 +56,26 @@ struct VoryTabBar: View {
         GlassEffectContainer(spacing: circleGap) {
             HStack(spacing: circleGap) {
                 capsule
+                // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
+                // held, it offers the bots (#237). With four tabs at most the capsule keeps 49 pt
+                // slots on the narrowest phone.
+                Menu {
+                    ForEach(model.runtime?.profiles ?? []) { p in
+                        Button { voice(p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                    }
+                } label: {
+                    Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
+                        .frame(width: barHeight, height: barHeight)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                } primaryAction: {
+                    voice(nil)
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .disabled(model.runtime == nil)
+                .accessibilityLabel("Voice chat")
+                .accessibilityHint("Tap for a voice chat with the current bot; press and hold to choose a bot")
+                .accessibilityIdentifier("chats.voice")
                 Button { run(ComposeAction.tap(tapRaw)) } label: {
                     // Centred on the square, not the glyph: the pencil hangs off its top-right
                     // corner. Measured from a simulator screenshot (the square sat 2.5 pt low).

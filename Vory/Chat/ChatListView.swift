@@ -17,6 +17,9 @@ struct ChatRoute: Hashable {
     /// Sets one fresh chat apart from the next on the Mac, where a chat replaces the one beside
     /// the list: two "new chat" routes are otherwise equal and the second would change nothing.
     var token: UUID? = nil
+    /// Voice mode as soon as the chat exists (the Chats page's mic, the sheet's Voice mode),
+    /// after the first message if there is one.
+    var startVoice: Bool = false
 }
 
 struct ChatListView: View {
@@ -203,6 +206,8 @@ struct ChatListView: View {
                 sheetStarted = false
                 showNewChat = true
             }
+            // The mic circle beside it: a fresh chat, straight into voice mode (#237).
+            .onChange(of: model.voiceChatRequest?.id) { _, id in if id != nil, let r = model.voiceChatRequest { openVoiceChat(r) } }
             .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame() } }
             .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame() }
             .sheet(isPresented: $movingSelection) {
@@ -217,7 +222,7 @@ struct ChatListView: View {
                         sheetStarted = true
                         let back = model.composeReturnTab
                         switch start {
-                        case .chat(let profile, let text, let attachments, let cwd): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd), returningTo: back)
+                        case .chat(let profile, let text, let attachments, let cwd, let voice): open(ChatRoute(storedID: nil, title: nil, profile: profile, initialText: text, initialAttachments: attachments, cwd: cwd, startVoice: voice), returningTo: back)
                         case .group(let room, let text): rooms.insert(room, at: 0); open(RoomRoute(room: room, initialText: text), returningTo: back)
                         }
                     }
@@ -267,6 +272,16 @@ struct ChatListView: View {
         var cwd: String? = nil
         if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
         open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd), returningTo: model.composeReturnTab)
+    }
+
+    /// A fresh chat with the bot asked for (else the selected one), in the filter's project,
+    /// and voice mode as soon as it exists; ending voice mode leaves the person in the chat.
+    private func openVoiceChat(_ request: AppModel.VoiceChatRequest) {
+        guard model.selectedTab == .chats, let runtime else { returnFromCompose(); return }
+        let profile = request.profile ?? runtime.selectedProfile
+        var cwd: String? = nil
+        if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
+        open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd, startVoice: true), returningTo: model.composeReturnTab)
     }
 
     /// Back to the tab the compose circle was tapped on, if it was not this one.

@@ -352,44 +352,19 @@ struct ComposerView: View {
     }
 
     private var attachPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            #if os(iOS)
-            attachRow("Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true }
-            #endif
-            attachRow("Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true }
-            attachRow("Files", symbol: "folder.fill", color: .blue) { showFiles = true }
-            attachRow("Audio", symbol: "waveform", color: .red) { showRecorder = true }
-            #if os(iOS)
-            attachRow("Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) }
-            #endif
-            attachRow("Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() }
-            attachRow("Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true }
-        }
-        .padding(.vertical, 10)
-        .frame(width: 272)
-        // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
-        // its own size the glass was drawn for less than the rows and the last one poked out.
-        .fixedSize()
-        .glassEffect(.regular, in: .rect(cornerRadius: 30))
-    }
-
-    private func attachRow(_ title: String, symbol: String, color: Color, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(.snappy(duration: 0.28)) { showAttach = false }
-            action()
-        } label: {
-            HStack(spacing: 16) {
-                Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 40, height: 40).background(color, in: .circle)
-                Text(title).font(.title3).foregroundStyle(.primary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 18).padding(.vertical, 8)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
+        var items: [AttachItem] = []
+        #if os(iOS)
+        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true })
+        #endif
+        items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
+        items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
+        items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red) { showRecorder = true })
+        #if os(iOS)
+        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
+        #endif
+        items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
+        items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
+        return AttachPanel(items: items) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
     }
 
     private func send() async {

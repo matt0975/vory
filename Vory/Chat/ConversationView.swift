@@ -33,6 +33,7 @@ struct ConversationView: View {
     /// the keyboard.
     @State private var keyboardInset: CGFloat = 0
     @State private var sentInitial = false
+    @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
     private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
     @Namespace private var glassNamespace
@@ -191,6 +192,9 @@ struct ConversationView: View {
                 _ = await chat.send(t)
                 NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             }
+            // Opened for voice mode (the Chats page's mic, the sheet's Voice mode): hands-free
+            // begins once the first message, if any, is on its way, so the reply is spoken.
+            if let chat, route.startVoice, !voiceStarted { voiceStarted = true; HandsFreeSession.shared.start(chat: chat) }
         } catch {
             loadError = error.localizedDescription
         }
