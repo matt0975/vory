@@ -38,7 +38,9 @@ struct VoiceSettingsView: View {
         #if os(macOS)
         "Voice mode is in the Chat menu (⇧⌘V), the Voice Chat button over the chat list, or a chat's + panel."
         #else
-        "Voice mode is in a chat's + panel, the mic beside the compose button, or hold a chat's mic."
+        UserDefaults.standard.object(forKey: VoryTabBar.showVoiceKey) as? Bool ?? true
+            ? "Voice mode is in a chat's + panel and the mic beside the compose button; with Hold the mic to set to Start voice mode, holding a chat's mic starts it too."
+            : "Voice mode is in a chat's + panel; with Hold the mic to set to Start voice mode, holding a chat's mic starts it too."
         #endif
     }
     private var speech: SpeechSource { SpeechSource(rawValue: speechRaw) ?? .automatic }
@@ -76,7 +78,7 @@ struct VoiceSettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Read replies aloud speaks each reply as it finishes in the chat you have open. Send after dictation sends what you dictated as soon as it is in words, with nothing to tap.")
                     #if os(iOS)
-                    Text("Hold the mic to: a tap on the composer's mic always dictates into the field; Dictate makes a hold do the same, Start voice mode makes a hold open the whole conversation by voice on that chat, as the mic circle and the + panel do.")
+                    Text("Hold the mic to: a tap on the composer's mic always dictates into the field; Dictate makes a hold do the same, Start voice mode makes a hold open the whole conversation by voice on that chat, as the + panel does.")
                     #endif
                 }
             }

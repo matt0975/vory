@@ -44,7 +44,7 @@ final class LiveVoiceUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         // Live, forced; the stand-in instead of Google; the canned line instead of the microphone.
-        app.launchArguments = ["-launchTab", "chats", "-vory-voice-fake-input", "-vory-gemini-live-url", Self.fakeGemini, "-voice.conversation", "live", "-voice.liveProvider", "gemini"]
+        app.launchArguments = ["-launchTab", "chats", "-vory-voice-fake-input", "-vory-gemini-live-url", Self.fakeGemini, "-voice.conversation", "live", "-voice.liveProvider", "gemini", "-tabBar.showVoice", "YES"]
         app.launch()
 
         guard let mic = hittable(app.buttons.matching(identifier: "chats.voice"), timeout: 30) else { return XCTFail("no mic circle on the bar") }

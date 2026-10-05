@@ -279,6 +279,13 @@ final class PushRegistrar: PushRegistrationSyncing {
             lastRegistrationPath = path
             registeredAt = Date()
             lastError = nil
+            // Registered: whether the gateway runs the Companion can be read now. The launch
+            // read ran before this (it needs a registration) and found nothing, so until the
+            // next foreground the app posted its own banner beside the Companion's push: two
+            // per reply and per approval (on the Mac, until Settings was opened).
+            if AppModel.shared.companionInstalledVersion == nil {
+                Task { @MainActor in await AppModel.shared.refreshCompanionUpdateFlag() }
+            }
             if let sid = liveActivitySessionID { LiveActivityController.note("token published for session \(sid.prefix(12))") }
         } catch {
             lastError = "Could not publish the push registration: \(error.localizedDescription)"

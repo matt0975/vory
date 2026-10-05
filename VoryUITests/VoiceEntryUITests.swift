@@ -16,7 +16,8 @@ final class VoiceEntryUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchArguments = ["-launchTab", "chats", "-vory-voice-fake-input"]
+        // The mic circle is a setting now (Settings › Appearance › Voice button): pinned on.
+        app.launchArguments = ["-launchTab", "chats", "-vory-voice-fake-input", "-tabBar.showVoice", "YES"]
         app.launch()
     }
 

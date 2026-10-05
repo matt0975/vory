@@ -725,8 +725,8 @@ struct AppearanceView: View {
             Section {
                 Toggle("Tab labels", isOn: $showTabLabels)
                 Toggle("Voice button", isOn: $showVoiceButton)
-            } header: { Text("Tab bar") } footer: {
-                Text("Tab labels shows the page's name under the selected icon; off, the bar is icons only. The Voice button is the mic circle beside the bar, a fresh chat by voice (held, it offers the bots); off, the bar takes its room, and voice mode still starts from a chat's mic button and the + panel.")
+            } header: { Text("Labels and the voice button") } footer: {
+                Text("Tab labels shows the page's name under the selected icon; off, the bar is icons only. The Voice button is the mic circle beside the bar, a fresh chat by voice (held, it offers the bots); off, the bar takes its room, and voice mode still starts from a chat's + panel, or by holding a chat's mic when Settings › Voice › Hold the mic to is Start voice mode.")
             }
             Section {
                 Picker("Tap", selection: $composeTap) {
@@ -764,7 +764,7 @@ struct AppearanceView: View {
                 Toggle("Compact tool cards", isOn: $compactTools)
                 Toggle("Only the current step", isOn: $currentStepOnly)
             } header: { Text("Tool calls and reasoning") } footer: {
-                Text("Only the current step keeps just the tool running now and the reasoning of the reply being written; finished steps disappear from the thread, as in ChatGPT. Everything is still kept, and turning it off brings it all back.")
+                Text("Only the current step keeps just the tool running now and the reasoning of the reply being written; finished steps leave the thread. Everything is still kept, and turning it off brings it all back.")
             }
             Section {
                 Picker("Bubbles", selection: $bubbleStyle) {

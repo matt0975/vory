@@ -44,7 +44,8 @@ struct ModelSettingsView: View {
                             let task = t["task"]?.stringValue ?? ""
                             let prov = t["provider"]?.stringValue ?? "auto"
                             let mdl = t["model"]?.stringValue ?? ""
-                            modelMenu(title: task.replacingOccurrences(of: "_", with: " ").capitalized + ": " + (mdl.isEmpty ? prov : "\(prov)/\(mdl)"), providers: o.providers, allowAuto: true) { p, m in
+                            // The model id may name its provider already: not repeated (as Current).
+                            modelMenu(title: task.replacingOccurrences(of: "_", with: " ").capitalized + ": " + (mdl.isEmpty ? prov : Self.currentModelLine(provider: prov, model: mdl)), providers: o.providers, allowAuto: true) { p, m in
                                 Task { await set(scope: "auxiliary", task: task, provider: p, model: m, confirmed: false) }
                             }
                         }
