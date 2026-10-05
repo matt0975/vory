@@ -7,7 +7,7 @@ import Testing
 /// background, and the private way of turning that off is gone): one colour per scheme, as
 /// CSS, and the document carries it.
 @Suite struct MacCardBackgroundTests {
-    @MainActor @Test func thePageGetsTheCardsColourInEachScheme() {
+    @MainActor @Test func thePageGetsTheCardsColourInEachScheme() throws {
         let light = HTMLCard.pageBackground(dark: false)
         let dark = HTMLCard.pageBackground(dark: true)
         let hex = try! NSRegularExpression(pattern: "^#[0-9A-F]{6}$")
