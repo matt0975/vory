@@ -22,11 +22,33 @@ final class CardsAwayUITests: XCTestCase {
         return nil
     }
 
+    /// The mock's Disk cleanup chat runs its showcase turn when it is first opened (a todo
+    /// list, a message to another bot, then an approval that waits): the turn is let run, the
+    /// approval denied, and the composer waited for, so the cards below start on a quiet chat.
+    private func settle() {
+        let composer = app.textViews["composer.text"].firstMatch
+        let deadline = Date().addingTimeInterval(75)
+        var quiet = 0
+        while Date() < deadline {
+            let deny = app.buttons["Deny"].firstMatch
+            if deny.exists && deny.isHittable { deny.tap(); quiet = 0 }
+            let writing = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Writing'")).firstMatch.exists
+            if composer.exists && !writing && !deny.exists { quiet += 1 } else { quiet = 0 }
+            if quiet >= 4 { return }
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+        }
+    }
+
     /// Types into the composer (by its identifier: once a card is in the thread, the first text
     /// view is not the composer) and sends.
     private func send(_ text: String) {
         let field = app.textViews["composer.text"].firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "no composer (text views: \(app.textViews.allElementsBoundByIndex.map { $0.identifier }))")
+        if !field.waitForExistence(timeout: 30) {
+            shot("cards-no-composer")
+            let bars = app.navigationBars.allElementsBoundByIndex.map { $0.identifier }
+            let texts = app.textViews.allElementsBoundByIndex.map { $0.identifier }
+            XCTFail("no composer (text views: \(texts); bars: \(bars))")
+        }
         field.tap()
         field.typeText(text)
         let send = app.buttons["composer.send"].firstMatch
@@ -76,6 +98,7 @@ final class CardsAwayUITests: XCTestCase {
         app.launch()
         guard let row = hittable(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Disk cleanup'")), timeout: 30) else { return XCTFail("no Disk cleanup chat") }
         row.tap()
+        settle()
 
         // Two cards, each drawn (a web view each) when it arrives.
         send("card please")
@@ -84,20 +107,22 @@ final class CardsAwayUITests: XCTestCase {
         XCTAssertTrue(cards(reach: 2, timeout: 40), "the second card did not draw (\(app.webViews.links.count) links)")
         XCTAssertGreaterThan(app.webViews.count, 0)
 
-        // A run of plain replies pushes both cards well off the top of the screen.
+        // A run of table replies (the mock answers "table…" with a markdown table and nothing
+        // else; any other words start its scripted turn, which stops at an approval) pushes
+        // both cards well off the top of the screen.
         for i in 1...10 {
-            send("plain line \(i), a few words so the thread grows")
-            let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'plain line \(i)'")).firstMatch
+            send("table \(i) please")
+            let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'table \(i) please'")).firstMatch
             XCTAssertTrue(sent.waitForExistence(timeout: 20))
             RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         }
         // Off the screen for longer than the grace: let go.
         XCTAssertTrue(noWebViews(timeout: 20), "cards off the screen kept their web views (\(app.webViews.count))")
 
-        // Back up to them: drawn again.
-        let thread = app.scrollViews.firstMatch
+        // Back up to them: drawn again. (The swipe goes to the window: the first scroll view
+        // by query is a ten-point one at the bottom, not the thread.)
         for _ in 0..<12 where app.webViews.count == 0 {
-            thread.swipeDown(velocity: .fast)
+            app.swipeDown(velocity: .fast)
         }
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline, app.webViews.count == 0 { RunLoop.current.run(until: Date().addingTimeInterval(0.5)) }

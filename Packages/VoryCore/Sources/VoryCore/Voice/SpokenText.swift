@@ -166,6 +166,12 @@ public enum SpokenText {
         var wasHeadingOrBullet = false
         if let m = s.firstMatch(of: /^#{1,6}\s+/) { s.removeSubrange(m.range); wasHeadingOrBullet = true }
         if let m = s.firstMatch(of: /^(?:[-*+]|\d+[.)])\s+/) { s.removeSubrange(m.range); wasHeadingOrBullet = true }
+        // A task list's box is said as its state, not as brackets ("[x] Measured the directory").
+        if let m = s.firstMatch(of: /^\[([ xX])\]\s*/) {
+            let done = String(m.1).lowercased() == "x"
+            s.replaceSubrange(m.range, with: done ? "Done: " : "To do: ")
+            wasHeadingOrBullet = true
+        }
         if let m = s.firstMatch(of: /^>\s?/) { s.removeSubrange(m.range) }
         s = s.replacing(/!\[([^\]]*)\]\([^)]*\)/) { m in String(m.1).isEmpty ? "an image" : String(m.1) }
         s = s.replacing(/\[([^\]]+)\]\([^)]*\)/) { m in String(m.1) }

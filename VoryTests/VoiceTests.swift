@@ -5,6 +5,14 @@ import Testing
 
 /// What of a reply is read aloud.
 @Suite struct SpokenTextTests {
+    @Test func aTaskListIsSaidAsDoneAndToDoNotAsBrackets() {
+        let said = SpokenText.forSpeech("- [x] Measured the directory\n- [ ] Add the logrotate rule\n* [X] Proposed the command")
+        #expect(said == "Done: Measured the directory. To do: Add the logrotate rule. Done: Proposed the command.")
+        #expect(!said.contains("["))
+        // Brackets that are not a task box stay words.
+        #expect(SpokenText.forSpeech("See [the log](https://x.y/l) and [1].") == "See the log and [1].")
+    }
+
     @Test func markdownBecomesWordsAndBlocksBecomeNotes() {
         let reply = """
         ## What I found

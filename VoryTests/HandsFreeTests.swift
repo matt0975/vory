@@ -73,6 +73,43 @@ import Testing
         #expect(t.handle(.cardsCleared).isEmpty && t.phase == .listening)
     }
 
+    @Test func aCardDuringAStreamingReplyClosesItsSpeechAndTheWordsAfterTheAnswerStartAfresh() {
+        var s = HandsFreeState()
+        _ = s.handle(.start); _ = s.handle(.speechStarted); _ = s.handle(.speechEnded); _ = s.handle(.transcript("clean it up")); _ = s.handle(.sent)
+        _ = s.handle(.replyDelta("I'll clear the old logs. ")); _ = s.handle(.audioStarted)
+        #expect(s.phase == .speaking)
+        // The card comes while the reply streams: the reply's speech is closed where it is
+        // (the rest of the words come only after the answer), then the card is announced.
+        #expect(s.handle(.cardArrived(summary: "Delete 34 rotated log files")) == [.finishReplySpeech, .announce("Approval needed: Delete 34 rotated log files. Approve on screen.")])
+        #expect(s.phase == .needsApproval && s.replyCut && !s.replySpoken)
+        // The spoken part drains; the loop stays on the card.
+        #expect(s.handle(.audioFinished).isEmpty && s.phase == .needsApproval && !s.replyPending)
+        // Answered on the screen, the bot goes on: the new words are a fresh reply.
+        #expect(s.handle(.cardsCleared).isEmpty && s.phase == .thinking)
+        #expect(s.handle(.replyDelta("Done, 4.2 GB freed.")) == [.beginReplySpeech, .feedReply("Done, 4.2 GB freed.")])
+        #expect(!s.replyCut)
+        #expect(s.handle(.replyCompleted("I'll clear the old logs. Done, 4.2 GB freed.")) == [.finishReplySpeech])
+        _ = s.handle(.turnEnded(error: nil)); _ = s.handle(.audioFinished)
+        #expect(s.phase == .listening)
+
+        // The same, but the turn completes with no words after the answer: the whole reply is
+        // not said a second time.
+        var t = HandsFreeState()
+        _ = t.handle(.start); _ = t.handle(.speechStarted); _ = t.handle(.speechEnded); _ = t.handle(.transcript("clean it up")); _ = t.handle(.sent)
+        _ = t.handle(.replyDelta("Clearing them now.")); _ = t.handle(.audioStarted)
+        _ = t.handle(.cardArrived(summary: "rm")); _ = t.handle(.audioFinished); _ = t.handle(.cardsCleared)
+        #expect(t.handle(.replyCompleted("Clearing them now.")).isEmpty && !t.replyCut)
+        #expect(t.handle(.turnEnded(error: nil)).isEmpty && t.phase == .listening)
+
+        // A turn that ends while a reply is still open (no completion came) closes the reply,
+        // so its speech ends instead of waiting on words that never come.
+        var u = HandsFreeState()
+        _ = u.handle(.start); _ = u.handle(.speechStarted); _ = u.handle(.speechEnded); _ = u.handle(.transcript("hi")); _ = u.handle(.sent)
+        _ = u.handle(.replyDelta("Half a")); _ = u.handle(.audioStarted)
+        #expect(u.handle(.turnEnded(error: nil)) == [.finishReplySpeech] && u.phase == .speaking)
+        #expect(u.handle(.audioFinished).isEmpty && u.phase == .listening)
+    }
+
     @Test func bargeInStopsTheVoiceAndListensMuteClosesTheMic() {
         var s = HandsFreeState()
         _ = s.handle(.start); _ = s.handle(.speechStarted); _ = s.handle(.speechEnded); _ = s.handle(.transcript("hi")); _ = s.handle(.sent)

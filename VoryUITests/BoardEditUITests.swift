@@ -23,12 +23,12 @@ final class BoardEditUITests: XCTestCase {
         return nil
     }
 
-    /// The alert's field, emptied (a delete per character it holds; the cursor lands at the
-    /// end on a tap) and given new words.
+    /// The alert's field, emptied and given new words: a tap at its right edge puts the cursor
+    /// after the last character (a tap in the middle landed the new words inside the old), then
+    /// more deletes than the title is long, then the text.
     private func replace(in field: XCUIElement, with text: String) {
-        field.tap()
-        let held = (field.value as? String) ?? ""
-        if !held.isEmpty { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: held.count + 2)) }
+        field.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.5)).tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 80))
         field.typeText(text)
     }
 
@@ -42,7 +42,15 @@ final class BoardEditUITests: XCTestCase {
         let field = app.alerts.textFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "the Rename alert has no field")
         replace(in: field, with: title)
-        app.alerts.buttons["Save"].firstMatch.tap()
+        // The keyboard is still up: a first tap on Save has been swallowed, so it is tried
+        // again while the alert stands.
+        let alert = app.alerts.firstMatch
+        for attempt in 0..<4 where alert.exists {
+            if attempt > 0 { RunLoop.current.run(until: Date().addingTimeInterval(1)) }
+            let save = alert.buttons["Save"].firstMatch
+            if save.exists { save.tap() }
+            _ = alert.waitForNonExistence(timeout: 3)
+        }
         if !app.navigationBars[title].waitForExistence(timeout: 15) {
             shot("board-rename-missing")
             let bars = app.navigationBars.allElementsBoundByIndex.map { $0.identifier }
@@ -75,9 +83,20 @@ final class BoardEditUITests: XCTestCase {
         let rows = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Clear rotated logs'"))
         let chips = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Ready,'"))
         if hittable(chips, timeout: 12) == nil {
-            // Not in front after all: its tab, then.
-            guard let tab = hittable(app.buttons.matching(identifier: "tab.kanban"), timeout: 10) else { return XCTFail("no Board page and no Board tab") }
-            tab.tap()
+            // Not in front after all (a fresh install applies its first-run bar before the
+            // launch arguments are seen, now and then): the Board's tab if it is on the bar,
+            // else Settings › Hermes › Board, which opens the same page.
+            if let tab = hittable(app.buttons.matching(identifier: "tab.kanban"), timeout: 5) {
+                tab.tap()
+            } else {
+                guard let settings = hittable(app.buttons.matching(identifier: "tab.settings"), timeout: 10) else { return XCTFail("no Settings tab") }
+                settings.tap()
+                guard let row = hittable(app.buttons.matching(identifier: "settings.row.kanban"), timeout: 15) else {
+                    shot("board-no-page")
+                    return XCTFail("no Board row in Settings (bars: \(app.navigationBars.allElementsBoundByIndex.map { $0.identifier }))")
+                }
+                row.tap()
+            }
         }
         if hittable(rows, timeout: 5) == nil {
             // Another column in front: Ready has the card.

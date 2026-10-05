@@ -1314,6 +1314,11 @@ class Gateway:
             sid, stored = uuid.uuid4().hex[:8], time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
             s = Session(sid, stored, "New chat", profile)
             self.sessions[sid] = s
+            # Live from the start, as a resumed session is: a created session that was not in
+            # LIVE kept its approval frames out of open_frames, so approval.pending listed nothing
+            # for it and the app took an open card for one answered elsewhere.
+            LIVE[sid] = s
+            s.members.add(self)
             if p.get("cwd"):
                 # The real gateway writes the stored row on the first prompt; the mock files it now so
                 # the project grouping can be seen at once.

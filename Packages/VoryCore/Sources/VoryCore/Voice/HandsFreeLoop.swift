@@ -161,6 +161,12 @@ public struct HandsFreeState: Equatable, Sendable {
     public var replyPending = false
     /// This turn's reply (so far) is being fed to speech; later deltas join it.
     public var replySpoken = false
+    /// The reply's speech was closed early by a card: the words said so far were spoken, the
+    /// ones after the answer start afresh, and a completion with no new words is not said again.
+    public var replyCut = false
+    /// The reply's speech stream is open (begun, not yet finished or stopped): what a card or
+    /// the turn's end has to close.
+    public private(set) var replyOpen = false
     public var cardsPending = false
     public enum PauseCause: Sendable, Equatable { case person, interruption }
     public var pausedBy: PauseCause?
@@ -176,6 +182,12 @@ public struct HandsFreeState: Equatable, Sendable {
 
     /// Applies one event and returns what to do about it.
     public mutating func handle(_ event: HandsFreeEvent) -> [HandsFreeEffect] {
+        let effects = apply(event)
+        if effects.contains(.stopSpeaking) || effects.contains(.finishReplySpeech) { replyOpen = false }
+        return effects
+    }
+
+    private mutating func apply(_ event: HandsFreeEvent) -> [HandsFreeEffect] {
         if phase == .ended { return [] }
         switch event {
         case .start:
@@ -213,7 +225,7 @@ public struct HandsFreeState: Equatable, Sendable {
             return []
 
         case .sent:
-            if phase == .thinking { turnRunning = true; replySpoken = false }
+            if phase == .thinking { turnRunning = true; replySpoken = false; replyCut = false }
             return []
 
         case .sendFailed(let error):
@@ -225,31 +237,43 @@ public struct HandsFreeState: Equatable, Sendable {
         case .replyDelta(let delta):
             guard phase == .thinking || phase == .speaking || phase == .needsApproval else { return [] }
             var effects: [HandsFreeEffect] = []
-            if !replySpoken { replySpoken = true; replyPending = true; effects.append(.beginReplySpeech) }
+            if !replySpoken { replySpoken = true; replyPending = true; replyCut = false; replyOpen = true; effects.append(.beginReplySpeech) }
             effects.append(.feedReply(delta))
             return effects
 
         case .replyCompleted(let text):
             guard phase == .thinking || phase == .speaking || phase == .needsApproval else { return [] }
             if replySpoken { return [.finishReplySpeech] }
+            // Cut at a card and nothing new since: what there was has been said.
+            if replyCut { replyCut = false; return [] }
             replySpoken = true
             replyPending = true
             return [.speakWhole(text)]
 
         case .turnEnded(let error):
             turnRunning = false
+            // A reply still open when the turn ends (its completion never came) is closed, so
+            // its speech can drain and end instead of waiting for words that will not come.
+            let close = replyOpen
             replySpoken = false
+            replyCut = false
             if let error, !error.isEmpty { note = error }
             if phase == .thinking, !replyPending { phase = cardsPending ? .needsApproval : .listening }
-            return []
+            return close ? [.finishReplySpeech] : []
 
         case .cardArrived(let summary):
             cardsPending = true
             guard phase == .thinking || phase == .speaking || phase == .listening else { return [] }
             phase = .needsApproval
             hearing = false
-            var effects: [HandsFreeEffect] = [.announce(String(format: Self.approvalLine, summary))]
-            if capturing { capturing = false; effects.insert(.captureCancel, at: 0) }
+            var effects: [HandsFreeEffect] = []
+            if capturing { capturing = false; effects.append(.captureCancel) }
+            // A reply still streaming is closed at the words said so far: its stream would wait
+            // for words that come only after the answer, and nothing behind it (this
+            // announcement first) could play; the loop sat at Speaking. The words after the
+            // answer start a fresh reply.
+            if replyOpen { replySpoken = false; replyCut = true; effects.append(.finishReplySpeech) }
+            effects.append(.announce(String(format: Self.approvalLine, summary)))
             return effects
 
         case .cardsCleared:

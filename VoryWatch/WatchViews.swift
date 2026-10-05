@@ -369,7 +369,10 @@ struct WatchChatView: View {
                             ForEach(chat.items.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
                             if let s = chat.statusLine, chat.isRunning { Text(s).font(.caption2).foregroundStyle(.secondary) }
                             if let card = chat.firstCard { WatchCardView(chat: chat, card: card) }
-                            Color.clear.frame(height: 1).id("bottom")
+                            // Room under a card for the bottom bar (the field, or Talk's wait line
+                            // and its (x)): the bar is laid over the content, and a card's Once
+                            // and Deny sat under it as it arrived.
+                            Color.clear.frame(height: chat.firstCard != nil ? 44 : 1).id("bottom")
                         }
                     }
                     .defaultScrollAnchor(.bottom)
