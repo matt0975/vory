@@ -28,7 +28,16 @@ final class CloudSyncPageUITests: XCTestCase {
         app = XCUIApplication()
         app.launchArguments = ["-launchTab", "settings"]
         app.launch()
-        guard let row = hittable(app.buttons.matching(identifier: "settings.row.icloud"), timeout: 20) else { return XCTFail("no iCloud Sync row") }
+        // The row is in the App section, below the fold on a phone: list rows under the fold
+        // do not exist to the test until scrolled to.
+        var row = hittable(app.buttons.matching(identifier: "settings.row.icloud"), timeout: 8)
+        var swipes = 0
+        while row == nil, swipes < 6 {
+            app.swipeUp(velocity: .slow)
+            swipes += 1
+            row = hittable(app.buttons.matching(identifier: "settings.row.icloud"), timeout: 3)
+        }
+        guard let row else { shot("settings-no-icloud-row"); return XCTFail("no iCloud Sync row") }
         row.tap()
         let toggle = app.switches["cloud.autoBackup"].firstMatch
         XCTAssertTrue(toggle.waitForExistence(timeout: 10), "no Back up automatically switch")
