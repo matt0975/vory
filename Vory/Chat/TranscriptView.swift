@@ -1403,7 +1403,7 @@ struct MarkdownView: View, Equatable {
         case .paragraph(let t):
             Text(Self.inline(t))
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(level <= 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline)
+            Text(Self.inline(t)).font(Self.headingFont(level))
         case .code(let lang, let code, let closed) where closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
@@ -1433,25 +1433,190 @@ struct MarkdownView: View, Equatable {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-        case .bullets(let items):
+        case .list(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, it in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("•"); Text(Self.inline(it)) }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        listMarker(it)
+                        Text(Self.inline(it.text))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.leading, CGFloat(it.depth) * 18)
                 }
             }
-        case .numbered(let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { i, it in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("\(i + 1).").monospacedDigit(); Text(Self.inline(it)) }
-                }
-            }
+        case .table(let table):
+            MarkdownTableView(table: table)
+        case .image(let alt, let url, let link):
+            MarkdownImageView(alt: alt, url: url, link: link)
         case .quote(let t):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary).frame(width: 3)
                 Text(Self.inline(t)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case .rule:
             Divider()
+        }
+    }
+}
+
+extension MarkdownView {
+    /// h1 and h2 keep their original look; h3 to h6 step down so they stay distinguishable.
+    static func headingFont(_ level: Int) -> Font {
+        switch level {
+        case ...1: .title2.weight(.bold)
+        case 2: .title3.weight(.semibold)
+        case 3: .headline
+        case 4: .subheadline.weight(.semibold)
+        case 5: .subheadline.weight(.medium)
+        default: .footnote.weight(.semibold)
+        }
+    }
+
+    @ViewBuilder func listMarker(_ item: MarkdownListItem) -> some View {
+        switch item.marker {
+        case .bullet:
+            Text(item.depth == 0 ? "•" : item.depth == 1 ? "◦" : "▪")
+        case .number(let n):
+            Text("\(n).").monospacedDigit()
+        case .task(let checked):
+            Image(systemName: checked ? "checkmark.square.fill" : "square")
+                .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                .accessibilityLabel(checked ? "Done" : "Not done")
+        }
+    }
+}
+
+/// A markdown table. Columns share the bubble width and cell text wraps (no side-scrolling,
+/// for the same reason code blocks wrap).
+struct MarkdownTableView: View {
+    var table: MarkdownTable
+
+    private func alignment(_ col: Int) -> Alignment {
+        guard col < table.alignments.count else { return .leading }
+        switch table.alignments[col] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+    private func textAlignment(_ col: Int) -> TextAlignment {
+        guard col < table.alignments.count else { return .leading }
+        switch table.alignments[col] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    private func cell(_ text: String, col: Int, header: Bool) -> some View {
+        Text(MarkdownView.inline(text))
+            .font(header ? .footnote.weight(.semibold) : .footnote)
+            .multilineTextAlignment(textAlignment(col))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: alignment(col))
+            .padding(.horizontal, 8).padding(.vertical, 6)
+    }
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(Array(table.header.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: true) }
+            }
+            .background(Color(.tertiarySystemFill))
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                Divider().gridCellUnsizedAxes(.horizontal)
+                GridRow {
+                    ForEach(Array(row.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: false) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator), lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A standalone markdown image. It is fetched only after the user taps it: a reply can embed an
+/// arbitrary URL, and auto-loading one would let injected content leak chat data through the
+/// query string (and reveal the device IP) without any interaction. Optionally a link.
+struct MarkdownImageView: View {
+    var alt: String
+    var url: String
+    var link: String?
+    @Environment(\.openURL) private var openURL
+    @State private var loadRequested = false
+    /// Set when a requested load has been pending past `loadTimeout`.
+    @State private var timedOut = false
+
+    var body: some View {
+        // Only remote https images load: a reply must not make the app read local paths, and
+        // App Transport Security rejects cleartext http anyway.
+        if let u = URL(string: url), u.scheme?.lowercased() == "https", let host = u.host() {
+            if loadRequested {
+                loaded(u)
+            } else {
+                Button { loadRequested = true } label: {
+                    Label(alt.isEmpty ? "Load image from \(host)" : "\(alt) (load from \(host))", systemImage: "photo")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Loads the image from \(host)")
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    /// What a standalone image shows. Pure, so the decision can be unit-tested without a network.
+    enum Display: Equatable { case image, spinner, placeholder }
+
+    /// A finished load wins (even a late one); a failure or a stalled load (`timedOut`) shows the placeholder;
+    /// otherwise the spinner keeps turning.
+    static func display(success: Bool, failure: Bool, timedOut: Bool) -> Display {
+        if success { return .image }
+        if failure || timedOut { return .placeholder }
+        return .spinner
+    }
+
+    static func placeholderTitle(alt: String) -> String { alt.isEmpty ? "Image unavailable" : alt }
+
+    /// The one fallback for every image that cannot be shown: a blocked scheme, a failed load, a stalled load.
+    private var placeholder: some View {
+        Label(Self.placeholderTitle(alt: alt), systemImage: "photo")
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+
+    /// AsyncImage has no timeout of its own: past this, a stalled load shows the placeholder, and an image that
+    /// still arrives later replaces it.
+    private static let loadTimeout: Duration = .seconds(15)
+
+    @ViewBuilder private func loaded(_ u: URL) -> some View {
+        let image = AsyncImage(url: u) { phase in
+            switch phase {
+            case .success(let img):
+                img.resizable().scaledToFit().clipShape(.rect(cornerRadius: 8))
+            case .failure:
+                placeholder
+            default:
+                if Self.display(success: false, failure: false, timedOut: timedOut) == .placeholder {
+                    placeholder
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 60)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task {
+            do { try await Task.sleep(for: Self.loadTimeout); timedOut = true } catch {}
+        }
+        .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+        if let link, let target = URL(string: link), ["http", "https"].contains(target.scheme?.lowercased() ?? "") {
+            Button { openURL(target) } label: { image }.buttonStyle(.plain)
+        } else {
+            image
         }
     }
 }

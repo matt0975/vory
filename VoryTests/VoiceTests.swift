@@ -43,6 +43,23 @@ import Testing
         #expect(SpokenText.forSpeech("") == "")
     }
 
+    @Test func aTableWithoutOuterPipesIsOneNoteAndAPipeInProseIsStillSaid() {
+        // The app renders tables written without outer pipes (PR #133); the voice skips them too.
+        #expect(SpokenText.forSpeech("Sizes:\n\na | b\n--|--\n1 | 2\n\nDone.") == "Sizes: " + SpokenText.tableOmitted + " Done.")
+        let prose = SpokenText.forSpeech("Either A | or B, your call.\nNext.")
+        #expect(prose.hasPrefix("Either A") && prose.hasSuffix("Next.") && !prose.contains(SpokenText.tableOmitted))
+        // Streaming: the header is held until the delimiter row decides.
+        var f = SpokenText.Incremental()
+        var out = f.feed("Name | Size\n")
+        #expect(out.isEmpty)
+        out += f.feed("---|---\nlogs | 2 GB\n\nThat is all.\n")
+        #expect(out == [SpokenText.tableOmitted, "That is all."])
+        var g = SpokenText.Incremental()
+        #expect(g.feed("Pick A | B\n").isEmpty)
+        let late = g.feed("Then go.\n")
+        #expect(late.count == 2 && late[0].hasPrefix("Pick A") && late[1] == "Then go.")
+    }
+
     @Test func sentencesAreCutForOneAtATimeSynthesisWithShortOnesJoined() {
         let s = SpokenText.sentences("Yes. The index is built, and the export runs in 40 seconds now. Shall I set logrotate to eight? Done!")
         #expect(s == ["Yes. The index is built, and the export runs in 40 seconds now.", "Shall I set logrotate to eight?", "Done!"])
