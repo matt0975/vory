@@ -110,8 +110,13 @@ final class AppModel {
     var newChatRequest: UUID?
     /// "Start voice mode" (Siri, a Shortcut, the Action Button): the next new chat starts hands-free.
     var voiceModeRequested = false
+    private var voiceModeRequestedAt: Date?
+    /// The request stands for a moment only: asked with no chat list to answer it (the Mac's
+    /// window closed), it must not start voice mode on whatever chat opens an hour later.
+    var voiceModeWanted: Bool { voiceModeRequested && Date().timeIntervalSince(voiceModeRequestedAt ?? .distantPast) < 20 }
     func requestVoiceMode() {
         voiceModeRequested = true
+        voiceModeRequestedAt = Date()
         composeProfile = nil
         selectedTab = .chats
         // Launched for the intent, the chat list may still be mounting: a moment before it is asked.

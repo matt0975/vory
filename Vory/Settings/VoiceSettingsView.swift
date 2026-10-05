@@ -32,6 +32,14 @@ struct VoiceSettingsView: View {
     @State private var gatewayLive: GatewayVoiceAPI.LiveStatus?
     @State private var gatewayLiveError: String?
 
+    /// Where voice mode starts from, in this platform's words.
+    static var voiceModeWhere: String {
+        #if os(macOS)
+        "Voice mode is in the Chat menu (⇧⌘V), the Voice Chat button over the chat list, or a chat's + panel."
+        #else
+        "Voice mode is in a chat's + panel, the mic beside the compose button, or hold a chat's mic."
+        #endif
+    }
     private var speech: SpeechSource { SpeechSource(rawValue: speechRaw) ?? .automatic }
     private var engine: VoiceEngine? { model.runtime?.voice }
     private var conversation: ConversationMode { ConversationMode(rawValue: conversationRaw) ?? .automatic }
@@ -69,7 +77,7 @@ struct VoiceSettingsView: View {
                 Toggle("Quick answers", isOn: $quickAnswers)
             } header: { Text("Voice mode") } footer: {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Voice mode is in a chat's + menu, the mic beside the compose button, or hold the mic. Standard listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
+                    Text(Self.voiceModeWhere + " Standard listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
                     Text("Quick answers make voice replies come faster with less deep reasoning: while voice mode runs, that chat thinks at low effort with fast replies on, and goes back to its own settings after. Turn it off here, or ask the bot to take its time.")
                     if !lastSession.isEmpty { Text("Last voice session: \(lastSession)").font(.caption2) }
                 }
