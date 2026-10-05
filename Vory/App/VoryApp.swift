@@ -43,6 +43,9 @@ struct VoryApp: App {
                         LocalNotifier.isForeground = true
                         BotMotionSource.shared.apply(active: true)
                         model.lock.willEnterForeground()
+                        // "Last checked" moves every time the app comes forward, and the day's
+                        // backup runs from here when it is due (the Mac does the same on activation).
+                        CloudSync.shared.syncNow()
                         Task { await model.push.refreshAuthorization() }
                         Task { await model.refreshCompanionUpdateFlag() }
                         // Live Activities whose turn ended while the app was away must not linger,
@@ -51,6 +54,7 @@ struct VoryApp: App {
                         AwayWatch.shared.returned(runtime: model.runtime)
                         Task { await model.push.refreshRelayIfStale() }
                     case .background:
+                        CloudBackupTask.schedule()
                         AwayWatch.shared.left(runtime: model.runtime)
                         BotMotionSource.shared.apply(active: false)
                         LocalNotifier.isForeground = false

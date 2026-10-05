@@ -431,6 +431,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         LiveActivityController.observePushStarts()
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
+        CloudBackupTask.register()
         BotLooksMirror.mirror()   // so the notification extensions show the right bot from the start
         #if DEBUG
         // Simulator testing: `simctl push` only works once the app has asked for notification permission.

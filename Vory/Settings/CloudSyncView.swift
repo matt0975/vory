@@ -28,9 +28,25 @@ struct CloudSyncView: View {
                 LabeledContent("Bot looks", value: summary.bots == 0 ? "none" : "\(summary.bots)")
                 LabeledContent("Gateways", value: summary.gateways == 0 ? "none" : "\(summary.gateways)")
                 if let device = summary.device, let date = summary.date {
-                    LabeledContent("Last change", value: "\(device), \(date.formatted(date: .abbreviated, time: .shortened))")
+                    // The latest write to iCloud from any device, this one included: a backup
+                    // made here, the daily one, or a change synced from another device.
+                    LabeledContent("Last backup", value: "\(summary.isOwnDevice ? "\(DeviceWords.ThisTitle) (\(device))" : device), \(date.formatted(date: .abbreviated, time: .shortened))")
+                        .accessibilityIdentifier("cloud.lastBackup")
                 }
             } header: { Text(sync.signedIn ? "In iCloud" : "Saved for iCloud") }
+
+            Section {
+                Toggle("Back up automatically", isOn: Binding(get: { sync.autoBackup }, set: { sync.autoBackup = $0 }))
+                    .accessibilityIdentifier("cloud.autoBackup")
+                if let last = sync.lastOwnBackupAt {
+                    LabeledContent("Last backup from \(DeviceWords.this)", value: last.formatted(date: .abbreviated, time: .shortened))
+                }
+                if sync.autoBackup, let why = sync.lastAutoBackupError {
+                    Text("Last automatic backup failed: \(why)").font(.footnote).foregroundStyle(.orange)
+                }
+            } footer: {
+                Text("Once a day, when Vory opens or in the background when the system allows, \(DeviceWords.this) backs its settings, bot looks and gateways up to your iCloud, the same as Back Up \(DeviceWords.ThisTitle) Now. Nothing leaves your iCloud; a failure is said here, not asked about.")
+            }
 
             Section {
                 // Each question hangs from its own button: asked from the whole list, the
@@ -68,6 +84,9 @@ struct CloudSyncView: View {
                 Text("Stays on each device: notifications, the app lock, the \(DeviceWords.isMac ? "sidebar" : "tab bar"), text size, and browser sign-ins (a gateway signed in with the browser asks once on each device).")
             }
         }
+        // The last footer sat under the tab bar on a phone: room for the bar at the end of
+        // the list, as the chat and the tab roots keep.
+        .modifier(TabBarClearance())
         .untitledPage()
     }
 
@@ -83,8 +102,11 @@ struct CloudSyncView: View {
         }
         if !sync.enabled { return "Off: \(DeviceWords.this) keeps its own settings and sends nothing to iCloud. What is already in iCloud stays there." }
         if !sync.signedIn { return "\(DeviceWords.This) does not appear to be signed in to iCloud, or iCloud Drive is off for it. Sync starts by itself once it is." }
-        if let t = sync.lastSyncedAt { return "On. Last checked \(t.formatted(date: .omitted, time: .shortened))." }
-        return "On."
+        // Checked: every pass, and every time the app comes forward. A failure is said in words.
+        var line = "On."
+        if let t = sync.lastSyncedAt { line = "On. Last checked \(t.formatted(date: .omitted, time: .shortened))." }
+        if let why = sync.lastSyncError { line += " \(why)" }
+        return line
     }
 
     private func row(_ symbol: String, _ title: String, _ detail: String) -> some View {
@@ -103,6 +125,21 @@ struct CloudSyncView: View {
         // A gateway that came back without its sign-in is asked for it now.
         model.signInPrompt = r.pending
         if model.runtime == nil { Task { await model.activateSavedConnection() } }
+    }
+}
+
+/// Room for the tab bar at the end of a pushed page's list: the bar is laid over the content,
+/// and a long last footer (the iCloud page's) ended under it on a phone.
+struct TabBarClearance: ViewModifier {
+    #if os(iOS)
+    @Environment(AppModel.self) private var model
+    #endif
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        content.contentMargins(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 16, for: .scrollContent)
+        #else
+        content
+        #endif
     }
 }
 

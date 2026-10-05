@@ -21,8 +21,9 @@ protocol CloudKeyValueStore: AnyObject {
     /// `nil` removes the key.
     func setCloudValue(_ value: Any?, for key: String)
     var cloudKeys: [String] { get }
-    /// Ask for a sync with the server soon; a no-op where there is none.
-    func flush()
+    /// Ask for a sync with the server soon; a no-op where there is none. False when the store
+    /// would not take it (over its quota, or no iCloud account).
+    @discardableResult func flush() -> Bool
 }
 
 extension NSUbiquitousKeyValueStore: CloudKeyValueStore {
@@ -31,7 +32,7 @@ extension NSUbiquitousKeyValueStore: CloudKeyValueStore {
         if let value { set(value, forKey: key) } else { removeObject(forKey: key) }
     }
     var cloudKeys: [String] { Array(dictionaryRepresentation.keys) }
-    func flush() { synchronize() }
+    @discardableResult func flush() -> Bool { synchronize() }
 }
 
 /// A cloud that is a dictionary: two `CloudMerge`s sharing one stand in for two devices.
@@ -40,7 +41,7 @@ final class MemoryCloudStore: CloudKeyValueStore {
     func cloudValue(_ key: String) -> Any? { values[key] }
     func setCloudValue(_ value: Any?, for key: String) { values[key] = value }
     var cloudKeys: [String] { Array(values.keys) }
-    func flush() {}
+    @discardableResult func flush() -> Bool { true }
 }
 
 // MARK: The merge
@@ -52,9 +53,12 @@ struct CloudSummary: Equatable {
     var gateways = 0
     /// The name Home greets the person by, when iCloud holds one.
     var name: String?
-    /// The device that wrote last, other than this one when there is another.
+    /// The device that wrote to iCloud last, this one included (it used to prefer another
+    /// device's word, so a backup made here never showed as the last one).
     var device: String?
     var date: Date?
+    /// The last write was this device's.
+    var isOwnDevice = false
     var isEmpty: Bool { settings == 0 && bots == 0 && gateways == 0 }
 }
 
@@ -93,7 +97,7 @@ struct CloudMerge {
         HomeLayout.storageKey, HomeLayout.allBotsKey, nameKey,
         ChatStyle.showToolCalls, ChatStyle.showReasoning, ChatStyle.showTurnStats, ChatStyle.showSystemNotes,
         ChatStyle.showBots, ChatStyle.showToolOutput, ChatStyle.currentStepOnly, ChatStyle.compactTools,
-        ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies,
+        ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies, ChatStyle.returnSends,
         BotAvatarStore.glassAllKey, GatewayRuntime.defaultProfileKey,
         ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey, ChatGoals.enabledKey,
     ] + VoiceSettings.syncedKeys
@@ -147,10 +151,15 @@ struct CloudMerge {
         if stamps != before.0 { defaults.set(stamps, forKey: Self.stampsKey) }
         if seen != before.1 { defaults.set(seen, forKey: Self.seenKey) }
         if out.pushed > 0 {
-            cloud.setCloudValue(["name": deviceName, "t": now()], for: Self.devicePrefix + deviceID)
+            stamp()
             cloud.flush()
         }
         return out
+    }
+
+    /// This device's "last write" entry: its name and now.
+    func stamp() {
+        cloud.setCloudValue(["name": deviceName, "t": now()], for: Self.devicePrefix + deviceID)
     }
 
     /// One key: which way, if any, it moves.
@@ -244,13 +253,13 @@ struct CloudMerge {
                 if (cloud.cloudValue(key) as? [String: Any])?["gone"] as? Bool != true { s.bots += 1 }
             } else if key.hasPrefix(Self.devicePrefix), let d = cloud.cloudValue(key) as? [String: Any], let t = d["t"] as? Double {
                 let own = key == Self.devicePrefix + deviceID
-                // Another device's word over this one's own; among those, the latest.
-                if latest == nil || (latest!.own && !own) || (latest!.own == own && t > latest!.t) {
+                // The latest write, whichever device made it: a backup made here is the last one.
+                if latest == nil || t > latest!.t {
                     latest = (d["name"] as? String ?? "another device", t, own)
                 }
             }
         }
-        if let latest { s.device = latest.name; s.date = Date(timeIntervalSince1970: latest.t) }
+        if let latest { s.device = latest.name; s.date = Date(timeIntervalSince1970: latest.t); s.isOwnDevice = latest.own }
         return s
     }
 
@@ -501,6 +510,20 @@ final class CloudSync {
     /// Set by a restore that brought no gateway to a device with none: the running sync
     /// takes them when their item arrives.
     static let awaitingGatewaysKey = "cloudSync.awaitingGateways"
+    /// Settings › iCloud Sync › Back up automatically: once a day, from this device; per device, on unless turned off.
+    nonisolated static let autoBackupKey = "cloudSync.autoBackup"
+    /// When this device last backed itself up (Back Up Now or the daily one), seconds since 1970; per device.
+    nonisolated static let lastOwnBackupKey = "cloudSync.lastOwnBackupAt"
+    /// The background task that runs the daily backup when the system allows (Info.plist lists it).
+    nonisolated static let backupTaskID = "com.vorantx.vory.backup"
+    /// How old this device's last backup may be before the daily one runs.
+    nonisolated static let backupInterval: TimeInterval = 24 * 3600
+
+    /// Whether the daily backup is due: never backed up, or the last one is over a day old.
+    nonisolated static func backupDue(lastBackupAt: Double?, now: Double) -> Bool {
+        guard let last = lastBackupAt else { return true }
+        return now - last >= backupInterval
+    }
 
     /// On unless switched off in Settings › iCloud Sync.
     var enabled: Bool {
@@ -510,6 +533,18 @@ final class CloudSync {
         }
     }
     private(set) var lastSyncedAt: Date?
+    /// Why the last pass did not reach iCloud, in plain words; nil when it did.
+    private(set) var lastSyncError: String?
+    /// Settings › iCloud Sync › Back up automatically.
+    var autoBackup: Bool {
+        didSet { UserDefaults.standard.set(autoBackup, forKey: Self.autoBackupKey) }
+    }
+    /// When this device last backed itself up, by hand or by the day.
+    private(set) var lastOwnBackupAt: Date?
+    /// Why the last daily backup did not happen; shown under the switch, never a prompt.
+    private(set) var lastAutoBackupError: String?
+    /// A restore is running: nothing backs up over it.
+    @ObservationIgnored private var restoring = false
     /// Bumped whenever the cloud's contents may have changed, so a summary on screen is read again.
     private(set) var revision = 0
     /// Set when another device erased the iCloud data: this one stopped syncing rather than
@@ -540,7 +575,11 @@ final class CloudSync {
     @ObservationIgnored var suspended = false
 
     private init() {
-        enabled = UserDefaults.standard.object(forKey: Self.enabledKey) as? Bool ?? true
+        let defaults = UserDefaults.standard
+        enabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? true
+        autoBackup = defaults.object(forKey: Self.autoBackupKey) as? Bool ?? true
+        let last = defaults.double(forKey: Self.lastOwnBackupKey)
+        lastOwnBackupAt = last > 0 ? Date(timeIntervalSince1970: last) : nil
     }
 
     private var deviceID: String {
@@ -571,8 +610,19 @@ final class CloudSync {
         started = true
         self.store = store
         let center = NotificationCenter.default
-        center.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloud as? NSUbiquitousKeyValueStore, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.syncNow() }
+        center.addObserver(forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification, object: cloud as? NSUbiquitousKeyValueStore, queue: .main) { [weak self] n in
+            // The store says why it changed: an account change or a full store are the two
+            // that deserve a word on the page; a plain change from another device just syncs.
+            // (Read before the hop: a Notification does not cross into the actor.)
+            let reason = n.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+            MainActor.assumeIsolated {
+                if let reason {
+                    if reason == NSUbiquitousKeyValueStoreAccountChange { self?.lastSyncError = "The iCloud account changed; sync starts over with the account now signed in." }
+                    else if reason == NSUbiquitousKeyValueStoreQuotaViolationChange { self?.lastSyncError = "iCloud's key-value store is full; the last change did not reach it." }
+                    else { self?.lastSyncError = nil }
+                }
+                self?.syncNow()
+            }
         }
         // A setting changed here (or was just applied from the cloud, which the merge sees as
         // already agreed and leaves alone).
@@ -592,8 +642,25 @@ final class CloudSync {
         guard enabled, started, !suspended, !stoppedByErase() else { return }
         syncSettings()
         syncGateways()
+        if !cloud.flush() { lastSyncError = "iCloud did not take the last sync: the store may be full, or \(DeviceWords.this) is not signed in." }
+        else if lastSyncError?.hasPrefix("iCloud did not take") == true { lastSyncError = nil }
         lastSyncedAt = Date()
         revision += 1
+        // The day's backup, when it is due: launch, coming forward, and the Mac's activation
+        // all come through here.
+        backUpIfDue()
+    }
+
+    /// The daily backup, quietly, when the switch is on, iCloud is there, no restore is
+    /// running and this device's last backup is over a day old. The same backup as Back Up
+    /// Now; a failure is a line under the switch, never a prompt.
+    func backUpIfDue() {
+        guard autoBackup, enabled, started, !suspended, !restoring else { return }
+        guard Self.backupDue(lastBackupAt: lastOwnBackupAt?.timeIntervalSince1970, now: Date().timeIntervalSince1970) else { return }
+        guard signedIn else { lastAutoBackupError = "\(DeviceWords.This) is not signed in to iCloud."; return }
+        guard !stoppedByErase() else { lastAutoBackupError = "Sync stopped after the iCloud data was erased from another device."; return }
+        if backUpNow() { lastAutoBackupError = nil }
+        else { lastAutoBackupError = "iCloud did not take it: the store may be full, or iCloud is unreachable." }
     }
 
     private func syncSettings() {
@@ -757,6 +824,8 @@ final class CloudSync {
     /// iCloud's settings and looks over this device's, and its gateways added to this device's.
     @discardableResult
     func restore() -> RestoreOutcome {
+        restoring = true
+        defer { restoring = false }
         var result = RestoreOutcome()
         result.settings = merge.reconcile(.restore).applied
         lastLocalFingerprint = localFingerprint()
@@ -777,14 +846,24 @@ final class CloudSync {
         return result
     }
 
-    /// This device's settings, looks and gateways over what iCloud holds.
-    func backUpNow() {
-        merge.reconcile(.backUp)
+    /// This device's settings, looks and gateways over what iCloud holds. True when iCloud
+    /// took it; this device's last-backup time is kept either way it was asked.
+    @discardableResult
+    func backUpNow() -> Bool {
+        let m = merge
+        m.reconcile(.backUp)
+        // The device's stamp goes up with every backup, even one with nothing new to push,
+        // so "Last backup" says this device and now.
+        m.stamp()
         lastLocalFingerprint = localFingerprint()
         if let store { CloudGateways.reconcile(store: store, importNew: false) }
-        cloud.flush()
-        lastSyncedAt = Date()
+        let took = cloud.flush()
+        let at = Date()
+        lastOwnBackupAt = at
+        UserDefaults.standard.set(at.timeIntervalSince1970, forKey: Self.lastOwnBackupKey)
+        lastSyncedAt = at
         revision += 1
+        return took
     }
 
     // MARK: Reset
