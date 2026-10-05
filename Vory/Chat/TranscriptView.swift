@@ -800,6 +800,9 @@ private struct TimeRevealPan: UIViewRepresentable {
 extension ChatStyle { static let headerShowsTitle = "chatHeaderShowsTitle" }
 enum ChatStyle {
     static let showToolCalls = "chat.showToolCalls"
+    /// The on-screen keyboard's Return sends (as it did before 1.4) instead of adding a line; off
+    /// by default. A hardware keyboard's Return sends and Shift-Return adds a line either way.
+    static let returnSends = "chat.returnSends"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
     static let showSystemNotes = "chat.showSystemNotes"

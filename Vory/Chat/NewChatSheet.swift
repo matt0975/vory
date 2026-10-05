@@ -31,6 +31,8 @@ struct NewChatSheet: View {
     enum Field { case to }
     /// The message field is UIKit (ComposerTextView), so its focus is a plain flag.
     @State private var messageFocused = false
+    /// Settings › Appearance › Return key sends; the field adds a line otherwise.
+    @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Files picked before the chat exists; staged into the chat as soon as it opens.
     @State private var staged: [AttachmentPreview] = []
     /// The project the chat starts in ("" for none): the Chats filter's project, else the
@@ -209,7 +211,8 @@ struct NewChatSheet: View {
                 HStack(alignment: .bottom, spacing: 6) {
                     ComposerTextView(text: $text, placeholder: chosen.isEmpty ? "Choose a bot first" : "Message", focused: $messageFocused, accessibilityID: "newchat.text",
                                      onSend: { Task { await start() } },
-                                     onPasteData: { data, name, type in stage(data, name: name, type: type) })
+                                     onPasteData: { data, name, type in stage(data, name: name, type: type) },
+                                     returnSends: returnSends)
                         .padding(.leading, 14).padding(.vertical, 7)
                         .disabled(chosen.isEmpty)
                     // Voice mode with the bot chosen; whatever is typed or attached goes first.

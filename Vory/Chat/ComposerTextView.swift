@@ -6,6 +6,21 @@ import AppKit
 #endif
 import UniformTypeIdentifiers
 
+/// What a Return in the composer does on the phone and the iPad, one rule for the on-screen
+/// keyboard and a hardware one: Shift-Return adds a line, ⌘-Return sends, a bare Return takes
+/// the open picker's item, else a hardware Return sends and the on-screen Return adds a line,
+/// unless Settings says the Return key sends (as it did before 1.4).
+enum ComposerReturnRule {
+    enum Action: Equatable { case send, newline, pick }
+    static func action(hardware: Bool, shift: Bool, command: Bool, pickerOpen: Bool, returnSends: Bool) -> Action {
+        if shift { return .newline }
+        if command { return .send }
+        if pickerOpen { return .pick }
+        if hardware { return .send }
+        return returnSends ? .send : .newline
+    }
+}
+
 #if os(macOS)
 /// The Mac composer: SwiftUI's own field, growing to `maxLines`. Return sends, Option-Return
 /// adds a line; Up and Down go to `onArrow` first (history recall); an image, movie or document
@@ -19,6 +34,10 @@ struct ComposerTextView: View {
     var onSend: () -> Void = {}
     var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
     var onArrow: (Int) -> Bool = { _ in false }
+    /// The phone's Return rule, taken so the call site is one; the Mac's field keeps its own
+    /// Return (sends) and Shift-Return (a line) and ignores both.
+    var onReturn: () -> Bool = { false }
+    var returnSends = false
     @FocusState private var isFocused: Bool
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
@@ -88,6 +107,10 @@ struct ComposerTextView: UIViewRepresentable {
     var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
     /// Hardware Up (-1) / Down (1): history recall. Return true when handled.
     var onArrow: (Int) -> Bool = { _ in false }
+    /// A bare Return with a picker open (slash commands, mentions): the item. True when taken.
+    var onReturn: () -> Bool = { false }
+    /// Settings › Appearance › Return key sends: the on-screen Return sends instead of adding a line.
+    var returnSends = false
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
 
@@ -104,8 +127,9 @@ struct ComposerTextView: UIViewRepresentable {
         v.isScrollEnabled = false
         v.alwaysBounceVertical = false
         v.showsVerticalScrollIndicator = true
-        v.returnKeyType = .send
-        v.enablesReturnKeyAutomatically = true
+        // Return adds a line (the key says return), unless the setting makes it send.
+        v.returnKeyType = returnSends ? .send : .default
+        v.enablesReturnKeyAutomatically = returnSends
         v.accessibilityIdentifier = accessibilityID
         v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         v.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -123,6 +147,12 @@ struct ComposerTextView: UIViewRepresentable {
             v.placeholderLabel.isHidden = !text.isEmpty
         }
         if v.placeholderLabel.text != placeholder { v.placeholderLabel.text = placeholder }
+        let key: UIReturnKeyType = returnSends ? .send : .default
+        if v.returnKeyType != key {
+            v.returnKeyType = key
+            v.enablesReturnKeyAutomatically = returnSends
+            v.reloadInputViews()
+        }
         if focused, !v.isFirstResponder, v.window != nil {
             DispatchQueue.main.async { v.becomeFirstResponder() }
         } else if !focused, v.isFirstResponder {
@@ -156,13 +186,29 @@ struct ComposerTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ v: UITextView) { if parent.focused { parent.focused = false } }
 
         func textView(_ v: UITextView, shouldChangeTextIn range: NSRange, replacementText s: String) -> Bool {
-            // The Send key: a bare newline from the keyboard sends; Shift-Return on a hardware
-            // keyboard comes through the key command instead and inserts a line break.
-            if s == "\n" {
+            // A newline from the on-screen keyboard (a hardware keyboard's Return comes through
+            // the key commands instead): the picker's item, a send, or the line break itself.
+            guard s == "\n" else { return true }
+            switch ComposerReturnRule.action(hardware: false, shift: false, command: false, pickerOpen: false, returnSends: parent.returnSends) {
+            case .pick: return !parent.onReturn()
+            case .send:
+                if parent.onReturn() { return false }
                 if !v.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parent.onSend() }
                 return false
+            case .newline:
+                // A picker open takes the item even when Return would add a line.
+                return !parent.onReturn()
             }
-            return true
+        }
+
+        /// A hardware Return: the picker's item, else a send; Shift-Return and ⌘-Return are decided here too.
+        func hardwareReturn(_ v: UITextView, shift: Bool, command: Bool) {
+            switch ComposerReturnRule.action(hardware: true, shift: shift, command: command, pickerOpen: false, returnSends: parent.returnSends) {
+            case .newline: v.insertText("\n")
+            case .pick, .send:
+                if parent.onReturn() { return }
+                if !v.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parent.onSend() }
+            }
         }
 
         // MARK: UITextPasteDelegate — images and documents from the pasteboard become attachments.
@@ -233,13 +279,18 @@ final class PasteTextView: UITextView {
     override var keyCommands: [UIKeyCommand]? {
         let up = UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(arrowUp))
         let down = UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(arrowDown))
-        let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(insertLineBreak))
-        for c in [up, down] { c.wantsPriorityOverSystemBehavior = true }
-        return [up, down, newline]
+        // A hardware keyboard, as on the Mac: Return sends, Shift-Return adds a line, ⌘-Return sends.
+        let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(returnPressed))
+        let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(shiftReturnPressed))
+        let commandSend = UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(commandReturnPressed))
+        for c in [up, down, send] { c.wantsPriorityOverSystemBehavior = true }
+        return [up, down, send, newline, commandSend]
     }
     @objc private func arrowUp() { if coordinator?.parent.onArrow(-1) != true { moveCursor(up: true) } }
     @objc private func arrowDown() { if coordinator?.parent.onArrow(1) != true { moveCursor(up: false) } }
-    @objc private func insertLineBreak() { insertText("\n") }
+    @objc private func returnPressed() { coordinator?.hardwareReturn(self, shift: false, command: false) }
+    @objc private func shiftReturnPressed() { coordinator?.hardwareReturn(self, shift: true, command: false) }
+    @objc private func commandReturnPressed() { coordinator?.hardwareReturn(self, shift: false, command: true) }
 
     private func moveCursor(up: Bool) {
         guard let r = selectedTextRange else { return }

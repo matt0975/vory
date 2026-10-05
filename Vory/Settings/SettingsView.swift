@@ -583,6 +583,7 @@ struct AppearanceView: View {
     @AppStorage(ChatStyle.botTint) private var botTint = false
     @AppStorage(ChatStyle.textSize) private var textSize = "default"
     @AppStorage(ComposeAction.tapKey) private var composeTap = ComposeAction.tapDefault.rawValue
+    @AppStorage(ChatStyle.returnSends) private var returnSends = false
     @AppStorage(ComposeAction.holdKey) private var composeHold = ComposeAction.holdDefault.rawValue
     @Environment(\.editMode) private var editMode
 
@@ -712,6 +713,11 @@ struct AppearanceView: View {
             }
             #endif
             #if os(iOS)
+            Section {
+                Toggle("Return key sends", isOn: $returnSends)
+            } header: { Text("Composer") } footer: {
+                Text("Off, the on-screen keyboard's Return adds a line, as in Messages, and the arrow sends. On, Return sends. On a hardware keyboard Return sends and Shift-Return adds a line either way; ⌘-Return sends too.")
+            }
             Section {
                 Picker("Tap", selection: $composeTap) {
                     ForEach(ComposeAction.tapChoices) { Text($0.title).tag($0.rawValue) }

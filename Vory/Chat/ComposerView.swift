@@ -15,6 +15,8 @@ struct ComposerView: View {
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
+    /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
+    @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
     private var holdStartsVoiceMode: Bool {
         #if os(iOS)
@@ -89,19 +91,29 @@ struct ComposerView: View {
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
 
+    /// A command picked: it replaces the word being typed, not the whole line.
+    private func pickSlash(_ name: String) {
+        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        if words.isEmpty { words = [""] }
+        words[words.count - 1] = "/" + name
+        text = words.joined(separator: " ") + " "
+    }
+
+    /// Return with a picker open takes its first item (a bare Return would otherwise add a
+    /// line, or send, under a half-typed command). True when something was picked.
+    private func pickFirstSuggestion() -> Bool {
+        if let s = slashSuggestions.first { pickSlash(s.name); return true }
+        if let p = mentionSuggestions.first { pickMention(p); return true }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             if !slashSuggestions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(slashSuggestions, id: \.name) { s in
-                            Button {
-                                // Replace the word being typed, not the whole line.
-                                var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-                                if words.isEmpty { words = [""] }
-                                words[words.count - 1] = "/" + s.name
-                                text = words.joined(separator: " ") + " "
-                            } label: {
+                            Button { pickSlash(s.name) } label: {
                                 HStack(spacing: 10) {
                                     Text("/" + s.name).font(.subheadline.monospaced().weight(.medium)).lineLimit(1)
                                     Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -208,19 +220,7 @@ struct ComposerView: View {
                             .padding(.leading, 14).padding(.vertical, 7)
                             .transition(.opacity)
                     } else {
-                    ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
-                                     onSend: { Task { await send() } },
-                                     onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
-                                     onArrow: { recallHistory($0) })
-                        .padding(.leading, 14).padding(.vertical, 7)
-                        .task { catalog = await chat.commandsCatalog() }
-                        .onChange(of: text) { old, new in
-                            // Offered once as the text gets long (a paste lands in one jump;
-                            // typing crosses the line once); "Keep" holds until it shrinks again.
-                            let limit = 800
-                            if new.count >= limit, old.count < limit || new.count - old.count > 400 { withAnimation(.snappy) { longTextOffer = true } }
-                            else if new.count < limit { longTextOffer = false }
-                        }
+                        textField
                     }
                     trailingControl
                         .padding(.trailing, 4).padding(.bottom, 4)
@@ -303,6 +303,26 @@ struct ComposerView: View {
         }
         .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact) }
         .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame() }
+    }
+
+    /// The field itself (its own view: the body's one expression grew past what the compiler
+    /// types in reasonable time).
+    private var textField: some View {
+        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
+                         onSend: { Task { await send() } },
+                         onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
+                         onArrow: { recallHistory($0) },
+                         onReturn: { pickFirstSuggestion() },
+                         returnSends: returnSends)
+            .padding(.leading, 14).padding(.vertical, 7)
+            .task { catalog = await chat.commandsCatalog() }
+            .onChange(of: text) { old, new in
+                // Offered once as the text gets long (a paste lands in one jump;
+                // typing crosses the line once); "Keep" holds until it shrinks again.
+                let limit = 800
+                if new.count >= limit, old.count < limit || new.count - old.count > 400 { withAnimation(.snappy) { longTextOffer = true } }
+                else if new.count < limit { longTextOffer = false }
+            }
     }
 
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
