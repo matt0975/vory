@@ -142,6 +142,7 @@ public final class GatewayRuntime {
 
     public func stop() async {
         globalEventTask?.cancel()
+        kanban.stopEvents()
         await socket.disconnect()
     }
 
@@ -325,8 +326,10 @@ public final class GatewayRuntime {
     }
 
     /// `cwd`: a folder on the gateway the chat works in, so it belongs to that project.
-    public func newChat(cwd: String? = nil) async throws -> ChatSession {
-        let session = ChatSession(runtime: self, storedID: nil, title: nil)
+    /// `profile`: the bot the chat is with when it is not the selected one (the watch's choice,
+    /// without switching the phone's list under the person).
+    public func newChat(cwd: String? = nil, profile: String? = nil) async throws -> ChatSession {
+        let session = ChatSession(runtime: self, storedID: nil, title: nil, profile: profile)
         try await session.create(cwd: cwd)
         registry.add(session)
         return session

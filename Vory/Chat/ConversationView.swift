@@ -198,7 +198,11 @@ struct ConversationView: View {
             }
             // Opened for voice mode (the Chats page's mic, the sheet's Voice mode): hands-free
             // begins once the first message, if any, is on its way, so the reply is spoken.
-            if let chat, route.startVoice, !voiceStarted { voiceStarted = true; HandsFreeSession.shared.start(chat: chat) }
+            if let chat, route.startVoice, !voiceStarted {
+                voiceStarted = true
+                // Not twice: a "Start voice mode" request may have started it a moment ago.
+                if !HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.start(chat: chat) }
+            }
         } catch {
             loadError = error.localizedDescription
         }

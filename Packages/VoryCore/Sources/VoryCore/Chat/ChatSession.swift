@@ -814,7 +814,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard cards.contains(where: { $0.id == card.id }) else { return }
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
-        if let c = inlineAnswers.removeValue(forKey: card.id) { c.resume(returning: .null) }
+        // The gateway's reply slot stays open: answering it with nothing here read as a deny
+        // when the gateway's list had simply missed the card (a tester's Once came back as
+        // "Answered on another device" and a refusal). If the gateway really has its answer
+        // it ignores a late one; the turn's end releases whatever still waits.
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
         runtime.cardNotifier?.cardSettled(card, chat: self)
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: card.method == "approval" ? "Answered on another device" : "No longer waiting for an answer", symbol: "checkmark.shield")))

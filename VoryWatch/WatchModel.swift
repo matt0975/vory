@@ -210,7 +210,9 @@ final class WatchModel {
         syncStatus = "Synced \(connections.count) gateway\(connections.count == 1 ? "" : "s") from iPhone"
         let activeID = (context["active"] as? String).flatMap(UUID.init(uuidString:))
         if let target = activeID.flatMap({ store.connection(id: $0) }) ?? store.active ?? connections.first {
-            Task { await activate(target) }
+            // Only when the gateway actually changed: every context (a looks or summary resend)
+            // used to re-activate the phone's choice over the watch's own.
+            if runtime == nil || runtime?.connection.id != target.id { Task { await activate(target) } }
         }
     }
 

@@ -266,6 +266,10 @@ final class InputPipe: @unchecked Sendable {
         if format == nil { detectorSeen = false }
     }
 
+    /// Where the recording is encoded and written: not the audio thread, and not under the
+    /// lock (the AAC encode held both, and the lead-in's encode held the lock on main).
+    private let writeQueue = DispatchQueue(label: "dev.vory.listener.write", qos: .userInitiated)
+
     func startCapture(to url: URL) {
         lock.lock(); defer { lock.unlock() }
         guard file == nil, let format = ring.last?.format else { fileURL = url; return }
@@ -273,10 +277,13 @@ final class InputPipe: @unchecked Sendable {
             let settings: [String: Any] = [AVFormatIDKey: Int(kAudioFormatMPEG4AAC), AVSampleRateKey: format.sampleRate,
                                            AVNumberOfChannelsKey: Int(format.channelCount), AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]
             let f = try AVAudioFile(forWriting: url, settings: settings, commonFormat: format.commonFormat, interleaved: format.isInterleaved)
-            fileConverter = nil
-            for b in ring { write(b, to: f) }
+            let lead = ring
             file = f
             fileURL = url
+            writeQueue.async { [self] in
+                fileConverter = nil
+                for b in lead { write(b, to: f) }
+            }
         } catch {
             file = nil; fileURL = nil
         }
@@ -291,9 +298,12 @@ final class InputPipe: @unchecked Sendable {
 
     /// Closes the recording and returns it, nil when none was open.
     func stopCapture() -> URL? {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         let url = file == nil ? nil : fileURL
         file = nil; fileURL = nil
+        lock.unlock()
+        // Every write queued for the file lands before the file is read.
+        writeQueue.sync {}
         return url
     }
 
@@ -308,7 +318,7 @@ final class InputPipe: @unchecked Sendable {
         levels.append(min(1, max(0, (db + 50) / 50)))
         if levels.count > UtteranceListener.waveformSamples { levels.removeFirst(levels.count - UtteranceListener.waveformSamples) }
         if let f = file {
-            write(buffer, to: f)
+            if let copy = Self.copy(buffer) { writeQueue.async { [self] in write(copy, to: f) } }
         } else if let copy = Self.copy(buffer) {
             ring.append(copy)
             ringSeconds += Double(buffer.frameLength) / buffer.format.sampleRate

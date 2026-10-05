@@ -57,7 +57,8 @@ struct RootView: View {
                 UserDefaults.standard.set(true, forKey: TabLayout.homeFirstAppliedKey)
             }
             // The chosen first screen (Settings › Home), when it is still on the bar.
-            if let tab = AppModel.AppTab(rawValue: launchTab), TabLayout.parse(rootLayoutRaw).visible().contains(tab) { model.selectedTab = tab }
+            // A page the gateway cannot show (the Board without its plugin) is not opened on: it drew blank.
+            if let tab = AppModel.AppTab(rawValue: launchTab), TabLayout.parse(rootLayoutRaw).visible(hiding: model.hiddenTabs).contains(tab) { model.selectedTab = tab }
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-vory-show-companion-prompt") { showCompanionPrompt = true }
             if ProcessInfo.processInfo.arguments.contains("-vory-show-setup") { showInstaller = true }

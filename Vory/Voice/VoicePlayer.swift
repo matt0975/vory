@@ -15,6 +15,8 @@ final class VoicePlayer {
     private let node = AVAudioPlayerNode()
     private var connectedFormat: AVAudioFormat?
     private(set) var isPlaying = false
+    /// A `play` is in progress (it may be winding down after `stop`); the next waits its turn.
+    private var busy = false
     /// Scheduled and not yet heard, oldest first: what a restarted engine plays again.
     private var queued: [AudioChunk] = []
     /// Bumped whenever the schedule is thrown away (stop, a restart), so the callbacks of the
@@ -30,12 +32,18 @@ final class VoicePlayer {
     private(set) var handsFree = false
     private var inputTapInstalled = false
     private var configObserver: Any?
+    private var routeObserver: Any?
 
     init() { engine.attach(node) }
 
     /// Plays every chunk of the stream in order and returns once the last one has sounded
     /// (or the stream failed, or `stop()` was called).
     func play(_ chunks: AsyncThrowingStream<AudioChunk, Error>) async throws {
+        // One at a time: a second play while the first still drained threw its queue away and
+        // took over its finish (Live's next turn could start over the end of the last).
+        while busy { try await Task.sleep(for: .milliseconds(20)) }
+        busy = true
+        defer { busy = false }
         if !handsFree { try beginSession() }
         isPlaying = true
         queued = []; ended = false; loggedFirstAudio = false
@@ -198,6 +206,19 @@ final class VoicePlayer {
         }
         engine.prepare()
         try engine.start()
+        #if os(iOS)
+        // Voice processing re-routes as the engine starts: the speaker is asked for again after,
+        // and again on every route change while the session runs.
+        if !Self.routeHasHeadsetOrCar(session) { try? session.overrideOutputAudioPort(.speaker) }
+        routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.handsFree else { return }
+                let s = AVAudioSession.sharedInstance()
+                if !Self.routeHasHeadsetOrCar(s) { try? s.overrideOutputAudioPort(.speaker) }
+                Self.log.notice("route changed: \(Self.sessionLine(), privacy: .public)")
+            }
+        }
+        #endif
         // A route change (headphones in, a car kit) resets the engine: it is started again.
         configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.restartAfterChange() }
@@ -232,6 +253,7 @@ final class VoicePlayer {
         stop()
         handsFree = false
         if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        if let o = routeObserver { NotificationCenter.default.removeObserver(o); routeObserver = nil }
         if inputTapInstalled { engine.inputNode.removeTap(onBus: 0); inputTapInstalled = false }
         engine.stop()
         #if os(iOS)

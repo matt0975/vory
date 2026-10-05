@@ -149,8 +149,12 @@ public final class KanbanStore {
 
     public func stopEvents() {
         eventsTask?.cancel(); eventsTask = nil
+        // `receive()` does not notice a cancelled task: the socket is closed under it, so the
+        // loop ends now and not at the next frame.
+        eventSocket?.cancel(with: .goingAway, reason: nil); eventSocket = nil
         liveConnected = false
     }
+    private var eventSocket: URLSessionWebSocketTask?
 
     private func eventLoop() async {
         var backoff: Double = 2
@@ -164,10 +168,11 @@ public final class KanbanStore {
                 var request = URLRequest(url: url)
                 for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
                 let socket = Self.socketSession.webSocketTask(with: request)
+                eventSocket = socket
                 socket.resume()
                 liveConnected = true
                 backoff = 2
-                defer { socket.cancel(with: .goingAway, reason: nil) }
+                defer { socket.cancel(with: .goingAway, reason: nil); if eventSocket === socket { eventSocket = nil } }
                 while !Task.isCancelled {
                     let message = try await socket.receive()
                     let data: Data?
@@ -181,6 +186,8 @@ public final class KanbanStore {
                     }
                 }
             } catch {
+                // A loop that was stopped says nothing: a newer one may already be live.
+                if Task.isCancelled { return }
                 liveConnected = false
             }
             if Task.isCancelled { return }

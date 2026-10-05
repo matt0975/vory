@@ -130,9 +130,13 @@ enum HTMLCard {
     }
 
     /// The configuration every card's web view gets.
+    /// One non-persistent store for every card: nothing is kept past the process, and a thread
+    /// with many cards does not hold a store each.
+    @MainActor private static let store = WKWebsiteDataStore.nonPersistent()
+
     @MainActor static func configuration() -> WKWebViewConfiguration {
         let c = WKWebViewConfiguration()
-        c.websiteDataStore = .nonPersistent()
+        c.websiteDataStore = store
         c.defaultWebpagePreferences.allowsContentJavaScript = true
         c.mediaTypesRequiringUserActionForPlayback = .all
         c.suppressesIncrementalRendering = false

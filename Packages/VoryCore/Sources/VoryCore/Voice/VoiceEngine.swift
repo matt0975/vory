@@ -24,7 +24,11 @@ public final class VoiceEngine {
     public func attach(_ runtime: GatewayRuntime) { self.runtime = runtime }
 
     private var gatewayConnected: Bool { runtime?.socketState.isOpen == true }
-    private var gatewayVoice: GatewayVoiceAPI? { runtime.map { GatewayVoiceAPI(api: $0.api, profile: $0.selectedProfile) } }
+    /// The bot the gateway's voice calls go under while a hands-free session runs: that chat's,
+    /// not whatever the list has selected since (a hidden voice session on another bot spoke and
+    /// leased under the default one).
+    public var profile: String?
+    private var gatewayVoice: GatewayVoiceAPI? { runtime.map { GatewayVoiceAPI(api: $0.api, profile: profile ?? $0.selectedProfile) } }
 
     public func route(for job: VoiceJob) -> VoiceRoute {
         VoiceRouting.route(for: VoiceSettings.speech, gatewayConnected: gatewayConnected,
@@ -98,7 +102,7 @@ public final class VoiceEngine {
         streams.append(client)
         defer { streams.removeAll { $0 === client } }
         do {
-            try await client.open(runtime: runtime, profile: runtime.selectedProfile)
+            try await client.open(runtime: runtime, profile: profile ?? runtime.selectedProfile)
         } catch {
             if VoiceSettings.speech == .gateway { throw error }
             return false
@@ -179,7 +183,7 @@ public final class VoiceEngine {
         speech.client = client
         defer { streams.removeAll { $0 === client } }
         do {
-            try await client.open(runtime: runtime, profile: runtime.selectedProfile)
+            try await client.open(runtime: runtime, profile: profile ?? runtime.selectedProfile)
         } catch {
             if VoiceSettings.speech == .gateway { throw error }
             return false

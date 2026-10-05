@@ -11,6 +11,7 @@ struct KanbanView: View {
     var embedded = false
 
     @Environment(AppModel.self) private var model
+    @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
     @State private var detailTask: KanbanTask?
@@ -141,13 +142,14 @@ struct KanbanView: View {
     /// The columns as chips with their counts, four to a row so all eight are in view; one
     /// is open at a time. (A scrolling row inside a safe-area inset would not scroll.)
     private func columns(_ board: KanbanBoard) -> some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 4), spacing: 6) {
+        // Two to a row at the accessibility sizes, where four left only an icon and "…".
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: typeSize.isAccessibilitySize ? 2 : 4), spacing: 6) {
             ForEach(KanbanStatus.columns, id: \.self) { s in
                 let n = board.count(s)
                 Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
                     HStack(spacing: 4) {
                         Image(systemName: s.symbol).font(.caption2)
-                        Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
                         if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
                     }
                     .padding(.horizontal, 6).padding(.vertical, 7)
@@ -219,7 +221,7 @@ struct KanbanView: View {
         } label: { Label("Priority", systemImage: "flag") }
         Button { ask = .comment(task) } label: { Label("Comment", systemImage: "bubble.left") }
         if task.isWorking { Button { ask = .stop(task) } label: { Label("Stop the Worker", systemImage: "stop.circle") } }
-        if let sid = task.sessionId, !sid.isEmpty { Button { openChat(sid, profile: task.assignee) } label: { Label("Open Chat", systemImage: "bubble.left.and.bubble.right") } }
+        if let sid = task.sessionId, !sid.isEmpty { Button { openChat(sid, profile: nil) } label: { Label("Open Chat", systemImage: "bubble.left.and.bubble.right") } }
         Divider()
         if task.column != .archived { Button { ask = .archive(task) } label: { Label("Archive", systemImage: "archivebox") } }
         Button(role: .destructive) { ask = .delete(task) } label: { Label("Delete", systemImage: "trash") }
@@ -416,6 +418,10 @@ struct KanbanTaskSheet: View {
                 else if let error { ContentUnavailableView("Could not read the task", systemImage: "exclamationmark.triangle", description: Text(error)) }
                 else { ProgressView() }
             }
+            // A refused comment or stop, with the task still showing: said, not swallowed.
+            .alert("Board", isPresented: Binding(get: { error != nil && detail != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil }
+            } message: { Text(error ?? "") }
             .navigationTitle(detail?.task.title ?? "Task")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -429,7 +435,7 @@ struct KanbanTaskSheet: View {
                 }
             }
             .confirmationDialog("Stop the worker?", isPresented: $confirmStop, titleVisibility: .visible) {
-                Button("Stop", role: .destructive) { Task { if let d = detail, let store { _ = await store.stop(d.task, reason: "stopped from Vory"); await load() } } }
+                Button("Stop", role: .destructive) { Task { if let d = detail, let store { if !(await store.stop(d.task, reason: "stopped from Vory")) { error = store.lastError }; await load() } } }
                 Button("Cancel", role: .cancel) {}
             } message: { Text("The worker is terminated and the card goes back to ready.") }
             .task { await load() }
@@ -459,7 +465,8 @@ struct KanbanTaskSheet: View {
                 if let c = t.created { LabeledContent("Made") { Text(c, format: .relative(presentation: .named)) } }
                 if let tenant = t.tenant, !tenant.isEmpty { LabeledContent("Tenant", value: tenant) }
                 if let sid = t.sessionId, !sid.isEmpty {
-                    Button { onOpenChat(sid, t.assignee) } label: { Label("Open Chat", systemImage: "bubble.left.and.bubble.right") }
+                    // No bot named: the chat's owner is looked up (the task's assignee need not be it).
+                    Button { onOpenChat(sid, nil) } label: { Label("Open Chat", systemImage: "bubble.left.and.bubble.right") }
                 }
             }
             if !t.warnings.isEmpty {

@@ -310,7 +310,9 @@ struct ComposerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
-        } else if text.isEmpty && chat.staged.isEmpty {
+        } else if text.isEmpty && chat.staged.isEmpty && !HandsFreeSession.shared.isActive {
+            // Dictation steps aside while voice mode has the microphone (its recorder reset the
+            // audio session under the engine).
             TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
                 #if os(iOS)
                 // Held: the whole conversation by voice, not one message.
@@ -358,7 +360,8 @@ struct ComposerView: View {
         #endif
         items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
-        items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red) { showRecorder = true })
+        // Not while voice mode has the microphone: the recorder would reset the session under it.
+        items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red, disabled: HandsFreeSession.shared.isActive) { showRecorder = true })
         items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })

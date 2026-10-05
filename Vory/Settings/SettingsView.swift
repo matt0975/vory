@@ -659,9 +659,16 @@ struct AppearanceView: View {
             #else
             Section {
                 ForEach(layout.tabs, id: \.self) { tab in
-                    // Chats and Settings stay: no delete control, and no lock badge either.
-                    Label(tab.title, systemImage: tab.symbol)
-                        .deleteDisabled(TabLayout.required.contains(tab))
+                    // Chats and Settings stay: no delete control, and no lock badge either. A page
+                    // the gateway cannot show right now (the Board without its plugin) says so.
+                    let unavailable = model.hiddenTabs.contains(tab)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(tab.title, systemImage: tab.symbol).foregroundStyle(unavailable ? .secondary : .primary)
+                        if unavailable, let plugin = tab.needsPlugin {
+                            Text("Off the bar until the \(plugin) plugin is turned on on the gateway.").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .deleteDisabled(TabLayout.required.contains(tab))
                 }
                 .onMove { from, to in var l = layout; l.move(fromOffsets: from, toOffset: to); layoutRaw = l.encoded }
                 .onDelete { offsets in

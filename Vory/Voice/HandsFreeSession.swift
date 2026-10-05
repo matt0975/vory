@@ -29,6 +29,8 @@ final class HandsFreeSession {
     private static let hearingLineID = UUID()
     /// Where a turn's time goes, one line in the log per turn (#233).
     private var clock = TurnClock()
+    /// The last reply spoken or seen, so a snapshot after an outage does not repeat it.
+    private var lastReplyHeard: String?
     /// The full-screen view is away while the loop goes on (the chat shows a pill to come back).
     var minimized = false
     private(set) var lastError: String?
@@ -154,6 +156,7 @@ final class HandsFreeSession {
         interruptedLast = false
         transcript = VoiceTranscript()
         replyLine = nil; heardWords = ""
+        lastReplyHeard = VoiceCoordinator.lastReply(in: chat.items)
         livePersonLine = nil; liveBotLine = nil
         clock = TurnClock()
         // The system's microphone prompt may be up for a while (on a Mac that has never been
@@ -162,10 +165,13 @@ final class HandsFreeSession {
         Task { [weak self] in
             guard await AVAudioApplication.requestRecordPermission() else {
                 #if os(macOS)
-                self?.lastError = "Microphone access denied. Allow it in System Settings › Privacy & Security › Microphone."
+                let why = "Microphone access denied. Allow it in System Settings › Privacy & Security › Microphone."
                 #else
-                self?.lastError = "Microphone access denied. Allow it in Settings › Vory."
+                let why = "Microphone access denied. Allow it in Settings › Vory."
                 #endif
+                // Said in the chat: the voice screen never shows for a session that could not start.
+                self?.lastError = why
+                self?.chat?.banner = why
                 self?.chat = nil
                 return
             }
@@ -185,9 +191,12 @@ final class HandsFreeSession {
             try player.beginHandsFree(tap: !Self.fakeInput, onInput: onInput)
         } catch {
             lastError = error.localizedDescription
+            chat.banner = "Voice mode could not start: \(error.localizedDescription)"
             self.chat = nil
             return
         }
+        // The chat's own bot speaks and listens, whatever the list has selected meanwhile.
+        engine?.profile = chat.profileName
         VoiceCoordinator.shared.stop()
         watch(chat)
         observeNotifications(chat)
@@ -216,6 +225,9 @@ final class HandsFreeSession {
         fakeTask?.cancel(); fakeTask = nil
         for o in observers { NotificationCenter.default.removeObserver(o) }
         observers = []
+        // Taken now, not when the task runs: by then the chat is nil and the lease stayed held.
+        let engine = engine
+        engine?.profile = nil
         Task { await engine?.lease(false) }
         if let chat { Task { await chat.endQuickAnswers() } }
         chat = nil
@@ -363,7 +375,8 @@ final class HandsFreeSession {
             let (stream, continuation) = AsyncThrowingStream<AudioChunk, Error>.makeStream()
             livePlayback = continuation
             livePlayTask = Task { [weak self] in
-                try? await self?.player.play(stream)
+                do { try await self?.player.play(stream) }
+                catch { UtteranceListener.log.error("live playback failed: \(error.localizedDescription, privacy: .public)") }
                 guard let self, !Task.isCancelled else { return }
                 self.livePlayback = nil
                 self.livePlayTask = nil
@@ -420,11 +433,13 @@ final class HandsFreeSession {
     }
 
     private func liveReplyArrived(_ text: String) {
-        let waiters = liveReplyWaiters
-        liveReplyWaiters = []
+        // One reply answers one request, the oldest waiting: with two asks in flight, both
+        // used to get the first answer.
+        guard !liveReplyWaiters.isEmpty else { return }
+        let waiter = liveReplyWaiters.removeFirst()
         clock.mark("reply")
         let spoken = SpokenText.forSpeech(text)
-        for w in waiters { w.c.resume(returning: spoken.isEmpty ? "The bot answered with nothing to say aloud; it is in the chat." : String(spoken.prefix(4000))) }
+        waiter.c.resume(returning: spoken.isEmpty ? "The bot answered with nothing to say aloud; it is in the chat." : String(spoken.prefix(4000)))
     }
 
     private func liveMute(_ on: Bool) {
@@ -517,6 +532,14 @@ final class HandsFreeSession {
                 // A turn that ended without a reply still answers the model's tool.
                 if !chat.isRunning, !liveReplyWaiters.isEmpty { liveReplyArrived("The bot finished without a spoken answer; the result is in the chat.") }
             } else {
+                if !chat.isRunning, state.phase == .thinking, !state.replySpoken,
+                   let text = VoiceCoordinator.lastReply(in: chat.items), text != lastReplyHeard {
+                    // The reply finished while the socket was down: no completion came, the
+                    // snapshot shows it done. It is spoken from the transcript instead of lost.
+                    lastReplyHeard = text
+                    exchange.heard(SpokenText.forSpeech(text))
+                    run(state.handle(.replyCompleted(text)))
+                }
                 run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
                 // A turn with nothing to say still reports where its time went.
                 if !chat.isRunning, !state.replyPending, let line = clock.report() { UtteranceListener.log.notice("turn: \(line, privacy: .public)\(self.quickTag, privacy: .public)") }
@@ -570,6 +593,7 @@ final class HandsFreeSession {
             Task { @MainActor in
                 guard let self, self.chat?.storedID == id else { return }
                 self.clock.mark("reply")
+                self.lastReplyHeard = text
                 self.exchange.heard(SpokenText.forSpeech(text))
                 if self.isLive { self.liveReplyArrived(text) } else { self.run(self.state.handle(.replyCompleted(text))) }
             }
