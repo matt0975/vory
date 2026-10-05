@@ -1,3 +1,4 @@
+import os
 import ActivityKit
 import Foundation
 import UIKit
@@ -74,10 +75,14 @@ final class LiveActivityController: TurnActivityReporting {
     nonisolated static var log: [String] { logLock.lock(); defer { logLock.unlock() }; return logStorage }
     nonisolated static func note(_ what: String) {
         let stamp = Date().formatted(.dateTime.hour().minute().second())
+        // The unified log too (dev.vory, "activity"): the ring buffer below is only for the
+        // app's own page, and a simulator or a device read-out needs the lines in a stream.
+        Self.unifiedLog.notice("\(what, privacy: .public)")
         logLock.lock(); defer { logLock.unlock() }
         logStorage.append("\(stamp) \(what)")
         if logStorage.count > 12 { logStorage.removeFirst(logStorage.count - 12) }
     }
+    nonisolated private static let unifiedLog = Logger(subsystem: "dev.vory", category: "activity")
     private var stateTask: Task<Void, Never>?
 
     // MARK: Push to start
