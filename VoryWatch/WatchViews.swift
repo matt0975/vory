@@ -235,7 +235,7 @@ struct WatchChatsView: View {
         if model.socketUsable, let chat = try? await rt.newChat() { path.append(chat.storedID); return }
         // No direct socket (Bluetooth to the phone): ask the phone app to create it.
         do {
-            let r = try await model.connectivity.request(["op": "new", "profile": profile])
+            let r = try await model.askPhone(["op": "new", "profile": profile])
             if let sid = r["session"] as? String, !sid.isEmpty { path.append(sid) }
             else { model.loadError = r["error"] as? String ?? "The phone could not create a chat." }
         } catch { model.loadError = "New chat needs the iPhone nearby: \(error.localizedDescription)" }
@@ -353,6 +353,8 @@ struct WatchChatView: View {
     @State private var shown = 12
     /// When the thread last followed the stream to its end.
     @State private var lastFollow = Date.distantPast
+    /// After the live chat failed to attach: not tried again before this.
+    @State private var liveRetryAt = Date.distantPast
 
     var body: some View {
         Group {
@@ -395,7 +397,18 @@ struct WatchChatView: View {
                 .toolbar {
                     // The bottom bar is where watchOS pins a field to the screen's bottom edge; a
                     // safe-area inset sat above a blank band on the Ultra.
-                    ToolbarItem(placement: .bottomBar) { composer { let t = text; text = ""; await chat.send(t) } }
+                    ToolbarItem(placement: .bottomBar) {
+                        composer {
+                            let t = text; text = ""
+                            // The chat could not be attached on the socket: the phone sends it.
+                            if await chat.send(t) != nil, chat.resumeError != nil {
+                                liveRetryAt = Date().addingTimeInterval(30)
+                                proxied = true
+                                text = t
+                                await proxySend()
+                            }
+                        }
+                    }
                     if chat.isRunning {
                         ToolbarItem(placement: .topBarTrailing) { Button { Task { await chat.stop() } } label: { Image(systemName: "stop.fill") }.tint(.red) }
                     }
@@ -404,18 +417,38 @@ struct WatchChatView: View {
                 Text(error).foregroundStyle(.red)
             } else { ProgressView() }
         }
-        .task {
+        // Started again when the runtime is replaced (a new route or address): the old one is stopped.
+        .task(id: model.runtime.map(ObjectIdentifier.init)) {
             guard let rt = model.runtime else { return }
+            chat = nil; proxied = false; liveRetryAt = .distantPast
             profile = model.sessions.first { $0.id == storedID }?.profile
             title = model.sessions.first { $0.id == storedID }?.displayTitle ?? "Chat"
-            if model.socketUsable {
-                do { chat = try await rt.openChat(storedID: storedID, title: nil, profile: profile); return } catch { /* fall through */ }
+            await follow(rt)
+        }
+    }
+
+    /// The chat on the live socket while it is open and the chat attached; over HTTP with the
+    /// phone sending while it is not, moving between the two as the socket comes and goes.
+    /// Without a socket the last messages show over HTTP at once instead of waiting on one
+    /// that may never come. A chat whose attach failed used to stay on screen with every send
+    /// failing, and one whose socket dropped never left the live path.
+    private func follow(_ rt: GatewayRuntime) async {
+        while !Task.isCancelled {
+            if model.socketUsable, chat == nil || proxied, Date() >= liveRetryAt {
+                // The first open shows the cached transcript at once; a retry after a failed
+                // attach stays on the phone path until the chat is attached, not flipping back.
+                let retry = chat != nil
+                if let live = try? await rt.openChat(storedID: storedID, title: nil, profile: profile, waitForResume: retry), !retry || live.resumeError == nil {
+                    chat = live; proxied = false
+                } else { liveRetryAt = Date().addingTimeInterval(30) }
             }
-            // No socket yet (the Bluetooth link never opens one): show the last messages over
-            // REST at once instead of waiting on a socket that may never come, and keep polling.
-            // The 4 s wait before the first byte was most of the "long time to load".
-            proxied = true
-            await pollLoop(rt)
+            if !proxied, let c = chat, c.resumeError != nil, !c.isResuming {
+                liveRetryAt = Date().addingTimeInterval(30)
+                proxied = true
+            }
+            if !proxied, chat == nil || !model.socketUsable { proxied = true }
+            if proxied { await refreshProxied(rt) }
+            try? await Task.sleep(for: .seconds(proxied ? (running ? 2 : 6) : 1))
         }
     }
 
@@ -429,7 +462,8 @@ struct WatchChatView: View {
             } else {
                 TextField("Message", text: $text)
             }
-            if let chat {
+            // Talk needs the live chat: on the phone path it would speak into one that dropped.
+            if let chat, !proxied || talk.isBusy {
                 // While the reply is awaited the same button gives the wait up (the reply still
                 // lands in the chat); before, only the header's Stop or the 180 s limit ended it.
                 Button { talk.tap(chat: chat) } label: {
@@ -476,7 +510,7 @@ struct WatchChatView: View {
         .toolbar {
             ToolbarItem(placement: .bottomBar) { composer { await proxySend() } }
             if running {
-                ToolbarItem(placement: .topBarTrailing) { Button { Task { _ = try? await model.connectivity.request(["op": "stop", "session": storedID, "profile": profile ?? ""]) } } label: { Image(systemName: "stop.fill") }.tint(.red) }
+                ToolbarItem(placement: .topBarTrailing) { Button { Task { _ = try? await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""]) } } label: { Image(systemName: "stop.fill") }.tint(.red) }
             }
         }
     }
@@ -499,29 +533,24 @@ struct WatchChatView: View {
         .padding(10).background(.orange.opacity(0.15), in: .rect(cornerRadius: 14))
     }
 
-    private func pollLoop(_ rt: GatewayRuntime) async {
-        while !Task.isCancelled {
-            // The socket came up after this chat opened (Wi-Fi joined, or it was still
-            // connecting): move to the live path instead of polling for the rest of the visit.
-            if model.socketUsable, let live = try? await rt.openChat(storedID: storedID, title: nil, profile: profile) {
-                chat = live
-                proxied = false
-                return
-            }
-            await refreshProxied(rt)
-            try? await Task.sleep(for: .seconds(running ? 2 : 6))
-        }
-    }
-
     private func refreshProxied(_ rt: GatewayRuntime) async {
-        if let r: JSONValue = try? await rt.api.get("/api/sessions/\(storedID)/messages", query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: String(shown + 2))], profile: profile ?? rt.selectedProfile) {
+        // The history over HTTP: the watch's own connection, or through the phone when that
+        // does not reach the gateway (the route in Settings).
+        do {
+            let r: JSONValue = try await rt.api.get("/api/sessions/\(storedID)/messages", query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: String(shown + 2))], profile: profile ?? rt.selectedProfile)
             let msgs = (r["messages"]?.arrayValue ?? r.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
             let built = msgs.enumerated().compactMap { TranscriptItem.fromHistory($1, index: $0) }
             let sorted = built.sorted { $0.timestamp < $1.timestamp }
             // Only replace what changed: a fresh array every poll re-laid out every row.
             if sorted.map(\.id) != items.map(\.id) || sorted.last?.kind != items.last?.kind { items = sorted }
+        } catch is CancellationError {
+            return
+        } catch {
+            // An empty chat with no word why (the phone away on iPhone only, say) read as broken.
+            if items.isEmpty { self.error = error.localizedDescription }
         }
-        if let reply = try? await model.connectivity.request(["op": "cards", "session": storedID, "profile": profile ?? ""]) {
+        if let reply = try? await model.askPhone(["op": "cards", "session": storedID, "profile": profile ?? ""]) {
+            guard reply["ok"] as? Bool == true else { error = reply["error"] as? String; return }
             cards = reply["cards"] as? [[String: Any]] ?? []
             running = reply["running"] as? Bool ?? false
             statusText = reply["status"] as? String ?? ""
@@ -532,21 +561,30 @@ struct WatchChatView: View {
     private func proxySend() async {
         let t = text; text = ""
         do {
-            let r = try await model.connectivity.request(["op": "prompt", "session": storedID, "profile": profile ?? "", "text": t])
-            if r["ok"] as? Bool != true { error = r["error"] as? String ?? "The phone could not send it." } else { running = true; error = nil }
-            items.append(TranscriptItem(id: "local-\(UUID().uuidString)", kind: .user(text: t, attachments: [])))
-        } catch { self.error = error.localizedDescription }
+            let r = try await model.askPhone(["op": "prompt", "session": storedID, "profile": profile ?? "", "text": t])
+            if r["ok"] as? Bool != true {
+                error = r["error"] as? String ?? "The phone could not send it."
+                text = t
+            } else {
+                running = true; error = nil
+                items.append(TranscriptItem(id: "local-\(UUID().uuidString)", kind: .user(text: t, attachments: [])))
+            }
+        } catch { self.error = error.localizedDescription; text = t }
     }
 
     private func proxyChoice(_ card: String, _ choice: String) async {
-        do { _ = try await model.connectivity.request(["op": "approval", "session": storedID, "profile": profile ?? "", "card": card, "choice": choice]); cards.removeAll { ($0["id"] as? String) == card } }
-        catch { self.error = error.localizedDescription }
+        do {
+            let r = try await model.askPhone(["op": "approval", "session": storedID, "profile": profile ?? "", "card": card, "choice": choice])
+            if r["ok"] as? Bool == true { cards.removeAll { ($0["id"] as? String) == card } } else { error = r["error"] as? String ?? "The phone could not answer it." }
+        } catch { self.error = error.localizedDescription }
     }
 
     private func proxyAnswer(_ card: String) async {
         let t = text; text = ""
-        do { _ = try await model.connectivity.request(["op": "answer", "session": storedID, "profile": profile ?? "", "card": card, "text": t]); cards.removeAll { ($0["id"] as? String) == card } }
-        catch { self.error = error.localizedDescription }
+        do {
+            let r = try await model.askPhone(["op": "answer", "session": storedID, "profile": profile ?? "", "card": card, "text": t])
+            if r["ok"] as? Bool == true { cards.removeAll { ($0["id"] as? String) == card } } else { error = r["error"] as? String ?? "The phone could not answer it."; text = t }
+        } catch { self.error = error.localizedDescription; text = t }
     }
 }
 
@@ -716,8 +754,8 @@ struct WatchSettingsView: View {
                 if let rt = model.runtime {
                     Section("Gateway") {
                         LabeledContent("Name", value: rt.connection.name)
-                        LabeledContent("Link", value: model.socketUsable ? "Direct (Wi-Fi)" : "Through iPhone")
-                        LabeledContent("Status", value: rt.socketState.label)
+                        LabeledContent("Link", value: model.socketUsable ? "Direct, live" : model.throughPhone ? "Through iPhone" : "Direct")
+                        if model.route != .relayOnly { LabeledContent("Status", value: rt.socketState.label) }
                         LabeledContent("Bot", value: model.listProfile == "*" ? "All bots" : (model.listProfile ?? rt.selectedProfile ?? "—"))
                         LabeledContent("Summaries", value: model.summaries.isEmpty ? "off on iPhone" : "\(model.summaries.count) from iPhone")
                     }
@@ -736,8 +774,20 @@ struct WatchSettingsView: View {
                         }
                     }
                     Section {
-                        Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
-                    } footer: { Text("Chats always load over HTTP. Sending and approving go through the iPhone unless the watch has its own Wi-Fi route to the gateway. Summaries and bot looks come from the iPhone.") }
+                        Picker("Connect through", selection: Binding(get: { model.route }, set: { r in Task { await model.setRoute(r) } })) {
+                            Text("Automatic").tag(GatewayRoute.automatic)
+                            Text("iPhone only").tag(GatewayRoute.relayOnly)
+                        }
+                    } footer: {
+                        Text(model.route == .relayOnly
+                             ? "Everything goes through your iPhone, so it needs to be nearby. Use this when the watch's own Wi-Fi cannot reach the gateway."
+                             : "The watch uses its own connection while the gateway answers there, and goes through your iPhone when it does not.")
+                    }
+                    Section {
+                        if model.route != .relayOnly {
+                            Button { Task { await rt.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                        }
+                    } footer: { Text("Sending and approving go through the iPhone unless the watch has a live connection of its own. Summaries and bot looks come from the iPhone.") }
                 } else {
                     Section { Text("Open Vory on the iPhone once; it hands the gateway to the watch.").font(.footnote) }
                 }

@@ -14,6 +14,16 @@ public final class GatewayRuntime {
     private let log = Logger(subsystem: "Vory", category: "runtime")
 
     public var socketState: SocketState = .idle
+    /// False where no socket is opened at all (a watch going through its iPhone): start,
+    /// reconnect and new credentials leave it closed, and the capability probe skips it.
+    public var socketEnabled = true
+    /// Whether a sessions list that came back over HTTP counts as reachable for the widget
+    /// snapshot (the watch, whose socket is often not allowed to open), not the socket alone.
+    public var httpCountsAsOnline = false
+    /// Whether this client reaches the gateway through a relay (the watch's iPhone); the
+    /// complications then leave the refresh to the app, as they cannot go that way.
+    public var throughRelay = false
+    private var lastListAnswered = false
     public var profiles: [ProfileInfo] = []
     public var selectedProfile: String? {
         didSet {
@@ -66,7 +76,9 @@ public final class GatewayRuntime {
                 let wasOpen = self.socketState.isOpen
                 self.socketState = s
                 // The status widget shows whether the gateway is reachable: tell it on every flip.
-                if wasOpen != s.isOpen { self.publishSnapshot() }
+                // Where HTTP counts too (the watch), a socket that closed asks HTTP afresh rather
+                // than keep the last answer.
+                if wasOpen != s.isOpen { self.publishSnapshot(refreshSessions: wasOpen && self.httpCountsAsOnline) }
             } },
             onServerRequest: { [weak self] req in
                 guard let self else { return nil }
@@ -100,14 +112,14 @@ public final class GatewayRuntime {
         secrets = s
         store.saveSecrets(s, for: connection.id)
         await api.updateSigner(RequestSigner(authMode: connection.authMode, secrets: s))
-        await socket.connect()
+        if socketEnabled { await socket.connect() }
     }
 
     private nonisolated func websocketURL() async throws -> (URL, [String: String]) {
         let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
         var ticket: String?
         if authMode.usesBearer {
-            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody())
+            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
             ticket = r["ticket"]?.stringValue
         }
         let url = RequestSigner.websocketURL(gateway: gateway, token: secrets.sessionToken, ticket: ticket)
@@ -120,7 +132,7 @@ public final class GatewayRuntime {
         let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
         var items = query
         if authMode.usesBearer {
-            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody())
+            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody(), directOnly: true)
             if let t = r["ticket"]?.stringValue, !t.isEmpty { items.append(URLQueryItem(name: "ticket", value: t)) }
         } else if let t = secrets.sessionToken, !t.isEmpty {
             items.append(URLQueryItem(name: "token", value: t))
@@ -134,7 +146,7 @@ public final class GatewayRuntime {
         projects.attach(self)
         kanban.attach(self)
         voice.attach(self)
-        await socket.connect()
+        if socketEnabled { await socket.connect() }
         await loadProfiles()
         await refreshCapabilities()
         publishSnapshot(refreshSessions: true)
@@ -146,7 +158,10 @@ public final class GatewayRuntime {
         await socket.disconnect()
     }
 
-    public func reconnectNow() async { await socket.disconnect(); await socket.connect() }
+    public func reconnectNow() async {
+        await socket.disconnect()
+        if socketEnabled { await socket.connect() }
+    }
 
     /// Tells the gateway this socket answers server → client requests (approval, clarify…).
     /// Without it the gateway never writes the approval frame and the agent waits with no card.
@@ -209,6 +224,7 @@ public final class GatewayRuntime {
     }
 
     public func refreshCapabilities() async {
+        guard socketEnabled else { await registerWithoutSocket(); return }
         do {
             try await socket.waitUntilReady()
             await advertiseCapabilities()
@@ -226,7 +242,18 @@ public final class GatewayRuntime {
             await probeCodeSkew()
         } catch {
             log.warning("capabilities: \(error.localizedDescription, privacy: .public)")
+            // The watch's socket is often not allowed to open: register its pushes over HTTP.
+            if httpCountsAsOnline { await registerWithoutSocket() }
         }
+    }
+
+    /// Push registration with no socket to ask the bot's home: the gateway's profile list
+    /// carries each bot's home too, and it comes over HTTP (through the watch's iPhone when
+    /// it has to). Without it the watch's complication pushes were never registered.
+    private func registerWithoutSocket() async {
+        if profiles.isEmpty { await loadProfiles() }
+        if let home = profiles.first(where: { $0.name == selectedProfile })?.path, !home.isEmpty { profileHome = home }
+        await pushRegistrar?.syncRegistration(runtime: self)
     }
 
     /// Adds `profile` to RPC params when a non-default profile is selected.
@@ -306,12 +333,12 @@ public final class GatewayRuntime {
     /// gateway is asked before anything is resumed: a `session.resume` sent under another bot
     /// does not fail, it makes the gateway move the chat into that bot's store.
     public func openChat(storedID: String, title: String?, profile: String? = nil, waitForResume: Bool = false) async throws -> ChatSession {
-        if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
+        if let c = registry.byStored(storedID) { return await reopen(c, waitForResume: waitForResume) }
         var owner = profile
         if owner == nil || owner!.isEmpty {
             owner = try await ownerProfile(ofStored: storedID)
             // Another open of the same chat may have finished while the gateway was asked.
-            if let c = registry.byStored(storedID) { if waitForResume { await c.awaitResume() }; return c }
+            if let c = registry.byStored(storedID) { return await reopen(c, waitForResume: waitForResume) }
         }
         let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: owner)
         registry.add(session)
@@ -323,6 +350,15 @@ public final class GatewayRuntime {
             if let e = session.resumeError { registry.remove(session); throw HermesAPIError.transport(e) }
         }
         return session
+    }
+
+    /// An open chat asked for again. One whose attach failed (opened while the socket was
+    /// down, which the first connect does not repair) is attached again rather than handed
+    /// back as it was: every send to it failed for the rest of the visit.
+    private func reopen(_ c: ChatSession, waitForResume: Bool) async -> ChatSession {
+        if c.resumeError != nil, !c.isResuming { c.beginResume() }
+        if waitForResume { await c.awaitResume() }
+        return c
     }
 
     /// `cwd`: a folder on the gateway the chat works in, so it belongs to that project.
@@ -400,17 +436,24 @@ public final class GatewayRuntime {
             if refreshSessions || recentSessions.isEmpty {
                 if let r: SessionListResponse = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8")], profile: selectedProfile) {
                     recentSessions = r.sessions
+                    lastListAnswered = true
+                } else {
+                    lastListAnswered = false
                 }
             }
             let chats = recentSessions.map { s in
+                // A chat not open here is working by the gateway's word, on the watch: without its
+                // own socket it opens none, and the complications never showed one at work.
                 WidgetSnapshot.Chat(id: s.id, title: s.displayTitle, profile: s.profile ?? selectedProfile ?? "default", lastActive: s.lastActive,
-                                    running: chatForStored(s.id)?.isRunning ?? false, needsYou: needsAttention.contains(s.id))
+                                    running: chatForStored(s.id)?.isRunning ?? (httpCountsAsOnline && s.isActive == true), needsYou: needsAttention.contains(s.id))
             }
             let ctx = registry.all.first { $0.isRunning }?.usage?.computedContextPercent ?? registry.all.last?.usage?.computedContextPercent
             // The overview numbers are written by Home or the widget; a rewrite here keeps them.
             let kept = WidgetSnapshot.load()?.usage
-            let snap = WidgetSnapshot(gatewayName: connection.name, connectionID: connection.id.uuidString, profile: selectedProfile ?? "default",
-                                      needsAttention: needsAttention.count, chats: chats, contextPercent: ctx, connected: socketState.isOpen, usage: kept)
+            var snap = WidgetSnapshot(gatewayName: connection.name, connectionID: connection.id.uuidString, profile: selectedProfile ?? "default",
+                                      needsAttention: needsAttention.count, chats: chats, contextPercent: ctx,
+                                      connected: socketState.isOpen || (httpCountsAsOnline && lastListAnswered), usage: kept)
+            snap.throughRelay = throughRelay ? true : nil
             snap.save()
             onSnapshotPublished?(snap)
         }

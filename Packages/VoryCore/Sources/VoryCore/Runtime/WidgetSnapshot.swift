@@ -28,6 +28,10 @@ public struct WidgetSnapshot: Codable, Sendable, Equatable {
     /// The Home tab's overview numbers, for the Overview widget and complications. Written by
     /// the app when Home loads and by the widget itself when it is older than half an hour.
     public var usage: Usage?
+    /// The watch app reaches the gateway through its iPhone: the complications, which cannot
+    /// go that way, leave the refresh to the app instead of calling the gateway themselves.
+    /// nil on the phone and on snapshots from before the field existed.
+    public var throughRelay: Bool?
 
     public struct Usage: Codable, Sendable, Equatable {
         public struct Day: Codable, Sendable, Equatable {
