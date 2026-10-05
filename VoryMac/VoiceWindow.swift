@@ -31,9 +31,16 @@ struct MacVoiceHUD: View {
         VStack(spacing: 8) {
             Image(systemName: "waveform.badge.mic").font(.title).foregroundStyle(.secondary)
             Text("Voice mode is off").font(.headline)
+            // A session that could not start (the microphone refused, no input): why, here as
+            // well as in the chat's banner.
+            if let error = session.lastError {
+                Text(error).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text("Open a chat and choose Voice Mode (⇧⌘V).").font(.caption).foregroundStyle(.secondary)
         }
         .padding()
+        .accessibilityElement(children: .combine)
     }
 
     private func content(_ chat: ChatSession) -> some View {
@@ -57,7 +64,9 @@ struct MacVoiceHUD: View {
                     .frame(width: 84)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
-                            Text(p.title).font(.headline).contentTransition(.numericText())
+                            // The state never wraps: the badges keep their width and the chat's
+                            // title is what gives way at the window's minimum width.
+                            Text(p.title).font(.headline).lineLimit(1).fixedSize().contentTransition(.numericText())
                             if session.isLive, let label = session.liveLabel {
                                 // A Live conversation (the person's own key, billed per minute): which model.
                                 Text("Live · \(label)").font(.caption2.weight(.semibold)).lineLimit(1).fixedSize()
@@ -65,15 +74,23 @@ struct MacVoiceHUD: View {
                                     .background(.white.opacity(0.14), in: .capsule)
                                     .help("A Live conversation with \(label), on your own key")
                             }
+                            if p.showsMutedBadge {
+                                // Muted while the bot speaks or thinks: said plainly, not only by the button.
+                                Label("Mic muted", systemImage: "mic.slash.fill").font(.caption2.weight(.semibold)).lineLimit(1).fixedSize()
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.white.opacity(0.14), in: .capsule)
+                                    .accessibilityIdentifier("voice.mutedBadge")
+                            }
                             Spacer(minLength: 0)
-                            Text(chat.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).frame(maxWidth: 120, alignment: .trailing)
+                            Text(chat.title).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                                .frame(maxWidth: 120, alignment: .trailing).layoutPriority(-1)
                         }
                         if let line = p.line {
                             Text(line).font(.caption).foregroundStyle(p.lineIsWarning ? Color.orange : Color.secondary).lineLimit(2)
                         }
                         // The whole conversation, scrolling, following the newest words until the
                         // person scrolls up to read back; the window can be made taller for it.
-                        VoiceTranscriptView(lines: session.transcriptLines, prompt: VoiceHUDPresentation.prompt)
+                        VoiceTranscriptView(lines: session.transcriptLines, prompt: VoiceHUDPresentation.prompt(live: session.isLive))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         if p.showsWaveform {
                             HandsFreeWaveform(levels: session.levels, tint: tint).frame(height: 18).transition(.opacity)
@@ -144,12 +161,10 @@ struct VoiceHUDPresentation: Equatable {
     /// the paused hint; nil when there is nothing to say.
     var line: String?
     var lineIsWarning = false
-    /// The words: the reply being said, the words being heard, the last words heard (as a
-    /// quote), or the prompt to speak.
-    var caption: String
-    var captionIsQuote = false
     var showsWaveform = false
     var showsApproval = false
+    /// Muted while the bot speaks or thinks: a badge says so (while listening the title does).
+    var showsMutedBadge = false
     var pulses = false
     var faceActive = false
     var mood: Mood = .idle
@@ -159,12 +174,17 @@ struct VoiceHUDPresentation: Equatable {
     var pauseLabel = "Pause"
     var pauseSymbol = "pause.fill"
 
+    /// What the empty transcript says: Standard answers at a pause, Live answers as it goes.
     static let prompt = "Say something. I'll answer when you pause."
+    static let livePrompt = "Say something."
+    static func prompt(live: Bool) -> String { live ? livePrompt : prompt }
     static let approvalHint = "Approve on screen. The loop waits."
     static let pausedHint = "Resume to keep going."
 
+    /// `spoken` and `liveText` are the words in flight; the transcript view shows them, so the
+    /// presentation reads only the state. (They stay in the signature for the callers.)
     static func make(state: HandsFreeState, spoken: String, liveText: String, goal: String?, error: String?) -> VoiceHUDPresentation {
-        var p = VoiceHUDPresentation(title: state.title, caption: prompt)
+        var p = VoiceHUDPresentation(title: state.title)
         // The line.
         switch state.phase {
         case .thinking:
@@ -177,18 +197,9 @@ struct VoiceHUDPresentation: Equatable {
             if let note = state.note { p.line = note; p.lineIsWarning = true }
             else if let error { p.line = error; p.lineIsWarning = true }
         }
-        // The words.
-        if state.phase == .speaking || (state.phase == .thinking && !spoken.isEmpty) {
-            p.caption = tail(spoken)
-        } else if state.hearing, !liveText.isEmpty {
-            p.caption = tail(liveText)
-        } else if let heard = state.caption {
-            p.caption = "“\(heard)”"; p.captionIsQuote = true
-        } else {
-            p.caption = prompt; p.captionIsQuote = true
-        }
         p.showsWaveform = state.phase == .listening && !state.isMuted
         p.showsApproval = state.phase == .needsApproval
+        p.showsMutedBadge = state.isMuted && state.phase != .listening && state.phase != .paused
         p.pulses = state.hearing || state.phase == .speaking
         p.faceActive = state.phase == .thinking || state.phase == .speaking
         switch state.phase {
@@ -204,10 +215,5 @@ struct VoiceHUDPresentation: Equatable {
         p.pauseLabel = state.phase == .paused ? "Resume" : "Pause"
         p.pauseSymbol = state.phase == .paused ? "play.fill" : "pause.fill"
         return p
-    }
-
-    static func tail(_ s: String, max: Int = 200) -> String {
-        guard s.count > max else { return s }
-        return "…" + String(s.suffix(max - 1))
     }
 }

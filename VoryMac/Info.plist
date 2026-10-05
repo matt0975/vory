@@ -64,7 +64,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to a Hermes dashboard running on your local network, such as http://192.168.x.x:9119.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Record a voice memo to attach, or dictate a message.</string>
+	<string>Talk to your bot in voice mode, dictate a message, or record a voice memo to attach.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Transcribe hold-to-talk speech on this Mac before sending it.</string>
 </dict>

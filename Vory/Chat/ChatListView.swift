@@ -279,10 +279,15 @@ struct ChatListView: View {
     /// and voice mode as soon as it exists; ending voice mode leaves the person in the chat.
     private func openVoiceChat(_ request: AppModel.VoiceChatRequest) {
         guard model.selectedTab == .chats, let runtime else { returnFromCompose(); return }
-        let profile = request.profile ?? runtime.selectedProfile
         var cwd: String? = nil
         if !projectFilter.isEmpty, projectFilter != "__none__" { cwd = runtime.projects.project(id: projectFilter)?.startPath }
-        open(ChatRoute(storedID: nil, title: nil, profile: profile, cwd: cwd, startVoice: true), returningTo: model.composeReturnTab)
+        open(Self.voiceRoute(request, selectedProfile: runtime.selectedProfile, cwd: cwd), returningTo: model.composeReturnTab)
+    }
+
+    /// The chat a Voice Chat request opens: a fresh one with the bot asked for, else the bot
+    /// the list shows, in the project filtered to, straight into voice mode.
+    static func voiceRoute(_ request: AppModel.VoiceChatRequest, selectedProfile: String?, cwd: String?) -> ChatRoute {
+        ChatRoute(storedID: nil, title: nil, profile: request.profile ?? selectedProfile, cwd: cwd, startVoice: true)
     }
 
     /// Back to the tab the compose circle was tapped on, if it was not this one.
@@ -372,6 +377,8 @@ struct ChatListView: View {
         .menuIndicator(.hidden)
         .disabled(model.runtime == nil)
         .help("New Chat (⌘N). Hold for bots, a project and a first message (⇧⌘N).")
+        .accessibilityLabel("New Chat")
+        .accessibilityHint("Starts a chat with the current bot. Hold for the bots and a project.")
         .accessibilityIdentifier("chats.compose")
     }
 
@@ -390,6 +397,8 @@ struct ChatListView: View {
         .menuIndicator(.hidden)
         .disabled(model.runtime == nil)
         .help("Voice chat with the current bot. Hold to choose a bot.")
+        .accessibilityLabel("Voice Chat")
+        .accessibilityHint("Starts a voice chat with the current bot. Hold to choose a bot.")
         .accessibilityIdentifier("chats.voice")
     }
     #endif

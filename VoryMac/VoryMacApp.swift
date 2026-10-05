@@ -24,12 +24,16 @@ struct VoryMacApp: App {
     @State private var boardCommands = BoardCommands.shared
     @State private var voice = VoiceCoordinator.shared
     @State private var voiceSession = HandsFreeSession.shared
+    @Environment(\.openWindow) private var openWindow
 
     /// Voice mode on the open chat; with none open, a new chat with the default bot, and the
-    /// loop starts on it as soon as it is in front.
+    /// loop starts on it as soon as it is in front. The main window may be closed (the app
+    /// lives on in the menu bar): it comes back first, or the new chat would have no list to open in.
     private func toggleVoiceMode() {
         if voiceSession.isActive { voiceSession.end(); return }
         if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
+        openWindow(id: MacWindow.main)
+        NSApp.activate()
         model.requestVoiceMode()
     }
     /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
@@ -181,4 +185,16 @@ struct VoryMacApp: App {
 enum MacWindow {
     static let main = "main"
     static let voice = "voice"
+
+    /// Opens the main window from outside a view (an App Intent, say): the window's own open
+    /// action, kept from the root view when it first appeared. Nil until then, which only
+    /// happens before the window has ever shown.
+    @MainActor static var openMain: (() -> Void)?
+
+    /// The main window in front, by the kept action; before one exists, the app is activated
+    /// and the window scene restores itself.
+    @MainActor static func bringMainForward() {
+        openMain?()
+        NSApp.activate()
+    }
 }

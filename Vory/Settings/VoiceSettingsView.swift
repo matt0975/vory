@@ -79,7 +79,10 @@ struct VoiceSettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(Self.voiceModeWhere + " Standard listens, sends what you said when you pause, speaks the reply, and listens again. Approvals are never taken by voice: the card shows on screen and it waits.")
                     Text("Quick answers make voice replies come faster with less deep reasoning: while voice mode runs, that chat thinks at low effort with fast replies on, and goes back to its own settings after. Turn it off here, or ask the bot to take its time.")
+                    #if os(iOS)
+                    // The phone's audio session (category, route, the silent switch's doing); a Mac has none.
                     if !lastSession.isEmpty { Text("Last voice session: \(lastSession)").font(.caption2) }
+                    #endif
                 }
             }
             Section {

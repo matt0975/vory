@@ -64,6 +64,12 @@ struct SnapshotProvider: TimelineProvider {
             // The gateway answered, so it is reachable even if the app has no socket open.
             snap.connected = true
             snap.save()
+        } else {
+            // It did not answer: say so, dated now, rather than keep showing the last "Online"
+            // for the rest of the hour.
+            snap.updatedAt = Date()
+            snap.connected = false
+            snap.save()
         }
         // The overview numbers refresh on their own, every half hour the widget is scheduled,
         // so the Overview widget stays current without the app being opened.

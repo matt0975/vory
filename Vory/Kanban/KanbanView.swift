@@ -388,8 +388,14 @@ struct KanbanCardRow: View {
                     HStack(spacing: 4) { ProgressView().controlSize(.mini); Text(w).font(.caption).foregroundStyle(.secondary) }
                         .accessibilityLabel("A worker is on it, \(w)")
                 }
-                if let c = task.commentCount, c > 0 { Label("\(c)", systemImage: "bubble.left").font(.caption).foregroundStyle(.secondary) }
-                if let p = task.progress, p.total > 0 { Label("\(p.done)/\(p.total)", systemImage: "checklist").font(.caption).foregroundStyle(.secondary) }
+                if let c = task.commentCount, c > 0 {
+                    Label("\(c)", systemImage: "bubble.left").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("\(c) comment\(c == 1 ? "" : "s")")
+                }
+                if let p = task.progress, p.total > 0 {
+                    Label("\(p.done)/\(p.total)", systemImage: "checklist").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("\(p.done) of \(p.total) children done")
+                }
                 if !task.warnings.isEmpty {
                     Label("\(task.warnings.count)", systemImage: "exclamationmark.triangle.fill").font(.caption).foregroundStyle(.orange)
                         .accessibilityLabel(task.warnings.map(\.text).joined(separator: ". "))
