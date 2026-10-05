@@ -121,7 +121,8 @@ struct VoryMacApp: App {
                     if voice.isSpeaking { voice.stop() } else if let text = lastReply { voice.speak(text) }
                 }
                 .keyboardShortcut("s", modifiers: [.command, .option])
-                .disabled(!voice.isSpeaking && lastReply == nil)
+                // Not while voice mode runs: the window's own speech has the player.
+                .disabled((!voice.isSpeaking && lastReply == nil) || voiceSession.isActive)
                 // Voice mode: the open chat by voice, in the floating window; ⇧⌘V again ends it.
                 Button(voiceSession.isActive ? "End Voice Mode" : "Voice Mode") { toggleVoiceMode() }
                     .keyboardShortcut("v", modifiers: [.command, .shift])
