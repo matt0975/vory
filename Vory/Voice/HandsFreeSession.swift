@@ -858,7 +858,18 @@ final class HandsFreeSession {
     // MARK: A stand-in for the microphone (DEBUG)
 
     private var fakeTurns = 0
-    static let fakeLines = ["What is filling up the disk on that host?", "Yes, go ahead and clean it up."]
+    /// The lines the stand-in microphone says, one per turn. DEBUG: `-vory-voice-fake-lines
+    /// "first|second|…"` replaces them for a recording, so the screen can show the same words.
+    static let fakeLines: [String] = {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "-vory-voice-fake-lines"), i + 1 < args.count {
+            let lines = args[i + 1].split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            if !lines.isEmpty { return lines }
+        }
+        #endif
+        return ["What is filling up the disk on that host?", "Yes, go ahead and clean it up."]
+    }()
 
     /// One continuation, resumed once by whichever comes first: the observed change or the
     /// cancellation (which may arrive from any thread, and before the continuation is taken).
