@@ -37,6 +37,13 @@ import Testing
         #expect(spoken.hasSuffix("Say the word and I'll run it."))
     }
 
+    @Test func picturesAreShownNotRead() {
+        // A MEDIA: reference and a bare image path say nothing; the words around them stay.
+        let reply = "Here is the disk use before and after:\nMEDIA:/home/x/.hermes/images/disk.png\n/tmp/shot.png\nDone."
+        #expect(SpokenText.forSpeech(reply) == "Here is the disk use before and after: Done.")
+        #expect(SpokenText.forSpeech("See MEDIA:/a/b.png now.") == "See now.")
+    }
+
     @Test func anUnclosedFenceAndImagesAreHandled() {
         #expect(SpokenText.forSpeech("Here:\n```python\nprint(1)") == "Here: " + SpokenText.codeOmitted)
         #expect(SpokenText.forSpeech("See ![the chart](x.png) and ![](y.png).") == "See the chart and an image.")

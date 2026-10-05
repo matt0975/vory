@@ -60,7 +60,9 @@ public enum SpokenText {
         }
 
         private mutating func consume(line: String) -> [String] {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Pictures are shown, not read: a MEDIA: reference or a bare image path says nothing
+            // (the voice once read a file path out loud).
+            let trimmed = MediaScan.textWithoutMedia(line).trimmingCharacters(in: .whitespaces)
             if let fence = inFence {
                 if trimmed.hasPrefix(fence) { inFence = nil; return [Self.note(forFence: fenceLang)] }
                 return []
