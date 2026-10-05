@@ -42,7 +42,9 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
         Task { @MainActor in Self.model?.push.deviceToken = hex; await Self.model?.syncPush() }
     }
 
-    func didFailToRegisterForRemoteNotifications(withError error: Error) {
+    // WatchKit's spelling of the callback; the UIKit-style name only "nearly matched" it, so
+    // a failed registration was never reported on the watch.
+    func didFailToRegisterForRemoteNotificationsWithError(_ error: Error) {
         Task { @MainActor in Self.model?.push.lastError = error.localizedDescription }
     }
 

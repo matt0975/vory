@@ -55,6 +55,12 @@ import Testing
         #expect(HTMLCard.navigation(to: URL(string: "file:///etc/passwd"), isMainFrame: true) == .block)
         #expect(HTMLCard.navigation(to: URL(string: "https://example.com/frame"), isMainFrame: false) == .block)
         #expect(HTMLCard.navigation(to: URL(string: "about:blank"), isMainFrame: false) == .block)
+        // Only a link the person activated leaves for the browser: a script setting location, a
+        // meta refresh, a form or a redirect goes nowhere, and the document still loads.
+        #expect(HTMLCard.navigation(to: URL(string: "https://example.com/logs"), isMainFrame: true, userLink: false) == .block)
+        #expect(HTMLCard.navigation(to: URL(string: "mailto:a@b.c"), isMainFrame: true, userLink: false) == .block)
+        #expect(HTMLCard.navigation(to: URL(string: "about:blank"), isMainFrame: true, userLink: false) == .allow)
+        #expect(HTMLCard.navigation(to: nil, isMainFrame: true, userLink: false) == .allow)
     }
 
     @Test func theRuleListIsValidAndBlocksEverythingButHTTPS() throws {

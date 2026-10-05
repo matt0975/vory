@@ -120,6 +120,38 @@ new Chart(document.getElementById('c'), {type: 'line', data: {labels: ['Mon','Tu
 
 CARD_PART_2 = """nginx is still the one growing. Say the word and I'll set its logrotate to `rotate 8`."""
 
+TABLE_REPLY = """## What is using the disk
+
+| Directory | Size | Oldest file |
+|:--|--:|:-:|
+| nginx | 2.1 GB | March |
+| postgres | 1.4 GB | May |
+| app/debug | 0.7 GB | last week |
+
+A second look, written the loose way:
+
+Host | Free
+--|--
+log-1 | 12%
+log-2 | 48%
+
+### What I would do
+
+1. Rotate the big ones
+   - nginx: `rotate 8`
+   - postgres: keep the live file
+     1. check the replication slot first
+2. Then the cleanup
+   - [x] measure
+   - [ ] delete rotated files older than 90 days
+   - [ ] add the logrotate rule
+
+###### A tiny heading
+
+![The week's chart](https://example.com/charts/disk-week.png)
+
+Say the word and I'll run it."""
+
 
 def usage(output: int, calls: int = 1) -> dict:
     used = 18_400 + output * 4
@@ -1071,8 +1103,21 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": DELEGATE_PART_1 + "\n\n" + DELEGATE_PART_2, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
+    async def _table_turn(self, s: Session, prompt: str) -> None:
+        """A reply with the markdown PR #133 renders: headings, a table with and without outer
+        pipes, a nested list with task items, and a web image (loaded only on a tap)."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, TABLE_REPLY, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [TABLE_REPLY])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        if prompt.strip().lower().startswith("table"):
+            await self._table_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("think"):
             # A long first think, as a real model has before its first word: the prompt sits
             # alone in the thread with the typing bubble for a while (a tester's first message

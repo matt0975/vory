@@ -90,9 +90,16 @@ xcodebuild archive \
     CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
     MARKETING_VERSION="$MARKETING_VERSION" \
     VORY_PUSH_RELAY_URL="${VORY_PUSH_RELAY_URL:-}" \
-    | grep -E 'error:|warning: .*(signing|provision)|ARCHIVE' || true
+    2>&1 | tee "$ARCHIVE_DIR/archive-$ARCHIVE_PREFIX-$BUILD_NUMBER.log" | grep -E 'error:|warning: .*(signing|provision)|ARCHIVE' || true
 
 [ -d "$ARCHIVE" ] || fail "Archive was not produced. Re-run without the grep filter to see why."
+
+# A delegate method that only "nearly matches" its protocol's requirement is never called (a
+# card's links once loaded their page inside the chat for exactly that): no build ships with one.
+if grep -q "nearly matches optional requirement" "$ARCHIVE_DIR/archive-$ARCHIVE_PREFIX-$BUILD_NUMBER.log"; then
+    grep "nearly matches optional requirement" "$ARCHIVE_DIR/archive-$ARCHIVE_PREFIX-$BUILD_NUMBER.log" | sort -u >&2
+    fail "A delegate method does not match its protocol (above), so the system never calls it. Fix it before shipping."
+fi
 
 echo "==> Exporting with manual distribution signing"
 EXPORT_DIR="$ARCHIVE_DIR/export-$ARCHIVE_PREFIX-$BUILD_NUMBER"

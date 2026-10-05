@@ -1,3 +1,4 @@
+import os
 import SwiftUI
 import WebKit
 import VoryCore
@@ -16,6 +17,8 @@ import VoryCore
 
 /// The pure parts of the card, kept apart from the views so they can be tested.
 enum HTMLCard {
+    /// Every navigation decision, so a card that moved can be explained from the log.
+    static let log = Logger(subsystem: "dev.vory", category: "card")
     /// Whether a fenced block is a card: its language says html.
     static func isCard(language: String?) -> Bool {
         guard let l = language?.trimmingCharacters(in: .whitespaces).lowercased() else { return false }
@@ -62,10 +65,13 @@ enum HTMLCard {
     /// changes and the document is made anew); a link or any other top-level navigation
     /// leaves for the browser (https, http or mail), and frames are never loaded.
     enum Navigation: Equatable { case allow, openOutside, block }
-    static func navigation(to url: URL?, isMainFrame: Bool) -> Navigation {
+    /// `userLink`: the navigation came from a link the person activated. Anything the page does
+    /// on its own (a script setting location, a meta refresh, a form, a redirect) goes nowhere:
+    /// a card must never load another page inside the chat.
+    static func navigation(to url: URL?, isMainFrame: Bool, userLink: Bool = true) -> Navigation {
         guard isMainFrame else { return .block }
         if url == nil || url?.absoluteString == "about:blank" { return .allow }
-        guard let url, let scheme = url.scheme?.lowercased() else { return .block }
+        guard userLink, let url, let scheme = url.scheme?.lowercased() else { return .block }
         return ["https", "http", "mailto"].contains(scheme) ? .openOutside : .block
     }
 
@@ -250,17 +256,25 @@ struct HTMLWebView {
             }
         }
 
-        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            switch HTMLCard.navigation(to: navigationAction.request.url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
-            case .allow: decisionHandler(.allow)
-            case .openOutside: if let u = navigationAction.request.url { HTMLCard.openOutside(u) }; decisionHandler(.cancel)
-            case .block: decisionHandler(.cancel)
+        // The async form of the requirement: the closure form, written without the closure's
+        // main-actor mark, only "nearly matched" it, so WebKit never saw the method and let every
+        // navigation through (a tapped link loaded its page inside the card).
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            let url = navigationAction.request.url
+            let decision = HTMLCard.navigation(to: url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true,
+                                               userLink: navigationAction.navigationType == .linkActivated)
+            HTMLCard.log.notice("card navigation \(url?.absoluteString ?? "nil", privacy: .public) type \(navigationAction.navigationType.rawValue): \(String(describing: decision), privacy: .public)")
+            switch decision {
+            case .allow: return .allow
+            case .openOutside: if let url { HTMLCard.openOutside(url) }; return .cancel
+            case .block: return .cancel
             }
         }
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            // window.open and target=_blank: outside, never a second web view.
-            if let u = navigationAction.request.url, HTMLCard.navigation(to: u, isMainFrame: true) == .openOutside { HTMLCard.openOutside(u) }
+            // window.open and target=_blank: outside when the person clicked, never a second web view.
+            if let u = navigationAction.request.url,
+               HTMLCard.navigation(to: u, isMainFrame: true, userLink: navigationAction.navigationType == .linkActivated) == .openOutside { HTMLCard.openOutside(u) }
             return nil
         }
 
