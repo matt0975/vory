@@ -565,9 +565,11 @@ struct WatchTranscriptRow: View {
             } else {
                 HStack { Spacer(minLength: 24); Text(t).font(.footnote).padding(8).background(Color.accentColor, in: .rect(cornerRadius: 12)).foregroundStyle(.white) }
             }
-        case .assistant(let t, _, let streaming):
+        case .assistant(let raw, _, let streaming):
+            // Pictures the bot sent are names here, not paths: the MEDIA: line stays out.
+            let t = MediaScan.textWithoutMedia(raw)
             HStack(alignment: .bottom, spacing: 4) {
-                if let profile { WatchBotFace(profile: profile, size: 16) }
+                if let profile { WatchBotFace(profile: profile, size: 16).accessibilityHidden(true) }
                 // Bold, italics, code and links once the reply is whole; plain while it streams.
                 Group {
                     if streaming { Text(t.isEmpty ? "…" : t) } else { Text(WatchMarkdown.inline(t)) }

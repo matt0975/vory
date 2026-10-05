@@ -209,7 +209,9 @@ public struct KanbanComment: Codable, Sendable, Identifiable, Hashable {
 
 public struct KanbanEvent: Codable, Sendable, Identifiable, Hashable {
     public var id: Int
-    public var taskId: String
+    /// Optional: a board-level event has none, and one such event used to fail the whole
+    /// frame's decode, so the board did not read again.
+    public var taskId: String?
     public var runId: Int?
     /// "status", "commented", "blocked", "reclaimed", "edited", "reprioritized"…
     public var kind: String

@@ -34,6 +34,7 @@ public enum MediaScan {
     /// Pictures a reply refers to: `MEDIA:/path` lines, markdown images with a path on the
     /// gateway, and bare absolute paths to image files on their own line.
     public static func images(in text: String) -> [MediaRef] {
+        let text = lineFeeds(text)
         var out: [MediaRef] = []
         var seen = Set<String>()
         func add(_ raw: String) {
@@ -45,10 +46,17 @@ public enum MediaScan {
         for m in text.matches(of: /MEDIA:(\S+)/) { add(String(m.1)) }
         for m in text.matches(of: /!\[[^\]]*\]\(([^)\s]+)\)/) { add(String(m.1)) }
         for line in text.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespaces)
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if t.hasPrefix("/") || t.hasPrefix("~/"), !t.contains(" ") { add(t) }
         }
         return out
+    }
+
+    /// A CRLF reply, line by line: "\r\n" is one character to Swift, so a split on "\n" saw
+    /// the whole reply as one line and a path on its own line was never found. (The look for
+    /// a CR is on the bytes: to `contains`, "\r" is not in "\r\n" either.)
+    static func lineFeeds(_ text: String) -> String {
+        text.utf8.contains(13) ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
     }
 
     /// Paths with image extensions anywhere in a tool's output (a screenshot tool's result, say).
@@ -67,7 +75,7 @@ public enum MediaScan {
     /// The reply with its media lines taken out, for the bubble (the pictures are shown under it).
     public static func textWithoutMedia(_ text: String) -> String {
         var lines: [String] = []
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        for raw in lineFeeds(text).split(separator: "\n", omittingEmptySubsequences: false) {
             var line = String(raw)
             line = line.replacing(/\s*MEDIA:\S+/) { _ in "" }
             // A markdown image with a path on the gateway leaves its words behind; one with a
@@ -76,9 +84,10 @@ public enum MediaScan {
                 let target = String(m.2)
                 return target.hasPrefix("/") || target.hasPrefix("~") ? String(m.1) : String(m.0)
             }
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if (t.hasPrefix("/") || t.hasPrefix("~/")), !t.contains(" "), MediaRef.isImage(t) { continue }
-            if t.isEmpty, !raw.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A path with a full stop or a bracket after it is still that path.
+            if (t.hasPrefix("/") || t.hasPrefix("~/")), !t.contains(" "), MediaRef.isImage(clean(t)) { continue }
+            if t.isEmpty, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             lines.append(line)
         }
         var joined = lines.joined(separator: "\n")

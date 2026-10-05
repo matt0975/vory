@@ -228,7 +228,24 @@ final class WatchModel {
     func route(from userInfo: [AnyHashable: Any], action: String?, replyText: String?) {
         guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return }
         pendingChat = sid
-        guard let rt = runtime, let action else { return }
+        guard let action else { return }
+        guard let rt = runtime else {
+            // Launched in the background by the action, with no socket of its own yet: the
+            // phone answers for it over the watch link.
+            Task {
+                var base: [String: Any] = ["session": sid]
+                if let p = hermes["profile"] as? String, !p.isEmpty { base["profile"] = p }
+                if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty {
+                    _ = try? await connectivity.request(base.merging(["op": "prompt", "text": text]) { $1 })
+                    return
+                }
+                let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
+                guard let r = try? await connectivity.request(base.merging(["op": "cards"]) { $1 }), let cards = r["cards"] as? [[String: Any]],
+                      let card = cards.first(where: { ($0["method"] as? String) == "approval" }), let id = card["id"] as? String else { return }
+                _ = try? await connectivity.request(base.merging(["op": "approval", "card": id, "choice": choice]) { $1 })
+            }
+            return
+        }
         Task {
             guard let chat = try? await rt.openChat(storedID: sid, title: nil, profile: hermes["profile"] as? String) else { return }
             if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty { await chat.send(text); return }

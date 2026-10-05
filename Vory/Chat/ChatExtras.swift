@@ -157,16 +157,35 @@ struct SelectTextSheet: View {
 /// full-resolution bitmap.
 enum AttachmentThumbs {
     @MainActor private static let cache = NSCache<NSString, UIImage>()
+    private static func key(_ url: URL, _ side: CGFloat) -> NSString { "\(url.path)|\(Int(side))" as NSString }
+
     @MainActor static func image(at url: URL, side: CGFloat) -> UIImage? {
-        let key = "\(url.path)|\(Int(side))" as NSString
+        let key = key(url, side)
         if let hit = cache.object(forKey: key) { return hit }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let pixels = Int(side * UIScreen.main.scale)
-        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: pixels,
-                                        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCache: false]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        let image = UIImage(cgImage: cg)
+        guard let image = decode(at: url, pixels: Int(side * UIScreen.main.scale)) else { return nil }
         cache.setObject(image, forKey: key)
         return image
     }
+
+    /// The same, decoded off the main thread: a row's thumbnails and the viewer's picture are
+    /// made where a scroll does not wait for them.
+    @MainActor static func imageAsync(at url: URL, side: CGFloat) async -> UIImage? {
+        let key = key(url, side)
+        if let hit = cache.object(forKey: key) { return hit }
+        let pixels = Int(side * UIScreen.main.scale)
+        let box = await Task.detached(priority: .userInitiated) { Box(decode(at: url, pixels: pixels)) }.value
+        if let image = box.image { cache.setObject(image, forKey: key) }
+        return box.image
+    }
+
+    /// The file downsampled to at most `pixels` a side, never the whole bitmap.
+    nonisolated static func decode(at url: URL, pixels: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: pixels,
+                                        kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceShouldCache: false]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    private final class Box: @unchecked Sendable { let image: UIImage?; init(_ image: UIImage?) { self.image = image } }
 }

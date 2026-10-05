@@ -62,7 +62,7 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save a picture from a chat to your Photos.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Record a voice memo to attach, or dictate a message.</string>
+	<string>Talk with your bot in voice mode, dictate a message, or record a voice memo to attach.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Transcribe hold-to-talk speech on this device before sending it.</string>
 	<key>NSSupportsLiveActivities</key>

@@ -28,6 +28,11 @@ public enum SpokenText {
         /// A line with a pipe but no outer pipes may be a table's header (the app renders tables
         /// written that way too); the delimiter row that decides comes next, so it is held.
         private var pendingPipeLine: String?
+        /// Front matter (a `---` first line, a `key: value` under it, a `---` to close) is shown
+        /// by nobody and said by nobody; the parser hides it, so the voice skips it too.
+        private var linesSeen = 0
+        private var inFrontMatter = false
+        private var frontMatterOpenHeld = false
 
         public init() {}
 
@@ -63,6 +68,18 @@ public enum SpokenText {
             // Pictures are shown, not read: a MEDIA: reference or a bare image path says nothing
             // (the voice once read a file path out loud).
             let trimmed = MediaScan.textWithoutMedia(line).trimmingCharacters(in: .whitespaces)
+            linesSeen += 1
+            if inFrontMatter {
+                if trimmed == "---" || trimmed == "..." { inFrontMatter = false }
+                return []
+            }
+            if frontMatterOpenHeld {
+                frontMatterOpenHeld = false
+                // A key under the opening dashes makes it front matter; anything else made the
+                // dashes a rule, which says nothing either way.
+                if trimmed.firstMatch(of: /^[A-Za-z0-9_-]+:(\s|$)/) != nil { inFrontMatter = true; return [] }
+            }
+            if linesSeen == 1, trimmed == "---" { frontMatterOpenHeld = true; return [] }
             if let fence = inFence {
                 if trimmed.hasPrefix(fence) { inFence = nil; return [Self.note(forFence: fenceLang)] }
                 return []

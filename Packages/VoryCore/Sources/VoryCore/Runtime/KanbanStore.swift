@@ -93,10 +93,13 @@ public final class KanbanStore {
     private func read(_ api: KanbanAPI) async {
         loading = board == nil
         defer { loading = false }
+        let slug = selectedBoard
         do {
             async let b = api.board()
             async let w = api.workers()
             let (bb, ww) = try await (b, w)
+            // Another board was chosen while this one was being read: its answer is not that board's.
+            guard slug == selectedBoard else { return }
             board = bb
             workers = ww.workers
             cursor.start(fromBoard: bb.latestEventId)

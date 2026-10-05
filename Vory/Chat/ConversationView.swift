@@ -522,6 +522,15 @@ struct ChatMenuItems: View {
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
         Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
+        #if os(iOS)
+        // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.
+        if let last = VoiceCoordinator.lastReply(in: chat.items) {
+            Button { VoiceCoordinator.shared.toggleSpeaking(last) } label: {
+                Label(VoiceCoordinator.shared.isSpeaking(last) ? "Stop Speaking" : "Speak Last Reply", systemImage: VoiceCoordinator.shared.isSpeaking(last) ? "stop.circle" : "speaker.wave.2")
+            }
+            .disabled(HandsFreeSession.shared.isActive)
+        }
+        #endif
         ChatProjectMenu(chat: chat)
         Divider()
         Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }

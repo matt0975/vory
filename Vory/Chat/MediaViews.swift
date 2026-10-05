@@ -8,7 +8,8 @@ import VoryCore
 /// are evaluated often.
 enum TranscriptMedia {
     static func images(in text: String) -> [MediaRef] {
-        guard text.contains("MEDIA:") || text.contains("![") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/") else { return [] }
+        guard text.contains("MEDIA:") || text.contains("![") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/")
+                || text.contains("\r\n/") || text.contains("\r\n~/") else { return [] }
         return MediaScan.images(in: text)
     }
     static func attachedImages(in text: String, profile: String?) -> [MediaRef] {
@@ -116,14 +117,14 @@ struct MediaThumb: View {
         guard let rt = AppModel.shared.runtime else { failed = true; return }
         let gateway = rt.connection.id.uuidString
         if let url = await MediaStore.shared.cached(ref, gateway: gateway) {
-            image = AttachmentThumbs.image(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side)
             failed = image == nil
             return
         }
         do {
             let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             guard !Task.isCancelled else { return }
-            image = AttachmentThumbs.image(at: url, side: side)
+            image = await AttachmentThumbs.imageAsync(at: url, side: side)
             failed = image == nil
         } catch {
             failed = true
@@ -253,7 +254,7 @@ struct ImageViewerSheet: View {
         do {
             let file = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             url = file
-            image = AttachmentThumbs.image(at: file, side: 2400)
+            image = await AttachmentThumbs.imageAsync(at: file, side: 2400)
             if image == nil { error = "This file is not an image the device can show." }
         } catch {
             self.error = "The gateway could not give this file: \(error.localizedDescription)"

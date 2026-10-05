@@ -179,7 +179,10 @@ final class VoicePlayer {
         // The speaker, not the earpiece, unless something is worn or plugged in: `defaultToSpeaker`
         // asks for it, the override insists (an earpiece at arm's length sounds like silence).
         if !Self.routeHasHeadsetOrCar(session) { try? session.overrideOutputAudioPort(.speaker) }
-        Self.log.notice("hands-free session: \(Self.sessionLine(), privacy: .public)")
+        let line = Self.sessionLine()
+        Self.log.notice("hands-free session: \(line, privacy: .public)")
+        // Settings › Voice shows it from the start, before (or without) any audio out.
+        UserDefaults.standard.set("start, " + line, forKey: VoiceSettings.lastSessionKey)
         #endif
         if engine.isRunning { engine.stop() }
         node.stop()

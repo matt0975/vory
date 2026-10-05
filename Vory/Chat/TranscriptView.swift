@@ -1368,8 +1368,10 @@ struct MarkdownView: View, Equatable {
     /// Parsed blocks and inline styling, kept for the text they came from: a row that scrolls
     /// off and back (the lazy stack rebuilds it) does not parse its markdown again, and a
     /// finished reply is parsed once for as long as it is in the cache.
-    private static let blockCache = NSCache<NSString, BlocksBox>()
-    private static let inlineCache = NSCache<NSString, InlineBox>()
+    // Bounded: a streaming reply makes a new entry per token, and a long day of chats made
+    // thousands that nothing ever read again.
+    private static let blockCache: NSCache<NSString, BlocksBox> = { let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; return c }()
+    private static let inlineCache: NSCache<NSString, InlineBox> = { let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; return c }()
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     final class InlineBox { let text: AttributedString; init(_ t: AttributedString) { text = t } }
 
@@ -1522,6 +1524,8 @@ struct MarkdownTableView: View {
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: alignment(col))
             .padding(.horizontal, 8).padding(.vertical, 6)
+            // VoiceOver hears which column a cell is in, not a bare value.
+            .accessibilityLabel(header || col >= table.header.count ? text : "\(table.header[col]): \(text)")
     }
 
     var body: some View {
@@ -1599,30 +1603,44 @@ struct MarkdownImageView: View {
     /// still arrives later replaces it.
     private static let loadTimeout: Duration = .seconds(15)
 
+    @State private var picture: UIImage?
+    @State private var failed = false
+
     @ViewBuilder private func loaded(_ u: URL) -> some View {
-        let image = AsyncImage(url: u) { phase in
-            switch phase {
-            case .success(let img):
-                img.resizable().scaledToFit().clipShape(.rect(cornerRadius: 8))
-            case .failure:
-                placeholder
-            default:
-                if Self.display(success: false, failure: false, timedOut: timedOut) == .placeholder {
-                    placeholder
-                } else {
-                    ProgressView().frame(maxWidth: .infinity, minHeight: 60)
-                }
+        // Fetched to the caches and decoded downsampled, off the main thread, like a picture
+        // from the gateway: AsyncImage decoded the whole bitmap in the row.
+        let image = Group {
+            switch Self.display(success: picture != nil, failure: failed, timedOut: timedOut) {
+            case .image: if let picture { Image(uiImage: picture).resizable().scaledToFit().clipShape(.rect(cornerRadius: 8)) }
+            case .placeholder: placeholder
+            case .spinner: ProgressView().frame(maxWidth: .infinity, minHeight: 60)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .task {
-            do { try await Task.sleep(for: Self.loadTimeout); timedOut = true } catch {}
-        }
+        .task(id: u) { await fetch(u) }
         .accessibilityLabel(alt.isEmpty ? "Image" : alt)
         if let link, let target = URL(string: link), ["http", "https"].contains(target.scheme?.lowercased() ?? "") {
             Button { openURL(target) } label: { image }.buttonStyle(.plain)
         } else {
             image
+        }
+    }
+
+    private func fetch(_ u: URL) async {
+        let clock = Task { try? await Task.sleep(for: Self.loadTimeout); timedOut = true }
+        defer { clock.cancel() }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: u)
+            let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("vory-web-images", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            var name = u.absoluteString.utf8.reduce(UInt64(5381)) { ($0 << 5) &+ $0 &+ UInt64($1) }.description
+            if !u.pathExtension.isEmpty { name += "." + u.pathExtension }
+            let file = dir.appendingPathComponent(name)
+            try data.write(to: file)
+            guard !Task.isCancelled else { return }
+            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200) { picture = decoded } else { failed = true }
+        } catch {
+            failed = true
         }
     }
 }

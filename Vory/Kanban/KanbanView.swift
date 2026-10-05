@@ -46,11 +46,11 @@ struct KanbanView: View {
         .alert(ask?.title ?? "", isPresented: Binding(get: { ask?.asksForText == true }, set: { if !$0 { ask = nil } }), presenting: ask) { a in
             TextField(a.placeholder, text: $answer)
             Button(a.verb) { Task { await answerAsk(a) } }
-            Button("Cancel", role: .cancel) { ask = nil }
+            Button("Cancel", role: .cancel) { ask = nil; answer = "" }
         } message: { a in Text(a.message) }
         .confirmationDialog(ask?.title ?? "", isPresented: Binding(get: { ask?.asksForText == false }, set: { if !$0 { ask = nil } }), titleVisibility: .visible, presenting: ask) { a in
             Button(a.verb, role: a.destructive ? .destructive : nil) { Task { await answerAsk(a) } }
-            Button("Cancel", role: .cancel) { ask = nil }
+            Button("Cancel", role: .cancel) { ask = nil; answer = "" }
         } message: { a in Text(a.message) }
         .alert("Board", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
             Button("OK") { notice = nil }
@@ -78,7 +78,17 @@ struct KanbanView: View {
             if let e = store.lastError {
                 Section { Label(e, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange) }
             }
-            if tasks.isEmpty {
+            if board.allTasks.isEmpty {
+                // The whole board, not just this column: the first task is a tap away.
+                ContentUnavailableView {
+                    Label("No tasks on this board", systemImage: "rectangle.split.3x1")
+                } description: {
+                    Text("Make one with New Task; a task with a bot starts in Ready and the dispatcher hands it over.")
+                } actions: {
+                    Button("New Task") { showNew = true }.buttonStyle(.borderedProminent)
+                }
+                .listRowBackground(Color.clear)
+            } else if tasks.isEmpty {
                 ContentUnavailableView("Nothing in \(column.title)", systemImage: column.symbol, description: Text(emptyWords))
                     .listRowBackground(Color.clear)
             }
@@ -135,6 +145,7 @@ struct KanbanView: View {
         case .blocked: return "A worker that cannot go on parks its card here with a reason."
         case .review: return "A worker that wants a look before done asks for review."
         case .done: return "Finished work lands here; archive it to clear the board."
+        case .scheduled: return "A card given a time waits here."
         default: return "Make a task with the plus, or move one here."
         }
     }
@@ -418,6 +429,8 @@ struct KanbanTaskSheet: View {
                 else if let error { ContentUnavailableView("Could not read the task", systemImage: "exclamationmark.triangle", description: Text(error)) }
                 else { ProgressView() }
             }
+            // The board read again (a move, an event): the task's facts follow, as the Mac's inspector does.
+            .onChange(of: store?.lastRead) { _, _ in Task { await load() } }
             // A refused comment or stop, with the task still showing: said, not swallowed.
             .alert("Board", isPresented: Binding(get: { error != nil && detail != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK") { error = nil }

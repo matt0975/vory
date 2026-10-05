@@ -290,12 +290,15 @@ final class HandsFreeSession {
         // Google's prose becomes one sentence (a free-tier limit, a refused key, no network).
         let plain = GeminiLive.Trouble.plain(reason, what: "live sessions")
         state.note = "Live ended: \(plain.headline) Continuing in Standard."
+        state.hearing = false
         player.endHandsFree()
         do { try player.beginHandsFree(tap: !Self.fakeInput, onInput: listener.ingest) } catch { lastError = error.localizedDescription; end(); return }
         listener.endOfTurnPause = VoiceSettings.endOfTurn.rawValue
         listener.onSpeechStarted = { [weak self] in self?.heardStart() }
         listener.onSpeechEnded = { [weak self] url in self?.heardEnd(url) }
         Task { await engine?.lease(true) }
+        // A paused session stays paused; Resume opens the Standard mic.
+        if state.phase == .paused { syncSurface(); return }
         run(state.handle(.start))
     }
 
@@ -455,12 +458,12 @@ final class HandsFreeSession {
         syncSurface()
     }
 
-    private func livePause(_ on: Bool) {
+    private func livePause(_ on: Bool, by cause: HandsFreeState.PauseCause = .person) {
         guard state.phase != .ended else { return }
         if on {
             guard state.phase != .paused else { return }
             livePausedMute = state.isMuted
-            state.pausedBy = .person
+            state.pausedBy = cause
             state.phase = .paused
             state.hearing = false
             liveMic.muted = true
@@ -538,6 +541,7 @@ final class HandsFreeSession {
                     // snapshot shows it done. It is spoken from the transcript instead of lost.
                     lastReplyHeard = text
                     exchange.heard(SpokenText.forSpeech(text))
+                    state.note = "The connection dropped for a moment; the reply was read from the chat."
                     run(state.handle(.replyCompleted(text)))
                 }
                 run(state.handle(chat.isRunning ? .sent : .turnEnded(error: nil)))
@@ -604,6 +608,17 @@ final class HandsFreeSession {
             let options = (n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
             Task { @MainActor in
                 guard let self else { return }
+                if self.isLive {
+                    // Live has no reducer: a call pauses it, and it goes on when the system says so.
+                    switch type {
+                    case .began: self.livePause(true, by: .interruption)
+                    case .ended:
+                        if options.contains(.shouldResume) { self.player.restartAfterChange(); self.livePause(false) }
+                        else { self.state.note = "Audio was interrupted. Tap Resume to continue." }
+                    @unknown default: break
+                    }
+                    return
+                }
                 switch type {
                 case .began: self.run(self.state.handle(.interruptionBegan))
                 case .ended:

@@ -434,6 +434,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             // younger than the question is left alone: it may have arrived after the gateway
             // made its list.
             let open = Set(waiting.compactMap { $0["request_id"]?.stringValue })
+            let held = cards.filter { $0.method == "approval" }.compactMap { $0.approval?.requestId }
+            log.notice("approval.pending: gateway lists \(open.sorted().joined(separator: ","), privacy: .public); held \(held.joined(separator: ","), privacy: .public)")
             for card in cards where card.method == "approval" {
                 guard let rid = card.approval?.requestId, !open.contains(rid),
                       let shown = cardShownAt[card.id], shown.addingTimeInterval(Self.cardGrace) < asked else { continue }
@@ -778,10 +780,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     private func restoreQuickAnswers(_ before: [String: String]?) async {
         if !storedID.isEmpty { UserDefaults.standard.removeObject(forKey: Self.quickRestoreKey(storedID)) }
-        // A chat that reported no effort of its own goes back to the gateway's usual middle.
-        let effort = before?["reasoning"] ?? ""
-        try? await setReasoning(effort.isEmpty ? "medium" : effort)
-        try? await setFast(before?["fast"] == "on")
+        // Only what was recorded goes back; a chat that reported no effort of its own is left
+        // to the gateway's own default rather than guessed at.
+        if let effort = before?["reasoning"], !effort.isEmpty { try? await setReasoning(effort) }
+        if let fast = before?["fast"] { try? await setFast(fast == "on") }
     }
 
     public func rename(_ newTitle: String) async {

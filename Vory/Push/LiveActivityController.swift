@@ -247,6 +247,9 @@ final class LiveActivityController: TurnActivityReporting {
         st.endedAtUnix = st.endedAtUnix ?? Date().timeIntervalSince1970
         endingIDs.insert(a.id)
         ActivityHandle(a).end(st)
+        // Only while the end is in flight; the set does not grow with every turn of the day.
+        let id = a.id
+        Task { try? await Task.sleep(for: .seconds(10)); endingIDs.remove(id) }
         // Its push token dies with it; the gateway must not keep aiming at a dead activity.
         NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil, userInfo: ["token": "", "storedID": a.attributes.storedSessionID, "startedAt": 0.0])
     }

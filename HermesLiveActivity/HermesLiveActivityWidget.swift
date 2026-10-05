@@ -405,10 +405,12 @@ struct LockScreenTurnView: View {
                 Spacer(minLength: 4)
                 if state.needsAttention {
                     if state.attentionKind != "input" { ApprovalButtons(attributes: attributes) }
-                } else if state.voiceMode != nil {
+                } else if let voice = state.voiceMode {
                     VStack(alignment: .trailing, spacing: 6) {
                         VoiceEndButton(attributes: attributes)
-                        Text(PhaseText.headline(for: state)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        // The loop's own short word ("Listening…", "Speaking"), not "Voice mode",
+                        // which the narrow column cut to "Voice m…".
+                        Text(voice).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     }
                 } else {
                     // A fixed width: the ticking timer text otherwise claims the whole row and
