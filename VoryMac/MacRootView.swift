@@ -124,6 +124,10 @@ private struct MainSplitView: View {
     /// Settings › Home › "Open Vory on": the page the window starts on, as on the phone.
     @AppStorage("launchTab") private var launchTab = "chats"
     @State private var openedOnLaunchTab = false
+    @State private var appearedAt = Date.distantPast
+    /// How long after the window appears a page that the gateway has to vouch for (the Board)
+    /// may still take the start: its plugin is probed once the gateway answers, a second or two in.
+    private static let launchTabGrace: TimeInterval = 8
 
     /// The pages in the rail, less the ones the gateway cannot show (the Board without its plugin).
     private var tabs: [AppModel.AppTab] { TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs) }
@@ -156,14 +160,23 @@ private struct MainSplitView: View {
         // the bubbles squeezed to a few words a line.
         .frame(minWidth: 860, minHeight: 520)
         // The chosen first page, once, when it is still in the rail and the gateway can show it
-        // (the Board without its plugin opened blank on the phone).
-        .onAppear {
-            guard !openedOnLaunchTab else { return }
-            openedOnLaunchTab = true
-            if let tab = AppModel.AppTab(rawValue: launchTab), tabs.contains(tab) { model.selectedTab = tab }
+        // (the Board without its plugin opened blank on the phone). A page the gateway has to
+        // vouch for is hidden until its probe answers, so the start waits a few seconds for it,
+        // and only while nothing else has been chosen meanwhile.
+        .onAppear { appearedAt = Date(); openOnLaunchTab(tabs) }
+        .onChange(of: tabs) { _, now in
+            openOnLaunchTab(now)
+            // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
+            if !now.contains(model.selectedTab) { model.selectedTab = .chats }
         }
-        // The page showing left the rail (the plugin went, or the layout changed): back to Chats.
-        .onChange(of: tabs) { _, now in if !now.contains(model.selectedTab) { model.selectedTab = .chats } }
+    }
+
+    private func openOnLaunchTab(_ now: [AppModel.AppTab]) {
+        guard !openedOnLaunchTab, let tab = AppModel.AppTab(rawValue: launchTab), tab != .chats else { openedOnLaunchTab = true; return }
+        guard Date().timeIntervalSince(appearedAt) < Self.launchTabGrace, model.selectedTab == .chats else { openedOnLaunchTab = true; return }
+        guard now.contains(tab) else { return }
+        openedOnLaunchTab = true
+        model.selectedTab = tab
     }
 
     @ViewBuilder private func page(_ tab: AppModel.AppTab) -> some View {
