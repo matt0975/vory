@@ -25,6 +25,9 @@ public enum SpokenText {
         private var inFence: String? = nil
         private var fenceLang = ""
         private var tableRows = 0
+        /// A line with a pipe but no outer pipes may be a table's header (the app renders tables
+        /// written that way too); the delimiter row that decides comes next, so it is held.
+        private var pendingPipeLine: String?
 
         public init() {}
 
@@ -37,7 +40,7 @@ public enum SpokenText {
                 out += consume(line: line)
             }
             // A long paragraph: its finished sentences go out before the line ends.
-            if inFence == nil, !held.trimmingCharacters(in: .whitespaces).hasPrefix("|"), let cut = Self.sentenceCut(held) {
+            if inFence == nil, !held.contains("|"), let cut = Self.sentenceCut(held) {
                 let head = String(held[..<cut])
                 held = String(held[cut...])
                 out += consume(line: head)
@@ -61,12 +64,19 @@ public enum SpokenText {
                 return []
             }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                let out = flushTable()
+                let out = releasePending() + flushTable()
                 inFence = String(trimmed.prefix(3))
                 fenceLang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
                 return out
             }
-            if trimmed.hasPrefix("|") && trimmed.hasSuffix("|") { tableRows += 1; return [] }
+            // Tables: a row with outer pipes counts at once; a header without them counts once
+            // the delimiter row under it says so, else its words are said after all.
+            if pendingPipeLine != nil {
+                if Self.isDelimiterRow(trimmed) { pendingPipeLine = nil; tableRows += 2; return [] }
+                return releasePending() + consume(line: line)
+            }
+            if (trimmed.hasPrefix("|") && trimmed.hasSuffix("|") && trimmed.count > 1) || (tableRows > 0 && trimmed.contains("|")) { tableRows += 1; return [] }
+            if tableRows == 0, trimmed.contains("|") { pendingPipeLine = trimmed; return [] }
             if trimmed.isEmpty { return flushTable() }
             var out = flushTable()
             if trimmed == "---" || trimmed == "***" || trimmed == "___" { return out }
@@ -78,6 +88,19 @@ public enum SpokenText {
         private mutating func flushTable() -> [String] {
             defer { tableRows = 0 }
             return tableRows > 0 ? [tableOmitted] : []
+        }
+
+        /// The held pipe line was not a table's header after all: its words.
+        private mutating func releasePending() -> [String] {
+            guard let p = pendingPipeLine else { return [] }
+            pendingPipeLine = nil
+            let words = inlineForSpeech(p)
+            return words.isEmpty ? [] : [words]
+        }
+
+        /// `---|:--:|--:` and the like: only pipes, colons, dashes and spaces, with a dash in it.
+        static func isDelimiterRow(_ t: String) -> Bool {
+            t.contains("-") && !t.isEmpty && t.allSatisfy { "|:- ".contains($0) }
         }
 
         private static func note(forFence lang: String) -> String {
