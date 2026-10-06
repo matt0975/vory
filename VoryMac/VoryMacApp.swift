@@ -122,6 +122,11 @@ struct VoryMacApp: App {
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
                 Divider()
+                // The open chat's newest reply as markdown on the pasteboard (#255): the keyboard and
+                // VoiceOver way to the hover button's Copy.
+                Button("Copy Last Reply") { if let text = lastReply { UIPasteboard.general.string = TranscriptMedia.copyText(text) } }
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
+                    .disabled(lastReply == nil)
                 // The open chat's newest reply, read aloud by the Speech setting; again stops it.
                 Button(voice.isSpeaking ? "Stop Speaking" : "Speak Last Reply") {
                     if voice.isSpeaking { voice.stop() } else if let text = lastReply { voice.speak(text) }
