@@ -90,8 +90,16 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
     public var name: String?
     public var context: String?
     public var reasoning: String?
+    /// The answer as the gateway sent it to the model's API, when the stored `content` is empty:
+    /// a model that put its whole answer in reasoning has it promoted to the reply here.
+    public var apiContent: String?
+    /// "stop", "length", "tool_calls"…; nil when the page does not carry it (`session.resume`).
+    public var finishReason: String?
+    /// Whether the row asked for tools: its reasoning is thinking before a tool call, never an answer.
+    public var hasToolCalls: Bool
 
-    public init(role: String, text: String? = nil, timestamp: Double? = nil, rowId: Int? = nil, displayKind: String? = nil, name: String? = nil, context: String? = nil, reasoning: String? = nil) {
+    public init(role: String, text: String? = nil, timestamp: Double? = nil, rowId: Int? = nil, displayKind: String? = nil, name: String? = nil, context: String? = nil, reasoning: String? = nil,
+                apiContent: String? = nil, finishReason: String? = nil, hasToolCalls: Bool = false) {
         self.role = role
         self.text = text
         self.timestamp = timestamp
@@ -100,6 +108,9 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         self.name = name
         self.context = context
         self.reasoning = reasoning
+        self.apiContent = apiContent
+        self.finishReason = finishReason
+        self.hasToolCalls = hasToolCalls
     }
 
     // The WebSocket `session.resume` history is pre-flattened (`text`), but the REST
@@ -108,7 +119,9 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
     // The watch and the fast-open prefetch read that page, so both shapes decode here.
     private enum Keys: String, CodingKey {
         case role, text, timestamp, rowId, displayKind, name, context, reasoning, content, id, toolCalls, displayContent
+        case apiContent, finishReason, reasoningContent, hasToolCalls
         case rowIdRaw = "row_id", displayKindRaw = "display_kind", toolCallsRaw = "tool_calls", displayContentRaw = "display_content"
+        case apiContentRaw = "api_content", finishReasonRaw = "finish_reason", reasoningContentRaw = "reasoning_content"
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,12 +135,21 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         else if let s = try? c.decodeIfPresent(String.self, forKey: .timestamp) { timestamp = Self.parseDate(s) }
         rowId = (try? c.decodeIfPresent(Int.self, forKey: .rowId)) ?? (try? c.decodeIfPresent(Int.self, forKey: .rowIdRaw)) ?? (try? c.decodeIfPresent(Int.self, forKey: .id))
         displayKind = (try? c.decodeIfPresent(String.self, forKey: .displayKind)) ?? (try? c.decodeIfPresent(String.self, forKey: .displayKindRaw))
+        let calls = (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCalls)) ?? (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCallsRaw))
         var n = try? c.decodeIfPresent(String.self, forKey: .name)
-        if n == nil, let tc = (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCalls)) ?? (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCallsRaw)),
-           let first = tc.arrayValue?.first { n = first["function"]?["name"]?.stringValue ?? first["name"]?.stringValue }
+        if n == nil, let first = calls?.arrayValue?.first { n = first["function"]?["name"]?.stringValue ?? first["name"]?.stringValue }
         name = n
         context = try? c.decodeIfPresent(String.self, forKey: .context)
-        reasoning = try? c.decodeIfPresent(String.self, forKey: .reasoning)
+        // Both spellings: `JSONValue.decode` converts snake_case, the transcript cache does not.
+        // Blank is absent: the gateway pads reasoning_content with a single space for some APIs.
+        func blankless(_ s: String?) -> String? { s.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
+        func string(_ a: Keys, _ b: Keys) -> String? {
+            blankless((try? c.decodeIfPresent(String.self, forKey: a)) ?? (try? c.decodeIfPresent(String.self, forKey: b)))
+        }
+        reasoning = blankless(try? c.decodeIfPresent(String.self, forKey: .reasoning)) ?? string(.reasoningContent, .reasoningContentRaw)
+        apiContent = string(.apiContent, .apiContentRaw)
+        finishReason = string(.finishReason, .finishReasonRaw)
+        hasToolCalls = (try? c.decodeIfPresent(Bool.self, forKey: .hasToolCalls)) ?? ((calls?.arrayValue?.isEmpty == false))
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -140,6 +162,9 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         try c.encodeIfPresent(name, forKey: .name)
         try c.encodeIfPresent(context, forKey: .context)
         try c.encodeIfPresent(reasoning, forKey: .reasoning)
+        try c.encodeIfPresent(apiContent, forKey: .apiContent)
+        try c.encodeIfPresent(finishReason, forKey: .finishReason)
+        if hasToolCalls { try c.encode(true, forKey: .hasToolCalls) }
     }
 
     /// OpenAI-style content: a string, or parts like `{type: "text", text: …}`.

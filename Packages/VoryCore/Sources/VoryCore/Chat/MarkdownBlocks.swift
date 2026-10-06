@@ -37,6 +37,59 @@ public struct MarkdownTable: Hashable, Sendable {
     }
 }
 
+// Computed only: `MarkdownBlock.id` hashes the table, so a stored property here would change
+// every block's identity (and the rows would rebuild as the reply streams).
+extension MarkdownTable {
+    /// The cell at `row`, `column`, or "" past the end (a table built by hand can be ragged).
+    public func cell(row: Int, column: Int) -> String {
+        guard rows.indices.contains(row), rows[row].indices.contains(column) else { return "" }
+        return rows[row][column]
+    }
+
+    public func alignment(of column: Int) -> MarkdownColumnAlignment {
+        alignments.indices.contains(column) ? alignments[column] : .leading
+    }
+
+    /// What VoiceOver reads for a body cell: the column's header, then the value
+    /// ("Params: 744B"), with inline markdown reduced to its words so no asterisks are read out.
+    public func spokenCell(row: Int, column: Int) -> String {
+        let value = Self.plain(cell(row: row, column: column))
+        let name = header.indices.contains(column) ? Self.plain(header[column]) : ""
+        if name.isEmpty { return value }
+        if value.isEmpty { return name }
+        return "\(name): \(value)"
+    }
+
+    /// Inline markdown as plain words (`**a**` reads "a", a link reads its title). Cached: every
+    /// cell's VoiceOver label is built from it each time the table is drawn.
+    public static func plain(_ text: String) -> String {
+        if let hit = plainCache.object(forKey: text as NSString) { return hit as String }
+        let out = String(MarkdownParser.inline(text).characters).trimmingCharacters(in: .whitespaces)
+        plainCache.setObject(out as NSString, forKey: text as NSString)
+        return out
+    }
+    nonisolated(unsafe) private static let plainCache: NSCache<NSString, NSString> = { let c = NSCache<NSString, NSString>(); c.countLimit = 2000; return c }()
+
+    /// The table written back out as GitHub-flavoured markdown, for Copy as Markdown. Pipes in a
+    /// cell are escaped (the parser took `\|` as a literal pipe, inside code spans too), so the
+    /// text parses back to the same table here and in other markdown readers.
+    public var markdown: String {
+        let width = header.count
+        func line(_ cells: [String]) -> String {
+            let padded = (0..<width).map { $0 < cells.count ? cells[$0] : "" }
+            return "| " + padded.map { $0.replacingOccurrences(of: "|", with: "\\|") }.joined(separator: " | ") + " |"
+        }
+        let delimiter = "| " + (0..<width).map { c -> String in
+            switch alignment(of: c) {
+            case .leading: "---"
+            case .center: ":---:"
+            case .trailing: "---:"
+            }
+        }.joined(separator: " | ") + " |"
+        return ([line(header), delimiter] + rows.map(line)).joined(separator: "\n")
+    }
+}
+
 /// Block-level markdown splitter for incremental rendering. Inline styling is delegated to
 /// `AttributedString(markdown:)`; an unterminated code fence is still rendered as code so the
 /// block stabilizes as soon as the closing fence streams in.

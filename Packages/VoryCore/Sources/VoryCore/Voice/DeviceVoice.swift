@@ -51,6 +51,43 @@ public struct AudioChunk: Sendable {
         return AudioChunk(sampleRate: sampleRate, channels: channels, isFloat32: isFloat32, data: out)
     }
 
+    /// Mono int16 speech with whatever follows the last spoken words cut off: Gemini's voice
+    /// previews can end in a burst of static, which played at full level after the words (the
+    /// 20 ms fade only softened its last 20 ms). The words are found as loud windows with few
+    /// zero crossings (voiced sound); noise is loud with many. `keep` seconds after the last
+    /// voiced window stay, the end fades over `fade`. Leaves other formats, and audio with
+    /// nothing after its words, as they are, so applying it twice changes nothing.
+    public func trimmedTail(keep: Double = 0.08, fade: Double = 0.05) -> AudioChunk {
+        guard !isFloat32, channels == 1 else { return self }
+        let w = max(1, Int(0.02 * sampleRate)), frames = frameCount
+        guard frames > 4 * w else { return self }
+        var level: [Double] = [], crossings: [Double] = []
+        data.withUnsafeBytes { raw in
+            let s = raw.bindMemory(to: Int16.self)
+            var i = 0
+            while i + w <= frames {
+                var sum = 0.0, z = 0
+                for k in i..<(i + w) {
+                    let x = Double(s[k]) / 32768
+                    sum += x * x
+                    if k > i, (s[k] >= 0) != (s[k - 1] >= 0) { z += 1 }
+                }
+                level.append(10 * log10(sum / Double(w) + 1e-12))
+                crossings.append(Double(z) / Double(w))
+                i += w
+            }
+        }
+        // The speech level, from voiced windows only: loud static must not raise the bar and cut
+        // the end of the last word.
+        let voiced = level.indices.filter { crossings[$0] < 0.25 && level[$0] > -60 }.map { level[$0] }.sorted()
+        guard !voiced.isEmpty else { return self }
+        let reference = voiced[Int(Double(voiced.count - 1) * 0.9)]
+        guard let last = level.indices.last(where: { level[$0] > reference - 25 && crossings[$0] < 0.25 }) else { return self }
+        let end = min(frames, (last + 1) * w + Int(keep * sampleRate))
+        guard end < frames else { return self }
+        return AudioChunk(sampleRate: sampleRate, channels: 1, isFloat32: false, data: data.prefix(end * 2)).fadedOut(seconds: fade)
+    }
+
     /// The chunk as a buffer in its own format, for a player node or a converter.
     public func pcmBuffer() -> AVAudioPCMBuffer? {
         guard let format = AVAudioFormat(commonFormat: isFloat32 ? .pcmFormatFloat32 : .pcmFormatInt16, sampleRate: sampleRate,

@@ -370,6 +370,8 @@ struct WatchChatView: View {
                             }
                             ForEach(chat.items.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
                             if let s = chat.statusLine, chat.isRunning { Text(s).font(.caption2).foregroundStyle(.secondary) }
+                            // What went wrong (a Talk that heard nothing, a chat that could not re-attach).
+                            if let b = chat.banner { Text(b).font(.caption2).foregroundStyle(.red).onTapGesture { chat.banner = nil } }
                             if let card = chat.firstCard { WatchCardView(chat: chat, card: card) }
                             // Room under a card for the bottom bar (the field, or Talk's wait line
                             // and its (x)): the bar is laid over the content, and a card's Once
@@ -390,7 +392,11 @@ struct WatchChatView: View {
                         let now = Date()
                         if now.timeIntervalSince(lastFollow) > 0.35 { lastFollow = now; proxy.scrollTo("bottom", anchor: .bottom) }
                     }
-                    .onChange(of: chat.isRunning) { _, running in if !running { proxy.scrollTo("bottom", anchor: .bottom) } }
+                    .onChange(of: chat.isRunning) { _, running in
+                        if !running { proxy.scrollTo("bottom", anchor: .bottom) }
+                        // A new turn: last turn's error line has said its piece.
+                        else { chat.banner = nil }
+                    }
                     .onChange(of: chat.firstCard?.id) { _, _ in withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                 }
                 .navigationTitle(chat.title)
@@ -417,6 +423,9 @@ struct WatchChatView: View {
                 Text(error).foregroundStyle(.red)
             } else { ProgressView() }
         }
+        // Leaving the chat ends Talk's wait and voice: the reply would otherwise be read out later
+        // with no screen to stop it from.
+        .onDisappear { talk.stopWaiting(); talk.stopSpeaking() }
         // Started again when the runtime is replaced (a new route or address): the old one is stopped.
         .task(id: model.runtime.map(ObjectIdentifier.init)) {
             guard let rt = model.runtime else { return }
@@ -462,11 +471,11 @@ struct WatchChatView: View {
             } else {
                 TextField("Message", text: $text)
             }
-            // Talk needs the live chat: on the phone path it would speak into one that dropped.
-            if let chat, !proxied || talk.isBusy {
+            // Talk on the live chat, or through the iPhone when this chat is on the phone path.
+            if let target = talkTarget {
                 // While the reply is awaited the same button gives the wait up (the reply still
                 // lands in the chat); before, only the header's Stop or the 180 s limit ended it.
-                Button { talk.tap(chat: chat) } label: {
+                Button { talk.tap(target: target) } label: {
                     Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : talk.phase == .waiting ? "xmark.circle.fill" : "mic.circle.fill")
                         .font(.title3)
                         .symbolEffect(.pulse, isActive: talk.phase == .recording || talk.phase == .waiting)
@@ -482,7 +491,19 @@ struct WatchChatView: View {
                     .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
             }
         }
-        .onChange(of: talk.error) { _, e in if let e { error = nil; chat?.banner = e; talk.error = nil } }
+        .onChange(of: talk.error) { _, e in
+            guard let e else { return }
+            // The phone path shows its line under the thread; the live chat its banner.
+            if proxied { error = e } else { chat?.banner = e }
+            talk.error = nil
+        }
+    }
+
+    /// Where the mic sends: the live chat on its socket, else the phone path.
+    private var talkTarget: TalkTarget? {
+        if !proxied, let chat { return .live(chat) }
+        if proxied, let rt = model.runtime { return .phone(PhoneTalk(model: model, runtime: rt, storedID: storedID, profile: profile)) }
+        return nil
     }
 
     // MARK: REST + phone proxy
@@ -510,7 +531,7 @@ struct WatchChatView: View {
         .toolbar {
             ToolbarItem(placement: .bottomBar) { composer { await proxySend() } }
             if running {
-                ToolbarItem(placement: .topBarTrailing) { Button { Task { _ = try? await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""]) } } label: { Image(systemName: "stop.fill") }.tint(.red) }
+                ToolbarItem(placement: .topBarTrailing) { Button { talk.stopWaiting(); Task { _ = try? await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""]) } } label: { Image(systemName: "stop.fill") }.tint(.red) }
             }
         }
     }
@@ -539,7 +560,8 @@ struct WatchChatView: View {
         do {
             let r: JSONValue = try await rt.api.get("/api/sessions/\(storedID)/messages", query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: String(shown + 2))], profile: profile ?? rt.selectedProfile)
             let msgs = (r["messages"]?.arrayValue ?? r.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
-            let built = msgs.enumerated().compactMap { TranscriptItem.fromHistory($1, index: $0) }
+            // Whole-page: an answer a model put in its reasoning shows as the reply.
+            let built = TranscriptItem.fromHistory(msgs)
             let sorted = built.sorted { $0.timestamp < $1.timestamp }
             // Only replace what changed: a fresh array every poll re-laid out every row.
             if sorted.map(\.id) != items.map(\.id) || sorted.last?.kind != items.last?.kind { items = sorted }

@@ -121,7 +121,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
         case "prompt":
             guard let text = m["text"] as? String, !text.isEmpty else { return ["ok": false, "error": "empty"] }
             // A failure is the watch's to show: "ok" while nothing was sent left it on "Working…".
-            if let problem = await chat.send(text), chat.resumeError != nil { return ["ok": false, "error": problem] }
+            // Talk on the watch marks a spoken turn: short, plain answers, as on the phone.
+            let voice: VoiceTurn? = m["voice"] as? Bool == true ? VoiceTurn() : nil
+            if let problem = await chat.send(text, voice: voice), chat.resumeError != nil { return ["ok": false, "error": problem] }
             if !chat.isRunning, chat.queue.isEmpty, case .error(let why)? = chat.items.last?.kind { return ["ok": false, "error": why] }
             return ["ok": true, "running": chat.isRunning]
         case "approval":

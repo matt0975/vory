@@ -68,8 +68,12 @@ final class VoicePlayer {
             await withCheckedContinuation { c in finish = c }
         }
         // The last callback comes as the data reaches the output; a beat before the engine
-        // stops lets the hardware finish it.
-        if isPlaying, !handsFree { try? await Task.sleep(for: .milliseconds(80)) }
+        // stops lets the hardware finish it. On Bluetooth the output runs well behind, so the
+        // beat is its latency: stopping at 80 ms cut a headset's stream mid-sound.
+        if isPlaying, !handsFree {
+            let settle = min(0.6, max(0.08, engine.outputNode.presentationLatency + 0.05))
+            try? await Task.sleep(for: .seconds(settle))
+        }
     }
 
     private func schedule(_ chunk: AudioChunk) throws {

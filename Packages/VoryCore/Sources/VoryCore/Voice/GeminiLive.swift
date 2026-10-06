@@ -128,7 +128,8 @@ public enum GeminiLive {
         public static func cachedPreview(voice: String) -> AudioChunk? {
             for rate in [24000.0, 22050.0, 16000.0, 48000.0] {
                 let url = previewFile(voice: voice, rate: rate)
-                if let data = try? Data(contentsOf: url), !data.isEmpty { return AudioChunk(sampleRate: rate, channels: 1, isFloat32: false, data: data) }
+                // Trimmed on the way in too: a preview saved before the trim existed replays clean.
+                if let data = try? Data(contentsOf: url), !data.isEmpty { return AudioChunk(sampleRate: rate, channels: 1, isFloat32: false, data: data).trimmedTail() }
             }
             return nil
         }
@@ -165,7 +166,8 @@ public enum GeminiLive {
             // "audio/L16;codec=pcm;rate=24000"
             let mime = inline["mimeType"]?.stringValue ?? ""
             let rate = mime.split(separator: ";").compactMap { $0.hasPrefix("rate=") ? Double($0.dropFirst(5)) : nil }.first ?? outputRate
-            return AudioChunk(sampleRate: rate, channels: 1, isFloat32: false, data: pcm)
+            // Without the static that can follow the words (and is saved trimmed, so it never replays).
+            return AudioChunk(sampleRate: rate, channels: 1, isFloat32: false, data: pcm).trimmedTail()
         }
     }
 

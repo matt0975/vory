@@ -102,17 +102,21 @@ struct VoiceSettingsView: View {
                 Picker("Conversation", selection: $conversationRaw) {
                     ForEach(ConversationMode.allCases) { m in Text(m.title).tag(m.rawValue) }
                 }
-                // One provider offered (OpenAI Live is not built yet): a plain line, not a menu
-                // of one.
-                if LiveProvider.offered.count > 1 {
-                    Picker("Live provider", selection: Binding(get: { liveProvider.rawValue }, set: { liveProviderRaw = $0 })) {
-                        ForEach(LiveProvider.offered) { p in Text(p.title).tag(p.rawValue) }
+                // A provider not built yet is listed greyed out ("coming later") and cannot be
+                // picked; a choice of it synced from another device still resolves to one offered.
+                Picker("Live provider", selection: Binding(get: { liveProvider.rawValue }, set: { raw in
+                    if LiveProvider(rawValue: raw)?.isOffered == true { liveProviderRaw = raw }
+                })) {
+                    ForEach(LiveProvider.listed) { p in
+                        Text(p.menuTitle).tag(p.rawValue).disabled(!p.isOffered)
                     }
-                } else {
-                    LabeledContent("Live provider", value: liveProvider.title)
                 }
+                .accessibilityIdentifier("voice.liveProvider")
             } header: { Text("Live voice") } footer: {
-                Text("Live is a real back-and-forth with a lifelike voice: a voice model of your own listens and talks, and hands every real request to the bot. Automatic uses Live when your Gemini key is saved, otherwise Standard. Live runs on your own Gemini key, billed to you by Google.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Live is a real back-and-forth with a lifelike voice: a voice model of your own listens and talks, and hands every real request to the bot. Automatic uses Live when your Gemini key is saved, otherwise Standard. Live runs on your own Gemini key, billed to you by Google.")
+                    if LiveProvider.comingLater.contains(.openai) { Text("OpenAI Live through your gateway is coming in a later update.") }
+                }
             }
             if liveProvider == .gemini {
                 Section {
