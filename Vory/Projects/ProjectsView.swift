@@ -49,7 +49,7 @@ struct ProjectsView: View {
                     .disabled(model.runtime?.projects.available != true)
             }
         }
-        .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame() } }
+        .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame().withAppModel() } }
         .alert("Rename project", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Rename") {

@@ -94,6 +94,7 @@ struct SettingsView: View {
                             }
                             .padding(.vertical, 4)
                         }
+                        .accessibilityIdentifier("settings.row.gateways")
                         if let rt = model.runtime, !rt.profiles.isEmpty {
                             Picker("Profile", selection: Binding(get: { rt.selectedProfile ?? "" }, set: { rt.selectedProfile = $0 })) {
                                 ForEach(rt.profiles) { p in
@@ -203,6 +204,24 @@ struct GatewaysView: View {
             } footer: {
                 Text("One saved gateway covers every profile on that machine; switch profiles from the Chats or Settings tab. Approvals always go to the gateway that owns the session.")
             }
+            // Sign-ins remembered behind Face ID, one row each, to forget without removing the gateway.
+            let remembered = model.store.connections.filter { model.store.remembered.contains($0.id) }
+            if !remembered.isEmpty {
+                Section {
+                    ForEach(remembered) { c in
+                        HStack {
+                            Label(c.name, systemImage: "person.badge.key")
+                            Spacer()
+                            Button("Forget", role: .destructive) { model.store.remembered.forget(c.id) }
+                                .accessibilityIdentifier("gateway.forgetSignIn")
+                        }
+                    }
+                } header: {
+                    Text("Remembered sign-ins")
+                } footer: {
+                    Text("Kept on \(DeviceWords.this) only, behind \(RememberedSignInCopy.guardedBy(model.rememberedSignIn.authenticator.methodName)), and used only when a session ends. Forgetting one does not sign you out.")
+                }
+            }
             Section {
                 Button { showAdd = true } label: { Label("Add Gateway", systemImage: "plus") }
                 if let rt = model.runtime {
@@ -215,7 +234,7 @@ struct GatewaysView: View {
             }
         }
         .untitledPage()
-        .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame() }
+        .sheet(isPresented: $showAdd) { NavigationStack { GatewayFormView() }.sheetFrame().withAppModel() }
         .alert("Remove gateway?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button("Remove", role: .destructive) { if let c = pendingDelete { Task { await model.deleteConnection(c.id) } } }
             Button("Cancel", role: .cancel) {}
@@ -828,6 +847,7 @@ struct ResetView: View {
 
 struct AboutView: View {
     static let feedbackAddress = "matt@vory.dev"
+    static let sourceURL = URL(string: "https://github.com/matt0975/vory")!
     @Environment(AppModel.self) private var model
     @State private var copiedAddress = false
     @State private var taps = 0
@@ -903,6 +923,13 @@ struct AboutView: View {
                 .accessibilityHint("Copies the address")
                 Link(destination: URL(string: "https://vory.dev/privacy/")!) { Label("Privacy policy", systemImage: "hand.raised") }
                 Link(destination: URL(string: "https://vory.dev")!) { Label("vory.dev", systemImage: "safari") }
+                // Vory is open source: the code anyone can read, and the licence it is under.
+                Link(destination: Self.sourceURL) {
+                    LabeledContent { Text("MIT licence").foregroundStyle(.secondary) }
+                           label: { Label("Source code on GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }
+                }
+                .accessibilityLabel("Source code on GitHub, MIT licence")
+                .accessibilityIdentifier("about.source")
             } header: { Text("Vory") } footer: {
                 Text("A public beta. In TestFlight, take a screenshot to send feedback with it attached.")
             }

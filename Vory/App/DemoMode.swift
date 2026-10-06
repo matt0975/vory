@@ -12,6 +12,8 @@ import VoryCore
 ///   -vory-demo-gateway <url> <session token> <name>   one saved gateway, connected at launch
 ///   -vory-demo-cloud <url> <session token> <name>     an iCloud backup to restore from, holding
 ///                                                     that gateway, a name and a few bot looks
+///   -vory-demo-biometry yes|no                        Face ID's answer, for the remembered
+///                                                     sign-in (a simulator has no Face ID)
 /// None of this exists in a release build.
 @MainActor
 enum DemoMode {

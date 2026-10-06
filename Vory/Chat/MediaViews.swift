@@ -40,7 +40,7 @@ struct MediaThumbStrip: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
-        .sheet(item: $viewing) { ImageViewerSheet(ref: $0, profile: profile) }
+        .sheet(item: $viewing) { ImageViewerSheet(ref: $0, profile: profile).withAppModel() }
     }
 
     private func thumb(_ ref: MediaRef) -> some View {

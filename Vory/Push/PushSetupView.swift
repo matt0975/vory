@@ -120,7 +120,7 @@ struct PushSetupView: View {
             if case .success(let url) = result { setup.importKey(url) }
         }
         .sheet(isPresented: $showCompanionSignIn) {
-            if let rt { CompanionSignInSheet(runtime: rt) { secrets in setup.companionSecrets = secrets; setup.rememberCompanionSecrets(for: rt) }.sheetFrame() }
+            if let rt { CompanionSignInSheet(runtime: rt) { secrets in setup.companionSecrets = secrets; setup.rememberCompanionSecrets(for: rt) }.sheetFrame().withAppModel() }
         }
         .alert("Cancel setup?", isPresented: $confirmQuit) {
             Button("Cancel setup", role: .destructive) { if let rt { setup.startOver(runtime: rt) }; dismiss() }
@@ -723,6 +723,7 @@ struct PeekableValue: View {
                 Text(full ?? text).font(.footnote.monospaced()).textSelection(.enabled).fixedSize()
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .presentationCompactAdaptation(.popover)
+                    .withAppModel()
             }
     }
 }
@@ -1868,8 +1869,9 @@ struct CompanionSignInSheet: View {
                 }
                 if runtime.connection.authMode == .password {
                     Section {
-                        TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("Password", text: $password)
+                        // Marked as a sign-in, so the Passwords app can fill them in.
+                        TextField("Username", text: $username).textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Password", text: $password).textContentType(.password)
                     }
                     Section { Button(busy ? "Signing in…" : "Sign in") { Task { await signInWithPassword() } }.disabled(busy || username.isEmpty || password.isEmpty) }
                 } else {

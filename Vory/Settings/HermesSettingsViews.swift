@@ -747,7 +747,19 @@ struct CronJobDetailView: View {
                 }
             } footer: { Text("Everything the gateway holds for this task. Edit here for fields the form does not show; the form and the JSON save to the same task.") }
             Section {
-                Button { Task { await act("trigger") } } label: { Label("Run now", systemImage: "play.circle") }
+                Button { Task { await runNow() } } label: {
+                    Label {
+                        Text(run.title).contentTransition(.opacity)
+                    } icon: {
+                        if let symbol = run.symbol { Image(systemName: symbol) } else { ProgressView().controlSize(.small) }
+                    }
+                }
+                .disabled(run.isBusy)
+                .accessibilityIdentifier("cron.runNow")
+            } footer: {
+                if let note = run.note { Text(note.text).foregroundStyle(note.isProblem ? Color.red : Color.secondary) }
+            }
+            Section {
                 Button(role: .destructive) { Task { await act("delete") } } label: { Label("Delete task", systemImage: "trash") }
             }
             if let status { Section { Text(status).font(.footnote).foregroundStyle(status.hasPrefix("Saved") || status.hasPrefix("Done") ? Color.secondary : Color.red) } }
@@ -761,6 +773,12 @@ struct CronJobDetailView: View {
             name = original.name; schedule = original.schedule; prompt = original.prompt; deliver = original.deliver; enabled = original.enabled
             rawText = Self.pretty(raw)
             readSchedule(schedule)
+        }
+        // The job reloaded under the page (after Run now its last run and result change): the
+        // JSON follows unless it has been edited, or Save lit up for nothing and would have sent
+        // the old run fields back.
+        .onChange(of: raw) { old, new in
+            if rawText == Self.pretty(old) { rawText = Self.pretty(new) }
         }
     }
 
@@ -824,6 +842,36 @@ struct CronJobDetailView: View {
         } catch { status = error.localizedDescription }
     }
 
+    /// This task's Run now, kept app-wide so it outlives the page (see `CronRuns`).
+    private var runKey: String { "\(model.runtime?.connection.id.uuidString ?? "")|\(job.identity)" }
+    private var run: CronRun { CronRuns.shared.run(runKey) }
+
+    /// Run now: Running… at once, one request however often it is pressed, then Started or
+    /// Finished for a moment, or the error in plain words.
+    private func runNow() async {
+        guard let rt else { return }
+        let key = runKey
+        var go = false
+        CronRuns.shared.update(key) { go = $0.begin() }
+        guard go else { return }
+        let attempt = CronRuns.shared.run(key).attempt
+        let before = job.lastRunAt ?? raw["last_run_at"]?.stringValue
+        do {
+            let reply: JSONValue = try await rt.api.send("POST", "/api/cron/jobs/\(job.identity)/trigger", body: EmptyBody())
+            CronRuns.shared.update(key) { $0.answered(reply, lastRunBefore: before) }
+        } catch {
+            // No answer at all may only mean the task outlasted the wait: the gateway says whether
+            // it is still running.
+            var now: JSONValue?
+            if CronRun.mayStillBeRunning(after: error) { now = try? await rt.api.get("/api/cron/jobs/\(job.identity)") }
+            CronRuns.shared.update(key) { $0.failed(error, jobNow: now, lastRunBefore: before) }
+        }
+        guard CronRuns.shared.run(key).isBusy else { return }
+        onChange()
+        try? await Task.sleep(for: .seconds(CronRun.confirmationSeconds))
+        withAnimation(.snappy) { CronRuns.shared.update(key) { $0.settle(attempt: attempt) } }
+    }
+
     private func act(_ action: String) async {
         guard let rt else { return }
         do {
@@ -870,7 +918,7 @@ struct SessionsView: View {
                 } label: { Label("Options", systemImage: "gearshape") }
             }
         }
-        .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats).sheetFrame() }
+        .sheet(isPresented: $showAdvanced) { SessionStoreSheet(stats: stats).sheetFrame().withAppModel() }
     }
 
     private func load() async {

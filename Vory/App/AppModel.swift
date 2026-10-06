@@ -2,6 +2,8 @@ import Foundation
 import Observation
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 import UserNotifications
 import WidgetKit
@@ -25,7 +27,10 @@ final class AppModel {
     /// The one model, owned here rather than by the scene, so a notification action that launches
     /// the app in the background (no window yet) still has somewhere to go.
     static let shared = AppModel()
-    let store = ConnectionStore()
+    let store: ConnectionStore
+    /// Signing a gateway in again by itself, after Face ID, from a sign-in this device was asked
+    /// to remember, when the session runs out for good.
+    let rememberedSignIn: RememberedSignInCoordinator
     let lock = AppLock()
     let push = PushRegistrar()
     private(set) var runtime: GatewayRuntime?
@@ -157,6 +162,10 @@ final class AppModel {
     var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
 
     init() {
+        let store = ConnectionStore()
+        self.store = store
+        rememberedSignIn = RememberedSignInCoordinator(vault: store.remembered)
+        rememberedSignIn.canPromptNow = { [weak self] in self?.canAskForSignInNow ?? false }
         // Settings, looks and gateways through the person's iCloud (it reads nothing until the
         // next turn of the run loop, when this model exists).
         #if DEBUG
@@ -202,6 +211,42 @@ final class AppModel {
         if let c = store.active { await activate(c) }
     }
 
+    /// Whether Face ID may be asked for now, for a remembered sign-in: the app in front and its
+    /// own lock not up (the lock asks for Face ID itself, and two prompts would collide).
+    var canAskForSignInNow: Bool {
+        guard !lock.isLocked else { return false }
+        #if os(iOS)
+        return UIApplication.shared.applicationState == .active
+        #else
+        return NSApplication.shared.isActive
+        #endif
+    }
+
+    /// Back in front, or unlocked, with the gateway in use refusing its session: the remembered
+    /// sign-in gets its go now, if it could not while the app was away or locked.
+    func signInAgainIfExpired() async {
+        guard let rt = runtime, case .authRejected = rt.socketState else { return }
+        guard let renewed = await rememberedSignIn.signInAgain(rt.connection, access: rt.secrets.access), runtime === rt else { return }
+        await rt.replaceSecrets(renewed)
+    }
+
+    /// Whether the Sign In sheet can offer Face ID for this gateway.
+    func canSignInWithRemembered(_ c: GatewayConnection) -> Bool {
+        rememberedSignIn.decision(for: c, asked: true) == .useRemembered
+    }
+
+    /// The Sign In sheet's Face ID button: the remembered sign-in, asked for by the person.
+    func signInWithRemembered(_ c: GatewayConnection) async throws {
+        let renewed = try await rememberedSignIn.signInWithRemembered(c, access: store.secrets(for: c.id).access)
+        if let rt = runtime, rt.connection.id == c.id {
+            await rt.replaceSecrets(renewed)
+        } else {
+            store.saveSecrets(renewed, for: c.id)
+            if store.activeConnectionID == c.id { await activate(c) }
+        }
+        NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+    }
+
     func activate(_ connection: GatewayConnection) async {
         if let rt = runtime {
             if rt.connection.id == connection.id { return }
@@ -217,6 +262,9 @@ final class AppModel {
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        // A session that runs out for good signs in again by itself, after Face ID, when this
+        // device remembers the gateway's sign-in; otherwise the person is asked, as before.
+        rt.signInAgain = { [weak self] c, s in await self?.rememberedSignIn.signInAgain(c, access: s.access) }
         runtime = rt
         ChatGoals.shared.attach(rt)
         activationError = nil

@@ -804,11 +804,28 @@ public struct CommandsCatalog: Codable, Hashable, Sendable {
     public struct Meta: Codable, Hashable, Sendable {
         public var argumentMode: String?
         public var desktop: String?
+
+        public init(argumentMode: String? = nil, desktop: String? = nil) {
+            self.argumentMode = argumentMode
+            self.desktop = desktop
+        }
+    }
+    /// Per skill command ("/name"): how often it is used and where it came from ("bundled",
+    /// "hub", "local"), which the gateway's own menus rank and prune by. Older gateways send none.
+    public struct SkillMeta: Codable, Hashable, Sendable {
+        public var usage: Int?
+        public var origin: String?
+
+        public init(usage: Int? = nil, origin: String? = nil) {
+            self.usage = usage
+            self.origin = origin
+        }
     }
     public var pairs: [[String]]?
     public var categories: [CommandCategory]?
     public var canon: [String: String]?
     public var commands: [String: Meta]?
+    public var skills: [String: SkillMeta]?
     public var warning: String?
     public var allPairs: [(name: String, description: String)] {
         var out: [(String, String)] = []
@@ -816,10 +833,13 @@ public struct CommandsCatalog: Codable, Hashable, Sendable {
         return out
     }
 
-    public init(pairs: [[String]]? = nil, categories: [CommandCategory]? = nil, canon: [String: String]? = nil, warning: String? = nil) {
+    public init(pairs: [[String]]? = nil, categories: [CommandCategory]? = nil, canon: [String: String]? = nil,
+                commands: [String: Meta]? = nil, skills: [String: SkillMeta]? = nil, warning: String? = nil) {
         self.pairs = pairs
         self.categories = categories
         self.canon = canon
+        self.commands = commands
+        self.skills = skills
         self.warning = warning
     }
 }

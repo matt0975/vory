@@ -62,9 +62,7 @@ struct GatewaySignInSheet: View {
                     if connections.count > 1 {
                         Text("Gateway \(index + 1) of \(connections.count)").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text(GatewaySignIn.usesBrowser(c)
-                         ? "A sign-in stays on the device it was made on, so \(DeviceWords.this) signs in once. Your browser opens the gateway's sign-in page and brings you back here."
-                         : "A sign-in stays on the device it was made on, so \(DeviceWords.this) needs this gateway's \(c.authMode == .password ? "username and password" : "session token") once.")
+                    Text(explanation(c))
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                     Text(c.gateway.description).font(.footnote.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
@@ -84,6 +82,24 @@ struct GatewaySignInSheet: View {
                             .buttonStyle(.glassProminent)
                             .disabled(busy)
                             .accessibilityIdentifier("signin.browser")
+                        } else if model.canSignInWithRemembered(c) {
+                            // Remembered on this device: Face ID signs it in, the form stays the way out.
+                            Button { signInWithRemembered(c) } label: {
+                                HStack(spacing: 8) {
+                                    if busy { ProgressView().controlSize(.small) }
+                                    Label("Sign In with \(guardName)", systemImage: Self.symbol(for: guardName)).font(.headline)
+                                }
+                                .frame(maxWidth: .infinity).padding(.vertical, 6)
+                            }
+                            .buttonStyle(.glassProminent)
+                            .disabled(busy)
+                            .accessibilityIdentifier("signin.remembered")
+                            Button { showForm = true } label: {
+                                Text("Enter Sign-In…").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            }
+                            .buttonStyle(.glass)
+                            .disabled(busy)
+                            .accessibilityIdentifier("signin.form")
                         } else {
                             Button { showForm = true } label: {
                                 Text("Enter Sign-In…").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
@@ -111,7 +127,45 @@ struct GatewaySignInSheet: View {
         // The gateway's form, for a sign-in that is typed. Saving it signs in and connects.
         .sheet(isPresented: $showForm, onDismiss: { if let c = current, !c.lacksCredentials(model.store.secrets(for: c.id)) { next() } }) {
             if let c = current {
-                NavigationStack { GatewayFormView(existing: model.store.connections.first { $0.id == c.id } ?? c) }.sheetFrame()
+                NavigationStack { GatewayFormView(existing: model.store.connections.first { $0.id == c.id } ?? c) }.sheetFrame().withAppModel()
+            }
+        }
+    }
+
+    /// What guards a remembered sign-in here ("Face ID", "Touch ID"…), for the button.
+    private var guardName: String { model.rememberedSignIn.authenticator.methodName }
+
+    static func symbol(for guardName: String) -> String {
+        switch guardName {
+        case "Face ID": return "faceid"
+        case "Touch ID": return "touchid"
+        case "Optic ID": return "opticid"
+        default: return "key.fill"
+        }
+    }
+
+    private func explanation(_ c: GatewayConnection) -> String {
+        if GatewaySignIn.usesBrowser(c) {
+            return "A sign-in stays on the device it was made on, so \(DeviceWords.this) signs in once. Your browser opens the gateway's sign-in page and brings you back here."
+        }
+        if model.canSignInWithRemembered(c) {
+            return "\(DeviceWords.This) remembers this gateway's sign-in, so \(RememberedSignInCopy.guardedBy(guardName)) signs you in again."
+        }
+        return "A sign-in stays on the device it was made on, so \(DeviceWords.this) needs this gateway's \(c.authMode == .password ? "username and password" : "session token") once."
+    }
+
+    /// Face ID, then the remembered sign-in; a cancel leaves the buttons as they were.
+    private func signInWithRemembered(_ c: GatewayConnection) {
+        busy = true; error = nil
+        Task {
+            defer { busy = false }
+            do {
+                try await model.signInWithRemembered(c)
+                next()
+            } catch RememberedSignInError.cancelled {
+                // Turned down: nothing to say, both buttons are there.
+            } catch {
+                self.error = error.localizedDescription
             }
         }
     }

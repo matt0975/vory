@@ -50,8 +50,8 @@ struct BotsView: View {
                     Button { showNewBot = true } label: { Image(systemName: "plus") }.accessibilityLabel("New bot")
                 }
             }
-            .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame() } }
-            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame() } }
+            .sheet(isPresented: $showNewBot) { if let rt = model.runtime { NewBotSheet(runtime: rt).sheetFrame().withAppModel() } }
+            .sheet(item: $editing) { p in if let rt = model.runtime { NewBotSheet(runtime: rt, editing: p).sheetFrame().withAppModel() } }
             .navigationDestination(for: ProfileInfo.self) { BotDetailView(profile: $0) }
             .navigationDestination(for: BotSettingsRoute.self) { r in ProfileCardView(profileName: r.profile).untitledPage() }
             .navigationDestination(for: Room.self) { RoomView(room: $0) }
@@ -398,7 +398,7 @@ struct BotDetailView: View {
                     NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: profile.name)) {
                         SessionRow(session: s, needsYou: model.runtime?.needsAttention.contains(s.id) ?? false, live: model.runtime?.chatForStored(s.id)?.isRunning ?? false)
                     }
-                    .contextMenu { Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") } } preview: { SessionPreview(session: s) }
+                    .contextMenu { Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") } } preview: { SessionPreview(session: s).withAppModel() }
                 }
             } header: { Text("Chats") }
         }
@@ -448,14 +448,17 @@ struct RoomView: View {
     @State private var cursor = 0
     @State private var loaded = false
     @State private var lastSendAt: Date = .distantPast
+    @State private var showMembers = false
+    @Environment(\.dismiss) private var dismiss
     /// One thread per room composer; the gateway wants the same id on every message.
     private let threadID = "main"
 
     /// Which rows draw: the human's messages as blue bubbles, the bots' as grey ones with the
-    /// bot in front, room activity as a quiet line (typing becomes the bubble below instead);
-    /// everything else stays out of the way.
+    /// bot in front, room activity as a quiet line (typing becomes the bubble below instead, and
+    /// "settled", which the gateway files after every exchange, says nothing the thread does
+    /// not); everything else stays out of the way.
     private var shown: [RoomEvent] {
-        events.filter { $0.kind.hasPrefix("message.") || ($0.kind == "room.activity" && !Self.isTyping($0)) }
+        events.filter { $0.kind.hasPrefix("message.") || ($0.kind == "room.activity" && !Self.isTyping($0) && Self.status(of: $0) != "settled") }
     }
 
     private static func status(of ev: RoomEvent) -> String {
@@ -464,38 +467,32 @@ struct RoomView: View {
     private static func isTyping(_ ev: RoomEvent) -> Bool {
         let s = status(of: ev); return s.contains("typing") || s.contains("thinking") || s.contains("working") || s.contains("composing")
     }
-    private func member(named id: String) -> RoomMember? {
-        let k = id.lowercased()
-        return room.members.first { [$0.memberId, $0.handle, $0.profile, $0.displayName].compactMap { $0?.lowercased() }.contains(k) }
-    }
-    private func memberKey(_ m: RoomMember) -> String { m.memberId ?? m.handle ?? m.profile ?? "" }
-
-    /// Who is typing: from each room activity after the last thing they said — the member the
-    /// payload names, or the first word of "hermes is typing…". A message from them, or a
-    /// "settled"/"idle" activity, clears it.
-    private var typing: [RoomMember] {
-        var active: [String: RoomMember] = [:]
-        for ev in events {
-            if ev.kind.hasPrefix("message."), ev.kind != "message.user" {
-                let who = ev.payload["member_id"]?.stringValue ?? ev.actor.id
-                if let m = member(named: who) { active[memberKey(m)] = nil }
-                continue
-            }
-            guard ev.kind == "room.activity" else { continue }
-            let s = Self.status(of: ev)
-            let named = ev.payload["member_id"]?.stringValue ?? ev.payload["handle"]?.stringValue ?? ev.payload["member"]?.stringValue
-                ?? s.split(separator: " ").first.map(String.init) ?? ""
-            let m = member(named: named)
-            if Self.isTyping(ev) {
-                if let m { active[memberKey(m)] = m }
-            } else if s.contains("settled") || s.contains("idle") || s.contains("done") || s.contains("stopped") {
-                if let m { active[memberKey(m)] = nil } else { active.removeAll() }
-            }
-        }
-        return room.members.filter { active[memberKey($0)] != nil }
-    }
+    /// Who is working: the bots the room's log says are on a turn now (`GroupActivity`).
+    private var typing: [RoomMember] { GroupActivity.working(members: room.members, events: events) }
 
     var body: some View {
+        let working = typing
+        thread(working: working)
+            // The group's own header: its bots over its name, and the member list a tap away.
+            #if os(iOS)
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                GroupChatHeader(room: room, working: working, onBack: { dismiss() }, onMembers: { showMembers = true })
+            }
+            // The bar is hidden, which switches off the edge swipe back; put it back.
+            .background(InteractivePopEnabler())
+            #else
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    GroupToolbarTitle(room: room, working: working) { showMembers = true }
+                }
+            }
+            .navigationSubtitle(GroupActivity.names(room.members))
+            #endif
+            .sheet(isPresented: $showMembers) { GroupMembersSheet(room: room, working: working).sheetFrame().withAppModel() }
+    }
+
+    private func thread(working typing: [RoomMember]) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -531,14 +528,13 @@ struct RoomView: View {
                         }
                     }
                     .id("rows")
-                    // Whoever is composing: their bot, thinking, beside a typing bubble.
-                    ForEach(typing, id: \.self) { m in
-                        HStack(alignment: .bottom, spacing: 10) {
-                            BotAvatar(profile: m.profile ?? m.handle ?? "?", size: 28, active: true, mood: BotFaceView.Mood(profile: "room-typing-\(memberKey(m))", state: .thinking))
-                            TypingBubble()
-                            Spacer(minLength: 40)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    // Whoever is working: their bot (their bots, side by side) beside one typing
+                    // bubble, with their names over it. It fades in on its own; nothing else in
+                    // the thread is animated with it (an animation of the whole thread slid the
+                    // rows under a message that arrived in the same update).
+                    if !typing.isEmpty {
+                        GroupTypingRow(members: typing)
+                            .transition(ChatRowTransition.fadeIn)
                     }
                     if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                     Color.clear.frame(height: 0).id("bottom")
@@ -588,7 +584,6 @@ struct RoomView: View {
                 #endif
             }
             .onChange(of: events.count) { _, _ in withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) } }
-            .animation(.snappy(duration: 0.25), value: typing)
         }
         .navigationTitle(room.name)
         .navigationBarTitleDisplayMode(.inline)

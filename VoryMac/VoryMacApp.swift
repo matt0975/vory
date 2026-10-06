@@ -71,6 +71,12 @@ struct VoryMacApp: App {
                     Task { await model.push.refreshAuthorization() }
                     // Anything changed on another device since: take it.
                     CloudSync.shared.syncNow()
+                    // A session that ran out while another app was in front: a remembered
+                    // sign-in signs it in again now.
+                    Task { await model.signInAgainIfExpired() }
+                }
+                .onChange(of: model.lock.isLocked) { _, locked in
+                    if !locked { Task { await model.signInAgainIfExpired() } }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
                     LocalNotifier.isForeground = false

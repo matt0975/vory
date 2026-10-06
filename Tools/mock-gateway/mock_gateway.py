@@ -6,23 +6,31 @@ WebSocket at /api/ws (gateway.ready, session.*, prompt.submit, streamed message.
 reasoning.delta / reasoning.available / thinking.delta, tool.start/complete, an `approval`
 server->client request, session.usage ticks, message.complete). No AI provider, no API keys,
 no network calls. A prompt containing "think it through" gets a reply that thinks first; one
-containing "power rankings" gets a web search and an answer sent only as reasoning.
+containing "power rankings" gets a web search and an answer sent only as reasoning. A prompt
+starting "tools" gets a long turn of a dozen tool calls (the thread's layout checks). In a group
+chat of two or more bots, a message with @all or @everyone opens every bot's turn at once, so
+they are seen working side by side before each answers.
 
     python3 mock_gateway.py --port 9119 --token mock-token
 
-Then add a gateway in the app with URL http://127.0.0.1:9119 and that session token.
+Then add a gateway in the app with URL http://127.0.0.1:9119 and that session token. With
+--password-auth user:password (or POST /api/_mock/password-auth) it also takes a username and
+password sign-in, the way a gateway with its auth gate on does.
 Requires the `websockets` package (it ships in the Hermes venv).
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import hashlib
 import os
 import json
 import re
 import random
 import time
 import uuid
+from urllib.parse import unquote
 
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
@@ -100,6 +108,57 @@ DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper
 DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
 upstream that is gone; the rest is fine. On disk, 34 rotated logs older than 90 days add up to
 4.2 GB. Say the word and I'll drop the stale block and clear those files."""
+
+
+# The "tools…" turn: a short opening, a dozen tool calls with a few words between some of them,
+# then a long answer. (name, command, summary, output, words after it or "").
+TOOLS_INTRO = """Checking the whole host before I touch anything. I'll go through disk, memory, services
+and the backups one at a time and write it all up at the end."""
+
+TOOLS_STEPS = [
+    ("terminal", "df -h /", "1 filesystem, 82% used", "/dev/sda1  470G  386G   84G  82% /\n", ""),
+    ("terminal", "du -sh /var/log/* | sort -rh | head", "10 entries, 4.2 GB total",
+     "2.1G\t/var/log/nginx\n1.4G\t/var/log/postgres\n0.7G\t/var/log/app\n", "Logs are the big one. Memory next."),
+    ("terminal", "free -h", "15 GiB total, 9.8 GiB available", "Mem: 15Gi 5.2Gi 9.8Gi\nSwap: 2.0Gi 0B 2.0Gi\n", ""),
+    ("terminal", "uptime", "up 41 days, load 0.42", " 10:04:11 up 41 days,  3:12,  1 user,  load average: 0.42, 0.38, 0.35\n", ""),
+    ("read_file", "/etc/logrotate.d/nginx", "14 lines", "/var/log/nginx/*.log {\n  daily\n  rotate 52\n  compress\n}\n",
+     "There it is: `rotate 52` keeps a year of nginx logs. That explains most of the disk."),
+    ("terminal", "systemctl --failed", "0 failed units", "0 loaded units listed.\n", ""),
+    ("terminal", "systemctl status nginx postgresql", "2 services running", "nginx.service: active (running)\npostgresql.service: active (running)\n",
+     "Services are healthy. Checking the backups now; they have their own disk."),
+    ("terminal", "ls -lh /backups | tail -5", "5 entries", "-rw-r--r-- 1 root root 1.1G backup-1.tar.gz\n", ""),
+    ("terminal", "df -h /backups", "1 filesystem, 61% used", "/dev/sdb1  1.8T  1.1T  700G  61% /backups\n", ""),
+    ("search_files", "nightly-export", "3 matches", "/etc/cron.d/nightly-export\n/srv/export/run.sh\n/srv/export/README.md\n",
+     "The nightly export writes its dumps to the backups disk, which has room for months more."),
+    ("terminal", "journalctl -p err --since today | tail -3", "3 lines", "postgres: checkpoints are occurring too frequently\n", ""),
+    ("terminal", "psql -c 'show max_wal_size'", "1 row", " max_wal_size\n--------------\n 1GB\n", ""),
+]
+
+TOOLS_ANSWER = """## The host, top to bottom
+
+**Disk** is the only real problem. `/` is at 82%, and 4.2 GB of that is rotated logs:
+
+- `nginx/access.log.*`: 2.1 GB, a year of them, because logrotate keeps 52 weeks
+- `postgres/*.log`: 1.4 GB
+- `app/debug.log.*`: 0.7 GB from the verbose-logging experiment
+
+**Memory** is fine: 9.8 GiB of 15 GiB free and no swap in use. **Load** is low (0.42) and the
+host has been up for 41 days.
+
+**Services**: nothing failed, and nginx and postgres are both running.
+
+**Backups** live on their own disk at 61%, with room for months more of the nightly export.
+
+One thing to look at later: postgres says checkpoints happen too often. `max_wal_size` is 1 GB;
+raising it to 4 GB usually quiets that warning on a host like this.
+
+### What I would do
+
+1. Lower nginx's logrotate to `rotate 8`
+2. Delete the rotated logs older than 90 days (4.2 GB back)
+3. Raise `max_wal_size` to 4 GB at the next maintenance window
+
+Say the word and I'll start with the first two."""
 
 
 CARD_PART_1 = """Here is the last week of disk use on the log host, as a card."""
@@ -378,6 +437,35 @@ CRON_JOBS = [
      "deliver": "local", "enabled": False, "state": "paused", "last_status": "ok"},
 ]
 
+# Run now (POST /api/cron/jobs/{id}/trigger), as the real gateway does it: the request is held
+# while the task runs (MOCK_CRON_RUN_SECONDS, a quick task by default) and the reply is the job
+# after the run, last_run_at and last_status updated. While it runs the job carries a
+# fire_claim, and a second trigger is the gateway's 409. Every trigger that arrives is listed
+# at /api/_mock/cron-triggers, for a test to count.
+CRON_TRIGGERS: list[dict] = []
+CRON_RUN_SECONDS = float(os.environ.get("MOCK_CRON_RUN_SECONDS") or 4)
+
+
+def _cron_job(ref: str) -> dict | None:
+    return next((j for j in CRON_JOBS if ref in (j.get("job_id"), j.get("id"), j.get("name"))), None)
+
+
+async def cron_trigger(ref: str) -> tuple[int, object]:
+    CRON_TRIGGERS.append({"job_id": ref, "at": time.time()})
+    job = _cron_job(ref)
+    if job is None:
+        return 404, {"detail": "Job not found"}
+    if job.get("fire_claim"):
+        return 409, {"detail": "Job is already running or was claimed by another scheduler"}
+    job["fire_claim"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "by": "mock"}
+    try:
+        await asyncio.sleep(CRON_RUN_SECONDS)
+    finally:
+        job.pop("fire_claim", None)
+    job["last_run_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    job["last_status"] = "ok"
+    return 200, job
+
 
 def _png_data_url(seed: int, width: int = 320, height: int = 200) -> str:
     """A small PNG made on the spot (a gradient tinted by the seed): what the gateway's media
@@ -410,9 +498,11 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             return 200, {"data_url": _png_data_url(seed)}
         return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": 1234, "mime_type": "image/png", "data_url": _png_data_url(seed)}
     if base == "/api/status":
+        gated = PASSWORD_AUTH["enabled"]
         return 200, {"version": "0.21.4", "gateway": {"status": "running", "pid": 4242},
                      "gateway_running": True, "gateway_state": "running", "active_sessions": 1,
-                     "auth_required": False, "auth_providers": [], "auth_flows": [],
+                     "auth_required": gated, "auth_providers": ["basic"] if gated else [],
+                     "auth_flows": ["password"] if gated else [],
                      "memory": {"pressure": "ok", "gateway_rss_mb": 412, "system_available_mb": 9200},
                      "disk": {"pressure": "ok", "free_mb": 184_320, "total_mb": 494_384, "used_percent": 41}}
     if base == "/api/health":
@@ -438,6 +528,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
+    if base == "/api/_mock/cron-triggers":
+        # Every Run now as it arrived, for checking that a quick double press sent one.
+        return 200, {"triggers": CRON_TRIGGERS}
     if base.startswith("/api/sessions/") and base.count("/") == 3 and base.split("/")[3] not in ("search", "stats"):
         # One stored row, from the store of the bot that was asked: 404 from every other bot.
         sid = base.split("/")[3]
@@ -1034,6 +1127,89 @@ async def speak_stream(ws):
         return
 
 
+# ── Username/password sign-in ─────────────────────────────────────────────────────────────────
+# The dashboard's basic provider and the native flow the app signs in with
+# (hermes_cli/dashboard_auth): /auth/native/authorize, /auth/password-login, /auth/native/token
+# and /auth/native/refresh, then bearer tokens on /api/*. Off unless --password-auth
+# user:password or POST /api/_mock/password-auth {"enabled": true, "username", "password"} turns
+# it on. POST /api/_mock/expire-sessions makes every token so far stale, so the next refresh
+# answers session_expired, as a gateway does when its sessions end; GET /api/_mock/auth-log
+# lists the sign-ins and refreshes in order. Session-token requests are served as before.
+PASSWORD_AUTH = {"enabled": False, "username": "", "password": ""}
+AUTH_PENDING: dict = {}
+AUTH_CODES: dict = {}
+ACCESS_TOKENS: set = set()
+REFRESH_TOKENS: set = set()
+AUTH_LOG: list = []
+PUBLIC_API = ("/api/status", "/api/health", "/api/auth/providers")
+
+
+def _issue_tokens() -> dict:
+    access, refresh = "at-" + uuid.uuid4().hex, "rt-" + uuid.uuid4().hex
+    ACCESS_TOKENS.add(access)
+    REFRESH_TOKENS.add(refresh)
+    return {"access_token": access, "refresh_token": refresh, "token_type": "bearer",
+            "expires_at": int(time.time()) + 3600, "provider": "basic", "user_id": PASSWORD_AUTH["username"]}
+
+
+def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tuple[int, object] | None:
+    """The sign-in routes and the bearer check, or None for everything else."""
+    from urllib.parse import unquote
+    if base == "/api/_mock/password-auth" and method == "POST":
+        PASSWORD_AUTH.update(enabled=bool(payload.get("enabled")), username=str(payload.get("username", "")),
+                             password=str(payload.get("password", "")))
+        ACCESS_TOKENS.clear(); REFRESH_TOKENS.clear(); AUTH_CODES.clear(); AUTH_LOG.clear()
+        return 200, {"ok": True, "enabled": PASSWORD_AUTH["enabled"]}
+    if base == "/api/_mock/expire-sessions" and method == "POST":
+        ACCESS_TOKENS.clear(); REFRESH_TOKENS.clear()
+        AUTH_LOG.append("expired")
+        return 200, {"ok": True}
+    if base == "/api/_mock/auth-log":
+        return 200, {"log": AUTH_LOG}
+    if base == "/api/auth/providers":
+        enabled = PASSWORD_AUTH["enabled"]
+        return 200, {"providers": [{"name": "basic", "display_name": "Username and password", "supports_password": True}] if enabled else []}
+    if not PASSWORD_AUTH["enabled"]:
+        return None
+    if base == "/auth/native/authorize":
+        # The real one sets its PKCE cookie and shows the login page; one sign-in at a time here.
+        AUTH_PENDING.clear()
+        AUTH_PENDING.update(challenge=unquote(query.get("code_challenge", "")), state=unquote(query.get("state", "")))
+        return 200, {"ok": True}
+    if base == "/auth/password-login" and method == "POST":
+        if payload.get("username") != PASSWORD_AUTH["username"] or payload.get("password") != PASSWORD_AUTH["password"]:
+            AUTH_LOG.append("password-login rejected")
+            return 401, {"detail": "Invalid credentials"}
+        code = "code-" + uuid.uuid4().hex
+        AUTH_CODES[code] = AUTH_PENDING.get("challenge", "")
+        AUTH_LOG.append("password-login")
+        return 200, {"ok": True, "next": f"http://127.0.0.1:1/callback?code={code}&state={AUTH_PENDING.get('state', '')}"}
+    if base == "/auth/native/token" and method == "POST":
+        challenge = AUTH_CODES.pop(payload.get("code", ""), None)
+        verifier = str(payload.get("code_verifier", ""))
+        expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+        if challenge is None or challenge != expected:
+            return 400, {"detail": "Invalid or expired authorization code."}
+        return 200, _issue_tokens()
+    if base == "/auth/native/refresh" and method == "POST":
+        refresh = payload.get("refresh_token", "")
+        if refresh not in REFRESH_TOKENS:
+            AUTH_LOG.append("refresh expired")
+            return 401, {"error": "session_expired", "detail": "Refresh token expired or invalid; start a new sign-in."}
+        REFRESH_TOKENS.discard(refresh)
+        AUTH_LOG.append("refresh")
+        return 200, _issue_tokens()
+    bearer = headers.get("Authorization", "") or ""
+    if base.startswith("/api/") and base not in PUBLIC_API and bearer.startswith("Bearer "):
+        if bearer[len("Bearer "):] not in ACCESS_TOKENS:
+            return 401, {"detail": "Not authenticated"}
+        if base == "/api/auth/me":
+            return 200, {"user_id": PASSWORD_AUTH["username"], "provider": "basic", "display_name": PASSWORD_AUTH["username"]}
+        if base == "/api/auth/ws-ticket":
+            return 200, {"ticket": "wst-" + uuid.uuid4().hex}
+    return None
+
+
 def process_request(connection, request):
     path = request.path
     if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events", "/api/audio/speak-stream"):
@@ -1045,7 +1221,28 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
-    if base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
+    if base == "/mock/drop-sockets":
+        # What iOS does to a suspended app's sockets after a while: they die under it, and the
+        # app finds out only when it comes back (a UI test calls this while the app is away).
+        # The turns keep running here; the app reconnects and resumes into their history.
+        dropped = 0
+        for gw in list(GATEWAYS):
+            try:
+                gw.ws.transport.abort()
+                dropped += 1
+            except Exception:  # noqa: BLE001
+                pass
+        print(f"[mock] dropped {dropped} socket(s)", flush=True)
+        body = json.dumps({"dropped": dropped}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    try:
+        body_json = json.loads(getattr(request, "body", b"") or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        body_json = {}
+    auth = auth_rest(method, base, query, body_json if isinstance(body_json, dict) else {}, request.headers)
+    if auth is not None:
+        result = auth
+    elif base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
         try:
             payload = json.loads(getattr(request, "body", b"") or b"{}")
         except json.JSONDecodeError:
@@ -1058,9 +1255,20 @@ def process_request(connection, request):
         sid = base.split("/")[3]
         row = next((r for r in STORED_SESSIONS if r["id"] == sid), None)
         result = (200, {"ok": True, "title": row["title"] if row else ""})
+    elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
+        # Held while the task "runs": answered later, without holding up anything else.
+        async def held() -> Response:
+            return _json_response(*(await cron_trigger(unquote(base.split("/")[4]))))
+        return held()
+    elif method == "GET" and re.fullmatch(r"/api/cron/jobs/[^/]+", base):
+        job = _cron_job(unquote(base.split("/")[4]))
+        result = (200, job) if job else (404, {"detail": "Job not found"})
     else:
         result = rest(path, query)
-    status, payload = result if result else (404, {"detail": "Not found"})
+    return _json_response(*(result if result else (404, {"detail": "Not found"})))
+
+
+def _json_response(status: int, payload: object) -> Response:
     body = neutral(json.dumps(payload)).encode()
     return Response(status, "OK", Headers([("Content-Type", "application/json"),
                                            ("Content-Length", str(len(body)))]), body)
@@ -1163,6 +1371,7 @@ if len(STORED_SESSIONS) > 1:
     STORED_SESSIONS[1]["cwd"] = "/home/hermes/homelab"
 
 LIVE: dict[str, Session] = {}   # by runtime id
+GATEWAYS: set = set()           # every connected JSON-RPC socket, for /mock/drop-sockets
 
 
 class Gateway:
@@ -1342,6 +1551,47 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _marathon_turn(self, s: Session, prompt: str) -> None:
+        """A long run of the kind a person starts and leaves going with the phone in a pocket:
+        a step at a time (a sentence, then a tool call with a screenful of output), then a long
+        markdown report. `marathon 300` sets the number of steps (200 when no number is given).
+        For checking what the app does when it comes back to a turn like this."""
+        m = re.search(r"\d+", prompt)
+        steps = max(1, min(5000, int(m.group()) if m else 200))
+        await self.event("message.start", s.sid)
+        parts: list[str] = []
+        layout: list = []
+        for i in range(steps):
+            words = f"Step {i + 1} of {steps}: checking shard {i + 1:03d} for errors. "
+            await self.stream_words(s, words, delay=0.01)
+            parts.append(words)
+            layout += [words, 1]
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            cmd = f"grep -c ERROR /var/log/app/shard-{i + 1:03d}.log && tail -n 40 /var/log/app/shard-{i + 1:03d}.log"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": "terminal", "context": cmd[:80], "args": {"command": cmd}})
+            await asyncio.sleep(0.04)
+            lines = "\n".join(f"2026-10-0{1 + k % 5} 0{k % 10}:{k:02d}:1{k % 10} shard-{i + 1:03d} INFO request {k * 7919 % 10007} served in {k % 90 + 3} ms"
+                              for k in range(40))
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": "terminal", "duration_s": 0.04,
+                                                      "summary": f"{(i * 37) % 11} errors", "result_text": lines})
+            if i % 25 == 24:
+                await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        sections = []
+        # A long report, but not one section per step: a few hundred lines of markdown, the size
+        # of the longest real reports (and an accessibility tree a UI test can still read).
+        for i in range(min(steps, 150)):
+            sections.append(f"### Shard {i + 1:03d}\n\n- Errors: **{(i * 37) % 11}**\n- Slowest request: {(i * 53) % 900 + 40} ms\n"
+                            f"- Action: {'rotate the log and watch it' if i % 3 else 'nothing to do'}\n")
+        report = "\n\n## Report\n\n| Shard | Errors |\n|---|---|\n" + "".join(f"| {i + 1:03d} | {(i * 37) % 11} |\n" for i in range(min(steps, 40))) \
+            + "\n" + "\n".join(sections) + "\nEverything else looked healthy."
+        await self.stream_words(s, report, delay=0.003)
+        parts.append(report)
+        layout.append(report)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, layout)
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": "".join(parts), "status": "complete", "usage": usage(s.output_tokens, steps + 1)})
+
     def file_reasoning_turn(self, s: Session, prompt: str, steps: list[dict]) -> None:
         """Files a finished turn as the gateway stores it: the prompt, then each step's row as
         agent/chat_completion_helpers.py `build_assistant_message` and the tool-result builder
@@ -1422,8 +1672,43 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": WIDE_TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _tools_turn(self, s: Session, prompt: str) -> None:
+        """A long turn that is mostly tool calls: a paragraph, then a dozen tool cards, some
+        back to back and some with a few words between them, each part streaming fast, and a
+        long answer at the end. No approval, so it runs start to finish on its own. It is what
+        the thread's layout is checked against while a turn streams (rows must never overlap)."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, TOOLS_INTRO, delay=0.012)
+        await self.echo_reasoning(s, TOOLS_INTRO)
+        layout: list = [TOOLS_INTRO]
+        said = TOOLS_INTRO
+        for i, (name, context, summary, result, between) in enumerate(TOOLS_STEPS):
+            tool_id = f"t-{uuid.uuid4().hex[:8]}"
+            await self.event("tool.start", s.sid, {"tool_id": tool_id, "name": name, "context": context, "args": {"command": context}})
+            await asyncio.sleep(0.25 + (i % 3) * 0.2)
+            await self.event("tool.complete", s.sid, {"tool_id": tool_id, "name": name, "duration_s": 0.4 + i * 0.1,
+                                                     "summary": summary, "result_text": result})
+            layout.append(1)
+            if between:
+                await self.stream_words(s, "\n\n" + between, delay=0.01)
+                await self.echo_reasoning(s, between)
+                layout.append(between)
+                said += "\n\n" + between
+        await self.stream_words(s, "\n\n" + TOOLS_ANSWER, delay=0.008)
+        await self.echo_reasoning(s, TOOLS_ANSWER)
+        layout.append(TOOLS_ANSWER)
+        said += "\n\n" + TOOLS_ANSWER
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, layout)
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": said, "status": "complete", "usage": usage(s.output_tokens, len(TOOLS_STEPS))})
+
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        # A turn of many tool calls, for the thread's layout checks.
+        if prompt.strip().lower().startswith("tools"):
+            await self._tools_turn(s, prompt)
+            return
         # Asked for anywhere in the prompt; ahead of "think…", whose long silent start would
         # otherwise hold "think it through" for 20 s.
         if "think it through" in prompt.lower():
@@ -1448,6 +1733,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("marathon"):
+            await self._marathon_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
@@ -1551,6 +1839,40 @@ class Gateway:
         await self.event("message.complete", s.sid, {
             "text": full, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
+    @staticmethod
+    def group_round(room: dict, log: list, ev, sent: dict, text: str) -> None:
+        """A group message to every bot (@all / @everyone): each member's turn opens within a
+        second (so the app shows them working side by side for a few seconds), they answer one
+        after the other, each turn settles, and then the room. The app polls groups.log for it."""
+        loop = asyncio.get_event_loop()
+        gateway = {"kind": "gateway", "id": "mock-gateway"}
+        members = room["members"][:6]
+
+        def coordinates(m: dict, i: int) -> dict:
+            return {"discussion_event_id": sent["event_id"], "member_id": m["member_id"], "member_index": i,
+                    "round_index": 0, "task_id": f"dtask:{sent['seq']}-{i}", "thread_id": "main",
+                    "turn_id": f"d{sent['seq']}.r0.p{i}"}
+
+        replies = ["I'll take the first half: the notes and the changelog for **{}**.",
+                   "And I'll take the rest: the build, the tests and the upload.",
+                   "I'll keep an eye on the logs while you two work."]
+
+        def start(m: dict, i: int) -> None:
+            ev("turn.started", gateway, coordinates(m, i))
+
+        def answer(m: dict, i: int) -> None:
+            words = replies[i % len(replies)].format(text.replace("@all", "").replace("@everyone", "").strip(" :,."))
+            ev("message.member", {"kind": "member", "id": m["member_id"]}, {**coordinates(m, i), "text": words})
+            said = log[-1]
+            ev("turn.settled", gateway, {**coordinates(m, i), "message_event_id": said["event_id"], "passed": False,
+                                         "seen_through_seq": said["seq"]})
+
+        for i, m in enumerate(members):
+            loop.call_later(0.6 + i * 0.7, start, m, i)
+            loop.call_later(9.0 + i * 3.0, answer, m, i)
+        loop.call_later(9.5 + (len(members) - 1) * 3.0, lambda: ev("room.activity", gateway, {
+            "status": "settled", "reason_code": "silent_round", "thread_id": "main", "discussion_event_id": sent["event_id"]}))
+
     # -- dispatch -----------------------------------------------------------------------------
 
     async def handle(self, msg: dict) -> dict | None:
@@ -1604,6 +1926,15 @@ class Gateway:
                 log.append({"room_id": room_id, "seq": len(log) + 1, "event_id": f"evt-{uuid.uuid4().hex[:12]}",
                             "kind": kind, "actor": actor, "payload": pl, "created_at": time.time()})
             ev("message.user", {"kind": "user", "id": "user"}, {"text": payload["text"], "thread_id": "main"})
+            room = next((r for r in ROOMS if r["room_id"] == room_id), None)
+            if room and len(room["members"]) > 1 and re.search(r"@(all|everyone)\b", payload["text"], re.IGNORECASE):
+                # Every bot asked at once: each one's turn opens (both are working together for
+                # a few seconds), then they answer one after the other and the room settles.
+                # Event shapes as the gateway's hosted rooms file them (turn coordinates in the
+                # payload, the gateway as the actor).
+                sent = log[-1]
+                self.group_round(room, log, ev, sent, payload["text"])
+                return ok({"event_id": sent["event_id"], "seq": sent["seq"]})
             ev("room.activity", {"kind": "system", "id": "room"}, {"status": "hermes is typing…"})
             sent = log[-2]
             # The member answers a few seconds later, as a real bot would; the app polls for it.
@@ -1796,17 +2127,33 @@ class Gateway:
                 s.title = p["title"]
             return ok({"title": s.title if s else ""})
         if method == "commands.catalog":
+            # Shaped like the real one (tui_gateway/methods_tools.py): the commands, then the skill
+            # commands; `commands` says how each built-in takes arguments and where it may run
+            # ("desktop" None = any client), `skills` how much each skill is used and where it came
+            # from, `canon` maps aliases to their command. A bundled skill nobody has used is left
+            # out of a bare "/" by the clients and still found by a search.
             return ok({"pairs": [["new", "Start a new chat"], ["model", "Switch the model"],
                                  ["approve", "Approve the waiting command"], ["compress", "Compress the context"],
                                  ["status", "Show session status"], ["usage", "Show token usage"],
-                                 ["agents", "Show the delegation tree"], ["rollback", "Restore a checkpoint"], ["cron", "Scheduled jobs"], ["academic-paper-acquisition", "Find and fetch papers"]],
-                       "categories": [], "canon": {}, "commands": {"/cron": {"argument_mode": "text", "desktop": "terminal"}, "/usage": {"argument_mode": "text", "desktop": None}}, "skills": {"/academic-paper-acquisition": {"usage": 2}}, "skill_count": 3, "warning": ""})
+                                 ["agents", "Show the delegation tree"], ["rollback", "Restore a checkpoint"], ["cron", "Scheduled jobs"], ["academic-paper-acquisition", "Find and fetch papers"],
+                                 ["code-review", "Review a diff for correctness bugs and suggest fixes"],
+                                 ["incident-writeup", "Turn an incident timeline into a postmortem"],
+                                 ["spreadsheet-tools", "Read, edit and chart spreadsheets"]],
+                       "categories": [], "canon": {"/new": "/new", "/reset": "/new", "/compress": "/compress", "/compact": "/compress"},
+                       "commands": {"/cron": {"argument_mode": "text", "desktop": "terminal"}, "/usage": {"argument_mode": "text", "desktop": None},
+                                    "/new": {"argument_mode": "text", "desktop": None}, "/model": {"argument_mode": "text", "desktop": "hidden"},
+                                    "/approve": {"argument_mode": "text", "desktop": "messaging"}, "/compress": {"argument_mode": "text", "desktop": None},
+                                    "/status": {"argument_mode": None, "desktop": None}, "/agents": {"argument_mode": None, "desktop": None},
+                                    "/rollback": {"argument_mode": "text", "desktop": None}},
+                       "skills": {"/academic-paper-acquisition": {"usage": 2, "origin": "hub"}, "/code-review": {"usage": 42, "origin": "bundled"},
+                                  "/incident-writeup": {"usage": 7, "origin": "hub"}, "/spreadsheet-tools": {"usage": 0, "origin": "bundled"}},
+                       "skill_count": 4, "warning": ""})
         if method == "slash.exec":
             cmd = (p.get("command") or "").lstrip("/")
             name = cmd.split(" ", 1)[0]
             if name == "usage":
                 return ok({"output": "Session Token Usage\n  input   12,480\n  output   3,112\n  cache    9,004\n  context  21.3k / 200k (10.6%)"})
-            if name in ("my-skill", "academic-paper-acquisition"):
+            if name in ("my-skill", "academic-paper-acquisition", "code-review", "incident-writeup", "spreadsheet-tools"):
                 return err(4018, f"skill command: use command.dispatch for /{name}")
             return ok({"output": f"(mock) /{cmd} ran on the gateway", "warning": "" if name != "personality" else "mirrored onto the live session"})
         if method == "command.dispatch":
@@ -1828,8 +2175,16 @@ class Gateway:
             s = self.sessions.get(p.get("session_id", ""))
             # Voice mode's quick answers set reasoning and fast for the session and put them back.
             print(f"config.set {p.get('key')}={p.get('value')!r} session={p.get('session_id')} scope={p.get('scope')}", flush=True)
-            return ok({"key": p.get("key", ""), "value": str(p.get("value", "")),
-                       "info": session_info(s.title if s else "", False, profile)})
+            info = session_info(s.title if s else "", False, profile)
+            if p.get("key") == "model":
+                # "<model> [--provider <slug>] --session": the reply's info carries the session's new
+                # model, as the real gateway's does, so a client's model line follows the switch.
+                words = str(p.get("value", "")).split()
+                if words and not words[0].startswith("--"):
+                    info["model"] = words[0]
+                if "--provider" in words[:-1]:
+                    info["provider"] = words[words.index("--provider") + 1]
+            return ok({"key": p.get("key", ""), "value": str(p.get("value", "")), "info": info})
         if method in ("session.close", "session.delete"):
             self.sessions.pop(p.get("session_id", ""), None)
             return ok({"closed": True, "deleted": p.get("session_id", "")})
@@ -1879,6 +2234,7 @@ async def ws_handler(ws):
             pass
         return
     gw = Gateway(ws)
+    GATEWAYS.add(gw)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
         "type": "gateway.ready", "session_id": "",
         "payload": {"skin": {"name": "default", "description": "", "colors": {}, "light_colors": {},
@@ -1900,6 +2256,7 @@ async def ws_handler(ws):
     except Exception:
         pass
     finally:
+        GATEWAYS.discard(gw)
         for live in LIVE.values():
             live.members.discard(gw)
 
@@ -1912,9 +2269,13 @@ async def main() -> None:
     # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
     ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
+    ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     args = ap.parse_args()
     global TOKEN
     TOKEN = args.token
+    if args.password_auth:
+        user, _, password = args.password_auth.partition(":")
+        PASSWORD_AUTH.update(enabled=True, username=user, password=password)
     print(f"mock Hermes gateway on http://{args.host}:{args.port}  (session token: {TOKEN})", flush=True)
     async with serve(ws_handler, args.host, args.port, process_request=process_request, max_size=None) as server:
         await server.serve_forever()

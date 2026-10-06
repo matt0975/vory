@@ -23,8 +23,9 @@ enum ComposerReturnRule {
 
 #if os(macOS)
 /// The Mac composer: SwiftUI's own field, growing to `maxLines`. Return sends, Option-Return
-/// adds a line; Up and Down go to `onArrow` first (history recall); an image, movie or document
-/// pasted with ⌘V goes out through `onPasteData` to become a staged attachment.
+/// adds a line; Up and Down go to `onArrow` first (history recall, or the chooser's mark); an
+/// image, movie or document pasted with ⌘V goes out through `onPasteData` to become a staged
+/// attachment.
 struct ComposerTextView: View {
     @Binding var text: String
     var placeholder: String
@@ -34,10 +35,14 @@ struct ComposerTextView: View {
     var onSend: () -> Void = {}
     var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
     var onArrow: (Int) -> Bool = { _ in false }
-    /// The phone's Return rule, taken so the call site is one; the Mac's field keeps its own
-    /// Return (sends) and Shift-Return (a line) and ignores both.
+    /// A bare Return with a chooser open: its item, instead of a send. True when taken.
     var onReturn: () -> Bool = { false }
+    /// Taken so the call site is one; the Mac's Return always sends (Shift-Return adds a line).
     var returnSends = false
+    /// A chooser is open above the field: Tab takes its item and Escape closes it.
+    var menuOpen = false
+    var onTab: () -> Bool = { false }
+    var onEscape: () -> Bool = { false }
     @FocusState private var isFocused: Bool
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
@@ -51,12 +56,17 @@ struct ComposerTextView: View {
             .onSubmit { if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() } }
             .onKeyPress(.upArrow) { onArrow(-1) ? .handled : .ignored }
             .onKeyPress(.downArrow) { onArrow(1) ? .handled : .ignored }
-            // Shift-Return is a line break, as on a hardware keyboard on iOS (Option-Return too, by default).
+            // Shift-Return is a line break, as on a hardware keyboard on iOS (Option-Return too, by
+            // default). A bare Return with a chooser open takes its item: it used to send the
+            // half-typed command under it.
             .onKeyPress(.return, phases: .down) { press in
-                guard press.modifiers.contains(.shift) else { return .ignored }
-                text += "\n"
-                return .handled
+                if press.modifiers.contains(.shift) { text += "\n"; return .handled }
+                if press.modifiers.isEmpty, onReturn() { return .handled }
+                return .ignored
             }
+            // Tab and Escape are the chooser's only while it is open; Tab moves the focus otherwise.
+            .onKeyPress(.tab, phases: .down) { press in menuOpen && press.modifiers.isEmpty && onTab() ? .handled : .ignored }
+            .onKeyPress(.escape, phases: .down) { _ in menuOpen && onEscape() ? .handled : .ignored }
             .onPasteCommand(of: Self.attachmentTypes) { providers in paste(providers) }
             .accessibilityIdentifier(accessibilityID ?? "composer.field")
             .onAppear { isFocused = focused }
@@ -111,6 +121,11 @@ struct ComposerTextView: UIViewRepresentable {
     var onReturn: () -> Bool = { false }
     /// Settings › Appearance › Return key sends: the on-screen Return sends instead of adding a line.
     var returnSends = false
+    /// A chooser is open above the field: a hardware Tab takes its item and Escape closes it
+    /// (the key commands are only there while it is open, so Tab keeps its own meaning otherwise).
+    var menuOpen = false
+    var onTab: () -> Bool = { false }
+    var onEscape: () -> Bool = { false }
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
 
@@ -283,14 +298,23 @@ final class PasteTextView: UITextView {
         let send = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(returnPressed))
         let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(shiftReturnPressed))
         let commandSend = UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(commandReturnPressed))
-        for c in [up, down, send] { c.wantsPriorityOverSystemBehavior = true }
-        return [up, down, send, newline, commandSend]
+        var commands = [up, down, send, newline, commandSend]
+        // With the chooser open and a hardware keyboard (an iPad's, say): Tab takes the marked
+        // item and Escape closes the list, as in the Mac app.
+        if coordinator?.parent.menuOpen == true {
+            commands.append(UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(tabPressed)))
+            commands.append(UIKeyCommand(input: UIKeyCommand.inputEscape, modifierFlags: [], action: #selector(escapePressed)))
+        }
+        for c in commands where c.modifierFlags.isEmpty { c.wantsPriorityOverSystemBehavior = true }
+        return commands
     }
     @objc private func arrowUp() { if coordinator?.parent.onArrow(-1) != true { moveCursor(up: true) } }
     @objc private func arrowDown() { if coordinator?.parent.onArrow(1) != true { moveCursor(up: false) } }
     @objc private func returnPressed() { coordinator?.hardwareReturn(self, shift: false, command: false) }
     @objc private func shiftReturnPressed() { coordinator?.hardwareReturn(self, shift: true, command: false) }
     @objc private func commandReturnPressed() { coordinator?.hardwareReturn(self, shift: false, command: true) }
+    @objc private func tabPressed() { if coordinator?.parent.onTab() != true { insertText("\t") } }
+    @objc private func escapePressed() { _ = coordinator?.parent.onEscape() }
 
     private func moveCursor(up: Bool) {
         guard let r = selectedTextRange else { return }

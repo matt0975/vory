@@ -42,13 +42,17 @@ public enum SocketError: LocalizedError, Sendable {
 public actor GatewaySocket {
     public typealias URLProvider = @Sendable () async throws -> (URL, [String: String])
     public typealias EventSink = @Sendable (GatewayEvent) -> Void
+    /// Handed each new batch once, when its first event arrives (see `GatewayEventBatch`).
+    public typealias EventBatchSink = @Sendable (GatewayEventBatch) -> Void
     public typealias StateSink = @Sendable (SocketState) -> Void
     public typealias RequestHandler = @Sendable (ServerRequest) async -> JSONValue?
     public typealias ReconnectHook = @Sendable () async -> Void
 
     private let log = Logger(subsystem: "Vory", category: "ws")
     private let urlProvider: URLProvider
-    private let onEvent: EventSink
+    private let onEvents: EventBatchSink
+    /// The batch being filled, until the app takes it or a reply closes it.
+    private var openBatch: GatewayEventBatch?
     private let onState: StateSink
     private let onServerRequest: RequestHandler
     private let onReconnected: ReconnectHook
@@ -66,13 +70,22 @@ public actor GatewaySocket {
     private var everConnected = false
     private var attempt = 0
 
-    public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
+    /// Events in batches: the sink is called once per batch, as it opens, and whoever takes
+    /// the batch later gets everything that arrived in the meantime.
+    public init(urlProvider: @escaping URLProvider, onEvents: @escaping EventBatchSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook) {
         self.urlProvider = urlProvider
-        self.onEvent = onEvent
+        self.onEvents = onEvents
         self.onState = onState
         self.onServerRequest = onServerRequest
         self.onReconnected = onReconnected
+    }
+
+    /// Events one at a time, each as it arrives.
+    public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
+         onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook) {
+        self.init(urlProvider: urlProvider, onEvents: { batch in for e in batch.take() { onEvent(e) } },
+                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected)
     }
 
     // MARK: Lifecycle
@@ -178,6 +191,7 @@ public actor GatewaySocket {
         for w in waiters { w.resume(throwing: SocketError.notConnected) }
         let calls = pending; pending = [:]
         for (_, c) in calls { c.resume(throwing: SocketError.notConnected) }
+        openBatch = nil
     }
 
     private func setState(_ s: SocketState) {
@@ -256,15 +270,27 @@ public actor GatewaySocket {
         switch frame {
         case .event(let ev):
             if ev.type == "gateway.ready" { markOpen() }
-            onEvent(ev)
+            deliver(ev)
         case .response(let id, let result, let error):
+            // Events after this reply reach the app after it (see `GatewayEventBatch`).
+            openBatch = nil
             guard let n = id.intValue, let c = pending.removeValue(forKey: n) else { return }
             if let error { c.resume(throwing: error) } else { c.resume(returning: result ?? .null) }
         case .serverRequest(let req):
+            openBatch = nil
             Task { await self.answer(req) }
         case .unknown:
             break
         }
+    }
+
+    /// Into the open batch while the app has not taken it; else into a new one, handed over.
+    private func deliver(_ ev: GatewayEvent) {
+        if let b = openBatch, b.add(ev) { return }
+        let b = GatewayEventBatch()
+        _ = b.add(ev)
+        openBatch = b
+        onEvents(b)
     }
 
     private func answer(_ req: ServerRequest) async {

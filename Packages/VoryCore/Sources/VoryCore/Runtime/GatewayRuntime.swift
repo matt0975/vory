@@ -14,6 +14,11 @@ public final class GatewayRuntime {
     private let log = Logger(subsystem: "Vory", category: "runtime")
 
     public var socketState: SocketState = .idle
+    /// The app is out of sight (the phone's app in the background): streaming replies gather
+    /// their text without being redrawn, and are drawn once when it comes back.
+    public var isAway = false {
+        didSet { if oldValue, !isAway { for chat in registry.all { chat.cameBack() } } }
+    }
     /// False where no socket is opened at all (a watch going through its iPhone): start,
     /// reconnect and new credentials leave it closed, and the capability probe skips it.
     public var socketEnabled = true
@@ -70,7 +75,8 @@ public final class GatewayRuntime {
                 guard let self else { throw SocketError.cancelled }
                 return try await self.websocketURL()
             },
-            onEvent: { [weak self] ev in Task { @MainActor in self?.handle(event: ev) } },
+            // One trip to the main actor per batch, not per event (see `GatewayEventBatch`).
+            onEvents: { [weak self] batch in Task { @MainActor in self?.handle(batch: batch.take()) } },
             onState: { [weak self] s in Task { @MainActor in
                 guard let self else { return }
                 let wasOpen = self.socketState.isOpen
@@ -93,9 +99,22 @@ public final class GatewayRuntime {
 
     // MARK: Auth plumbing
 
+    /// Signs the gateway in again once its session has run out for good (the gateway turned the
+    /// refresh token down), from a sign-in the person asked this device to remember; nil leaves
+    /// it to the person, as before. Set by the app, never on the watch. Returns the new session,
+    /// or nil to fall back to asking.
+    public var signInAgain: (@MainActor (GatewayConnection, GatewaySecrets) async -> GatewaySecrets?)?
+
     private func refreshSigner() async throws -> RequestSigner {
         guard connection.authMode.usesBearer else { throw HermesAPIError.unauthorized("") }
-        let refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
+        var refreshed: GatewaySecrets
+        do {
+            refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
+        } catch HermesAPIError.sessionExpired {
+            guard let signInAgain, let renewed = await signInAgain(connection, secrets) else { throw HermesAPIError.sessionExpired }
+            refreshed = renewed
+            refreshed.access = secrets.access
+        }
         secrets = refreshed
         store.saveSecrets(refreshed, for: connection.id)
         return RequestSigner(authMode: connection.authMode, secrets: refreshed)
@@ -377,6 +396,19 @@ public final class GatewayRuntime {
     }
 
     // MARK: Events
+
+    /// What the socket gathered since the main actor last looked, with each run of reply text
+    /// made one piece and one list refresh of each kind: after a long time away that is
+    /// thousands of frames, handled in one pass.
+    func handle(batch: [GatewayEvent]) {
+        guard !batch.isEmpty else { return }
+        let state = Self.signposter.beginInterval("events", "\(batch.count) events")
+        for ev in GatewayEvent.droppingRepeatedRefreshes(GatewayEvent.coalescingText(batch)) { handle(event: ev) }
+        Self.signposter.endInterval("events", state)
+    }
+
+    /// Intervals for Instruments (Points of Interest): event batches and snapshots.
+    nonisolated static let signposter = OSSignposter(subsystem: "Vory", category: .pointsOfInterest)
 
     private func handle(event: GatewayEvent) {
         if let chat = registry.byRuntime(event.sessionID) {

@@ -129,7 +129,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         adoptingTurn = true
         Task { [weak self] in
             guard let self else { return }
-            if let r = try? await rpc("session.resume", ["session_id": .string(storedID), "cols": 80]) { apply(snapshot: r) }
+            if let r = try? await rpc("session.resume", ["session_id": .string(storedID), "cols": 80]) { await apply(snapshot: r) }
             adoptingTurn = false
         }
     }
@@ -225,14 +225,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func resume() async throws {
         let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
-        apply(snapshot: r)
+        await apply(snapshot: r)
         await loadUsage()
     }
 
     public func reattachAfterReconnect() async {
         do {
             let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
-            apply(snapshot: r)
+            await apply(snapshot: r)
             stale = false
             if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
         } catch is CancellationError {
@@ -329,19 +329,24 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         return out
     }
 
-    private func apply(snapshot r: JSONValue) {
-        runtimeID = r["session_id"]?.stringValue ?? runtimeID
-        if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
-        info = try? r["info"]?.decode(SessionLiveInfo.self)
-        if let t = info?.title, !t.isEmpty { title = t }
+    /// Snapshots whose rows are being made off the main actor; events wait meanwhile.
+    private var snapshotsBuilding = 0
+    var isBuildingSnapshot: Bool { snapshotsBuilding > 0 }
+    /// Events that arrived while a snapshot was being made, handled after it in their order.
+    private var heldEvents: [GatewayEvent] = []
+
+    /// The rows of a snapshot's history, and the same rows under the ids of the rows shown that
+    /// say the same thing (`keepingIDs`). Decoding and building a long chat's history took the
+    /// main thread for seconds: a tester's app froze when it came back to a long turn and every
+    /// open chat was re-read at once. Nothing here touches the chat, so it runs off the main actor.
+    nonisolated static func snapshotRows(_ r: JSONValue, running: Bool, shown: [TranscriptItem], streamingID: String?) -> (built: [TranscriptItem], paired: [TranscriptItem]) {
         let history = (try? r["messages"]?.decode([TranscriptMessage].self)) ?? []
         // The gateway's transcript has no attachments; keep the ones this app sent (a photo in
         // the bubble vanished when the snapshot replaced the items).
         var keptAttachments: [String: [AttachmentPreview]] = [:]
-        for it in items { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
-        let running = r["running"]?.boolValue ?? info?.running ?? false
+        for it in shown { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
         // Replies already finished on screen stay replies while another turn starts.
-        let settled = Set(items.compactMap { item -> String? in
+        let settled = Set(shown.compactMap { item -> String? in
             if case .assistant(let t, _, false) = item.kind, !t.isEmpty { return StreamAssembler.normalized(t) }
             return nil
         })
@@ -350,8 +355,44 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             if case .user(let t, let a) = item.kind, a.isEmpty, let k = keptAttachments[t] { item.kind = .user(text: t, attachments: k) }
             return item
         }
-        // The reply streaming now is put back under its own id below; it is not history's.
-        items = Self.keepingIDs(built, from: items.filter { $0.id != streamingItemID })
+        // The reply streaming now is put back under its own id; it is not history's.
+        return (built, keepingIDs(built, from: shown.filter { $0.id != streamingID }))
+    }
+
+    /// A snapshot of the session from the gateway. Its rows are made off the main actor
+    /// (`snapshotRows`); events that arrive meanwhile wait, and are handled after it in the
+    /// order they came, as they were when the snapshot was applied the moment it arrived.
+    func apply(snapshot r: JSONValue) async {
+        let snapInfo = try? r["info"]?.decode(SessionLiveInfo.self)
+        let running = r["running"]?.boolValue ?? snapInfo?.running ?? false
+        let shown = items
+        let streamingID = streamingItemID
+        let signpost = GatewayRuntime.signposter.beginInterval("snapshot")
+        snapshotsBuilding += 1
+        let rows = await Task.detached(priority: .userInitiated) {
+            Self.snapshotRows(r, running: running, shown: shown, streamingID: streamingID)
+        }.value
+        snapshotsBuilding -= 1
+        // The thread changed here while the rows were made (a message sent, a note added):
+        // they are paired with the thread as it is now.
+        let paired = items == shown && streamingItemID == streamingID ? rows.paired : Self.keepingIDs(rows.built, from: items.filter { $0.id != streamingItemID })
+        apply(snapshot: r, info: snapInfo, rows: paired)
+        GatewayRuntime.signposter.endInterval("snapshot", signpost)
+        if snapshotsBuilding == 0, !heldEvents.isEmpty {
+            let held = heldEvents
+            heldEvents = []
+            for ev in held { handle(event: ev) }
+        }
+    }
+
+    private func apply(snapshot r: JSONValue, info snapInfo: SessionLiveInfo?, rows: [TranscriptItem]) {
+        runtimeID = r["session_id"]?.stringValue ?? runtimeID
+        if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
+        info = snapInfo
+        if let t = info?.title, !t.isEmpty { title = t }
+        var keptAttachments: [String: [AttachmentPreview]] = [:]
+        for it in items { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
+        items = rows
         toolIndex = [:]
         cards = []
         cardShownAt = [:]
@@ -602,6 +643,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: text, symbol: symbol)))
     }
 
+    /// The commands `dispatchSlash` runs itself, by name, and whether one runs as it is (true)
+    /// or wants what follows it (false). The composer's chooser lists these even when the
+    /// gateway marks them for another surface (/approve is "messaging" there, /model is kept out
+    /// of its desktop menu for a picker of its own), and runs the bare ones on a pick.
+    nonisolated public static let localCommands: [String: Bool] = [
+        "approve": true, "deny": true, "stop": true, "new": true, "reset": true, "clear": true,
+        "help": true, "commands": true,
+        "title": false, "rename": false, "model": false, "reasoning": false, "effort": false,
+    ]
+
+    /// The model for this chat, from a typed `/model name` or the composer's model chooser:
+    /// the session-scoped switch, then a line in the thread saying so (or what went wrong).
+    public func switchModel(provider: String?, model: String) async {
+        do { try await setModel(provider: provider, model: model); systemLine("Model set to \(model)", symbol: "cpu") }
+        catch { items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/model: \(error.localizedDescription)"))) }
+    }
+
     /// Slash commands, the way the terminal and the desktop run them: a few are the app's own
     /// (approve, stop, title, model…), the rest go to `slash.exec`, the gateway's general
     /// runner for built-ins, plugins and quick commands. `command.dispatch` only knows quick,
@@ -625,11 +683,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "title", "rename":
             if let arg, !arg.isEmpty { await rename(arg); systemLine("Renamed to \(arg)", symbol: "pencil"); return nil }
         case "model":
-            if let arg, !arg.isEmpty {
-                do { try await setModel(provider: nil, model: arg); systemLine("Model set to \(arg)", symbol: "cpu") }
-                catch { items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "/model: \(error.localizedDescription)"))) }
-                return nil
-            }
+            if let arg, !arg.isEmpty { await switchModel(provider: nil, model: arg); return nil }
         case "reasoning", "effort":
             if let arg, !arg.isEmpty {
                 do { try await setReasoning(arg); systemLine("Reasoning set to \(arg)", symbol: "brain") }
@@ -881,6 +935,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     // MARK: Events
 
     public func handle(event ev: GatewayEvent) {
+        // A snapshot is being made: this comes after it (see `apply(snapshot:)`).
+        if snapshotsBuilding > 0 { heldEvents.append(ev); return }
         let p = ev.payload
         if !startedHere, !isRunning, !adoptingTurn, !isResuming, Self.turnOpeners.contains(ev.type) { adoptTurnStartedElsewhere() }
         if ev.type == "message.complete" || ev.type == "error" { startedHere = false }
@@ -972,7 +1028,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             statusLine = "Preparing \(p["name"]?.stringValue ?? "tool")…"
         case "tool.complete":
             let id = p["tool_id"]?.stringValue ?? ""
-            if let itemID = toolIndex[id], let idx = items.firstIndex(where: { $0.id == itemID }), case .tool(var act) = items[idx].kind {
+            // Rows a turn's events are about sit at the end: looked for from there (from the
+            // top, each of a long turn's hundreds of tool calls walked the whole thread).
+            if let itemID = toolIndex[id], let idx = items.lastIndex(where: { $0.id == itemID }), case .tool(var act) = items[idx].kind {
                 act.status = .done
                 act.summary = p["summary"]?.stringValue
                 act.resultText = p["result_text"]?.stringValue ?? p["result"]?.stringValue ?? p["result"].map { $0.isNull ? "" : $0.prettyPrinted }
@@ -982,7 +1040,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             statusLine = "Thinking…"
         case "tool.output_risk":
             let id = p["tool_id"]?.stringValue ?? ""
-            if let itemID = toolIndex[id], let idx = items.firstIndex(where: { $0.id == itemID }), case .tool(var act) = items[idx].kind {
+            if let itemID = toolIndex[id], let idx = items.lastIndex(where: { $0.id == itemID }), case .tool(var act) = items[idx].kind {
                 act.risk = p["risk"]?.stringValue
                 items[idx].kind = .tool(act)
             }
@@ -1020,7 +1078,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// touched again only on `complete`, so a helper's tools and progress went nowhere.
     private func updateSubagent(_ type: String, _ p: JSONValue) {
         let rowID = SubagentActivity.rowID(for: p) ?? "sub-" + UUID().uuidString
-        let idx = items.firstIndex { $0.id == rowID }
+        let idx = items.lastIndex { $0.id == rowID }
         let current: SubagentActivity? = idx.flatMap { if case .subagent(let a) = items[$0].kind { return a }; return nil }
         let act = SubagentActivity.applying(type, p, to: current)
         if let idx { items[idx].kind = .subagent(act) } else {
@@ -1052,19 +1110,44 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         activity.start(for: self)
     }
 
+    /// How long the streaming row waits for more before it is redrawn. Every redraw parses and
+    /// lays out the whole reply so far, so a long one (a report of tens of kilobytes at the end
+    /// of a long turn) took the main thread for most of each 40 ms and the app stopped answering
+    /// taps; the wait grows with the reply, keeping the cost per second about level. A short
+    /// reply still comes in about 25 times a second.
+    nonisolated static func streamingInterval(utf8Count: Int) -> Duration {
+        .milliseconds(min(250, max(40, utf8Count / 128)))
+    }
+
     private func scheduleStreamingUpdate() {
         guard streamFlush == nil else { return }
+        // Nobody sees the thread while the app is away, but each redraw of a long reply still
+        // parsed and laid out all of it, and in the background (where the parsed copies are let
+        // go) that kept the main thread so busy that the system's "time is up" for the app's
+        // background time could not be answered: the app was ended ("crashed in background").
+        // The text keeps gathering; the row is drawn once on the way back (`cameBack`). The Live
+        // Activity, which is on screen meanwhile, still hears about the turn once a second.
+        if runtime.isAway {
+            if Date().timeIntervalSince(lastActivityUpdate) > 1 { lastActivityUpdate = Date(); activity.update(for: self, attention: !cards.isEmpty) }
+            return
+        }
+        let wait = Self.streamingInterval(utf8Count: assembler.text.utf8.count + assembler.reasoning.utf8.count)
         streamFlush = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(40))
+            try? await Task.sleep(for: wait)
             guard let self, !Task.isCancelled else { return }
             self.streamFlush = nil
             self.updateStreamingItem()
         }
     }
 
+    /// The app is back in front: the reply that streamed while it was away is drawn.
+    func cameBack() {
+        if streamingItemID != nil, streamFlush == nil { updateStreamingItem() }
+    }
+
     private func updateStreamingItem() {
         streamFlush?.cancel(); streamFlush = nil
-        guard let id = streamingItemID, let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        guard let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) else { return }
         items[idx].kind = .assistant(text: assembler.text, reasoning: assembler.reasoning.isEmpty ? nil : assembler.reasoning, streaming: true)
         if let started = turnStartedAt, Date().timeIntervalSince(lastStatsUpdate) > 0.5 {
             lastStatsUpdate = Date()
@@ -1075,7 +1158,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func sealStreamingForTool() {
-        guard let id = streamingItemID, let idx = items.firstIndex(where: { $0.id == id }) else { return }
+        guard let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) else { return }
         sealedTurnText += assembler.text
         if assembler.text.isEmpty { items.remove(at: idx) } else {
             items[idx].kind = .assistant(text: assembler.text, reasoning: assembler.reasoning.isEmpty ? nil : assembler.reasoning, streaming: false)
@@ -1106,7 +1189,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // trailing one — otherwise the entire reply is rendered twice.
         let tail = finalText.map { StreamAssembler.tail(ofFinalText: $0, alreadySealed: sealedTurnText) }
         var result: Int?
-        if let id = streamingItemID, let idx = items.firstIndex(where: { $0.id == id }) {
+        if let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) {
             let streamed = assembler.text
             let text = assembler.complete(finalText: tail)
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.remove(at: idx) }

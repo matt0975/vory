@@ -9,8 +9,37 @@ private final class ActivityHandle: @unchecked Sendable {
     let activity: Activity<HermesTurnAttributes>
     init(_ a: Activity<HermesTurnAttributes>) { activity = a }
 
+    private let lock = NSLock()
+    /// The newest state, kept while an update is on its way; sent after it, the ones it replaced never.
+    private var queued: HermesTurnAttributes.ContentState?
+    private var sending = false
+    private var ended = false
+
+    /// One update on its way at a time, the newest state next. A long turn that ran on while
+    /// the app was away came back as hundreds of tool calls in a burst, and each one (twice:
+    /// its start and the status line after it) sent an update of its own to the system at once.
     func update(_ state: HermesTurnAttributes.ContentState) {
-        Task.detached { await self.activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600))) }
+        let start = lock.withLock { () -> Bool in
+            guard !ended else { return false }
+            if sending { queued = state; return false }
+            sending = true
+            return true
+        }
+        guard start else { return }
+        Task.detached { await self.send(state) }
+    }
+
+    private func send(_ first: HermesTurnAttributes.ContentState) async {
+        var next: HermesTurnAttributes.ContentState? = first
+        while let state = next {
+            await activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600)))
+            next = lock.withLock {
+                let n = ended ? nil : queued
+                queued = nil
+                if n == nil { sending = false }
+                return n
+            }
+        }
     }
 
     /// An update that also alerts: the Island expands and the phone buzzes, like a push with an
@@ -26,6 +55,8 @@ private final class ActivityHandle: @unchecked Sendable {
     /// notification meanwhile), then the system removes it.
     func end(_ state: HermesTurnAttributes.ContentState, linger: TimeInterval? = nil) {
         let policy: ActivityUIDismissalPolicy = linger.map { .after(Date().addingTimeInterval($0)) } ?? .immediate
+        // An update still waiting to go must not follow the end.
+        lock.withLock { ended = true; queued = nil }
         Task.detached { await self.activity.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }
     }
 
@@ -265,13 +296,33 @@ final class LiveActivityController: TurnActivityReporting {
         NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil, userInfo: ["token": "", "storedID": a.attributes.storedSessionID, "startedAt": 0.0])
     }
 
+    /// When this chat last asked the system for a card and got none, and whether the app was
+    /// away then. Each ask is a synchronous call into the system on the main thread, and a long
+    /// turn starts a new reply after every tool call: with no card up (Live Activities refused,
+    /// or the app in the background, where the system starts none) every one of them asked
+    /// again. Hundreds of calls in a row, and one of them held the main thread past the
+    /// system's ten seconds while the app was in the background (0x8badf00d, a scene update).
+    private var lastAsk: (at: Date, away: Bool)?
+    nonisolated static let askAgainAfter: TimeInterval = 30
+
+    /// Whether to ask the system now: not again within half a minute of an ask that got
+    /// nothing, unless that was while away and the app is in front now.
+    nonisolated static func shouldAsk(lastAskAt: Date?, lastAskAway: Bool, awayNow: Bool, now: Date = Date()) -> Bool {
+        guard let at = lastAskAt, now.timeIntervalSince(at) < askAgainAfter else { return true }
+        return lastAskAway && !awayNow
+    }
+
     func start(for chat: ChatSession) {
         guard Self.isEnabled, handle == nil else { return }
+        let away = UIApplication.shared.applicationState == .background
+        guard Self.shouldAsk(lastAskAt: lastAsk?.at, lastAskAway: lastAsk?.away ?? false, awayNow: away) else { return }
+        lastAsk = (Date(), away)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { Self.lastStartError = "Live Activities are turned off for Vory in iOS Settings"; return }
         // After a relaunch the system may still show this chat's activity: adopt it instead of stacking a second one.
         if let existing = Activity<HermesTurnAttributes>.activities.first(where: {
             $0.attributes.storedSessionID == chat.storedID && $0.content.state.endedAt == nil && $0.activityState == .active && !Self.endingIDs.contains($0.id)
         }) {
+            lastAsk = nil
             startedAt = existing.content.state.startedAt
             let h = ActivityHandle(existing)
             handle = h
@@ -285,6 +336,8 @@ final class LiveActivityController: TurnActivityReporting {
             }
             return
         }
+        // Away from the app the system starts no card; the next ask in front will.
+        if away { return }
         // A finished card from the previous turn that the app has not been opened to clear yet must
         // not sit next to the new one.
         for a in Activity<HermesTurnAttributes>.activities where a.attributes.storedSessionID == chat.storedID && a.content.state.endedAt != nil {
@@ -307,6 +360,7 @@ final class LiveActivityController: TurnActivityReporting {
             let a = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: Date().addingTimeInterval(3600)), pushType: .token)
             let h = ActivityHandle(a)
             handle = h
+            lastAsk = nil
             tokenTask = h.observePushTokens(storedID: chat.storedID, startedAt: startedAt)
             stateTask = h.observeState()
             Self.lastStartError = nil; Self.lastStartedAt = Date()

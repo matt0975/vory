@@ -33,6 +33,13 @@ struct ComposerView: View {
     @State private var showHistory = false
     @State private var historyCursor: Int?
     @State private var catalog: CommandsCatalog?
+    /// The gateway's models, loaded the first time "/model " is typed in this chat.
+    @State private var modelOptions: ModelOptionsResult?
+    @State private var modelOptionsLoading = false
+    /// The chooser's marked row: what Return or Tab takes, moved with the arrow keys.
+    @State private var menuSelection = 0
+    /// Escape closed the chooser for the word being typed; a new word opens it again.
+    @State private var menuDismissed = false
     @State private var dictation = DictationController()
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
@@ -68,76 +75,92 @@ struct ComposerView: View {
         withAnimation(.snappy) { longTextOffer = false; text = "" }
     }
 
-    /// Every command the gateway lists, narrowed by what follows the "/" (a bare "/" shows all).
-    /// The word being typed, when it starts with "/": the first word, or a later one (a skill
-    /// that takes another command as its argument, say). Nil otherwise.
-    private var slashWord: Substring? {
-        guard text.hasPrefix("/") else { return nil }
-        let last = text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
-        return last.hasPrefix("/") ? last : nil
+    /// The chooser above the field: the gateway's commands and skills while a "/word" is typed,
+    /// its models after "/model " (see SlashMenu).
+    private var menuContext: SlashMenu.Context? { SlashMenu.context(for: text) }
+
+    private var menuItems: [SlashMenu.Item] {
+        guard !menuDismissed, let ctx = menuContext else { return [] }
+        switch ctx.kind {
+        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query) } ?? []
+        case .model: return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, query: ctx.query) } ?? []
+        }
     }
 
-    private var slashSuggestions: [(name: String, description: String)] {
-        guard let word = slashWord, let catalog else { return [] }
-        let q = word.dropFirst().lowercased()
-        // Some gateways list the names with their slash already.
-        return catalog.allPairs
-            .map { (name: $0.name.hasPrefix("/") ? String($0.name.dropFirst()) : $0.name, description: $0.description) }
-            .filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) }
-            .sorted { $0.name.lowercased() < $1.name.lowercased() }
-    }
+    /// The model list is on its way: the chooser says so rather than staying shut.
+    private var menuLoading: Bool { !menuDismissed && menuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
 
     /// The command list scrolls inside a cap: about 30 % of the screen, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
 
-    /// A command picked: it replaces the word being typed, not the whole line.
-    private func pickSlash(_ name: String) {
+    /// A row picked (tapped, or taken with Return or Tab). A command that takes nothing runs at
+    /// once when it is the whole message, as if typed and sent; anything else replaces the word
+    /// being typed, ready for what follows (a "/model " pick opens the model list). A model
+    /// switches this chat the way the model menu does, with a line in the thread.
+    private func pick(_ item: SlashMenu.Item) {
+        menuSelection = 0
+        if item.kind == .model {
+            text = ""
+            Task { await chat.switchModel(provider: item.provider, model: item.name) }
+            return
+        }
+        // With a reply quoted or files staged the text goes out as a message, not a command
+        // (ChatSession.send), so the command waits in the field instead.
+        if item.runsOnPick, menuContext?.wholeText == true, quote.isEmpty, chat.staged.isEmpty {
+            text = "/" + item.name
+            Task { await send() }
+            return
+        }
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         if words.isEmpty { words = [""] }
-        words[words.count - 1] = "/" + name
+        words[words.count - 1] = "/" + item.name
         text = words.joined(separator: " ") + " "
     }
 
-    /// Return with a picker open takes its first item (a bare Return would otherwise add a
-    /// line, or send, under a half-typed command). True when something was picked.
-    private func pickFirstSuggestion() -> Bool {
-        if let s = slashSuggestions.first { pickSlash(s.name); return true }
+    /// Return (or Tab) with a picker open takes its marked item (a bare Return would otherwise
+    /// add a line, or send, under a half-typed command). True when something was picked.
+    private func pickMarkedSuggestion() -> Bool {
+        let items = menuItems
+        if !items.isEmpty { pick(items[min(menuSelection, items.count - 1)]); return true }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
     }
 
+    /// Up and Down move the chooser's mark (round the ends) while it is open; history recall
+    /// has them otherwise.
+    private func moveSelection(_ delta: Int) -> Bool {
+        let n = menuItems.count
+        guard n > 0 else { return false }
+        menuSelection = (min(menuSelection, n - 1) + delta + n) % n
+        return true
+    }
+
+    /// Escape: the chooser closes until the word changes.
+    private func dismissMenu() -> Bool {
+        guard !menuItems.isEmpty || menuLoading else { return false }
+        withAnimation(.snappy(duration: 0.2)) { menuDismissed = true }
+        return true
+    }
+
+    private func loadModelOptions() async {
+        guard modelOptions == nil, !modelOptionsLoading else { return }
+        modelOptionsLoading = true
+        defer { modelOptionsLoading = false }
+        do { modelOptions = try await chat.modelOptions() }
+        catch {
+            // Typed past "/model " before the list came: the load was called off, nothing failed.
+            guard !Task.isCancelled else { return }
+            chat.banner = RestartRequiredCallout.matches(error.localizedDescription) ? "Hermes needs a restart: see Settings › System" : error.localizedDescription
+        }
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            if !slashSuggestions.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(slashSuggestions, id: \.name) { s in
-                            Button { pickSlash(s.name) } label: {
-                                HStack(spacing: 10) {
-                                    Text("/" + s.name).font(.subheadline.monospaced().weight(.medium)).lineLimit(1)
-                                    Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(height: 30)
-                                .padding(.vertical, 4)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("composer.command.\(s.name)")
-                            if s.name != slashSuggestions.last?.name { Divider() }
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 4)
-                }
-                .scrollIndicators(.visible)
-                // A fixed height; the dock's keyboard handling is manual (ConversationView) so
-                // this scroll view cannot swallow the keyboard inset.
-                .frame(height: min(commandListCap, CGFloat(slashSuggestions.count) * 38 + 8))
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                // In place, not sliding up from under the keyboard.
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
-            }
+            if !menuItems.isEmpty || menuLoading {
+                SlashMenuList(items: menuItems, selection: menuSelection, loading: menuLoading, cap: commandListCap) { pick($0) }
+                    // In place, not sliding up from under the keyboard.
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
             if !mentionSuggestions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -260,7 +283,7 @@ struct ComposerView: View {
                     .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
             }
         }
-        .animation(.snappy(duration: 0.25), value: slashSuggestions.map(\.name))
+        .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
         // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
@@ -295,14 +318,14 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
         #endif
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
-        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact) }
-        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame() }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact).withAppModel() }
+        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame().withAppModel() }
     }
 
     /// The field itself (its own view: the body's one expression grew past what the compiler
@@ -311,11 +334,20 @@ struct ComposerView: View {
         ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
-                         onArrow: { recallHistory($0) },
-                         onReturn: { pickFirstSuggestion() },
-                         returnSends: returnSends)
+                         onArrow: { moveSelection($0) || recallHistory($0) },
+                         onReturn: { pickMarkedSuggestion() },
+                         returnSends: returnSends,
+                         menuOpen: !menuItems.isEmpty || menuLoading,
+                         onTab: { pickMarkedSuggestion() },
+                         onEscape: { dismissMenu() })
             .padding(.leading, 14).padding(.vertical, 7)
             .task { catalog = await chat.commandsCatalog() }
+            // The model list loads when "/model " is first typed, and is kept for this chat.
+            .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
+            // A new word (or the model list after "/model") opens a dismissed chooser again,
+            // and the mark starts at the top whenever the list is narrowed.
+            .onChange(of: menuContext.map { "\($0.kind)-\($0.anchor)" }) { _, _ in menuDismissed = false }
+            .onChange(of: menuContext?.query) { _, _ in menuSelection = 0 }
             .onChange(of: text) { old, new in
                 // Offered once as the text gets long (a paste lands in one jump;
                 // typing crosses the line once); "Keep" holds until it shrinks again.

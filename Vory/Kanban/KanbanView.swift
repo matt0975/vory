@@ -40,9 +40,9 @@ struct KanbanView: View {
         .task(id: active) { await follow() }
         .reloadable { await store?.refresh() }
         .sheet(item: $detailTask) { t in
-            KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide)
+            KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
-        .sheet(isPresented: $showNew) { KanbanNewTaskSheet { warning in if let warning { notice = warning } }.sheetFrame() }
+        .sheet(isPresented: $showNew) { KanbanNewTaskSheet { warning in if let warning { notice = warning } }.sheetFrame().withAppModel() }
         .alert(ask?.title ?? "", isPresented: Binding(get: { ask?.asksForText == true }, set: { if !$0 { ask = nil } }), presenting: ask) { a in
             TextField(a.placeholder, text: $answer)
             Button(a.verb) { Task { await answerAsk(a) } }

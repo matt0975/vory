@@ -46,7 +46,7 @@ struct ConversationView: View {
                     .handsOff(chat)
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
-                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame() }
+                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
@@ -67,7 +67,7 @@ struct ConversationView: View {
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
-                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame() }
+                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
@@ -162,7 +162,7 @@ struct ConversationView: View {
             }
             .fullScreenCover(isPresented: Binding(get: { HandsFreeSession.shared.isActive(for: chat) && !HandsFreeSession.shared.minimized },
                                                    set: { if !$0, HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.minimized = true } })) {
-                HandsFreeView(chat: chat)
+                HandsFreeView(chat: chat).withAppModel()
             }
         #endif
     }

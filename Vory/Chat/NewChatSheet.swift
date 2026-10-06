@@ -264,12 +264,12 @@ struct NewChatSheet: View {
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in stage(data, name: name, kind: .image) }.ignoresSafeArea() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in stage(data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
-        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url) }.sheetFrame(.compact) }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url) }.sheetFrame(.compact).withAppModel() }
     }
 
     /// The + panel's rows: a chat composer's, with Message History greyed (there is no chat yet).

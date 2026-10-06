@@ -117,9 +117,22 @@ final class ReasoningReplyUITests: XCTestCase {
         sleep(2)
         shot("thinking-card")
         // Opened, the thinking reads as markdown above a reply that stays whole.
+        // The keyboard down and the card out from under the floating header: with the software
+        // keyboard up the thread sits at its end and the header covers the card's top, so a tap
+        // there lands on the bot's pill.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25))
+            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
+        sleep(1)
+        func headerCard() -> XCUIElement? {
+            app.buttons.matching(NSPredicate(format: "label == 'Show reasoning'")).allElementsBoundByIndex.first { $0.isHittable }
+        }
+        for _ in 0..<4 where (headerCard()?.frame.minY ?? 0) < 140 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
+                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.6)))
+            sleep(1)
+        }
         // The one on screen: every tab page is mounted, so the first match can be another copy.
-        let visible = app.buttons.matching(NSPredicate(format: "label == 'Show reasoning'")).allElementsBoundByIndex.first { $0.isHittable }
-        try XCTUnwrap(visible, "no Reasoning card on screen").tap()
+        try XCTUnwrap(headerCard(), "no Reasoning card on screen").tap()
         sleep(2)
         shot("thinking-card-open")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Hide reasoning'")).allElementsBoundByIndex.contains { $0.isHittable }, "the Reasoning card did not open")

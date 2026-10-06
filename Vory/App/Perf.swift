@@ -27,7 +27,52 @@ enum Perf {
         let line = snapshot.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
         log.notice("\(line, privacy: .public)")
     }
+
+    nonisolated(unsafe) private static var watching = false
+    /// Time the whole process stood still (suspended by the system), from the heartbeat.
+    nonisolated(unsafe) private static var frozenNanos: UInt64 = 0
+
+    /// How long the main thread kept the screen waiting, measured: a thread of its own asks the
+    /// main thread to answer every 50 ms and logs each wait over a quarter of a second ("main
+    /// thread busy 1840 ms"), the freeze a person feels as taps that do nothing. Testers came
+    /// back to a long turn and found the app frozen; this is how a fix is checked. A second
+    /// thread beats every 20 ms; a gap in its beats is the system suspending the app, which is
+    /// taken out of the wait rather than blamed on the main thread.
+    static func watchMainThread() {
+        guard !watching else { return }
+        watching = true
+        let heartbeat = Thread {
+            var last = DispatchTime.now().uptimeNanoseconds
+            while true {
+                Thread.sleep(forTimeInterval: 0.02)
+                let now = DispatchTime.now().uptimeNanoseconds
+                if now - last > 200_000_000 { lock.lock(); frozenNanos += now - last; lock.unlock() }
+                last = now
+            }
+        }
+        heartbeat.name = "dev.vory.main-thread-watch.beat"
+        heartbeat.start()
+        let thread = Thread {
+            let answered = DispatchSemaphore(value: 0)
+            while true {
+                lock.lock(); let frozenBefore = frozenNanos; lock.unlock()
+                let asked = DispatchTime.now().uptimeNanoseconds
+                DispatchQueue.main.async { answered.signal() }
+                answered.wait()
+                let waited = DispatchTime.now().uptimeNanoseconds - asked
+                // The heartbeat reports a suspension when it next beats: a moment later.
+                Thread.sleep(forTimeInterval: 0.05)
+                lock.lock(); let frozen = frozenNanos - frozenBefore; lock.unlock()
+                let ms = (waited > frozen ? waited - frozen : 0) / 1_000_000
+                if ms >= 250 { log.notice("main thread busy \(ms) ms") }
+            }
+        }
+        thread.name = "dev.vory.main-thread-watch"
+        thread.qualityOfService = .utility
+        thread.start()
+    }
     #else
     @inline(__always) static func tick(_ name: String) {}
+    @inline(__always) static func watchMainThread() {}
     #endif
 }
