@@ -151,11 +151,24 @@ struct ImageViewerSheet: View {
     #if os(iOS)
     private func saveToPhotos(_ url: URL) {
         saving = true
-        PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) }) { ok, err in
-            Task { @MainActor in
-                saving = false
-                if ok { saved = true } else { error = err?.localizedDescription ?? "Photos did not take the picture." }
+        Task {
+            do {
+                try await Self.addToPhotos(url)
+                saved = true
+            } catch {
+                self.error = error.localizedDescription
             }
+            saving = false
+        }
+    }
+
+    /// The picture into the library, from outside the main actor. Photos runs the change block
+    /// (and answers) on its own queue: written inside the view, the block took the view's main
+    /// actor isolation, and Swift's runtime check stopped the app the moment Photos ran it, so
+    /// Save to Photos crashed every time.
+    nonisolated private static func addToPhotos(_ url: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            _ = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
         }
     }
     #endif
