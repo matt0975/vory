@@ -260,7 +260,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// page of it when nothing is cached; `resume()` then replaces both with the live snapshot.
     public func beginResume() {
         if items.isEmpty, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
-            items = cached.enumerated().compactMap { TranscriptItem.fromHistory($1, index: $0) }
+            items = TranscriptItem.fromHistory(cached)
         }
         isResuming = true
         resumeError = nil
@@ -283,7 +283,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                                                             profile: profile) else { return }
         guard isResuming, items.isEmpty else { return }
         let msgs = (r["messages"]?.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
-        items = msgs.enumerated().compactMap { TranscriptItem.fromHistory($1, index: $0) }
+        items = TranscriptItem.fromHistory(msgs)
     }
 
     private func saveTranscriptCache() {
@@ -339,12 +339,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // the bubble vanished when the snapshot replaced the items).
         var keptAttachments: [String: [AttachmentPreview]] = [:]
         for it in items { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
-        var built: [TranscriptItem] = []
-        for (i, m) in history.enumerated() {
-            if var item = TranscriptItem.fromHistory(m, index: i) {
-                if case .user(let t, let a) = item.kind, a.isEmpty, let k = keptAttachments[t] { item.kind = .user(text: t, attachments: k) }
-                built.append(item)
-            }
+        let running = r["running"]?.boolValue ?? info?.running ?? false
+        // Replies already finished on screen stay replies while another turn starts.
+        let settled = Set(items.compactMap { item -> String? in
+            if case .assistant(let t, _, false) = item.kind, !t.isEmpty { return StreamAssembler.normalized(t) }
+            return nil
+        })
+        let built = TranscriptItem.fromHistory(history, running: running, settled: settled).map { item -> TranscriptItem in
+            var item = item
+            if case .user(let t, let a) = item.kind, a.isEmpty, let k = keptAttachments[t] { item.kind = .user(text: t, attachments: k) }
+            return item
         }
         // The reply streaming now is put back under its own id below; it is not history's.
         items = Self.keepingIDs(built, from: items.filter { $0.id != streamingItemID })
@@ -892,15 +896,21 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             assembler.appendDelta(delta)
             scheduleStreamingUpdate()
             if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count, "text": delta]) }
-        case "reasoning.delta", "thinking.delta":
+        case "reasoning.delta":
             if streamingItemID == nil { beginStreaming() }
             if statusLine != "Thinking…" { statusLine = "Thinking…" }
             assembler.appendReasoning(p["text"]?.stringValue ?? "")
             scheduleStreamingUpdate()
-        case "reasoning.available":
+        case "thinking.delta":
+            // The gateway's wait and spinner notices, not the model's reasoning: the status line
+            // says so, the card stays the model's own thinking.
             if streamingItemID == nil { beginStreaming() }
-            assembler.appendReasoning(p["text"]?.stringValue ?? "")
-            updateStreamingItem()
+            if statusLine != "Thinking…" { statusLine = "Thinking…" }
+        case "reasoning.available":
+            // Despite its name this is the reply's own text again (its first 500 characters),
+            // sent after each model response: it put the opening of the answer, a table cut off
+            // halfway, in the Reasoning card. The reply streams and completes on its own events.
+            break
         case "message.interim":
             let text = p["text"]?.stringValue ?? ""
             if p["already_streamed"]?.boolValue == true { finishStreaming(finalText: text.isEmpty ? nil : text) }
@@ -910,7 +920,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             }
         case "message.complete":
             let text = p["text"]?.stringValue
-            let lastAssistantIndex = finishStreaming(finalText: text)
+            let lastAssistantIndex = finishStreaming(finalText: text, gatewayReasoning: p["reasoning"]?.stringValue,
+                                                     previewed: p["response_previewed"]?.boolValue == true)
             if let spoken = text, !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, p["status"]?.stringValue != "interrupted" {
                 NotificationCenter.default.post(name: .hermesReplyCompleted, object: nil, userInfo: ["storedID": storedID, "text": spoken])
             }
@@ -1075,16 +1086,35 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// Returns the index of the turn's final assistant bubble, if one is on screen.
     @discardableResult
-    private func finishStreaming(finalText: String?) -> Int? {
+    private func finishStreaming(finalText: String?, gatewayReasoning: String? = nil, previewed: Bool = false) -> Int? {
+        // The final reply already went out as an interim message (some runtimes send every
+        // finished message that way) and nothing streamed since: the gateway says so with
+        // `response_previewed`, and the bubble on screen is the reply. Appending it again showed
+        // the answer twice.
+        if previewed, let finalText, assembler.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let idx = items.lastIndex(where: { if case .assistant(let t, _, false) = $0.kind { return !t.isEmpty }; return false }),
+           case .assistant(let shown, _, _) = items[idx].kind,
+           shown.trimmingCharacters(in: .whitespacesAndNewlines) == finalText.trimmingCharacters(in: .whitespacesAndNewlines) {
+            if let id = streamingItemID { items.removeAll { $0.id == id } }
+            streamingItemID = nil
+            sealedTurnText = ""
+            assembler.reset()
+            return items.lastIndex { if case .assistant(let t, _, false) = $0.kind { return !t.isEmpty }; return false }
+        }
         // `finalText` is the whole assistant turn. When tool calls split the stream, the leading
         // part is already on screen in earlier bubbles, so only the remainder belongs in the
         // trailing one — otherwise the entire reply is rendered twice.
         let tail = finalText.map { StreamAssembler.tail(ofFinalText: $0, alreadySealed: sealedTurnText) }
         var result: Int?
         if let id = streamingItemID, let idx = items.firstIndex(where: { $0.id == id }) {
+            let streamed = assembler.text
             let text = assembler.complete(finalText: tail)
-            if text.isEmpty { items.remove(at: idx) }
-            else { items[idx].kind = .assistant(text: text, reasoning: assembler.reasoning.isEmpty ? nil : assembler.reasoning, streaming: false); result = idx }
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { items.remove(at: idx) }
+            else {
+                // An answer that came as reasoning (the gateway promoted it) is the reply, not a card.
+                let reasoning = StreamAssembler.settledReasoning(streamedText: streamed, reasoning: assembler.reasoning, finalText: text, gatewayReasoning: gatewayReasoning)
+                items[idx].kind = .assistant(text: text, reasoning: reasoning, streaming: false); result = idx
+            }
         } else if let tail, !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             items.append(TranscriptItem(id: UUID().uuidString, kind: .assistant(text: tail, reasoning: nil, streaming: false)))
             result = items.count - 1

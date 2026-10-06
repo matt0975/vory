@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import VoryCore
 import WatchConnectivity
 
@@ -78,21 +79,34 @@ final class WatchSync: NSObject, WCSessionDelegate {
     }
 
     /// The watch cannot open WebSockets over the phone's Bluetooth link, so it asks the phone to
-    /// submit prompts and answer approvals. `sendMessage` wakes this app in the background.
+    /// submit prompts and answer approvals, and makes its HTTP calls through it when its own
+    /// route does not reach the gateway. `sendMessage` wakes this app in the background; the
+    /// background task keeps it awake until the answer is sent.
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
         let reply = UncheckedBox(replyHandler)
         let incoming = UncheckedBox(message)
         Task { @MainActor in
-            let result = await WatchSync.handle(incoming.value)
-            reply.value(result)
+            let hold = WatchRequestHold(reply: reply.value)
+            hold.finish(await WatchSync.handle(incoming.value))
         }
     }
 
     @MainActor
     static func handle(_ m: [String: Any]) async -> [String: Any] {
         guard let model = AppDelegate.model, let op = m["op"] as? String else { return ["ok": false, "error": "app not ready"] }
+        switch op {
+        case RelayWire.op: return await relay(m, model: model)
+        case RelayWire.putOp: return RelayParts.put(m)
+        case RelayWire.partOp: return RelayParts.part(m)
+        default: break
+        }
         if model.runtime == nil, let c = model.store.active { await model.activate(c) }
         guard let rt = model.runtime else { return ["ok": false, "error": "no gateway"] }
+        // The phone acts on its own active gateway only: a chat on another one is refused, not
+        // looked up (or created) on the wrong gateway.
+        if let g = (m["gateway"] as? String).flatMap(UUID.init(uuidString:)), g != rt.connection.id {
+            return ["ok": false, "error": "Your iPhone is using another gateway. Switch the iPhone to this one, or pick the iPhone's gateway on the watch."]
+        }
         // The watch's bot goes with each call; the phone's own selection stays where the person
         // left it (switching it here changed the phone's list under them).
         let profile = (m["profile"] as? String).flatMap { $0.isEmpty ? nil : $0 }
@@ -102,10 +116,15 @@ final class WatchSync: NSObject, WCSessionDelegate {
             return ["ok": true, "session": chat.storedID, "title": chat.title]
         }
         guard let sid = m["session"] as? String, let chat = try? await rt.openChat(storedID: sid, title: nil, profile: m["profile"] as? String, waitForResume: true) else { return ["ok": false, "error": "could not open the chat"] }
+        if let e = chat.resumeError { return ["ok": false, "error": "The iPhone could not open the chat: \(e)"] }
         switch op {
         case "prompt":
             guard let text = m["text"] as? String, !text.isEmpty else { return ["ok": false, "error": "empty"] }
-            await chat.send(text)
+            // A failure is the watch's to show: "ok" while nothing was sent left it on "Working…".
+            // Talk on the watch marks a spoken turn: short, plain answers, as on the phone.
+            let voice: VoiceTurn? = m["voice"] as? Bool == true ? VoiceTurn() : nil
+            if let problem = await chat.send(text, voice: voice), chat.resumeError != nil { return ["ok": false, "error": problem] }
+            if !chat.isRunning, chat.queue.isEmpty, case .error(let why)? = chat.items.last?.kind { return ["ok": false, "error": why] }
             return ["ok": true, "running": chat.isRunning]
         case "approval":
             guard let rid = m["card"] as? String, let choice = m["choice"] as? String, let card = chat.cards.first(where: { $0.id == rid }) else { return ["ok": false, "error": "no such card"] }
@@ -131,6 +150,48 @@ final class WatchSync: NSObject, WCSessionDelegate {
         }
     }
 
+    /// An HTTP call the watch makes through this phone: signed with this phone's credentials
+    /// for the watch's gateway, the answer compressed and, when big, in parts.
+    @MainActor
+    private static func relay(_ m: [String: Any], model: AppModel) async -> [String: Any] {
+        // Failures before the gateway was asked are "unavailable": the watch tries its own route.
+        var assembled: Data?
+        if let ref = m["bodyRef"] as? String {
+            guard let d = RelayParts.assemble(ref, parts: m["parts"] as? Int ?? 0) else { return RelayWire.unavailable("Part of the request was lost on the way from the watch.") }
+            assembled = d
+        }
+        guard let request = RelayWire.request(from: m, assembled: assembled) else { return RelayWire.unavailable("The iPhone could not read the request.") }
+        guard let api = api(for: m["gateway"] as? String, model: model) else { return RelayWire.unavailable("This gateway is not on the iPhone any more.") }
+        do {
+            let answer = try await api.forward(request)
+            return RelayParts.reply(answer)
+        } catch {
+            return RelayWire.failure(error)
+        }
+    }
+
+    /// The client for the watch's gateway: the running one when it is the phone's active
+    /// gateway, else one made from the saved credentials, renewing its sign-in as the app does.
+    @MainActor
+    private static func api(for gateway: String?, model: AppModel) -> HermesAPI? {
+        let wanted = gateway.flatMap(UUID.init(uuidString:)) ?? model.store.activeConnectionID
+        if let rt = model.runtime, rt.connection.id == wanted { return rt.api }
+        guard let id = wanted, let c = model.store.connection(id: id) else { return nil }
+        let store = model.store
+        let secrets = store.secrets(for: id)
+        // Kept while the credentials are the same: a sign-in on the phone makes a new one.
+        if let cached = spareAPIs[id], cached.secrets == secrets, cached.gateway == c.gateway { return cached.api }
+        let api = HermesAPI(gateway: c.gateway, signer: RequestSigner(authMode: c.authMode, secrets: secrets))
+        Task { await api.setRefresher { @MainActor in
+            let renewed = try await NativeAuthClient.refresh(gateway: c.gateway, secrets: store.secrets(for: id))
+            store.saveSecrets(renewed, for: id)
+            return RequestSigner(authMode: c.authMode, secrets: renewed)
+        } }
+        spareAPIs[id] = (secrets, c.gateway, api)
+        return api
+    }
+    @MainActor private static var spareAPIs: [UUID: (secrets: GatewaySecrets, gateway: GatewayURL, api: HermesAPI)] = [:]
+
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
         Task { @MainActor in self.flushPending() }
     }
@@ -138,6 +199,78 @@ final class WatchSync: NSObject, WCSessionDelegate {
     nonisolated func sessionDidDeactivate(_ session: WCSession) { session.activate() }
     nonisolated func sessionWatchStateDidChange(_ session: WCSession) {
         Task { @MainActor in self.flushPending() }
+    }
+}
+
+/// Bodies too big for one message, by id: a request's parts as they arrive from the watch, and
+/// an answer's parts until the watch has fetched them. Anything a minute old is dropped.
+@MainActor
+enum RelayParts {
+    private static var uploads: [String: (at: Date, parts: [Int: Data])] = [:]
+    private static var answers: [String: (at: Date, parts: [Data])] = [:]
+
+    private static func prune() {
+        let cutoff = Date().addingTimeInterval(-60)
+        uploads = uploads.filter { $0.value.at > cutoff }
+        answers = answers.filter { $0.value.at > cutoff }
+    }
+
+    static func put(_ m: [String: Any]) -> [String: Any] {
+        prune()
+        guard let id = m["id"] as? String, let i = m["index"] as? Int, let d = m["part"] as? Data else { return ["ok": false, "error": "bad part"] }
+        var entry = uploads[id] ?? (Date(), [:])
+        entry.parts[i] = d
+        uploads[id] = entry
+        return ["ok": true]
+    }
+
+    static func assemble(_ id: String, parts: Int) -> Data? {
+        guard let entry = uploads.removeValue(forKey: id), parts > 0, entry.parts.count == parts else { return nil }
+        var out = Data()
+        for i in 0..<parts { guard let d = entry.parts[i] else { return nil }; out.append(d) }
+        return out
+    }
+
+    static func reply(_ answer: RelayedResponse) -> [String: Any] {
+        prune()
+        let parts = RelayWire.split(RelayWire.compress(answer.body))
+        var more: String?
+        if parts.count > 1 {
+            let id = UUID().uuidString
+            answers[id] = (Date(), parts)
+            more = id
+        }
+        return RelayWire.reply(answer, firstPart: parts[0], more: more, parts: parts.count)
+    }
+
+    static func part(_ m: [String: Any]) -> [String: Any] {
+        guard let id = m["id"] as? String, let i = m["index"] as? Int, let entry = answers[id], i > 0, i < entry.parts.count else {
+            return ["ok": false, "error": "That answer is gone; ask again."]
+        }
+        if i == entry.parts.count - 1 { answers[id] = nil }
+        return ["ok": true, "part": entry.parts[i]]
+    }
+}
+
+/// A watch request in flight: keeps the phone awake until the answer is sent, and answers
+/// with an error if the system ends the background time first (the app was killed for a task
+/// left running). The watch gets exactly one answer.
+@MainActor
+final class WatchRequestHold {
+    private let reply: ([String: Any]) -> Void
+    private var task = UIBackgroundTaskIdentifier.invalid
+    private var answered = false
+
+    init(reply: @escaping ([String: Any]) -> Void) {
+        self.reply = reply
+        task = UIApplication.shared.beginBackgroundTask(withName: "watch-request") { [weak self] in
+            MainActor.assumeIsolated { self?.finish(RelayWire.unavailable("The iPhone ran out of background time.")) }
+        }
+    }
+
+    func finish(_ result: [String: Any]) {
+        if !answered { answered = true; reply(result) }
+        if task != .invalid { UIApplication.shared.endBackgroundTask(task); task = .invalid }
     }
 }
 

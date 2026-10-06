@@ -250,6 +250,55 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
     /// Filled in on `message.complete` for the trailing assistant bubble of a turn.
     public var stats: TurnStats?
 
+    /// A whole history, in order. Unlike row by row, an assistant row with no text can be told
+    /// apart: an answer a model put entirely in its reasoning (the gateway promotes it to the
+    /// reply but stores the content empty) shows as the reply, while thinking before a tool call
+    /// or a turn still running stays out. `running`: the chat's turn is still going.
+    /// `settled`: replies this device already showed as finished (normalized), so a turn started
+    /// right after on another device does not take back the answer before it.
+    public static func fromHistory(_ messages: [TranscriptMessage], running: Bool = false, settled: Set<String> = []) -> [TranscriptItem] {
+        var out: [TranscriptItem] = []
+        for (i, m) in messages.enumerated() {
+            if let item = fromHistory(m, index: i) { out.append(item); continue }
+            guard isEmptyAssistant(m),
+                  let answer = promotedAnswer(m, next: messages[(i + 1)...].first { $0.displayKind != "hidden" }, isLast: i == messages.count - 1, running: running, settled: settled)
+            else { continue }
+            let id = "h-\(m.rowId ?? i)-\(i)"
+            let ts = m.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
+            let thinking = m.reasoning.flatMap { StreamAssembler.normalized($0) == StreamAssembler.normalized(answer) ? nil : $0 }
+            out.append(TranscriptItem(id: id, kind: .assistant(text: answer, reasoning: thinking, streaming: false), timestamp: ts, rowID: m.rowId))
+        }
+        return out
+    }
+
+    /// The same history with each promoted answer in its row's text, for readers of messages
+    /// rather than rows (summaries, previews): they skipped such a reply as empty.
+    public static func withPromotedAnswers(_ messages: [TranscriptMessage], running: Bool = false) -> [TranscriptMessage] {
+        messages.enumerated().map { i, m in
+            guard isEmptyAssistant(m),
+                  let answer = promotedAnswer(m, next: messages[(i + 1)...].first { $0.displayKind != "hidden" }, isLast: i == messages.count - 1, running: running) else { return m }
+            var out = m; out.text = answer; return out
+        }
+    }
+
+    /// A shown assistant row with no text of its own: where a promoted answer may be.
+    static func isEmptyAssistant(_ m: TranscriptMessage) -> Bool {
+        m.role == "assistant" && m.displayKind != "hidden" && (m.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The reply an empty assistant row stands for, if any: the gateway's `api_content`, or its
+    /// reasoning when nothing says it was thinking (no tool calls, a clean stop, followed by the
+    /// person or the end of a finished chat).
+    static func promotedAnswer(_ m: TranscriptMessage, next: TranscriptMessage?, isLast: Bool, running: Bool, settled: Set<String> = []) -> String? {
+        // Anything but a clean stop is not an answer, api_content or not (a stalled response the
+        // gateway nudged on with "continue" keeps its partial text there).
+        if let f = m.finishReason, f != "stop" { return nil }
+        if let a = m.apiContent, !a.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return a }
+        guard let r = m.reasoning, !r.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !m.hasToolCalls else { return nil }
+        if let next { return next.role == "user" ? r : nil }
+        return isLast && (!running || settled.contains(StreamAssembler.normalized(r))) ? r : nil
+    }
+
     public static func fromHistory(_ m: TranscriptMessage, index: Int) -> TranscriptItem? {
         let id = "h-\(m.rowId ?? index)-\(index)"
         let ts = m.timestamp.map { Date(timeIntervalSince1970: $0) } ?? Date()
@@ -259,7 +308,9 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
             return TranscriptItem(id: id, kind: .user(text: m.text ?? "", attachments: []), timestamp: ts, rowID: m.rowId)
         case "assistant":
             guard let t = m.text, !t.isEmpty else { return nil }
-            return TranscriptItem(id: id, kind: .assistant(text: t, reasoning: m.reasoning, streaming: false), timestamp: ts, rowID: m.rowId)
+            // Reasoning that is only the answer again is not shown twice.
+            let thinking = m.reasoning.flatMap { StreamAssembler.normalized($0) == StreamAssembler.normalized(t) ? nil : $0 }
+            return TranscriptItem(id: id, kind: .assistant(text: t, reasoning: thinking, streaming: false), timestamp: ts, rowID: m.rowId)
         case "tool", "tool_call":
             var act = ToolActivity(id: id, name: m.name ?? "tool", context: m.context, status: .done)
             act.resultText = m.text
@@ -271,6 +322,23 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
             guard let t = m.text, !t.isEmpty else { return nil }
             return TranscriptItem(id: id, kind: .assistant(text: t, reasoning: nil, streaming: false), timestamp: ts, rowID: m.rowId)
         }
+    }
+
+    /// The bot's words after a message the person said (found by its text, else by time), for
+    /// reading a reply aloud from history: the watch's Talk through its iPhone has no stream.
+    public static func reply(in items: [TranscriptItem], to words: String, sentAt: Date) -> String? {
+        let said = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        let start: Int
+        if let i = items.lastIndex(where: { if case .user(let t, _) = $0.kind { return t.trimmingCharacters(in: .whitespacesAndNewlines) == said }; return false }) {
+            start = i + 1
+        } else if let i = items.firstIndex(where: { $0.timestamp >= sentAt.addingTimeInterval(-5) }) {
+            start = i
+        } else { return nil }
+        let replies = items[start...].compactMap { item -> String? in
+            if case .assistant(let t, _, _) = item.kind, !t.isEmpty { return t }
+            return nil
+        }
+        return replies.isEmpty ? nil : replies.joined(separator: "\n\n")
     }
 
     public init(id: String, kind: Kind, timestamp: Date = Date(), rowID: Int? = nil, stats: TurnStats? = nil) {
@@ -299,6 +367,55 @@ public struct StreamAssembler: Sendable {
         return text
     }
     public mutating func reset() { text = ""; reasoning = ""; deltaCount = 0; isStreaming = false }
+
+    /// For comparing an answer with reasoning: think tags out, whitespace collapsed, trimmed.
+    public static func normalized(_ s: String) -> String {
+        var t = s
+        for tag in ["<think>", "</think>", "<reasoning>", "</reasoning>", "<REASONING_SCRATCHPAD>", "</REASONING_SCRATCHPAD>"] { t = t.replacingOccurrences(of: tag, with: " ") }
+        return t.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The reasoning a finished reply keeps. A model that streamed its whole answer as
+    /// reasoning (no content) has the gateway promote it to the reply: the card would only
+    /// repeat the answer, so it goes, and any thinking before the answer stays. A reply that
+    /// streamed its own text keeps its reasoning as it came: that is real thinking.
+    /// `gatewayReasoning`: `message.complete`'s own reasoning, equal to the text on a promoted turn.
+    public static func settledReasoning(streamedText: String, reasoning: String, finalText: String, gatewayReasoning: String?) -> String? {
+        let r = reasoning.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !r.isEmpty else { return nil }
+        guard streamedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return reasoning }
+        let answer = normalized(finalText)
+        guard !answer.isEmpty else { return reasoning }
+        let thought = normalized(r)
+        if thought == answer { return nil }
+        // The answer at the end of the reasoning: what came before it was the thinking.
+        if let cut = suffixStart(of: finalText, in: r) {
+            let before = String(r[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return before.isEmpty ? nil : before
+        }
+        // The gateway marks a promoted turn by sending the answer as its reasoning too: reasoning
+        // that holds the answer, or is part of it (the end, after the stream was joined again
+        // mid-answer on a reconnect), is that answer.
+        if let g = gatewayReasoning, normalized(g) == answer, thought.contains(answer) || answer.contains(thought) { return nil }
+        return reasoning
+    }
+
+    /// Where `suffix` begins at the end of `text`, matching from the back and skipping
+    /// whitespace on either side (chunk boundaries); nil when `text` does not end with it.
+    static func suffixStart(of suffix: String, in text: String) -> String.Index? {
+        var t = text.endIndex, s = suffix.endIndex
+        var sawAny = false
+        while s > suffix.startIndex {
+            let sp = suffix.index(before: s)
+            if suffix[sp].isWhitespace { s = sp; continue }
+            guard t > text.startIndex else { return nil }
+            let tp = text.index(before: t)
+            if text[tp].isWhitespace { t = tp; continue }
+            guard text[tp] == suffix[sp] else { return nil }
+            t = tp; s = sp; sawAny = true
+        }
+        return sawAny ? t : nil
+    }
 
     /// `message.complete` carries the whole assistant turn. When tool calls split the stream, the
     /// leading part is already on screen in earlier bubbles; only this remainder belongs in the

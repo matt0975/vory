@@ -52,9 +52,34 @@ final class WatchModel {
 
     var hasConnections: Bool { !store.connections.isEmpty }
 
-    func start() async {
+    /// The phone link from the first moment, background launches included: a notification's
+    /// Reply or a complication push that launched the app found it not yet activated.
+    init() {
         connectivity.onContext = { [weak self] ctx in Task { @MainActor in self?.receive(context: ctx) } }
         connectivity.activate()
+    }
+
+    /// Settings › Connect through: the watch's own connection with the iPhone taking over when
+    /// the gateway does not answer there (Automatic), or always the iPhone (no socket at all).
+    static let routeKey = "watch.route"
+    private(set) var route: GatewayRoute = GatewayRoute(rawValue: UserDefaults.standard.string(forKey: WatchModel.routeKey) ?? "") ?? .automatic
+    /// Whether the last call that reached the gateway went through the iPhone.
+    private(set) var throughPhone = false
+    /// The phone's active gateway at the last sync: a sync moves the watch only when it changed.
+    static let lastPhoneActiveKey = "watch.lastPhoneActive"
+
+    func setRoute(_ r: GatewayRoute) async {
+        guard r != route else { return }
+        route = r
+        UserDefaults.standard.set(r.rawValue, forKey: Self.routeKey)
+        // The stored copy: it has the bot picked since the runtime started.
+        if let id = runtime?.connection.id, let c = store.connection(id: id) { await activate(c, force: true) }
+    }
+
+    /// The latest activation: an older one that finishes after it gives way.
+    private var activation = UUID()
+
+    func start() async {
         #if DEBUG
         // Simulator/e2e only: seed a gateway from the environment instead of typing it on a watch.
         let env = ProcessInfo.processInfo.environment
@@ -70,23 +95,48 @@ final class WatchModel {
         #endif
     }
 
-    func activate(_ connection: GatewayConnection) async {
+    /// `force`: start the same gateway again (the route changed, or its address).
+    func activate(_ connection: GatewayConnection, force: Bool = false) async {
+        let token = UUID()
+        activation = token
         if let rt = runtime {
-            if rt.connection.id == connection.id { return }
+            if rt.connection.id == connection.id, !force { return }
             await rt.stop()
-            // Another gateway: its own list, from its own cache.
-            sessions = []
-            listLimit = 8
-            hasMore = true
+            if rt.connection.id != connection.id {
+                // Another gateway: its own list, from its own cache.
+                sessions = []
+                listLimit = 8
+                hasMore = true
+            }
         }
         store.activeConnectionID = connection.id
         let rt = GatewayRuntime(connection: connection, store: store)
         rt.pushRegistrar = push
         rt.cardNotifier = WatchCardNotifier()
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        // iPhone only opens no socket; the watch's HTTP goes by the route, the iPhone carrying
+        // what its own connection cannot.
+        rt.socketEnabled = route != .relayOnly
+        rt.httpCountsAsOnline = true
+        rt.throughRelay = route == .relayOnly
+        throughPhone = route == .relayOnly
+        let bridge = connectivity, gateway = connection.id.uuidString
+        await rt.api.setRelay({ request in try await bridge.relay(request, gateway: gateway) }, route: route,
+                              reachable: { WatchConnectivityBridge.phoneReachable }) { [weak self, weak rt] relayed in
+            Task { @MainActor in if let rt { self?.noteRoute(relayed: relayed, runtime: rt) } }
+        }
+        // Another activation started while this one waited: it wins.
+        guard activation == token else { await rt.stop(); return }
         runtime = rt
         await rt.start()
         await loadSessions()
+    }
+
+    private func noteRoute(relayed: Bool, runtime rt: GatewayRuntime) {
+        guard runtime === rt else { return }
+        throughPhone = relayed || route == .relayOnly
+        // The complications read the flag from the snapshot: write it as soon as it changes.
+        if rt.throughRelay != throughPhone { rt.throughRelay = throughPhone; rt.publishSnapshot() }
     }
 
     /// How many chats the list holds; "Show more" at the end raises it.
@@ -99,6 +149,8 @@ final class WatchModel {
     /// watch saw (at once), a short page from the gateway, then the rest in the background.
     func loadSessions() async {
         guard let rt = runtime else { return }
+        // The bots, if the first try found neither route (the phone not yet within reach).
+        if rt.profiles.isEmpty { await rt.loadProfiles() }
         if sessions.isEmpty, let d = UserDefaults.standard.data(forKey: cacheKey), let cached = try? JSONDecoder().decode([StoredSession].self, from: d) {
             sessions = cached
         }
@@ -141,13 +193,24 @@ final class WatchModel {
         } catch { loadError = error.localizedDescription }
     }
 
-    /// Whether the live socket is usable; false over the phone's Bluetooth link, where only HTTP works.
+    /// A chat op the phone carries out for the watch, for this watch's gateway: the phone
+    /// refuses one for a gateway other than its own active one instead of acting there.
+    func askPhone(_ m: [String: Any]) async throws -> [String: Any] {
+        var m = m
+        if let id = runtime?.connection.id { m["gateway"] = id.uuidString }
+        return try await connectivity.request(m)
+    }
+
+    /// Whether the watch's own live socket is open. watchOS lets a watch app open one only in
+    /// narrow cases, and iPhone only never opens it; without it sending goes through the phone.
     var socketUsable: Bool { if case .open? = runtime?.socketState { return true }; return false }
 
     /// Background refresh for a complication push.
     func refreshForWidgets() async {
         if runtime == nil, let c = store.active { await activate(c) }
         runtime?.publishSnapshot(refreshSessions: true)
+        // The complications cannot go through the iPhone: their numbers are refreshed here.
+        if runtime?.throughRelay == true { await loadUsage() }
         try? await Task.sleep(for: .seconds(2))
     }
 
@@ -193,6 +256,15 @@ final class WatchModel {
         for c in connections {
             if let s = secrets[c.id.uuidString] { try? store.upsert(c, secrets: s) }
         }
+        // The running gateway takes what changed on the phone: a new address starts it again,
+        // new credentials go to its client (they used to wait for the next launch).
+        if let rt = runtime, let c = connections.first(where: { $0.id == rt.connection.id }) {
+            if c.gateway != rt.connection.gateway || c.authMode != rt.connection.authMode {
+                Task { await activate(c, force: true) }
+            } else if let s = secrets[c.id.uuidString], s != rt.secrets {
+                Task { await rt.replaceSecrets(s) }
+            }
+        }
         // A gateway the phone no longer has (removed there, or the phone was reset) goes here too.
         let incoming = Set(connections.map(\.id.uuidString))
         let previous = Set(UserDefaults.standard.stringArray(forKey: Self.syncedGatewaysKey) ?? [])
@@ -209,10 +281,12 @@ final class WatchModel {
         guard !store.connections.isEmpty else { syncStatus = "No gateway on the iPhone yet"; return }
         syncStatus = "Synced \(connections.count) gateway\(connections.count == 1 ? "" : "s") from iPhone"
         let activeID = (context["active"] as? String).flatMap(UUID.init(uuidString:))
+        // Only when the phone's choice changed since the last sync: every context (a looks or
+        // summary resend) moved the watch back to it over a gateway picked on the watch.
+        let phoneMoved = activeID?.uuidString != UserDefaults.standard.string(forKey: Self.lastPhoneActiveKey)
+        UserDefaults.standard.set(activeID?.uuidString, forKey: Self.lastPhoneActiveKey)
         if let target = activeID.flatMap({ store.connection(id: $0) }) ?? store.active ?? connections.first {
-            // Only when the gateway actually changed: every context (a looks or summary resend)
-            // used to re-activate the phone's choice over the watch's own.
-            if runtime == nil || runtime?.connection.id != target.id { Task { await activate(target) } }
+            if runtime == nil || (phoneMoved && runtime?.connection.id != target.id) { Task { await activate(target) } }
         }
     }
 
@@ -229,20 +303,31 @@ final class WatchModel {
         guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return }
         pendingChat = sid
         guard let action else { return }
-        guard let rt = runtime else {
-            // Launched in the background by the action, with no socket of its own yet: the
-            // phone answers for it over the watch link.
+        guard let rt = runtime, socketUsable else {
+            // No socket of its own (launched in the background by the action, or a watch that
+            // goes through its iPhone): the phone answers for it over the watch link. With a
+            // runtime but no socket, the answer used to wait on a socket that never came.
             Task {
                 var base: [String: Any] = ["session": sid]
                 if let p = hermes["profile"] as? String, !p.isEmpty { base["profile"] = p }
-                if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty {
-                    _ = try? await connectivity.request(base.merging(["op": "prompt", "text": text]) { $1 })
-                    return
-                }
-                let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
-                guard let r = try? await connectivity.request(base.merging(["op": "cards"]) { $1 }), let cards = r["cards"] as? [[String: Any]],
-                      let card = cards.first(where: { ($0["method"] as? String) == "approval" }), let id = card["id"] as? String else { return }
-                _ = try? await connectivity.request(base.merging(["op": "approval", "card": id, "choice": choice]) { $1 })
+                // The gateway the notification is for, when it says: the phone refuses another.
+                if let g = hermes["connection_id"] as? String, !g.isEmpty { base["gateway"] = g }
+                do {
+                    if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty {
+                        let r = try await connectivity.request(base.merging(["op": "prompt", "text": text]) { $1 })
+                        if r["ok"] as? Bool != true { WatchNotifier.notSent(r["error"] as? String) }
+                        return
+                    }
+                    let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
+                    let r = try await connectivity.request(base.merging(["op": "cards"]) { $1 })
+                    guard r["ok"] as? Bool == true else { WatchNotifier.notSent(r["error"] as? String); return }
+                    guard let card = (r["cards"] as? [[String: Any]])?.first(where: { ($0["method"] as? String) == "approval" }), let id = card["id"] as? String else {
+                        WatchNotifier.notSent("The approval was not found. It may have been answered already.")
+                        return
+                    }
+                    let a = try await connectivity.request(base.merging(["op": "approval", "card": id, "choice": choice]) { $1 })
+                    if a["ok"] as? Bool != true { WatchNotifier.notSent(a["error"] as? String) }
+                } catch { WatchNotifier.notSent(error.localizedDescription) }
             }
             return
         }
@@ -258,7 +343,7 @@ final class WatchModel {
 }
 
 /// WCSession plumbing; callbacks arrive off the main thread and are hopped by the model.
-final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
+final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sendable {
     nonisolated(unsafe) var onContext: (([String: Any]) -> Void)?
 
     func activate() {
@@ -276,9 +361,14 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
         onContext?(applicationContext)
     }
 
+    /// Whether the phone could take a message now.
+    static var phoneReachable: Bool { WCSession.default.activationState == .activated && WCSession.default.isReachable }
+
     /// Ask the phone to do something the watch cannot (submit a prompt, answer a card) and wait.
+    /// Right after launch the session may still be activating: up to 3 s are given to it.
     func request(_ message: [String: Any]) async throws -> [String: Any] {
         let s = WCSession.default
+        for _ in 0..<15 where s.activationState != .activated { try? await Task.sleep(for: .milliseconds(200)) }
         guard s.activationState == .activated, s.isReachable else { throw WatchProxyError.phoneUnreachable }
         let boxed: SendableDict = try await withCheckedThrowingContinuation { (c: CheckedContinuation<SendableDict, Error>) in
             let box = ReplyBox(c)
@@ -286,6 +376,49 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate {
         }
         return boxed.value
     }
+
+    /// An HTTP call made by the phone for the watch (`RelayWire`): a big body goes ahead in
+    /// parts, a big answer's parts are fetched after. Throws `RelayUnavailable` when the phone
+    /// cannot be asked at all, so the watch's own route is tried instead.
+    func relay(_ r: RelayedRequest, gateway: String) async throws -> RelayedResponse {
+        let packed = r.body.map(RelayWire.compress)
+        let message: [String: Any]
+        if let packed, packed.count > RelayWire.partSize {
+            let id = UUID().uuidString
+            let parts = RelayWire.split(packed)
+            for (i, p) in parts.enumerated() {
+                let ok = try await relaySend(["op": RelayWire.putOp, "id": id, "index": i, "part": p])
+                // Nothing reached the gateway yet: the watch's own route can still be tried.
+                guard ok["ok"] as? Bool == true else { throw RelayUnavailable("The iPhone did not take the request.") }
+            }
+            message = RelayWire.message(r, gateway: gateway, bodyRef: id, parts: parts.count)
+        } else {
+            message = RelayWire.message(r, gateway: gateway, inlineBody: packed)
+        }
+        let first = try await relaySend(message)
+        if RelayWire.isUnavailable(first) { throw RelayUnavailable(first["error"] as? String ?? WatchProxyError.phoneUnreachable.localizedDescription) }
+        guard first["ok"] as? Bool == true else { throw RelayWire.error(from: first) }
+        guard let status = first["status"] as? Int, var body = first["body"] as? Data else { throw HermesAPIError.transport("The iPhone's answer could not be read.") }
+        let parts = first["parts"] as? Int ?? 1
+        if parts > 1, let more = first["more"] as? String {
+            for i in 1..<parts {
+                let p = try await relaySend(["op": RelayWire.partOp, "id": more, "index": i])
+                guard p["ok"] as? Bool == true, let d = p["part"] as? Data else { throw RelayWire.error(from: p) }
+                body.append(d)
+            }
+        }
+        guard let plain = RelayWire.decompress(body) else { throw HermesAPIError.transport("The iPhone's answer could not be read.") }
+        return RelayedResponse(status: status, contentType: first["type"] as? String, body: plain)
+    }
+
+    /// `request`, with "the phone is not there" told apart from "the phone failed it".
+    private func relaySend(_ m: [String: Any]) async throws -> [String: Any] {
+        do { return try await request(m) }
+        catch WatchProxyError.phoneUnreachable { throw RelayUnavailable(WatchProxyError.phoneUnreachable.localizedDescription) }
+        catch let e as WCError where Self.phoneAway.contains(e.code) { throw RelayUnavailable(WatchProxyError.phoneUnreachable.localizedDescription) }
+    }
+
+    private static let phoneAway: Set<WCError.Code> = [.notReachable, .deviceNotPaired, .companionAppNotInstalled, .sessionNotActivated, .sessionInactive]
 }
 
 /// `[String: Any]` from WCSession, carried across the continuation boundary.
@@ -301,7 +434,7 @@ private final class ReplyBox: @unchecked Sendable {
 
 enum WatchProxyError: LocalizedError {
     case phoneUnreachable
-    var errorDescription: String? { "Your iPhone is not reachable. Sending from the watch needs the phone nearby (or the watch on Wi-Fi)." }
+    var errorDescription: String? { "Your iPhone is not reachable. Keep it nearby with Vory installed." }
 }
 
 /// Registers the watch for `complication` pushes: `platform: watchos`, its own bundle id.
@@ -392,6 +525,14 @@ enum WatchNotifier {
     static let approveOnceAction = "HERMES_APPROVE_ONCE"
     static let denyAction = "HERMES_DENY"
     static let replyAction = "HERMES_REPLY"
+
+    /// A reply or an answer from a notification that did not get through: said, not dropped.
+    static func notSent(_ why: String?) {
+        let content = UNMutableNotificationContent()
+        content.title = "Not sent"
+        content.body = why?.isEmpty == false ? why! : "The iPhone could not send it."
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "not-sent-\(UUID().uuidString)", content: content, trigger: nil))
+    }
 
     static func registerCategories() {
         let approve = UNNotificationAction(identifier: approveOnceAction, title: "Approve once", options: [])

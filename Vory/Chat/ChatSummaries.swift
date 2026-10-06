@@ -225,7 +225,7 @@ final class ChatSummarizer {
         guard let r: JSONValue = try? await runtime.api.get("/api/sessions/\(session.id)/messages",
                                                              query: [URLQueryItem(name: "order", value: "latest"), URLQueryItem(name: "limit", value: "14")],
                                                              profile: profile ?? session.profile ?? runtime.selectedProfile) else { return [] }
-        let all = (r["messages"]?.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
+        let all = TranscriptItem.withPromotedAnswers((r["messages"]?.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) })
         return Array(all.filter { ($0.role == "user" || $0.role == "assistant") && !($0.text ?? "").isEmpty }.suffix(10))
     }
 

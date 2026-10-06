@@ -42,10 +42,23 @@ public enum LiveProvider: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
-    /// The providers this build offers. OpenAI Live is not built yet, so it is not offered (a
-    /// menu entry that could only say "later" was a promise in the public build); the case
-    /// stays for when it is.
+    /// The providers this build offers. OpenAI Live is not built yet, so it is not offered; the
+    /// case stays for when it is.
     public static let offered: [LiveProvider] = [.gemini]
+    /// Listed in the menu but not yet selectable: shown as coming in a later update.
+    public static let comingLater: [LiveProvider] = [.openai]
+    /// Everything the menu lists, offered first.
+    public static var listed: [LiveProvider] { offered + comingLater.filter { !offered.contains($0) } }
+
+    public var isOffered: Bool { Self.offered.contains(self) }
+    /// The menu's line: a provider not offered yet says so.
+    public var menuTitle: String {
+        guard !isOffered else { return title }
+        switch self {
+        case .gemini: return "Gemini (coming later)"
+        case .openai: return "OpenAI (coming later)"
+        }
+    }
 }
 
 /// What a live voice model tells the app, provider-neutral.

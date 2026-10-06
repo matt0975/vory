@@ -46,6 +46,9 @@ struct SnapshotProvider: TimelineProvider {
     static func loadRefreshing() async -> WidgetSnapshot? {
         guard var snap = load() else { return nil }
         guard Date().timeIntervalSince(snap.updatedAt) > 600 else { return snap }
+        // The watch app goes through its iPhone, which an extension cannot: its own call would
+        // only fail (or go where the person said not to) and mark the gateway offline.
+        guard snap.throughRelay != true else { return snap }
         // ConnectionStore is main-actor; read what we need there and hand back plain values.
         let wanted = UUID(uuidString: snap.connectionID)
         let creds: (GatewayConnection, GatewaySecrets)? = await MainActor.run {

@@ -13,4 +13,13 @@ import Testing
         #expect(VoiceSettings.provider(stored: "openai") == .gemini)
         #expect(VoiceSettings.provider(stored: "nonsense") == .gemini)
     }
+
+    /// The menu lists OpenAI greyed out as coming later; only Gemini can be chosen.
+    @Test func theMenuShowsOpenAIAsComingLater() {
+        #expect(LiveProvider.listed == [.gemini, .openai])
+        #expect(LiveProvider.gemini.isOffered)
+        #expect(!LiveProvider.openai.isOffered)
+        #expect(LiveProvider.gemini.menuTitle == "Gemini (your key)")
+        #expect(LiveProvider.openai.menuTitle == "OpenAI (coming later)")
+    }
 }

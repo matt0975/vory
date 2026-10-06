@@ -699,7 +699,8 @@ final class ScrollMetrics {
 /// edge, so a drag re-renders nothing but this wrapper. The drag is a UIKit pan on the enclosing
 /// scroll view, so it behaves the same in every thread: it begins only on a leftward, mostly
 /// horizontal drag while the thread is at rest (not scrolling or decelerating), the column never
-/// moves right, and once it runs the scroll view's own pan lets go of the touch.
+/// moves right, and once it runs the scroll view's own pan lets go of the touch. A drag that
+/// starts on something scrolling sideways (a wide table) is left to it.
 struct TimeRevealColumn<Content: View>: View {
     @ViewBuilder var content: Content
     @State private var reveal: CGFloat = 0
@@ -776,6 +777,21 @@ private struct TimeRevealPan: UIViewRepresentable {
         }
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
             other === scrollView?.panGestureRecognizer
+        }
+        /// A touch that lands on something scrolling sideways (a table wider than its bubble)
+        /// is that scroller's: the reveal never sees it, so the drag moves the table and not
+        /// the thread.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+            guard g === pan else { return true }
+            return !Self.startsInSideScroller(touch.view, below: scrollView)
+        }
+        static func startsInSideScroller(_ view: UIView?, below thread: UIScrollView?) -> Bool {
+            var v = view
+            while let x = v, x !== thread {
+                if let inner = x as? UIScrollView, inner.contentSize.width > inner.bounds.width + 1 { return true }
+                v = x.superview
+            }
+            return false
         }
 
         @objc private func handle(_ p: UIPanGestureRecognizer) {
@@ -1058,7 +1074,7 @@ struct TranscriptRow: View, Equatable {
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
-                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text)).equatable()
+                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
@@ -1333,10 +1349,7 @@ struct ReasoningDisclosure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // One full-width hit target, edge to edge, rather than DisclosureGroup's label-only one.
-            Button {
-                if !open { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
-                withAnimation(.snappy) { open.toggle() }
-            } label: {
+            Button { toggle() } label: {
                 HStack {
                     Label("Reasoning", systemImage: "brain").font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -1348,12 +1361,18 @@ struct ReasoningDisclosure: View {
             .buttonStyle(.plain)
             .accessibilityLabel(open ? "Hide reasoning" : "Show reasoning")
             if open {
-                Text(text).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                // Models think in markdown (headings, lists, tables): render it, small and quiet.
+                MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
         }
+    }
+
+    private func toggle() {
+        if !open { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
+        withAnimation(.snappy) { open.toggle() }
     }
 }
 
@@ -1367,6 +1386,16 @@ extension Notification.Name {
 /// Renders markdown blocks; inline styling from AttributedString(markdown:).
 struct MarkdownView: View, Equatable {
     var text: String
+    var style: Style = .reply
+
+    /// How the blocks are dressed. A reply keeps the thread's own text size and colour; a
+    /// Reasoning card is footnote-sized and secondary, with small headings, and its html fences
+    /// stay code: a live web card does not belong in a model's notes to itself.
+    enum Style: Equatable {
+        case reply, reasoning
+        var showsCards: Bool { self == .reply }
+        var codeFont: Font { self == .reply ? .system(.footnote, design: .monospaced) : .system(.caption, design: .monospaced) }
+    }
 
     /// Parsed blocks and inline styling, kept for the text they came from: a row that scrolls
     /// off and back (the lazy stack rebuilds it) does not parse its markdown again, and a
@@ -1396,26 +1425,48 @@ struct MarkdownView: View, Equatable {
     /// Cards (fenced html) whose source is showing instead, by block position.
     @State private var sourceShown: Set<Int> = []
 
-    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text }
+    /// Selectable in place. Chat bubbles on the iPhone turn it off (see `selectable`).
+    var inlineSelection = true
+
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
 
     var body: some View {
         let _ = Perf.tick("markdown")
         let blocks = Self.blocks(text)
-        VStack(alignment: .leading, spacing: 8) {
+        let stack = VStack(alignment: .leading, spacing: style == .reasoning ? 6 : 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
                 render(block, at: i)
             }
         }
-        .textSelection(.enabled)
+        // A reply sets no font of its own: the thread's text size setting reaches it unchanged.
+        if style == .reasoning {
+            selectable(stack).font(.footnote).foregroundStyle(.secondary)
+        } else {
+            selectable(stack)
+        }
+    }
+
+    /// Selectable in place, except in an iPhone chat bubble: there the selection's own touch
+    /// handling took the taps of everything else in the bubble, so a Reasoning card above a
+    /// reply could not be opened (or closed). Text there is selected with Select Text in the
+    /// bubble's menu; the Mac keeps selection in place.
+    @ViewBuilder private func selectable(_ v: some View) -> some View {
+        #if os(macOS)
+        v.textSelection(.enabled)
+        #else
+        if inlineSelection { v.textSelection(.enabled) } else { v }
+        #endif
     }
 
     @ViewBuilder private func render(_ block: MarkdownBlock, at index: Int) -> some View {
         switch block {
         case .paragraph(let t):
-            Text(Self.inline(t))
+            // Never squeezed to a line: on the Mac a reply under an opened Reasoning card lost
+            // all but the first line of its last paragraph.
+            Text(Self.inline(t)).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(Self.headingFont(level))
-        case .code(let lang, let code, let closed) where closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
+            Text(Self.inline(t)).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
+        case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
             HTMLCardView(html: code, onShowSource: { withAnimation(.snappy) { _ = sourceShown.insert(index) } })
@@ -1424,13 +1475,14 @@ struct MarkdownView: View, Equatable {
                     Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
                 }
         case .code(let lang, let code, let closed):
-            // Wrapped, not side-scrolling: a horizontal pan inside a bubble used to fight the
-            // timestamp reveal. Long lines wrap; a copy button sits in the corner.
+            // Wrapped, not side-scrolling: code is read down the page and copied whole, so long
+            // lines wrap rather than hide past the edge (tables are what scroll sideways, and the
+            // time reveal stands aside for them). A copy button sits in the corner.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
                     Spacer(minLength: 0)
-                    if closed, HTMLCard.isCard(language: lang) {
+                    if style.showsCards, closed, HTMLCard.isCard(language: lang) {
                         Button { withAnimation(.snappy) { _ = sourceShown.remove(index) } } label: {
                             Label("Show Card", systemImage: "rectangle.on.rectangle").font(.caption2).labelStyle(.titleAndIcon)
                         }
@@ -1439,7 +1491,7 @@ struct MarkdownView: View, Equatable {
                     if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)
-                Text(code).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                Text(code).font(style.codeFont).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true).padding(10)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1484,6 +1536,18 @@ extension MarkdownView {
         }
     }
 
+    /// A Reasoning card's headings stay near its footnote text: a title-sized line in the
+    /// middle of the model's notes read louder than the reply under them.
+    static func headingFont(_ level: Int, style: Style) -> Font {
+        guard style == .reasoning else { return headingFont(level) }
+        switch level {
+        case ...1: return .subheadline.weight(.bold)
+        case 2: return .subheadline.weight(.semibold)
+        case 3: return .footnote.weight(.bold)
+        default: return .footnote.weight(.semibold)
+        }
+    }
+
     @ViewBuilder func listMarker(_ item: MarkdownListItem) -> some View {
         switch item.marker {
         case .bullet:
@@ -1498,56 +1562,80 @@ extension MarkdownView {
     }
 }
 
-/// A markdown table. Columns share the bubble width and cell text wraps (no side-scrolling,
-/// for the same reason code blocks wrap).
+/// A markdown table as a small card. Each column is as wide as its longest cell asks (held
+/// between about 64 and 220 pt; a longer cell wraps, three lines at most here), so a wide table
+/// no longer squeezes every column into the bubble and breaks words letter by letter. A table
+/// that fits fills the bubble; a wider one scrolls sideways inside the card, the side with more
+/// to see fading out, and the thread's time reveal stands aside for that drag. The corner button
+/// shows the whole table on its own sheet. At the accessibility text
+/// sizes each row becomes a card of "Header: value" lines instead, which needs no scrolling.
 struct MarkdownTableView: View {
     var table: MarkdownTable
-
-    private func alignment(_ col: Int) -> Alignment {
-        guard col < table.alignments.count else { return .leading }
-        switch table.alignments[col] {
-        case .leading: return .leading
-        case .center: return .center
-        case .trailing: return .trailing
-        }
-    }
-    private func textAlignment(_ col: Int) -> TextAlignment {
-        guard col < table.alignments.count else { return .leading }
-        switch table.alignments[col] {
-        case .leading: return .leading
-        case .center: return .center
-        case .trailing: return .trailing
-        }
-    }
-
-    private func cell(_ text: String, col: Int, header: Bool) -> some View {
-        Text(MarkdownView.inline(text))
-            .font(header ? .footnote.weight(.semibold) : .footnote)
-            .multilineTextAlignment(textAlignment(col))
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: alignment(col))
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            // VoiceOver hears which column a cell is in, not a bare value.
-            .accessibilityLabel(header || col >= table.header.count ? text : "\(table.header[col]): \(text)")
-    }
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var full = false
+    @State private var more = MarkdownTableMetrics.Overflow()
 
     var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow {
-                ForEach(Array(table.header.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: true) }
-            }
-            .background(Color(.tertiarySystemFill))
-            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
-                Divider().gridCellUnsizedAxes(.horizontal)
-                GridRow {
-                    ForEach(Array(row.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: false) }
-                }
+        Group {
+            if typeSize.isAccessibilitySize {
+                MarkdownTableStack(table: table)
+            } else {
+                card
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .clipShape(.rect(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator), lineWidth: 0.5))
+        // No menu of its own: a long press keeps the reply's (Reply, Speak, Copy, Share). The
+        // corner button opens the table, and its sheet copies it as Markdown.
+        // Local, as the html card's is: the row stays alive under its sheet in the lazy thread.
+        .sheet(isPresented: $full) { MarkdownTableSheet(table: table).sheetFrame(.wide) }
+    }
+
+    private var grid: some View {
+        MarkdownTableGrid(table: table, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
+    }
+
+    private var card: some View {
+        // The grid alone when its columns fit (it then stretches to the bubble's width), else
+        // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
+        // keeps a narrow table free of a scroll view that would catch the thread's drags.
+        ViewThatFits(in: .horizontal) {
+            grid
+            ScrollView(.horizontal) { grid }
+                .scrollIndicators(.hidden)
+                .onScrollGeometryChange(for: MarkdownTableMetrics.Overflow.self) { g in
+                    MarkdownTableMetrics.overflow(contentWidth: g.contentSize.width, visibleMinX: g.visibleRect.minX, visibleMaxX: g.visibleRect.maxX)
+                } action: { _, now in more = now }
+                .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
+        }
+        .background(Color(.systemBackground).opacity(0.5))
+        .clipShape(.rect(cornerRadius: 10))
+        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator), lineWidth: 0.5) }
+        .overlay(alignment: .topTrailing) {
+            Button { full = true } label: {
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(5)
+                    .background(.thinMaterial, in: .circle)
+            }
+            .buttonStyle(.plain)
+            .padding(4)
+            .accessibilityLabel("Open the table full screen")
+            .help("Open Table")
+        }
         .accessibilityElement(children: .contain)
+        // Not selectable in the bubble: on the Mac each selectable cell is an AppKit text view
+        // with its own accessibility, and inside the sideways scroll view VoiceOver's reading of
+        // them recursed until the app crashed. The full-screen sheet keeps selection and copy.
+        .textSelection(.disabled)
+    }
+
+    /// Opaque in the middle; an edge with more of the table past it fades to nothing.
+    private var fade: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [.black.opacity(more.leading ? 0 : 1), .black], startPoint: .leading, endPoint: .trailing).frame(width: 24)
+            Color.black
+            LinearGradient(colors: [.black, .black.opacity(more.trailing ? 0 : 1)], startPoint: .leading, endPoint: .trailing).frame(width: 24)
+        }
     }
 }
 
