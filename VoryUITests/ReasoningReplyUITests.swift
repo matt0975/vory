@@ -113,7 +113,17 @@ final class ReasoningReplyUITests: XCTestCase {
         app.buttons["composer.send"].firstMatch.tap()
         let reasoning = app.buttons["Show reasoning"].firstMatch
         XCTAssertTrue(reasoning.waitForExistence(timeout: 60), "real thinking lost its card")
-        sleep(3)
+        XCTAssertTrue(cell("covers the 30-day audit window").waitForExistence(timeout: 30), "the reply never finished")
+        sleep(2)
         shot("thinking-card")
+        // Opened, the thinking reads as markdown above a reply that stays whole.
+        // The one on screen: every tab page is mounted, so the first match can be another copy.
+        let visible = app.buttons.matching(NSPredicate(format: "label == 'Show reasoning'")).allElementsBoundByIndex.first { $0.isHittable }
+        try XCTUnwrap(visible, "no Reasoning card on screen").tap()
+        sleep(2)
+        shot("thinking-card-open")
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Hide reasoning'")).allElementsBoundByIndex.contains { $0.isHittable }, "the Reasoning card did not open")
+        XCTAssertTrue(cell("so I left it alone").exists, "the reply under the open card is not whole")
+        XCTAssertTrue(app.state == .runningForeground)
     }
 }

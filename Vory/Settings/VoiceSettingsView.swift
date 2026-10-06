@@ -104,14 +104,22 @@ struct VoiceSettingsView: View {
                 }
                 // A provider not built yet is listed greyed out ("coming later") and cannot be
                 // picked; a choice of it synced from another device still resolves to one offered.
-                Picker("Live provider", selection: Binding(get: { liveProvider.rawValue }, set: { raw in
-                    if LiveProvider(rawValue: raw)?.isOffered == true { liveProviderRaw = raw }
-                })) {
-                    ForEach(LiveProvider.listed) { p in
-                        Text(p.menuTitle).tag(p.rawValue).disabled(!p.isOffered)
+                // A menu of buttons, not a Picker: a disabled Picker option looked like any other
+                // on the Mac.
+                LabeledContent("Live provider") {
+                    Menu {
+                        ForEach(LiveProvider.listed) { p in
+                            Button { liveProviderRaw = p.rawValue } label: {
+                                if p == liveProvider { Label(p.menuTitle, systemImage: "checkmark") } else { Text(p.menuTitle) }
+                            }
+                            .disabled(!p.isOffered)
+                        }
+                    } label: {
+                        Text(liveProvider.menuTitle)
                     }
+                    .fixedSize()
+                    .accessibilityIdentifier("voice.liveProvider")
                 }
-                .accessibilityIdentifier("voice.liveProvider")
             } header: { Text("Live voice") } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Live is a real back-and-forth with a lifelike voice: a voice model of your own listens and talks, and hands every real request to the bot. Automatic uses Live when your Gemini key is saved, otherwise Standard. Live runs on your own Gemini key, billed to you by Google.")

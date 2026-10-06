@@ -1074,7 +1074,7 @@ struct TranscriptRow: View, Equatable {
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
-                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text)).equatable()
+                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
@@ -1349,10 +1349,7 @@ struct ReasoningDisclosure: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             // One full-width hit target, edge to edge, rather than DisclosureGroup's label-only one.
-            Button {
-                if !open { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
-                withAnimation(.snappy) { open.toggle() }
-            } label: {
+            Button { toggle() } label: {
                 HStack {
                     Label("Reasoning", systemImage: "brain").font(.caption).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
@@ -1365,12 +1362,17 @@ struct ReasoningDisclosure: View {
             .accessibilityLabel(open ? "Hide reasoning" : "Show reasoning")
             if open {
                 // Models think in markdown (headings, lists, tables): render it, small and quiet.
-                MarkdownView(text: text, style: .reasoning).equatable()
+                MarkdownView(text: text, style: .reasoning, inlineSelection: false).equatable()
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in
             if revealing, let itemID { NotificationCenter.default.post(name: .hermesRevealRow, object: nil, userInfo: ["bottom": f.maxY, "top": f.minY, "id": itemID]) }
         }
+    }
+
+    private func toggle() {
+        if !open { revealing = true; Task { try? await Task.sleep(for: .milliseconds(600)); revealing = false } }
+        withAnimation(.snappy) { open.toggle() }
     }
 }
 
@@ -1423,7 +1425,10 @@ struct MarkdownView: View, Equatable {
     /// Cards (fenced html) whose source is showing instead, by block position.
     @State private var sourceShown: Set<Int> = []
 
-    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style }
+    /// Selectable in place. Chat bubbles on the iPhone turn it off (see `selectable`).
+    var inlineSelection = true
+
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
 
     var body: some View {
         let _ = Perf.tick("markdown")
@@ -1433,21 +1438,34 @@ struct MarkdownView: View, Equatable {
                 render(block, at: i)
             }
         }
-        .textSelection(.enabled)
         // A reply sets no font of its own: the thread's text size setting reaches it unchanged.
         if style == .reasoning {
-            stack.font(.footnote).foregroundStyle(.secondary)
+            selectable(stack).font(.footnote).foregroundStyle(.secondary)
         } else {
-            stack
+            selectable(stack)
         }
+    }
+
+    /// Selectable in place, except in an iPhone chat bubble: there the selection's own touch
+    /// handling took the taps of everything else in the bubble, so a Reasoning card above a
+    /// reply could not be opened (or closed). Text there is selected with Select Text in the
+    /// bubble's menu; the Mac keeps selection in place.
+    @ViewBuilder private func selectable(_ v: some View) -> some View {
+        #if os(macOS)
+        v.textSelection(.enabled)
+        #else
+        if inlineSelection { v.textSelection(.enabled) } else { v }
+        #endif
     }
 
     @ViewBuilder private func render(_ block: MarkdownBlock, at index: Int) -> some View {
         switch block {
         case .paragraph(let t):
-            Text(Self.inline(t))
+            // Never squeezed to a line: on the Mac a reply under an opened Reasoning card lost
+            // all but the first line of its last paragraph.
+            Text(Self.inline(t)).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(Self.headingFont(level, style: style))
+            Text(Self.inline(t)).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
         case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
@@ -1605,6 +1623,10 @@ struct MarkdownTableView: View {
             .help("Open Table")
         }
         .accessibilityElement(children: .contain)
+        // Not selectable in the bubble: on the Mac each selectable cell is an AppKit text view
+        // with its own accessibility, and inside the sideways scroll view VoiceOver's reading of
+        // them recursed until the app crashed. The full-screen sheet keeps selection and copy.
+        .textSelection(.disabled)
     }
 
     /// Opaque in the middle; an edge with more of the table past it fades to nothing.

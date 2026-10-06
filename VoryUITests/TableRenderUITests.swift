@@ -98,6 +98,11 @@ final class TableRenderUITests: XCTestCase {
         let lastBefore = last.frame
         XCTAssertGreaterThan(lastBefore.maxX, window.maxX, "a six-column table should run past the screen")
 
+        // The whole accessibility tree read (what VoiceOver does): a wide table once took the
+        // Mac app down this way.
+        XCTAssertFalse(app.debugDescription.isEmpty)
+        XCTAssertTrue(app.state == .runningForeground, "reading the accessibility tree took the app down")
+
         // A sideways drag on the table scrolls it, not the thread.
         let cell = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Disk:'")).firstMatch
         XCTAssertTrue(cell.exists)
