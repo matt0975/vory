@@ -64,12 +64,15 @@ enum RememberedSignInError: LocalizedError, Equatable {
     case cancelled
     case gone
     case rejected
+    /// Remembered for an address the gateway no longer has.
+    case moved
 
     var errorDescription: String? {
         switch self {
         case .cancelled: return "The check was cancelled. Try again, or enter the sign-in."
         case .gone: return "\(DeviceWords.This) no longer remembers a sign-in for this gateway. Enter it again."
         case .rejected: return "The gateway did not accept the remembered sign-in, so it was forgotten. Enter the current one."
+        case .moved: return "This gateway's address changed after its sign-in was remembered, so the sign-in was forgotten. Enter it again."
         }
     }
 }
@@ -99,17 +102,52 @@ final class RememberedSignInCoordinator {
         /// The check was turned down (or failed) since the last sign-in: not asked again by
         /// itself, only from the Sign In sheet's button.
         case declined
+        /// It signed this gateway in less than `cooldown` ago, and the session is refused
+        /// again already. A sign-in that goes through without making the gateway work (a proxy
+        /// that refuses the socket, say) would otherwise ask for Face ID and send the password
+        /// on every return to the app. Only the Sign In sheet's button uses it until then.
+        case tooSoon
     }
 
     /// The decision, from facts alone. `asked`: the person tapped the button for it.
-    nonisolated static func decide(authMode: AuthMode, remembered: Bool, canAuthenticate: Bool, canPromptNow: Bool, declined: Bool, asked: Bool) -> Decision {
+    /// `usedRecently`: it signed this gateway in less than `cooldown` ago.
+    nonisolated static func decide(authMode: AuthMode, remembered: Bool, canAuthenticate: Bool, canPromptNow: Bool, declined: Bool, usedRecently: Bool, asked: Bool) -> Decision {
         guard authMode == .password else { return .askPerson(.notPasswordSignIn) }
         guard remembered else { return .askPerson(.nothingRemembered) }
         guard canAuthenticate else { return .askPerson(.noPasscode) }
         if asked { return .useRemembered }
         guard canPromptNow else { return .askPerson(.notNow) }
         guard !declined else { return .askPerson(.declined) }
+        guard !usedRecently else { return .askPerson(.tooSoon) }
         return .useRemembered
+    }
+
+    /// How long after it signs a gateway in the remembered sign-in waits before doing so by
+    /// itself again: at most once in ten minutes per gateway.
+    nonisolated static let cooldown: TimeInterval = 10 * 60
+
+    /// What saving the gateway's form does to its remembered sign-in.
+    enum FormChange: Equatable {
+        /// The username and password typed in the form, for the address saved.
+        case remember
+        case forget
+        /// Whatever is remembered stays as it is.
+        case keep
+    }
+
+    /// From facts alone. `wasOn`: the switch as the form opened. `typed`: a username and password
+    /// were entered in it. `moved`: the address saved is not the one the form opened with.
+    nonisolated static func formChange(authMode: AuthMode, switchOn: Bool, wasOn: Bool, typed: Bool, moved: Bool) -> FormChange {
+        // Another sign-in method has nothing typed to sign in again with.
+        guard authMode == .password else { return .forget }
+        if switchOn && typed { return .remember }
+        // Typed for the old address, it is of no use at the new one.
+        if moved { return .forget }
+        // Turned off in the form. A switch that only opened off forgets nothing: it also opens
+        // off while the list could not be read (the phone was locked when the app started),
+        // and a Save then deleted a sign-in the person had asked to keep.
+        if wasOn && !switchOn { return .forget }
+        return .keep
     }
 
     let vault: RememberedSignInVault
@@ -120,7 +158,11 @@ final class RememberedSignInCoordinator {
     var signIn: @MainActor (GatewayConnection, RememberedSignIn, CloudflareAccess) async throws -> GatewaySecrets = { c, r, access in
         try await NativeAuthClient.signInWithPassword(gateway: c.gateway, provider: r.provider, username: r.username, password: r.password, access: access)
     }
+    /// The clock, for the cooldown; replaced in tests.
+    var now: @MainActor () -> Date = { Date() }
     private(set) var declined: Set<UUID> = []
+    /// When the remembered sign-in last signed each gateway in.
+    private(set) var lastUsed: [UUID: Date] = [:]
     private var running: [UUID: Task<GatewaySecrets, Error>] = [:]
 
     init(vault: RememberedSignInVault, authenticator: any DeviceOwnerAuthenticating = RememberedSignInCoordinator.defaultAuthenticator()) {
@@ -136,13 +178,17 @@ final class RememberedSignInCoordinator {
     }
 
     func decision(for c: GatewayConnection, asked: Bool) -> Decision {
-        Self.decide(authMode: c.authMode, remembered: vault.contains(c.id), canAuthenticate: authenticator.canAuthenticate,
-                    canPromptNow: asked || canPromptNow(), declined: declined.contains(c.id), asked: asked)
+        let usedRecently = lastUsed[c.id].map { now().timeIntervalSince($0) < Self.cooldown } ?? false
+        return Self.decide(authMode: c.authMode, remembered: vault.contains(c.id), canAuthenticate: authenticator.canAuthenticate,
+                           canPromptNow: asked || canPromptNow(), declined: declined.contains(c.id), usedRecently: usedRecently, asked: asked)
     }
 
     /// The session ran out: the remembered sign-in, when the decision allows it. nil sends the
     /// person to the sign-in prompt; a failure is never more than that.
     func signInAgain(_ c: GatewayConnection, access: CloudflareAccess) async -> GatewaySecrets? {
+        // A list the device was too locked to read at launch is read now, rather than taken
+        // for "nothing remembered".
+        if !vault.isKnown { vault.reload() }
         guard decision(for: c, asked: false) == .useRemembered else { return nil }
         do { return try await run(c, access: access) } catch {
             declined.insert(c.id)
@@ -158,7 +204,10 @@ final class RememberedSignInCoordinator {
     }
 
     /// Signed in by hand (the gateway's form): it may be signed in again by itself next time.
-    func didSignIn(_ id: UUID) { declined.remove(id) }
+    func didSignIn(_ id: UUID) {
+        declined.remove(id)
+        lastUsed[id] = nil
+    }
 
     /// One prompt per gateway at a time: a burst of refused calls shares it.
     private func run(_ c: GatewayConnection, access: CloudflareAccess) async throws -> GatewaySecrets {
@@ -172,10 +221,18 @@ final class RememberedSignInCoordinator {
     private func attempt(_ c: GatewayConnection, access: CloudflareAccess) async throws -> GatewaySecrets {
         guard let context = await authenticator.authenticate(reason: "Sign in to \(c.name)") else { throw RememberedSignInError.cancelled }
         guard let remembered = try vault.signIn(for: c.id, context: context) else { throw RememberedSignInError.gone }
+        guard remembered.belongs(to: c.gateway) else {
+            // Typed for another address: the gateway was moved since, here or on another device
+            // through iCloud. The password goes only where it was typed, so it is forgotten
+            // rather than sent to a host the person never gave it to.
+            vault.forget(c.id)
+            throw RememberedSignInError.moved
+        }
         do {
             var s = try await signIn(c, remembered, access)
             s.access = access
             declined.remove(c.id)
+            lastUsed[c.id] = now()
             return s
         } catch let e as HermesAPIError where e.isUnauthorized {
             // The gateway turned the remembered password down: it was changed. Kept, it would

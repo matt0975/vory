@@ -41,7 +41,8 @@ public final class GatewayRuntime {
     public var lastError: String?
     /// Stored session ids that have a card waiting for the user.
     public var needsAttention: Set<String> = []
-    private var registry = ChatRegistry<ChatSession>()
+    /// Not private so a test can put a chat in it without a gateway and route events to it.
+    var registry = ChatRegistry<ChatSession>()
     /// Every open chat, in the order it was opened.
     public var chats: [ChatSession] { registry.all }
     private var globalEventTask: Task<Void, Never>?

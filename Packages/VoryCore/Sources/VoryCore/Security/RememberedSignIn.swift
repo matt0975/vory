@@ -11,12 +11,21 @@ public struct RememberedSignIn: Codable, Equatable, Sendable {
     public var provider: String
     public var username: String
     public var password: String
+    /// The gateway address it was typed for. The password is sent only there: a saved gateway
+    /// moved to another address (here, or on another device through iCloud) does not take it
+    /// along, the way a browser keeps a saved password to its own site. nil in one kept before
+    /// the address was, which is therefore never used.
+    public var gateway: GatewayURL?
 
-    public init(provider: String, username: String, password: String) {
+    public init(provider: String, username: String, password: String, gateway: GatewayURL) {
         self.provider = provider
         self.username = username
         self.password = password
+        self.gateway = gateway
     }
+
+    /// Whether it may be sent to `gateway`: only to the address it was typed for.
+    public func belongs(to gateway: GatewayURL) -> Bool { self.gateway == gateway }
 }
 
 /// Never printed: a log line, a `print` or a `dump` says there is one, not what it holds.
@@ -35,7 +44,8 @@ public protocol RememberedSignInBackend: AnyObject {
     func read(account: String, context: LAContext?) throws -> Data?
     func delete(account: String)
     /// Every account that has an item, from the attributes alone: nothing is unlocked or asked.
-    func accounts() -> [String]
+    /// nil when they could not be read (the device is locked): not known, which is not none.
+    func accounts() -> [String]?
 }
 
 /// The device Keychain, with the strictest protection it offers: this device only, never
@@ -108,16 +118,26 @@ public final class KeychainRememberedSignInBackend: RememberedSignInBackend {
         SecItemDelete(Self.query(account: account) as CFDictionary)
     }
 
-    public func accounts() -> [String] {
+    public func accounts() -> [String]? {
         var q = Self.query(account: nil)
         q[kSecReturnAttributes as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitAll
-        // Attributes need no unlock; a context that may not ask makes sure nothing does.
+        // Attributes need no Face ID; a context that may not ask makes sure nothing does.
         let quiet = LAContext()
         quiet.interactionNotAllowed = true
         q[kSecUseAuthenticationContext as String] = quiet
         var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let items = out as? [[String: Any]] else { return [] }
+        let status = SecItemCopyMatching(q as CFDictionary, &out)
+        return Self.accounts(status: status, found: out)
+    }
+
+    /// What the listing's answer means. None at all is an answer; anything else is not. While
+    /// the device is locked even the attributes of these items are out of reach
+    /// (errSecInteractionNotAllowed), and taken for "none" that hid every remembered sign-in
+    /// until the app was quit.
+    public static func accounts(status: OSStatus, found: AnyObject?) -> [String]? {
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess, let items = found as? [[String: Any]] else { return nil }
         return items.compactMap { $0[kSecAttrAccount as String] as? String }
     }
 }
@@ -128,6 +148,8 @@ public final class MemoryRememberedSignInBackend: RememberedSignInBackend {
     /// How many reads were given an evaluated context, for tests that check the prompt's
     /// answer is what opens the item.
     public private(set) var readsWithContext = 0
+    /// Stands in for a locked device: which accounts there are cannot be read.
+    public var unreadable = false
     public init() {}
     public func write(_ data: Data, account: String) throws { items[account] = data }
     public func read(account: String, context: LAContext?) throws -> Data? {
@@ -135,7 +157,7 @@ public final class MemoryRememberedSignInBackend: RememberedSignInBackend {
         return items[account]
     }
     public func delete(account: String) { items[account] = nil }
-    public func accounts() -> [String] { Array(items.keys) }
+    public func accounts() -> [String]? { unreadable ? nil : Array(items.keys) }
 }
 
 /// The sign-ins remembered on this device, one per gateway, and which gateways have one.
@@ -144,11 +166,24 @@ public final class MemoryRememberedSignInBackend: RememberedSignInBackend {
 public final class RememberedSignInVault {
     /// Gateways with a sign-in remembered here, known without a prompt.
     public private(set) var ids: Set<UUID> = []
+    /// Whether `ids` was ever read. A process started in the background while the device is
+    /// locked (a watch message, a notification, the backup task) cannot read it, and until it
+    /// can, no gateway counts as remembered, but none may be forgotten on that say-so either.
+    public private(set) var isKnown = false
     private let backend: any RememberedSignInBackend
 
     public init(backend: any RememberedSignInBackend) {
         self.backend = backend
-        ids = Set(backend.accounts().compactMap(Self.id(account:)))
+        reload()
+    }
+
+    /// Reads which gateways have one again: at the start, and when the app comes to the front
+    /// or the device is unlocked. A read that fails keeps what was known.
+    public func reload() {
+        guard let accounts = backend.accounts() else { return }
+        let read = Set(accounts.compactMap(Self.id(account:)))
+        if read != ids { ids = read }
+        if !isKnown { isKnown = true }
     }
 
     /// The device Keychain; in the demo copy, memory.

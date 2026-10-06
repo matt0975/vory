@@ -36,6 +36,9 @@ struct VoryApp: App {
                 // A chat handed over from the Mac (or another iPhone or iPad): open it here.
                 .continuesHandoff(model)
                 .task {
+                    // Started in the background while the phone was locked, the app could not
+                    // read which gateways have a remembered sign-in; the window opens unlocked.
+                    model.store.remembered.reload()
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()
                 }
@@ -60,6 +63,10 @@ struct VoryApp: App {
                         LiveActivityController.settleAtForeground(runtime: model.runtime)
                         AwayWatch.shared.returned(runtime: model.runtime)
                         Task { await model.push.refreshRelayIfStale() }
+                        // Which gateways have a remembered sign-in, read again: a launch while the
+                        // phone was locked could not read them, and that process may still be
+                        // the one running.
+                        model.store.remembered.reload()
                         // A session that ran out while the app was away: a remembered sign-in
                         // signs it in again now (after the app's own lock, if that is up).
                         Task { await model.signInAgainIfExpired() }

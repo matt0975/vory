@@ -2,10 +2,11 @@ import XCTest
 
 /// The composer's chooser against the mock gateway: "/" lists its commands and skills (not the
 /// terminal-only ones), typing narrows the list, a pick puts a skill in the field or runs a bare
-/// command; "/model " lists the models and a pick switches the chat. On a hardware keyboard the
-/// arrows move the mark and Tab and Return take it. (Escape is not here: a hardware Escape typed
-/// by the test never reaches the app in the simulator, nor does a hardware Return; the arrows and
-/// Tab do.) Skipped unless
+/// command; "/model " lists the models (the chat's own marked) and a pick switches the chat. On a
+/// hardware keyboard the arrows move the mark, Tab completes it and Return takes it; a recalled
+/// command opens no list, so the arrows step through history past it. (Escape is not here: a
+/// hardware Escape typed by the test never reaches the app in the simulator, nor does a hardware
+/// Return; the arrows and Tab do.) Skipped unless
 /// HERMES_E2E_URL / HERMES_E2E_TOKEN are set; HERMES_E2E_BUNDLE=com.vorantx.vory.demo drives the
 /// demo copy (Tools/dev/make-demo-app-sim.sh), pointed at the gateway by launch argument, and
 /// HERMES_E2E_SHOTS names a folder for the screenshots.
@@ -197,15 +198,20 @@ final class SlashMenuUITests: XCTestCase {
         shot("slash-keys-2-later-word")
         clear(composer)
 
-        // "/model ", Down, Return: the second model.
+        // "/model ": the mark starts on the chat's own model; Down, Return: the model after it.
         composer.typeText("/model ")
         let deadline = Date().addingTimeInterval(20)
         while modelRows().count < 2, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
         XCTAssertGreaterThan(modelRows().count, 1)
+        sleep(1)
+        let rows = modelRows()
+        let start = try XCTUnwrap(rows.firstIndex { $0.isSelected }, "no model row is marked")
+        XCTAssertEqual(rows[start].value as? String, "Current model", "the mark did not start on the chat's model")
         composer.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
         sleep(1)
-        let marked = try XCTUnwrap(modelRows().first { $0.isSelected }, "no model row is marked")
-        XCTAssertEqual(marked.identifier, modelRows()[1].identifier, "Down did not mark the second model")
+        let after = modelRows()
+        let marked = try XCTUnwrap(after.first { $0.isSelected }, "no model row is marked")
+        XCTAssertEqual(marked.identifier, after[(start + 1) % after.count].identifier, "Down did not mark the next model")
         let picked = String(marked.identifier.dropFirst("composer.model.".count))
         shot("slash-keys-3-model-marked")
         // The keyboard's Return (a typed hardware Return, like Escape, never reaches the app in
@@ -214,5 +220,81 @@ final class SlashMenuUITests: XCTestCase {
         XCTAssertTrue(text("Model set to \(picked)").waitForExistence(timeout: 20), "Return did not take the marked model")
         XCTAssertEqual((composer.value as? String) ?? "", "", "the field kept the command")
         shot("slash-keys-4-model-set")
+    }
+
+    /// Tab completes and never runs; "/model" Return Return keeps the chat's model; a typed model
+    /// name goes out as typed; Up and Down step through history past a command.
+    func testTabCompletesReturnKeepsTheModelAndHistoryStepsPastCommands() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = false
+        launch(url: url, token: token)
+        let composer = openNewChat()
+
+        // Tab on a command that takes nothing puts it in the field; it does not run it.
+        composer.typeText("/stat")
+        XCTAssertTrue(waitForMark("composer.command.status"), "the command list did not open")
+        composer.typeKey(XCUIKeyboardKey.tab.rawValue, modifierFlags: [])
+        XCTAssertEqual(composer.value as? String, "/status ", "Tab did not complete the command")
+        sleep(2)
+        XCTAssertFalse(text("/status ran on the gateway").exists, "Tab ran the command")
+        shot("slash-tab-1-completed")
+        clear(composer)
+
+        // "/model", Return: the model list opens with the chat's own model marked; Return again
+        // keeps it (no switch).
+        composer.typeText("/model")
+        XCTAssertTrue(waitForMark("composer.command.model"), "the command list did not open")
+        composer.typeText("\n")
+        let deadline = Date().addingTimeInterval(20)
+        while modelRows().count < 2, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        XCTAssertEqual(composer.value as? String, "/model ", "Return did not open the model list")
+        sleep(1)
+        let current = try XCTUnwrap(modelRows().first { $0.isSelected }, "no model row is marked")
+        XCTAssertEqual(current.value as? String, "Current model", "the mark is not on the chat's model")
+        shot("slash-return-1-current-marked")
+        composer.typeText("\n")
+        XCTAssertTrue(waitForNoRows("composer.model."), "the model list stayed open")
+        XCTAssertEqual((composer.value as? String) ?? "", "", "the field kept the command")
+        sleep(2)
+        XCTAssertFalse(text("Model set to").exists, "Return Return switched the model")
+        shot("slash-return-2-kept")
+
+        // A typed name is not swapped for the closest listed model: nothing is marked, and Return
+        // sends it as typed for the gateway to resolve.
+        composer.typeText("/model mini")
+        let listed = Date().addingTimeInterval(10)
+        func narrowed() -> Bool { let r = modelRows(); return !r.isEmpty && r.allSatisfy { $0.identifier.contains("mini") } }
+        while !narrowed(), Date() < listed { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        sleep(1)
+        XCTAssertTrue(narrowed(), "the model list did not narrow to \"mini\"")
+        XCTAssertNil(modelRows().first { $0.isSelected }, "a typed name marked a row")
+        shot("slash-return-3-typed")
+        composer.typeText("\n")
+        XCTAssertTrue(text("Model set to mini").waitForExistence(timeout: 20), "the typed name did not go out as typed")
+        XCTAssertEqual((composer.value as? String) ?? "", "", "the field kept the command")
+
+        // Another command, sent with the button, then back through history with the arrows: a
+        // recalled command opens no list, so Up gets past it.
+        composer.typeText("/usage")
+        XCTAssertNotNil(waitForRow("composer.command.usage"))
+        app.buttons["composer.send"].firstMatch.tap()
+        XCTAssertTrue(text("Session Token Usage").waitForExistence(timeout: 20), "the command did not run")
+        composer.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
+        XCTAssertEqual(composer.value as? String, "/usage", "Up did not recall the last entry")
+        XCTAssertTrue(waitForNoRows("composer.command.", timeout: 2), "a recalled command opened the list")
+        composer.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
+        XCTAssertEqual(composer.value as? String, "/model mini", "Up did not step past the recalled command")
+        XCTAssertTrue(waitForNoRows("composer.model.", timeout: 2), "a recalled command opened the model list")
+        shot("slash-history-1-recalled")
+        composer.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
+        XCTAssertEqual(composer.value as? String, "/usage", "Down did not step forward")
+        composer.typeKey(XCUIKeyboardKey.downArrow.rawValue, modifierFlags: [])
+        XCTAssertEqual((composer.value as? String) ?? "", "", "Down past the newest entry did not empty the field")
+        // Edited after recall, the list opens again.
+        composer.typeKey(XCUIKeyboardKey.upArrow.rawValue, modifierFlags: [])
+        XCTAssertEqual(composer.value as? String, "/usage")
+        composer.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertNotNil(waitForRow("composer.command.usage", timeout: 5), "an edited entry did not open the list")
+        shot("slash-history-2-edited")
     }
 }

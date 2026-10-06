@@ -5,7 +5,8 @@ import Testing
 
 /// Who a group chat shows working, read from the room's log: the gateway's own word when it
 /// gives it (a turn opened for a member, a member named as typing), else its turn order (the
-/// bots answer one after another, the ones a message mentions or all of them).
+/// bots answer one after another, the ones a message mentions or all of them, then in up to two
+/// more rounds the ones another bot cited, in the order the gateway turns that list to).
 @Suite struct GroupActivityTests {
     private let members = [RoomMember(memberId: "m1", profile: "default", handle: "default", displayName: "Default"),
                            RoomMember(memberId: "m2", profile: "work", handle: "work", displayName: "Work"),
@@ -53,6 +54,66 @@ import Testing
         #expect(names(log(entries)).isEmpty)
         entries.append(("room.activity", gateway, ["status": "settled", "discussion_event_id": "e1"]))
         #expect(names(log(entries)).isEmpty, "the room settled")
+    }
+
+    /// A bot's turn in a hosted room as the gateway files it: its message (none when it passed),
+    /// then the turn's end, both with the round they belong to.
+    private func turn(_ id: String, round: Int, _ text: String?, _ entries: inout [(String, RoomActor, JSONValue)]) {
+        var coordinates: [String: JSONValue] = ["member_id": .string(id), "round_index": .number(Double(round)),
+                                                "discussion_event_id": "e1", "thread_id": "main"]
+        if let text {
+            entries.append(("message.member", member(id), .object(coordinates.merging(["text": .string(text)]) { $1 })))
+        }
+        // How far the bot read: the thread's newest message when its turn ended.
+        let seen = (entries.lastIndex { $0.0.hasPrefix("message.") } ?? 0) + 1
+        coordinates["passed"] = .bool(text == nil)
+        coordinates["seen_through_seq"] = .number(Double(seen))
+        entries.append(("turn.settled", gateway, .object(coordinates)))
+    }
+
+    @Test func botsCitedByAnotherBotTakeTurnsInTheGatewaysTurnedOrder() {
+        // Every bot answers the first round, and Ops cites Default and Work. The gateway turns
+        // the cited list one place for the next round, so Work goes before Default.
+        var entries: [(String, RoomActor, JSONValue)] = [("message.user", user, ["text": "plan?", "thread_id": "main"])]
+        turn("m1", round: 0, "I'll do the notes.", &entries)
+        turn("m2", round: 0, "I'll do the build.", &entries)
+        turn("m3", round: 0, "@default @work you are both wrong", &entries)
+        #expect(names(log(entries)) == ["Work"], "the cited list turned by one: Work, then Default")
+        // Work cites Ops: the list is Default and Ops now, turned to put Ops first.
+        turn("m2", round: 1, "@ops what would you do?", &entries)
+        #expect(names(log(entries)) == ["Ops"])
+        turn("m3", round: 1, "Ship the notes first.", &entries)
+        #expect(names(log(entries)) == ["Default"], "the one cited bot left")
+        // Default cites Work, whose turn in this round is over: it goes in the next one.
+        turn("m1", round: 1, "@work agreed?", &entries)
+        #expect(names(log(entries)) == ["Work"])
+        turn("m2", round: 2, "Agreed.", &entries)
+        #expect(names(log(entries)).isEmpty, "nobody is waiting on an answer")
+    }
+
+    @Test func aRoundInWhichNoBotSpokeEndsTheDiscussion() {
+        var entries: [(String, RoomActor, JSONValue)] = [("message.user", user, ["text": "@default @ops plan?", "thread_id": "main"])]
+        turn("m1", round: 0, "@work can you check the build?", &entries)
+        turn("m3", round: 0, "Fine by me.", &entries)
+        #expect(names(log(entries)) == ["Work"])
+        turn("m2", round: 1, nil, &entries)
+        #expect(names(log(entries)).isEmpty, "Work passed, so nobody spoke in the round and the gateway settles it")
+    }
+
+    @Test func aTurnOfAnEarlierMessageThatEndsLateCountsForNothing() {
+        // A second message takes over from the first; the first one's turn for Default ends after it.
+        let events = log([("message.user", user, ["text": "plan?", "thread_id": "main"]),
+                          ("message.user", user, ["text": "actually, status?", "thread_id": "main"]),
+                          ("turn.cancelled", gateway, ["member_id": "m1", "round_index": 0, "discussion_event_id": "e1",
+                                                       "thread_id": "main", "seen_through_seq": 1, "reason": "superseded"])])
+        #expect(names(events) == ["Default"], "Default's turn for the new message is still to come")
+    }
+
+    @Test func aReadingOfTheLogStillGoesStale() {
+        // A page reads the log once per change and asks the reading each time it draws.
+        let reading = GroupActivity.read(members: members, events: log([("message.user", user, ["text": "@work status?", "thread_id": "main"])]))
+        #expect(reading.working(at: now).compactMap(\.displayName) == ["Work"])
+        #expect(reading.working(at: Date(timeIntervalSince1970: start + GroupActivity.guessWindow + 5)).isEmpty)
     }
 
     @Test func aMentionAsksOnlyThatBot() {

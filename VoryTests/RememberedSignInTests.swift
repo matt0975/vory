@@ -26,11 +26,16 @@ struct RememberedSignInTests {
     /// What a closure saw, kept on the main actor so the closures may record into it.
     @MainActor final class Recorder<T> { var items: [T] = [] }
 
-    private let secret = RememberedSignIn(provider: "basic", username: "sam-at-home", password: "correct-horse-battery")
+    /// The address the sign-in was typed for, and the one the test gateways have.
+    private static let home = try! GatewayURL.normalize("https://gateway.example.com")
+    private let secret = RememberedSignIn(provider: "basic", username: "sam-at-home", password: "correct-horse-battery", gateway: Self.home)
 
-    private func gateway(_ mode: AuthMode = .password, name: String = "Home") throws -> GatewayConnection {
-        GatewayConnection(name: name, gateway: try GatewayURL.normalize("https://gateway.example.com"), authMode: mode, authProvider: "basic")
+    private func gateway(_ mode: AuthMode = .password, name: String = "Home", address: GatewayURL = Self.home) throws -> GatewayConnection {
+        GatewayConnection(name: name, gateway: address, authMode: mode, authProvider: "basic")
     }
+
+    /// A clock the test moves by hand.
+    @MainActor final class Clock { var now = Date(timeIntervalSince1970: 1_800_000_000) }
 
     private func coordinator(_ backend: MemoryRememberedSignInBackend = MemoryRememberedSignInBackend(), auth: FakeAuthenticator = FakeAuthenticator()) -> RememberedSignInCoordinator {
         RememberedSignInCoordinator(vault: RememberedSignInVault(backend: backend), authenticator: auth)
@@ -98,12 +103,102 @@ struct RememberedSignInTests {
         #expect(!vault.contains(other))
     }
 
+    /// A launch while the phone is locked (a watch message, a notification, the backup task)
+    /// cannot read the list: it is not known, and it is read again once it can be.
+    @Test func aListThatCannotBeReadIsUnknownUntilItCanBe() throws {
+        let backend = MemoryRememberedSignInBackend()
+        let id = UUID()
+        try RememberedSignInVault(backend: backend).remember(secret, for: id)
+
+        backend.unreadable = true
+        let vault = RememberedSignInVault(backend: backend)
+        #expect(!vault.isKnown && vault.ids.isEmpty)
+        vault.reload()
+        #expect(!vault.isKnown, "a read that fails again is still no answer")
+
+        // Unlocked: read again (on unlock, coming to the front, or before it is needed).
+        backend.unreadable = false
+        vault.reload()
+        #expect(vault.isKnown && vault.ids == [id])
+
+        // Locked again later: what was known stays known.
+        backend.unreadable = true
+        vault.reload()
+        #expect(vault.isKnown && vault.contains(id))
+        // Read with nothing there: known, and empty.
+        backend.unreadable = false
+        backend.delete(account: RememberedSignInVault.account(id))
+        vault.reload()
+        #expect(vault.isKnown && vault.ids.isEmpty)
+    }
+
+    /// The Keychain's answer to the listing: none is an answer, a locked device is not.
+    @Test func whatTheKeychainListingMeans() {
+        typealias K = KeychainRememberedSignInBackend
+        #expect(K.accounts(status: errSecItemNotFound, found: nil) == [])
+        #expect(K.accounts(status: errSecInteractionNotAllowed, found: nil) == nil, "locked is not none")
+        #expect(K.accounts(status: errSecMissingEntitlement, found: nil) == nil)
+        let found = [[kSecAttrAccount as String: "signin.a"], [kSecAttrAccount as String: "signin.b"]] as AnyObject
+        #expect(K.accounts(status: errSecSuccess, found: found) == ["signin.a", "signin.b"])
+        #expect(K.accounts(status: errSecSuccess, found: nil) == nil)
+        #if os(iOS)
+        // The device Keychain itself (the Mac's unsigned test build has none): an answer.
+        #expect(K().accounts() != nil)
+        #endif
+    }
+
+    @Test func theCoordinatorReadsAListItCouldNotReadAtLaunch() async throws {
+        let backend = MemoryRememberedSignInBackend(), auth = FakeAuthenticator()
+        let c = try gateway()
+        try RememberedSignInVault(backend: backend).remember(secret, for: c.id)
+        backend.unreadable = true
+        let co = coordinator(backend, auth: auth)
+        #expect(co.decision(for: c, asked: false) == .askPerson(.nothingRemembered))
+        co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
+
+        // Still locked: nothing, and nothing asked.
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(auth.reasons.isEmpty)
+        // Unlocked and in front: the list is read before deciding, and used.
+        backend.unreadable = false
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(auth.reasons.count == 1)
+    }
+
+    // MARK: The gateway's form
+
+    @Test func whatSavingTheFormDoes() {
+        typealias C = RememberedSignInCoordinator
+        func change(_ mode: AuthMode = .password, on: Bool, wasOn: Bool, typed: Bool = true, moved: Bool = false) -> C.FormChange {
+            C.formChange(authMode: mode, switchOn: on, wasOn: wasOn, typed: typed, moved: moved)
+        }
+        // Turned on, or left on, with the sign-in typed: kept, for the address saved.
+        #expect(change(on: true, wasOn: false) == .remember)
+        #expect(change(on: true, wasOn: true) == .remember)
+        #expect(change(on: true, wasOn: true, moved: true) == .remember)
+        // Left on with nothing typed: what was remembered stays.
+        #expect(change(on: true, wasOn: true, typed: false) == .keep)
+        // Turned off here: forgotten.
+        #expect(change(on: false, wasOn: true) == .forget)
+        #expect(change(on: false, wasOn: true, typed: false) == .forget)
+        // Opened off and saved off: nothing forgotten. The switch also opens off while the list
+        // could not be read, and a Save then deleted a sign-in the person had asked to keep.
+        #expect(change(on: false, wasOn: false) == .keep)
+        #expect(change(on: false, wasOn: false, typed: false) == .keep)
+        // A new address: what was typed for the old one goes.
+        #expect(change(on: false, wasOn: false, moved: true) == .forget)
+        #expect(change(on: true, wasOn: true, typed: false, moved: true) == .forget)
+        // Another sign-in method: nothing typed to sign in again with.
+        #expect(change(.oauth, on: true, wasOn: true) == .forget)
+        #expect(change(.sessionToken, on: false, wasOn: false) == .forget)
+    }
+
     // MARK: When it is used
 
     @Test func theDecision() {
         typealias C = RememberedSignInCoordinator
-        func decide(_ mode: AuthMode = .password, remembered: Bool = true, passcode: Bool = true, now: Bool = true, declined: Bool = false, asked: Bool = false) -> C.Decision {
-            C.decide(authMode: mode, remembered: remembered, canAuthenticate: passcode, canPromptNow: now, declined: declined, asked: asked)
+        func decide(_ mode: AuthMode = .password, remembered: Bool = true, passcode: Bool = true, now: Bool = true, declined: Bool = false, recently: Bool = false, asked: Bool = false) -> C.Decision {
+            C.decide(authMode: mode, remembered: remembered, canAuthenticate: passcode, canPromptNow: now, declined: declined, usedRecently: recently, asked: asked)
         }
         #expect(decide() == .useRemembered)
         // A browser sign-in has nothing typed to sign in again with; neither has a session token.
@@ -119,6 +214,11 @@ struct RememberedSignInTests {
         #expect(decide(now: false, declined: true, asked: true) == .useRemembered)
         #expect(decide(.oauth, asked: true) == .askPerson(.notPasswordSignIn))
         #expect(decide(remembered: false, asked: true) == .askPerson(.nothingRemembered))
+        // Signed in by it a moment ago and refused again already: not by itself, but the
+        // button still works.
+        #expect(decide(recently: true) == .askPerson(.tooSoon))
+        #expect(decide(recently: true, asked: true) == .useRemembered)
+        #expect(decide(now: false, recently: true) == .askPerson(.notNow))
     }
 
     @Test func anExpiredSessionSignsInAgainAfterFaceID() async throws {
@@ -140,6 +240,8 @@ struct RememberedSignInTests {
     @Test func aCancelFallsBackToThePromptAndIsNotAskedAgainByItself() async throws {
         let auth = FakeAuthenticator(); auth.answer = false
         let c = try gateway(), co = coordinator(auth: auth)
+        let clock = Clock()
+        co.now = { clock.now }
         try co.vault.remember(secret, for: c.id)
         let signIns = Recorder<Int>()
         co.signIn = { _, _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "a") }
@@ -154,8 +256,77 @@ struct RememberedSignInTests {
         await #expect(throws: RememberedSignInError.cancelled) { try await co.signInWithRemembered(c, access: CloudflareAccess()) }
         auth.answer = true
         #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
-        // Signed in: asked by itself again next time.
+        // Signed in: no longer declined, so asked by itself again next time (once the cooldown
+        // after any sign-in it made has passed).
+        #expect(!co.declined.contains(c.id))
+        clock.now += RememberedSignInCoordinator.cooldown
         #expect(co.decision(for: c, asked: false) == .useRemembered)
+    }
+
+    /// A sign-in that goes through but does not keep the gateway working (a proxy that refuses
+    /// the socket) must not ask for Face ID and send the password on every return to the app.
+    @Test func itSignsInByItselfAtMostOnceInTenMinutes() async throws {
+        let auth = FakeAuthenticator()
+        let c = try gateway(), co = coordinator(auth: auth)
+        let clock = Clock()
+        co.now = { clock.now }
+        try co.vault.remember(secret, for: c.id)
+        let signIns = Recorder<Int>()
+        co.signIn = { _, _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "a") }
+
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        // Refused again a moment later: not by itself…
+        clock.now += 60
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        clock.now += RememberedSignInCoordinator.cooldown - 61
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(auth.reasons.count == 1 && signIns.items.count == 1)
+        #expect(co.vault.contains(c.id), "waiting is not forgetting")
+        // …but the Sign In sheet's button, whenever it is tapped (which starts the wait again).
+        #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
+        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        // Ten minutes on: by itself again.
+        clock.now += RememberedSignInCoordinator.cooldown
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(auth.reasons.count == 3 && signIns.items.count == 3)
+        // Signed in by hand in the form: a fresh start, no wait.
+        co.didSignIn(c.id)
+        #expect(co.decision(for: c, asked: false) == .useRemembered)
+        // Per gateway: another one is not held up by this one's wait.
+        let other = try gateway(name: "Office")
+        try co.vault.remember(secret, for: other.id)
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) != nil)
+        #expect(co.decision(for: other, asked: false) == .useRemembered)
+    }
+
+    /// The password goes only to the address it was typed for: a gateway moved since (here, or
+    /// on another device through iCloud) does not take it along.
+    @Test func aSignInRememberedForAnotherAddressIsNeverSent() async throws {
+        let auth = FakeAuthenticator()
+        let moved = try gateway(address: try GatewayURL.normalize("https://elsewhere.example.net"))
+        let co = coordinator(auth: auth)
+        try co.vault.remember(secret, for: moved.id)
+        co.signIn = { _, _, _ in Issue.record("the password was sent to another address"); return GatewaySecrets() }
+
+        #expect(await co.signInAgain(moved, access: CloudflareAccess()) == nil)
+        #expect(!co.vault.contains(moved.id), "of no use at the new address, so forgotten")
+
+        // From the Sign In sheet: said in words.
+        try co.vault.remember(secret, for: moved.id)
+        await #expect(throws: RememberedSignInError.moved) { try await co.signInWithRemembered(moved, access: CloudflareAccess()) }
+        #expect(!co.vault.contains(moved.id))
+
+        // One kept before the address was (no address at all): never sent either.
+        let backend = MemoryRememberedSignInBackend()
+        let c = try gateway(), old = coordinator(backend, auth: auth)
+        old.signIn = co.signIn
+        let legacy = Data(#"{"provider":"basic","username":"sam-at-home","password":"correct-horse-battery"}"#.utf8)
+        #expect(try JSONDecoder().decode(RememberedSignIn.self, from: legacy).gateway == nil)
+        try backend.write(legacy, account: RememberedSignInVault.account(c.id))
+        old.vault.reload()
+        await #expect(throws: RememberedSignInError.moved) { try await old.signInWithRemembered(c, access: CloudflareAccess()) }
+        #expect(!old.vault.contains(c.id))
     }
 
     @Test func aPasswordTheGatewayTurnsDownIsForgotten() async throws {

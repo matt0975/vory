@@ -4,50 +4,94 @@ import Foundation
 import UIKit
 import VoryCore
 
+/// The buzz and the expanded Island that go with an update when the app has the news itself.
+struct ActivityAlert: Equatable, Sendable {
+    var title: String
+    var body: String
+}
+
+/// Which update goes to the system next, one on its way at a time. Kept apart from
+/// `ActivityHandle` (which holds it under its lock) so the order can be tested.
+struct ActivityUpdateOrder {
+    struct Update: Equatable {
+        var state: HermesTurnAttributes.ContentState
+        var alert: ActivityAlert?
+    }
+    private(set) var sending = false
+    /// The newest state, kept while an update is on its way; sent after it, the ones it replaced never.
+    private var queued: Update?
+    private var ended = false
+
+    /// A new state, with or without an alert: what to send now, or nil when one is on its way
+    /// and this waits behind it. An alert that went out by itself ahead of the queue was then
+    /// overtaken by the state waiting there: a "Running Clarify" sent before the question came
+    /// landed after it, and the card said the bot was working while it waited for an answer.
+    mutating func offer(_ state: HermesTurnAttributes.ContentState, alert: ActivityAlert? = nil) -> Update? {
+        guard !ended else { return nil }
+        guard !sending else {
+            // An alert not yet out stays with the newest state while the bot still waits for
+            // the person; once it no longer does (the card answered), the buzz is not raised.
+            let keep = alert ?? (state.needsAttention ? queued?.alert : nil)
+            queued = Update(state: state, alert: keep)
+            return nil
+        }
+        sending = true
+        return Update(state: state, alert: alert)
+    }
+
+    /// The update on its way went out: what to send next, if anything.
+    mutating func sent() -> Update? {
+        let next = ended ? nil : queued
+        queued = nil
+        if next == nil { sending = false }
+        return next
+    }
+
+    /// An update still waiting to go must not follow the end.
+    mutating func end() {
+        ended = true
+        queued = nil
+    }
+}
+
 /// ActivityKit's `Activity` is not marked Sendable; Apple documents it as safe to drive from any context.
 private final class ActivityHandle: @unchecked Sendable {
     let activity: Activity<HermesTurnAttributes>
     init(_ a: Activity<HermesTurnAttributes>) { activity = a }
 
     private let lock = NSLock()
-    /// The newest state, kept while an update is on its way; sent after it, the ones it replaced never.
-    private var queued: HermesTurnAttributes.ContentState?
-    private var sending = false
-    private var ended = false
+    private var order = ActivityUpdateOrder()
 
     /// One update on its way at a time, the newest state next. A long turn that ran on while
     /// the app was away came back as hundreds of tool calls in a burst, and each one (twice:
     /// its start and the status line after it) sent an update of its own to the system at once.
-    func update(_ state: HermesTurnAttributes.ContentState) {
-        let start = lock.withLock { () -> Bool in
-            guard !ended else { return false }
-            if sending { queued = state; return false }
-            sending = true
-            return true
-        }
-        guard start else { return }
-        Task.detached { await self.send(state) }
-    }
-
-    private func send(_ first: HermesTurnAttributes.ContentState) async {
-        var next: HermesTurnAttributes.ContentState? = first
-        while let state = next {
-            await activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600)))
-            next = lock.withLock {
-                let n = ended ? nil : queued
-                queued = nil
-                if n == nil { sending = false }
-                return n
-            }
-        }
-    }
+    func update(_ state: HermesTurnAttributes.ContentState) { offer(state, alert: nil) }
 
     /// An update that also alerts: the Island expands and the phone buzzes, like a push with an
-    /// alert would. Used when the app itself has the news while it is not in front.
+    /// alert would. Used when the app itself has the news while it is not in front. It takes
+    /// its turn like any other update.
     func alert(_ state: HermesTurnAttributes.ContentState, title: String, body: String) {
-        let config = AlertConfiguration(title: LocalizedStringResource(String.LocalizationValue(title)),
-                                        body: LocalizedStringResource(String.LocalizationValue(body)), sound: .default)
-        Task.detached { await self.activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600)), alertConfiguration: config) }
+        offer(state, alert: ActivityAlert(title: title, body: body))
+    }
+
+    private func offer(_ state: HermesTurnAttributes.ContentState, alert: ActivityAlert?) {
+        guard let first = lock.withLock({ order.offer(state, alert: alert) }) else { return }
+        Task.detached { await self.send(first) }
+    }
+
+    private func send(_ first: ActivityUpdateOrder.Update) async {
+        var next: ActivityUpdateOrder.Update? = first
+        while let u = next {
+            let content = ActivityContent(state: u.state, staleDate: Date().addingTimeInterval(3600))
+            if let a = u.alert {
+                let config = AlertConfiguration(title: LocalizedStringResource(String.LocalizationValue(a.title)),
+                                                body: LocalizedStringResource(String.LocalizationValue(a.body)), sound: .default)
+                await activity.update(content, alertConfiguration: config)
+            } else {
+                await activity.update(content)
+            }
+            next = lock.withLock { order.sent() }
+        }
     }
 
     /// In front of the user the result is on screen already, so the activity goes at once; away
@@ -55,8 +99,7 @@ private final class ActivityHandle: @unchecked Sendable {
     /// notification meanwhile), then the system removes it.
     func end(_ state: HermesTurnAttributes.ContentState, linger: TimeInterval? = nil) {
         let policy: ActivityUIDismissalPolicy = linger.map { .after(Date().addingTimeInterval($0)) } ?? .immediate
-        // An update still waiting to go must not follow the end.
-        lock.withLock { ended = true; queued = nil }
+        lock.withLock { order.end() }
         Task.detached { await self.activity.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }
     }
 

@@ -184,4 +184,156 @@ import VoryCore
         #expect(free.first?.name == "free/assistant-open")
         #expect(M.modelItems(Self.options, current: "", query: "zzz").isEmpty)
     }
+
+    /// The same id under two providers: on a relay (an aggregator) and at its maker.
+    static let sharedID = ModelOptionsResult(providers: [
+        ModelProvider(slug: "workshop", name: "Workshop", models: ["workshop/assistant", "workshop/assistant-mini"], authenticated: true,
+                      featuredModels: ["workshop/assistant-mini"]),
+        ModelProvider(slug: "relay", name: "Relay", models: ["workshop/assistant", "relay/open"], authenticated: true,
+                      featuredModels: ["relay/open"]),
+    ])
+
+    @Test func onlyTheChatsOwnProvidersRowIsItsModel() {
+        // On the relay: its row is the chat's model; the maker's row with the same id is a switch.
+        let bare = M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: "relay", query: "")
+        #expect(bare.filter(\.current).map(\.id) == ["relay|workshop/assistant"])
+        // The chat's own model is added to its own provider's featured list only.
+        #expect(bare.map(\.id) == ["relay|workshop/assistant", "relay|relay/open", "workshop|workshop/assistant-mini"])
+        let search = M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: "relay", query: "assistant")
+        #expect(search.filter(\.current).map(\.id) == ["relay|workshop/assistant"])
+        // Provider unknown, or not in the list: every row with the id, as before.
+        #expect(M.modelItems(Self.sharedID, current: "workshop/assistant", query: "assistant").filter(\.current).count == 2)
+        #expect(M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: "elsewhere", query: "assistant").filter(\.current).count == 2)
+    }
+
+    // MARK: The mark and the keys
+
+    @Test func theCommandListMarksItsTopRowAndABareModelListTheChatsModel() throws {
+        let commands = M.commandItems(Self.catalog, query: "co")
+        let co = try #require(M.context(for: "/co"))
+        #expect(M.markedIndex(commands, context: co, mark: nil) == 0)
+        // "/model ": the chat's own model, not the first listed (it is third here).
+        let bare = try #require(M.context(for: "/model "))
+        let models = M.modelItems(Self.options, current: "workshop/assistant", query: "")
+        #expect(M.markedIndex(models, context: bare, mark: nil) == 2)
+        // The chat's model is not listed: nothing is marked.
+        #expect(M.markedIndex(M.modelItems(Self.options, current: "elsewhere/unlisted", query: ""), context: bare, mark: nil) == nil)
+        // A typed model name marks nothing (Return sends it as typed).
+        let typed = try #require(M.context(for: "/model mini"))
+        #expect(M.markedIndex(M.modelItems(Self.options, current: "", query: "mini"), context: typed, mark: nil) == nil)
+        #expect(M.markedIndex([], context: co, mark: nil) == nil)
+    }
+
+    @Test func aMarkMadeByHandHoldsForItsTextOnly() throws {
+        let typed = try #require(M.context(for: "/model mini"))
+        let items = M.modelItems(Self.options, current: "", query: "mini")
+        let mark = M.Mark(context: typed, id: "local|local/assistant-mini")
+        #expect(M.markedIndex(items, context: typed, mark: mark) == 1)
+        // Typed on: the mark is left behind.
+        let more = try #require(M.context(for: "/model minis"))
+        #expect(M.markedIndex(items, context: more, mark: mark) == nil)
+        // A row that is no longer listed: the usual mark.
+        #expect(M.markedIndex(items, context: typed, mark: M.Mark(context: typed, id: "gone")) == nil)
+    }
+
+    @Test func theArrowsGoRoundTheEndsAndStartFromNothingAtEitherEnd() {
+        #expect(M.move(0, by: 1, count: 3) == 1)
+        #expect(M.move(2, by: 1, count: 3) == 0)
+        #expect(M.move(0, by: -1, count: 3) == 2)
+        // A mark past a list that shrank comes back inside it.
+        #expect(M.move(7, by: -1, count: 3) == 1)
+        #expect(M.move(nil, by: 1, count: 3) == 0)
+        #expect(M.move(nil, by: -1, count: 3) == 2)
+        #expect(M.move(nil, by: 1, count: 0) == nil)
+    }
+
+    @Test func returnTakesTheMarkedRowAndSendsATypedModelNameAsTyped() throws {
+        let co = try #require(M.context(for: "/co"))
+        let commands = M.commandItems(Self.catalog, query: "co")
+        #expect(M.returnAction(commands, context: co, marked: 0) == .take(commands[0]))
+        // Nothing matches (or the catalog has not come): Return keeps its own meaning.
+        #expect(M.returnAction([], context: M.context(for: "/zzz"), marked: nil) == .keep)
+        // No chooser (closed with Escape, or none for the text).
+        #expect(M.returnAction(commands, context: nil, marked: 0) == .keep)
+
+        // "/model mini" lists two minis, but Return sends what was typed: the gateway resolves it
+        // (an alias, the user's own name, an unlisted id) on the chat's own provider.
+        let typed = try #require(M.context(for: "/model mini"))
+        let minis = M.modelItems(Self.options, current: "", query: "mini")
+        #expect(M.returnAction(minis, context: typed, marked: M.markedIndex(minis, context: typed, mark: nil)) == .send)
+        // The same while the list is loading.
+        #expect(M.returnAction([], context: typed, marked: nil) == .send)
+        // Chosen with the arrows: that row.
+        #expect(M.returnAction(minis, context: typed, marked: 1) == .take(minis[1]))
+    }
+
+    @Test func modelReturnReturnKeepsTheChatsModel() throws {
+        // "/model", Return: the command is the top row; it takes something, so it goes in the field.
+        let first = try #require(M.context(for: "/model"))
+        let commands = M.commandItems(Self.catalog, query: first.query)
+        guard case .take(let command) = M.returnAction(commands, context: first, marked: M.markedIndex(commands, context: first, mark: nil)) else {
+            Issue.record("Return did not take the command"); return
+        }
+        #expect(M.outcome(of: command, in: "/model", wholeText: first.wholeText, completing: false, canRun: true) == .fill("/model "))
+        // Return again: the chat's own model, and nothing to switch.
+        let bare = try #require(M.context(for: "/model "))
+        let models = M.modelItems(Self.options, current: "workshop/assistant", currentProvider: "workshop", query: bare.query)
+        guard case .take(let model) = M.returnAction(models, context: bare, marked: M.markedIndex(models, context: bare, mark: nil)) else {
+            Issue.record("Return did not take the marked model"); return
+        }
+        #expect(model.name == "workshop/assistant")
+        #expect(M.outcome(of: model, in: "/model ", wholeText: true, completing: false, canRun: true) == .keepModel)
+    }
+
+    @Test func tabCompletesAndNeverRuns() throws {
+        let items = Dictionary(uniqueKeysWithValues: M.commandItems(Self.catalog, query: "").map { ($0.name, $0) })
+        let status = try #require(items["status"])
+        let new = try #require(items["new"])
+        // Return (or a tap) runs a command that takes nothing; Tab only completes it.
+        #expect(M.outcome(of: status, in: "/sta", wholeText: true, completing: false, canRun: true) == .run("/status"))
+        #expect(M.outcome(of: status, in: "/sta", wholeText: true, completing: true, canRun: true) == .fill("/status "))
+        #expect(M.outcome(of: new, in: "/ne", wholeText: true, completing: true, canRun: true) == .fill("/new "))
+        // With a reply quoted or files staged it would go out as a message: it waits in the field.
+        #expect(M.outcome(of: status, in: "/sta", wholeText: true, completing: false, canRun: false) == .fill("/status "))
+        // A later word is an argument: completed in place.
+        #expect(M.outcome(of: status, in: "/code-review then /sta", wholeText: false, completing: false, canRun: true)
+                == .fill("/code-review then /status "))
+        // A model: Return switches (the chat's own stays); Tab puts its id after "/model ".
+        let mini = try #require(M.modelItems(Self.options, current: "workshop/assistant", query: "mini").first)
+        #expect(M.outcome(of: mini, in: "/model mini", wholeText: true, completing: false, canRun: true) == .switchModel)
+        #expect(M.outcome(of: mini, in: "/model mini", wholeText: true, completing: true, canRun: true) == .fill("/model workshop/assistant-mini"))
+    }
+
+    @Test func aModelCompletedWithTabIsTheOneReturnTakesProviderAndAll() throws {
+        // "/model workshop/assistant": the same id at its maker and on the relay; the relay's row
+        // is marked with the arrows and completed with Tab.
+        let typed = try #require(M.context(for: "/model workshop/assistant"))
+        let items = M.modelItems(Self.sharedID, current: "workshop/assistant-mini", currentProvider: "workshop", query: typed.query)
+        let relay = try #require(items.first { $0.provider == "relay" })
+        guard case .fill(let filled) = M.outcome(of: relay, in: "/model workshop/assistant", wholeText: true, completing: true, canRun: true) else {
+            Issue.record("Tab did not complete"); return
+        }
+        let ctx = try #require(M.context(for: filled))
+        let after = M.modelItems(Self.sharedID, current: "workshop/assistant-mini", currentProvider: "workshop", query: ctx.query)
+        let marked = M.markedIndex(after, context: ctx, mark: M.Mark(context: ctx, id: relay.id))
+        #expect(M.returnAction(after, context: ctx, marked: marked) == .take(relay))
+        // Without that mark the same text goes out as typed.
+        #expect(M.returnAction(after, context: ctx, marked: M.markedIndex(after, context: ctx, mark: nil)) == .send)
+    }
+
+    @Test func aRecalledEntryIsShownAsItWasSentUntilItIsEdited() {
+        let history = ["hello", "/status"]
+        #expect(M.isRecalled("/status", history: history, cursor: 1))
+        // Edited after recall: the choosers open again.
+        #expect(!M.isRecalled("/statu", history: history, cursor: 1))
+        // Typed, not recalled.
+        #expect(!M.isRecalled("/status", history: history, cursor: nil))
+        #expect(!M.isRecalled("/status", history: history, cursor: 5))
+    }
+
+    @Test func aChatReadsItsOwnBotsModelListNotTheSelectedOne() {
+        #expect(ChatSession.modelOptionsProfile(chat: "writer", selected: "coder") == "writer")
+        #expect(ChatSession.modelOptionsProfile(chat: nil, selected: "coder") == "coder")
+        #expect(ChatSession.modelOptionsProfile(chat: nil, selected: nil) == nil)
+    }
 }

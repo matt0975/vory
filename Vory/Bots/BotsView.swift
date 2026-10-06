@@ -467,8 +467,11 @@ struct RoomView: View {
     private static func isTyping(_ ev: RoomEvent) -> Bool {
         let s = status(of: ev); return s.contains("typing") || s.contains("thinking") || s.contains("working") || s.contains("composing")
     }
+    /// What the room's log says about who is working, read when the log changes (in `load`), not
+    /// in the body: every keystroke in the composer runs the body again.
+    @State private var activity = GroupActivity.Reading()
     /// Who is working: the bots the room's log says are on a turn now (`GroupActivity`).
-    private var typing: [RoomMember] { GroupActivity.working(members: room.members, events: events) }
+    private var typing: [RoomMember] { activity.working() }
 
     var body: some View {
         let working = typing
@@ -597,7 +600,9 @@ struct RoomView: View {
         guard let rt = model.runtime else { return }
         do {
             let r: GroupsLogResult = try await rt.rpc("groups.log", ["room_id": .string(room.roomId), "since_seq": .number(Double(cursor)), "limit": 200]).decode()
+            let changed = cursor == 0 || !r.events.isEmpty
             if cursor == 0 { events = r.events } else { events.append(contentsOf: r.events) }
+            if changed { activity = GroupActivity.read(members: room.members, events: events) }
             cursor = r.latestSeq
             loaded = true
         } catch { self.error = error.localizedDescription }

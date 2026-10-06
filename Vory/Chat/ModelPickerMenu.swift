@@ -3,10 +3,19 @@ import VoryCore
 
 extension ChatSession {
     /// The gateway's model list (`/api/model/options`), as the model menu, the model page and the
-    /// composer's "/model " chooser all read it. `refresh` asks the gateway to look again.
+    /// composer's "/model " chooser all read it. `refresh` asks the gateway to look again. It is
+    /// this chat's bot's list (the gateway lists each bot's own providers and keys), not the bot
+    /// selected at the time: after a switch elsewhere, a pick sent another bot's provider to
+    /// this chat.
     func modelOptions(refresh: Bool = false) async throws -> ModelOptionsResult {
         let q = refresh ? [URLQueryItem(name: "refresh", value: "true")] : []
-        return try await runtime.api.get("/api/model/options", query: q, profile: runtime.selectedProfile)
+        return try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+    }
+
+    /// The bot whose model list a chat reads: its own, or the selected one for a chat that has
+    /// none recorded.
+    nonisolated static func modelOptionsProfile(chat: String?, selected: String?) -> String? {
+        chat ?? selected
     }
 }
 

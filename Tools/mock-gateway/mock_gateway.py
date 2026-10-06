@@ -1263,6 +1263,17 @@ def process_request(connection, request):
     elif method == "GET" and re.fullmatch(r"/api/cron/jobs/[^/]+", base):
         job = _cron_job(unquote(base.split("/")[4]))
         result = (200, job) if job else (404, {"detail": "Job not found"})
+    elif method == "POST" and base == "/api/_mock/rooms":
+        # A group chat made here, for a test that needs one the app's New Message cannot make: a
+        # long name, or bots this mock does not list. Body: {"name", "handles": [...]}.
+        spec = body_json if isinstance(body_json, dict) else {}
+        handles = [str(h) for h in spec.get("handles") or ["default", "work"]][:6]
+        room = {"room_id": f"room-{uuid.uuid4().hex[:10]}", "name": str(spec.get("name") or "Room"),
+                "members": [{"member_id": f"m{i + 1}", "profile": h, "handle": h, "display_name": h.capitalize()}
+                            for i, h in enumerate(handles)],
+                "updated_at": time.time(), "disbanded_at": None, "latest_seq": 0}
+        ROOMS.append(room)
+        result = (200, {"room": room})
     else:
         result = rest(path, query)
     return _json_response(*(result if result else (404, {"detail": "Not found"})))

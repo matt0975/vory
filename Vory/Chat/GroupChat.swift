@@ -10,9 +10,10 @@ import VoryCore
 /// - When the gateway files only the ends of turns (a hosted room files no start), its turn
 ///   order: the bots answer a message one at a time, the ones it @mentions (all of them when it
 ///   mentions none) in the room's order, so the first of those not heard from since is the one
-///   working; after them, a bot another bot @mentioned that has not answered yet. A room that
-///   has said it settled, or a message nothing has followed for `guessWindow`, has nobody
-///   working.
+///   working. Then come up to two more rounds for the bots another bot @mentioned that have not
+///   answered since, the gateway turning that list by one place a round (its `_rotate`), so the
+///   second of them goes first in the first of those rounds. A room that has said it settled,
+///   or a message nothing has followed for `guessWindow`, has nobody working.
 enum GroupActivity {
     /// How long an unanswered message keeps its guessed bot working: past it, the room's driver
     /// is more likely down than the bot still at it.
@@ -60,36 +61,82 @@ enum GroupActivity {
         ev.payload["text"]?.stringValue ?? ev.payload["content"]?.stringValue ?? ""
     }
 
+    /// What a room's log says about who is working. Reading the log is the slow part (each bot
+    /// reply is searched for @mentions), so a page reads it once each time the log changes and
+    /// asks the reading for the members whenever it draws: a guess still goes stale after
+    /// `guessWindow`, with or without a new event.
+    struct Reading {
+        /// The members the room itself says are working, in the room's order.
+        var reported: [RoomMember] = []
+        /// The member the gateway's turn order puts next, when the room says nothing itself.
+        var next: RoomMember?
+        /// When the room last moved.
+        var lastAt: Double = 0
+
+        func working(at now: Date = Date()) -> [RoomMember] {
+            guard reported.isEmpty, let next, now.timeIntervalSince1970 - lastAt < GroupActivity.guessWindow else { return reported }
+            return [next]
+        }
+    }
+
     /// The members working now, in the room's order.
     static func working(members: [RoomMember], events: [RoomEvent], now: Date = Date()) -> [RoomMember] {
+        read(members: members, events: events).working(at: now)
+    }
+
+    /// Reads a room's log for who is working (see `Reading`).
+    static func read(members: [RoomMember], events: [RoomEvent]) -> Reading {
         var active = Set<String>()
         // Once the room has said who started (a turn opened, someone typing), it is taken at
         // its word; a room that never does is read by the gateway's turn order instead.
         var reportsStarts = false
         var question: RoomEvent?
         var heard = Set<String>()
+        // The bots' messages since the question, searched for @mentions only if the turn order
+        // is needed.
+        var replies: [(seq: Int, speaker: String, text: String)] = []
         var lastSaid: [String: Int] = [:]
-        var citedAt: [String: Int] = [:]
+        // The gateway's own bookkeeping, from the coordinates it files every turn with: whose
+        // turn ended in which round ("1:<member>"), the rounds a bot spoke in, and how far into
+        // the thread each bot has read.
+        var closedIn = Set<String>()
+        var spokeIn = Set<Int>()
+        var readTo: [String: Int] = [:]
+        var newest = 0
         var lastAt: Double = 0
         let ordered = zip(events, events.dropFirst()).allSatisfy { $0.seq <= $1.seq } ? events : events.sorted { $0.seq < $1.seq }
         for ev in ordered {
             let who = subject(of: ev, in: members)
+            // A turn of an earlier message that ends late counts for none of this one's rounds.
+            let ours = ev.payload["discussion_event_id"]?.stringValue.map { $0 == question?.eventId } ?? true
+            let round = ev.payload["round_index"]?.intValue
             switch ev.kind {
             case "message.user":
-                question = ev; heard = []; lastSaid = [:]; citedAt = [:]; lastAt = ev.createdAt
+                question = ev; heard = []; replies = []; lastSaid = [:]; closedIn = []; spokeIn = []
+                lastAt = ev.createdAt; newest = ev.seq
             case "message.member":
-                lastAt = ev.createdAt
+                lastAt = ev.createdAt; newest = ev.seq
                 guard let who else { break }
                 let k = key(who)
-                active.remove(k); heard.insert(k); lastSaid[k] = ev.seq
-                for m in mentioned(in: text(ev), members: members) where key(m) != k { citedAt[key(m)] = ev.seq }
+                active.remove(k); lastSaid[k] = ev.seq; readTo[k] = max(readTo[k] ?? 0, ev.seq)
+                replies.append((ev.seq, k, text(ev)))
+                if ours { heard.insert(k); if let round { spokeIn.insert(round) } }
             case "turn.started":
                 lastAt = ev.createdAt
                 reportsStarts = true
                 if let who { active.insert(key(who)) }
             case _ where closingTurns.contains(ev.kind):
                 lastAt = ev.createdAt
-                if let who { let k = key(who); active.remove(k); heard.insert(k); lastSaid[k] = max(lastSaid[k] ?? 0, ev.seq) }
+                guard let who else { break }
+                let k = key(who)
+                active.remove(k)
+                readTo[k] = max(readTo[k] ?? 0, ev.payload["seen_through_seq"]?.intValue ?? 0)
+                guard ours else { break }
+                heard.insert(k)
+                // The gateway ends a turn in a round, and a bot cited again can have a turn in the
+                // next one; in a room that names no rounds the bot is done answering, as after a
+                // message.
+                if let round { closedIn.insert("\(round):\(k)") } else { lastSaid[k] = max(lastSaid[k] ?? 0, ev.seq) }
             case "room.activity":
                 let s = status(ev)
                 let named = who ?? member(s.split(separator: " ").first.map(String.init), in: members)
@@ -109,12 +156,34 @@ enum GroupActivity {
                 break
             }
         }
-        let working = members.filter { active.contains(key($0)) }
-        guard working.isEmpty, !reportsStarts, let question, now.timeIntervalSince1970 - lastAt < guessWindow else { return working }
+        let reported = members.filter { active.contains(key($0)) }
+        guard reported.isEmpty, !reportsStarts, let question else { return Reading(reported: reported, lastAt: lastAt) }
+
+        // The first round: the bots the message asks (all of them when it names none), in the
+        // room's order.
         let asked = mentioned(in: text(question), members: members)
-        let next = (asked.isEmpty ? members : asked).first { !heard.contains(key($0)) }
-            ?? members.first { m in citedAt[key(m)].map { $0 > (lastSaid[key(m)] ?? 0) } ?? false }
-        return next.map { [$0] } ?? []
+        if let first = (asked.isEmpty ? members : asked).first(where: { !heard.contains(key($0)) }) {
+            return Reading(next: first, lastAt: lastAt)
+        }
+        // The two after it, as the gateway plans them (plan_next_task): the bots another bot
+        // cited after they last spoke, in the room's order, the list turned one place more each
+        // round. A bot whose turn in the round is over, or that has read the whole thread
+        // already, is passed over; a round in which no bot spoke ends the discussion.
+        var citedAt: [String: Int] = [:]
+        for r in replies {
+            for m in mentioned(in: r.text, members: members) where key(m) != r.speaker { citedAt[key(m)] = r.seq }
+        }
+        let cited = members.filter { m in citedAt[key(m)].map { $0 > (lastSaid[key(m)] ?? 0) } ?? false }
+        guard !cited.isEmpty else { return Reading(lastAt: lastAt) }
+        for round in 1...2 {
+            let turn = round % cited.count
+            let order = cited[turn...] + cited[..<turn]
+            if let next = order.first(where: { !closedIn.contains("\(round):\(key($0))") && (readTo[key($0)] ?? 0) < newest }) {
+                return Reading(next: next, lastAt: lastAt)
+            }
+            guard spokeIn.contains(round) else { break }
+        }
+        return Reading(lastAt: lastAt)
     }
 }
 
@@ -211,16 +280,22 @@ struct GroupChatHeader: View {
                             Text(Self.short(room.name, 26)).font(.caption.weight(.semibold)).lineLimit(1)
                             Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                         }
-                        // Shortened in code, not by a frame: the plate hugs its text (fixedSize).
+                        // Shortened in code, not by a frame, so the plate hugs its text.
                         Text(Self.short(GroupActivity.names(room.members), 42)).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
-                    .fixedSize()
+                    // Its full height, but never wider than the room between the circles: with
+                    // larger text or long names the lines end in "…" (a plate that kept its
+                    // width pushed the back circle off the screen).
+                    .fixedSize(horizontal: false, vertical: true)
                     .glassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // The plate is offered that room before the spacers beside it share what is left, so
+            // it is cut short only when its text does not fit.
+            .layoutPriority(1)
             .accessibilityLabel("\(room.name): \(GroupActivity.names(room.members))")
             .accessibilityHint("Shows the members")
             .accessibilityIdentifier("group.header")

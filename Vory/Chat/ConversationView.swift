@@ -466,7 +466,7 @@ struct ChatHeader: View {
                             Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                         }
                         // Shortened in code like the title: a compaction notice runs to a full
-                        // sentence and the pill (fixedSize) stretched past the screen.
+                        // sentence, and the pill would stretch to the edges for it.
                         // While it works: the goal the on-device model wrote, else the step it is on.
                         let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
                         let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
@@ -479,12 +479,18 @@ struct ChatHeader: View {
                             .animation(.snappy, value: chat.botState == .awaitingApproval)
                     }
                     .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
-                    .fixedSize()
+                    // Its full height, but never wider than the room between the circles: with
+                    // larger text the lines end in "…" (a pill that kept its width pushed the back
+                    // circle off the screen).
+                    .fixedSize(horizontal: false, vertical: true)
                     .glassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // The pill is offered that room before the spacers beside it share what is left, so
+            // it is cut short only when its text does not fit.
+            .layoutPriority(1)
             .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.05)) { popped = true } }
             .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
             .accessibilityIdentifier("chat.titlePill")

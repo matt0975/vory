@@ -261,6 +261,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func beginResume() {
         if items.isEmpty, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
             items = TranscriptItem.fromHistory(cached)
+            fetchedRowIDs = Set(items.map(\.id))
         }
         isResuming = true
         resumeError = nil
@@ -284,6 +285,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard isResuming, items.isEmpty else { return }
         let msgs = (r["messages"]?.arrayValue ?? []).compactMap { try? $0.decode(TranscriptMessage.self) }
         items = TranscriptItem.fromHistory(msgs)
+        fetchedRowIDs = Set(items.map(\.id))
     }
 
     private func saveTranscriptCache() {
@@ -334,6 +336,22 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     var isBuildingSnapshot: Bool { snapshotsBuilding > 0 }
     /// Events that arrived while a snapshot was being made, handled after it in their order.
     private var heldEvents: [GatewayEvent] = []
+    /// How many of the held events came before the reply of the snapshot applied last. That
+    /// snapshot shows them already: handled again on top of it, a tool call came twice and a
+    /// reply's text doubled.
+    private var heldShownBySnapshot = 0
+    /// Snapshot replies in the order they came, and the newest one applied. Two can be in
+    /// flight for one chat (a reconnect and the return to the app both re-read it); the older
+    /// one finishing last must not put the thread back as it was.
+    private var snapshotsAnswered = 0
+    private var newestSnapshotApplied = 0
+    /// The rows the last snapshot put in (or a REST page, or the cached copy of the chat). A row
+    /// that appears while a snapshot is being made and is not one of these was added here (a
+    /// message sent, its error): the snapshot was taken before it.
+    private var fetchedRowIDs: Set<String> = []
+    /// Runs before each snapshot's rows are made, off the main actor; nil in the app. A test
+    /// holds a build here to say what arrives while it runs.
+    var beforeSnapshotRows: (@Sendable (JSONValue) async -> Void)?
 
     /// The rows of a snapshot's history, and the same rows under the ids of the rows shown that
     /// say the same thing (`keepingIDs`). Decoding and building a long chat's history took the
@@ -363,40 +381,74 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// (`snapshotRows`); events that arrive meanwhile wait, and are handled after it in the
     /// order they came, as they were when the snapshot was applied the moment it arrived.
     func apply(snapshot r: JSONValue) async {
+        // The reply's ids are the chat's at once. Events are routed to a chat by its runtime id
+        // (`GatewayRuntime.handle(event:)`): taken only after the rows were made, every event of
+        // a turn already running went nowhere meanwhile, on a chat just opened (no id yet) or
+        // one the gateway gave a new id, and a reply that finished then never ended here.
+        if let rid = r["session_id"]?.stringValue, !rid.isEmpty { runtimeID = rid }
+        if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
+        snapshotsAnswered += 1
+        let order = snapshotsAnswered
+        // Events held so far came before this reply: the snapshot shows them already.
+        let heldBefore = heldEvents.count
+        let answeredAt = Date()
         let snapInfo = try? r["info"]?.decode(SessionLiveInfo.self)
         let running = r["running"]?.boolValue ?? snapInfo?.running ?? false
         let shown = items
         let streamingID = streamingItemID
+        let beforeRows = beforeSnapshotRows
         let signpost = GatewayRuntime.signposter.beginInterval("snapshot")
         snapshotsBuilding += 1
         let rows = await Task.detached(priority: .userInitiated) {
-            Self.snapshotRows(r, running: running, shown: shown, streamingID: streamingID)
+            await beforeRows?(r)
+            return Self.snapshotRows(r, running: running, shown: shown, streamingID: streamingID)
         }.value
         snapshotsBuilding -= 1
-        // The thread changed here while the rows were made (a message sent, a note added):
-        // they are paired with the thread as it is now.
-        let paired = items == shown && streamingItemID == streamingID ? rows.paired : Self.keepingIDs(rows.built, from: items.filter { $0.id != streamingItemID })
-        apply(snapshot: r, info: snapInfo, rows: paired)
+        // Left out when a newer snapshot was applied while this one's rows were made: that one
+        // shows everything this one does, and more.
+        if order > newestSnapshotApplied {
+            newestSnapshotApplied = order
+            heldShownBySnapshot = heldBefore
+            // Rows added here while the rows were made (a message sent, its error): the
+            // snapshot was taken before them, so they stay, after its rows. A snapshot or page
+            // put in meanwhile is the gateway's, not this device's.
+            let unchanged = items == shown
+            let shownIDs = unchanged ? [] : Set(shown.map(\.id))
+            let added = unchanged ? [] : items.filter { !shownIDs.contains($0.id) && !fetchedRowIDs.contains($0.id) }
+            let addedIDs = Set(added.map(\.id))
+            // The thread changed here while the rows were made: they are paired with the
+            // thread as it is now, leaving out the rows that stay as they are.
+            let paired = unchanged && streamingItemID == streamingID ? rows.paired
+                : Self.keepingIDs(rows.built, from: items.filter { $0.id != streamingItemID && !addedIDs.contains($0.id) })
+            apply(snapshot: r, info: snapInfo, rows: paired, answeredAt: answeredAt, added: added)
+        }
         GatewayRuntime.signposter.endInterval("snapshot", signpost)
-        if snapshotsBuilding == 0, !heldEvents.isEmpty {
-            let held = heldEvents
+        if snapshotsBuilding == 0 {
+            let held = heldEvents.dropFirst(heldShownBySnapshot)
             heldEvents = []
+            heldShownBySnapshot = 0
             for ev in held { handle(event: ev) }
         }
     }
 
-    private func apply(snapshot r: JSONValue, info snapInfo: SessionLiveInfo?, rows: [TranscriptItem]) {
-        runtimeID = r["session_id"]?.stringValue ?? runtimeID
-        if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
+    /// `answeredAt`: when the snapshot's reply came; a question asked since is newer than it.
+    /// `added`: rows this device added after the reply, which go after the snapshot's.
+    private func apply(snapshot r: JSONValue, info snapInfo: SessionLiveInfo?, rows: [TranscriptItem], answeredAt: Date, added: [TranscriptItem]) {
         info = snapInfo
         if let t = info?.title, !t.isEmpty { title = t }
         var keptAttachments: [String: [AttachmentPreview]] = [:]
         for it in items { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
         items = rows
         toolIndex = [:]
-        cards = []
-        cardShownAt = [:]
-        isRunning = r["running"]?.boolValue ?? info?.running ?? false
+        // A question asked while the rows were made (an approval, a clarify, a password) is
+        // newer than the snapshot's open requests, so it stays: cleared, the bot waited out the
+        // question with nothing on screen to answer it. One only an older list had goes.
+        cards = cards.filter { (cardAsOf[$0.id] ?? .distantPast) >= answeredAt }
+        cardShownAt = cardShownAt.filter { id, _ in cards.contains { $0.id == id } }
+        cardAsOf = cardAsOf.filter { id, _ in cards.contains { $0.id == id } }
+        // A message sent here since is a turn the snapshot cannot know about yet.
+        let sentSince = startedHere && added.contains { if case .user = $0.kind { return true }; return false }
+        isRunning = (r["running"]?.boolValue ?? info?.running ?? false) || sentSince
         if let inflight = r["inflight"], !inflight.isNull {
             let user = inflight["user"]?.stringValue ?? ""
             let lastUser = items.last(where: { if case .user = $0.kind { return true }; return false })
@@ -446,17 +498,24 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 if !streaming { finishStreaming(finalText: nil) }
             }
         }
+        // No reply streams in this snapshot: the one this device was drawing is history's row
+        // now. Its id kept, the next turn's text went into a row no longer there, and its end
+        // added the answer a second time.
+        if let id = streamingItemID, !items.contains(where: { $0.id == id }) { streamingItemID = nil; assembler.reset() }
+        fetchedRowIDs = Set(items.map(\.id))
+        items += added
         if let q = r["queued"]?["user"]?.stringValue, !q.isEmpty { queue = [QueuedMessage(text: q)] }
+        // The snapshot's questions are as old as its reply (the `answeredAt` filter above).
         if let open = r["open_requests"]?.arrayValue {
             for o in open {
                 guard let id = o["id"]?.stringValue, let method = o["method"]?.stringValue else { continue }
-                addCard(PendingCard(id: id, method: method, params: o["params"] ?? .object([:])))
+                addCard(PendingCard(id: id, method: method, params: o["params"] ?? .object([:])), asOf: answeredAt)
             }
         }
         if let pa = r["pending_approval"], !pa.isNull, let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) {
             var params = pa.objectValue ?? [:]
             params["session_id"] = .string(runtimeID)
-            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true))
+            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: answeredAt)
         }
         if isRunning { activity.start(for: self) }
         saveTranscriptCache()
@@ -492,7 +551,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) else { continue }
             var params = pa.objectValue ?? [:]
             params["session_id"] = .string(runtimeID)
-            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true))
+            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: asked)
         }
     }
 
@@ -864,6 +923,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// When each card appeared here.
     private var cardShownAt: [String: Date] = [:]
+    /// When the gateway last said each card's question was waiting: when the question came, or
+    /// when the list that had it was read (a snapshot's reply, the pending approvals).
+    private var cardAsOf: [String: Date] = [:]
     private var lastApprovalCheck = Date.distantPast
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
@@ -891,9 +953,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         Task { await pollPendingApprovals() }
     }
 
-    private func addCard(_ card: PendingCard) {
+    /// `asOf`: when the gateway last said the question was waiting (`cardAsOf`); now, unless it
+    /// came in a list.
+    private func addCard(_ card: PendingCard, asOf: Date = Date()) {
         guard !cards.contains(where: { $0.id == card.id }) else { return }
         cardShownAt[card.id] = Date()
+        cardAsOf[card.id] = asOf
         cards.append(card)
         runtime.setAttention(storedID: storedID, needed: true)
         activity.update(for: self, attention: true)

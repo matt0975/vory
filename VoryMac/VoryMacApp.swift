@@ -71,6 +71,9 @@ struct VoryMacApp: App {
                     Task { await model.push.refreshAuthorization() }
                     // Anything changed on another device since: take it.
                     CloudSync.shared.syncNow()
+                    // Which gateways have a remembered sign-in, read again: the list cannot be
+                    // read while the Mac is locked, and the app may have started then.
+                    model.store.remembered.reload()
                     // A session that ran out while another app was in front: a remembered
                     // sign-in signs it in again now.
                     Task { await model.signInAgainIfExpired() }

@@ -35,11 +35,13 @@ struct ComposerTextView: View {
     var onSend: () -> Void = {}
     var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
     var onArrow: (Int) -> Bool = { _ in false }
-    /// A bare Return with a chooser open: its item, instead of a send. True when taken.
+    /// A bare Return with a chooser open: its item instead of a send (or the composer's own send
+    /// of a typed model name). True when used.
     var onReturn: () -> Bool = { false }
     /// Taken so the call site is one; the Mac's Return always sends (Shift-Return adds a line).
     var returnSends = false
-    /// A chooser is open above the field: Tab takes its item and Escape closes it.
+    /// A chooser is open above the field: Tab completes its marked item (never runs it) and
+    /// Escape closes it.
     var menuOpen = false
     var onTab: () -> Bool = { false }
     var onEscape: () -> Bool = { false }
@@ -117,11 +119,13 @@ struct ComposerTextView: UIViewRepresentable {
     var onPasteData: @MainActor @Sendable (Data, String, UTType) -> Void = { _, _, _ in }
     /// Hardware Up (-1) / Down (1): history recall. Return true when handled.
     var onArrow: (Int) -> Bool = { _ in false }
-    /// A bare Return with a picker open (slash commands, mentions): the item. True when taken.
+    /// A bare Return with a picker open (slash commands, mentions): the item (or the composer's
+    /// own send of a typed model name). True when used.
     var onReturn: () -> Bool = { false }
     /// Settings › Appearance › Return key sends: the on-screen Return sends instead of adding a line.
     var returnSends = false
-    /// A chooser is open above the field: a hardware Tab takes its item and Escape closes it
+    /// A chooser is open above the field: a hardware Tab completes its marked item (never runs
+    /// it) and Escape closes it
     /// (the key commands are only there while it is open, so Tab keeps its own meaning otherwise).
     var menuOpen = false
     var onTab: () -> Bool = { false }
@@ -299,7 +303,7 @@ final class PasteTextView: UITextView {
         let newline = UIKeyCommand(input: "\r", modifierFlags: .shift, action: #selector(shiftReturnPressed))
         let commandSend = UIKeyCommand(input: "\r", modifierFlags: .command, action: #selector(commandReturnPressed))
         var commands = [up, down, send, newline, commandSend]
-        // With the chooser open and a hardware keyboard (an iPad's, say): Tab takes the marked
+        // With the chooser open and a hardware keyboard (an iPad's, say): Tab completes the marked
         // item and Escape closes the list, as in the Mac app.
         if coordinator?.parent.menuOpen == true {
             commands.append(UIKeyCommand(input: "\t", modifierFlags: [], action: #selector(tabPressed)))

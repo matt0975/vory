@@ -65,13 +65,29 @@ final class RememberSignInUITests: XCTestCase {
     }
 
     /// The copy on screen: every tab page is mounted, so the first match can be another one.
+    /// Not one under the software keyboard either (a simulator without a hardware keyboard):
+    /// XCUITest calls that hittable, and a tap there lands on a key. iOS's Save Password
+    /// prompt is answered on the way.
     private func hittable(_ query: XCUIElementQuery, timeout: TimeInterval = 10) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let e = query.allElementsBoundByIndex.first(where: { $0.isHittable }) { return e }
+            declineSavePassword()
+            let keyboard = app.keyboards.firstMatch
+            let covered = keyboard.exists ? keyboard.frame : .null
+            if let e = query.allElementsBoundByIndex.first(where: { $0.isHittable && !$0.frame.intersects(covered) }) { return e }
             RunLoop.current.run(until: Date().addingTimeInterval(0.3))
         }
         return nil
+    }
+
+    /// iOS's own "Save Password?" (Password AutoFill) comes up over the app when the form goes
+    /// away with the software keyboard still on the password field, and covers the tab bar.
+    /// Not Now, as someone who keeps the sign-in in Vory would answer.
+    private func declineSavePassword() {
+        let prompt = app.sheets.matching(NSPredicate(format: "label CONTAINS 'Save Password'")).firstMatch
+        guard prompt.exists else { return }
+        let notNow = prompt.buttons["Not Now"]
+        if notNow.exists { notNow.tap() }
     }
 
     /// Scrolls the form until the element is on screen.
@@ -127,11 +143,15 @@ final class RememberSignInUITests: XCTestCase {
         let remember = try XCTUnwrap(scrolledTo(app.switches.matching(identifier: "gateway.rememberSignIn")), "no Remember switch on the password form")
         XCTAssertEqual(remember.value as? String, "0", "Remember sign-in must start off")
         shot("remember-switch-off")
-        // The switch itself, not the row's label (a tap there does nothing).
-        let knob = remember.switches.firstMatch
-        if knob.exists { knob.tap() } else { remember.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
+        // The switch itself, not the row's label (a tap there does nothing). Tapped again if it
+        // went in while the form was still moving (the keyboard going down scrolls it).
         let turnedOn = NSPredicate(format: "value == '1'")
-        if XCTWaiter.wait(for: [expectation(for: turnedOn, evaluatedWith: remember)], timeout: 5) != .completed {
+        for _ in 0..<3 where remember.value as? String != "1" {
+            let knob = remember.switches.firstMatch
+            if knob.exists { knob.tap() } else { remember.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
+            if XCTWaiter.wait(for: [expectation(for: turnedOn, evaluatedWith: remember)], timeout: 5) == .completed { break }
+        }
+        if remember.value as? String != "1" {
             print("SWITCH-TREE \(app.debugDescription)")
             shot("remember-switch-stuck")
             XCTFail("the Remember switch did not turn on")
@@ -149,13 +169,15 @@ final class RememberSignInUITests: XCTestCase {
         // Settings › Gateways lists the remembered sign-in.
         let newChat = app.buttons["chats.new"].firstMatch
         XCTAssertTrue(newChat.waitForExistence(timeout: 40), "the app did not open after Save")
-        // The tab bar is behind the software keyboard when one is up (the form's last field).
-        if app.keyboards.firstMatch.exists {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
-                .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
-            sleep(1)
+        // With the software keyboard up at Save, iOS asks to save the password over the chat
+        // list, and the tab bar is under it until it is answered (`hittable` does).
+        guard let settingsTab = hittable(app.buttons.matching(identifier: "tab.settings"), timeout: 20) else {
+            print("NO-SETTINGS-TREE \(app.debugDescription)")
+            shot("remember-no-settings-tab")
+            XCTFail("no Settings tab")
+            return
         }
-        try XCTUnwrap(hittable(app.buttons.matching(identifier: "tab.settings"), timeout: 20), "no Settings tab").tap()
+        settingsTab.tap()
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "settings.row.gateways")), "no Gateways row").tap()
         let forget = try XCTUnwrap(hittable(app.buttons.matching(identifier: "gateway.forgetSignIn")), "no Forget row for the remembered sign-in")
         shot("remembered-in-settings")

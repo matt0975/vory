@@ -36,8 +36,9 @@ struct ComposerView: View {
     /// The gateway's models, loaded the first time "/model " is typed in this chat.
     @State private var modelOptions: ModelOptionsResult?
     @State private var modelOptionsLoading = false
-    /// The chooser's marked row: what Return or Tab takes, moved with the arrow keys.
-    @State private var menuSelection = 0
+    /// A chooser row marked on purpose (the arrows, or a model completed with Tab), for the text
+    /// it was marked on; otherwise SlashMenu.markedIndex decides what is marked.
+    @State private var menuMark: SlashMenu.Mark?
     /// Escape closed the chooser for the word being typed; a new word opens it again.
     @State private var menuDismissed = false
     @State private var dictation = DictationController()
@@ -51,7 +52,8 @@ struct ComposerView: View {
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
     private var mentionQuery: String? {
-        guard !text.hasPrefix("/"), let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("@") else { return nil }
+        guard !text.hasPrefix("/"), !showingRecalled,
+              let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("@") else { return nil }
         return String(last.dropFirst())
     }
     private var mentionSuggestions: [ProfileInfo] {
@@ -75,54 +77,81 @@ struct ComposerView: View {
         withAnimation(.snappy) { longTextOffer = false; text = "" }
     }
 
+    /// Up or Down put a history entry in the field and nothing has been typed since: no chooser
+    /// opens for it (see SlashMenu.isRecalled).
+    private var showingRecalled: Bool { SlashMenu.isRecalled(text, history: chat.composerHistory, cursor: historyCursor) }
+
     /// The chooser above the field: the gateway's commands and skills while a "/word" is typed,
     /// its models after "/model " (see SlashMenu).
-    private var menuContext: SlashMenu.Context? { SlashMenu.context(for: text) }
+    private var menuContext: SlashMenu.Context? { showingRecalled ? nil : SlashMenu.context(for: text) }
+
+    /// The chooser's context while it is open (not closed with Escape).
+    private var openMenuContext: SlashMenu.Context? { menuDismissed ? nil : menuContext }
 
     private var menuItems: [SlashMenu.Item] {
-        guard !menuDismissed, let ctx = menuContext else { return [] }
+        guard let ctx = openMenuContext else { return [] }
         switch ctx.kind {
         case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query) } ?? []
-        case .model: return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, query: ctx.query) } ?? []
+        case .model:
+            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.info?.provider, query: ctx.query) } ?? []
         }
     }
 
+    /// The row Return takes, shown marked; nil when none is (see SlashMenu.markedIndex).
+    private var markedIndex: Int? {
+        openMenuContext.flatMap { SlashMenu.markedIndex(menuItems, context: $0, mark: menuMark) }
+    }
+
     /// The model list is on its way: the chooser says so rather than staying shut.
-    private var menuLoading: Bool { !menuDismissed && menuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
+    private var menuLoading: Bool { openMenuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
 
     /// The command list scrolls inside a cap: about 30 % of the screen, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
 
-    /// A row picked (tapped, or taken with Return or Tab). A command that takes nothing runs at
-    /// once when it is the whole message, as if typed and sent; anything else replaces the word
-    /// being typed, ready for what follows (a "/model " pick opens the model list). A model
-    /// switches this chat the way the model menu does, with a line in the thread.
-    private func pick(_ item: SlashMenu.Item) {
-        menuSelection = 0
-        if item.kind == .model {
-            text = ""
-            Task { await chat.switchModel(provider: item.provider, model: item.name) }
-            return
-        }
+    /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
+    /// command that takes nothing runs as if typed and sent, a model switches this chat the way
+    /// the model menu does (with a line in the thread), the chat's own model stays, and anything
+    /// else goes in the field.
+    private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
+        menuMark = nil
         // With a reply quoted or files staged the text goes out as a message, not a command
         // (ChatSession.send), so the command waits in the field instead.
-        if item.runsOnPick, menuContext?.wholeText == true, quote.isEmpty, chat.staged.isEmpty {
-            text = "/" + item.name
+        let outcome = SlashMenu.outcome(of: item, in: text, wholeText: menuContext?.wholeText == true,
+                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty)
+        switch outcome {
+        case .run(let command):
+            text = command
             Task { await send() }
-            return
+        case .fill(let filled):
+            text = filled
+            // A model completed with Tab stays marked, so Return then takes that row, provider and all.
+            if item.kind == .model, let ctx = SlashMenu.context(for: filled) { menuMark = SlashMenu.Mark(context: ctx, id: item.id) }
+        case .switchModel:
+            text = ""
+            Task { await chat.switchModel(provider: item.provider, model: item.name) }
+        case .keepModel:
+            text = ""
         }
-        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        if words.isEmpty { words = [""] }
-        words[words.count - 1] = "/" + item.name
-        text = words.joined(separator: " ") + " "
     }
 
-    /// Return (or Tab) with a picker open takes its marked item (a bare Return would otherwise
-    /// add a line, or send, under a half-typed command). True when something was picked.
-    private func pickMarkedSuggestion() -> Bool {
+    /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
+    /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
+    /// SlashMenu.returnAction). True when Return was used here.
+    private func takeOnReturn() -> Bool {
+        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex) {
+        case .take(let item): pick(item); return true
+        case .send: Task { await send() }; return true
+        case .keep: break
+        }
+        if let p = mentionSuggestions.first { pickMention(p); return true }
+        return false
+    }
+
+    /// Tab completes the marked row (the top one when none is marked) and never runs anything.
+    private func completeOnTab() -> Bool {
         let items = menuItems
-        if !items.isEmpty { pick(items[min(menuSelection, items.count - 1)]); return true }
+        if !items.isEmpty { pick(items[markedIndex ?? 0], completing: true); return true }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
     }
@@ -130,9 +159,9 @@ struct ComposerView: View {
     /// Up and Down move the chooser's mark (round the ends) while it is open; history recall
     /// has them otherwise.
     private func moveSelection(_ delta: Int) -> Bool {
-        let n = menuItems.count
-        guard n > 0 else { return false }
-        menuSelection = (min(menuSelection, n - 1) + delta + n) % n
+        let items = menuItems
+        guard let ctx = openMenuContext, let i = SlashMenu.move(markedIndex, by: delta, count: items.count) else { return false }
+        menuMark = SlashMenu.Mark(context: ctx, id: items[i].id)
         return true
     }
 
@@ -158,7 +187,7 @@ struct ComposerView: View {
     var body: some View {
         VStack(spacing: 8) {
             if !menuItems.isEmpty || menuLoading {
-                SlashMenuList(items: menuItems, selection: menuSelection, loading: menuLoading, cap: commandListCap) { pick($0) }
+                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
                     // In place, not sliding up from under the keyboard.
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
             if !mentionSuggestions.isEmpty {
@@ -335,19 +364,19 @@ struct ComposerView: View {
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
                          onArrow: { moveSelection($0) || recallHistory($0) },
-                         onReturn: { pickMarkedSuggestion() },
+                         onReturn: { takeOnReturn() },
                          returnSends: returnSends,
                          menuOpen: !menuItems.isEmpty || menuLoading,
-                         onTab: { pickMarkedSuggestion() },
+                         onTab: { completeOnTab() },
                          onEscape: { dismissMenu() })
             .padding(.leading, 14).padding(.vertical, 7)
             .task { catalog = await chat.commandsCatalog() }
             // The model list loads when "/model " is first typed, and is kept for this chat.
             .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
             // A new word (or the model list after "/model") opens a dismissed chooser again,
-            // and the mark starts at the top whenever the list is narrowed.
+            // and a mark made by hand is let go once the list is narrowed (the usual mark is back).
             .onChange(of: menuContext.map { "\($0.kind)-\($0.anchor)" }) { _, _ in menuDismissed = false }
-            .onChange(of: menuContext?.query) { _, _ in menuSelection = 0 }
+            .onChange(of: menuContext) { _, ctx in if menuMark?.context != ctx { menuMark = nil } }
             .onChange(of: text) { old, new in
                 // Offered once as the text gets long (a paste lands in one jump;
                 // typing crosses the line once); "Keep" holds until it shrinks again.
