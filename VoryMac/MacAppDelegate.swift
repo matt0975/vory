@@ -11,6 +11,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         LocalNotifier.registerCategories()
         // The daily backup while the app runs (the phone has its background refresh for this).
         Task { @MainActor in BackupScheduler.start() }
+        // Continuity Camera only where a photo can go, not in every right-click menu.
+        Task { @MainActor in ContinuityMenuFilter.start() }
     }
 
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
