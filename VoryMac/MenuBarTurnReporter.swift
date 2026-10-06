@@ -36,6 +36,8 @@ final class TurnBoard {
 
     private func badge() {
         NSApp.dockTile.badgeLabel = attention > 0 ? "\(attention)" : nil
+        // The idle bots' eyes play only while something is working (#248).
+        if BotAmbient.shared.anyWorking != !turns.isEmpty { BotAmbient.shared.anyWorking = !turns.isEmpty }
     }
 }
 

@@ -917,6 +917,20 @@ public final class BotAmbient {
     /// The display is asleep or the screen is locked (Mac): every face holds still. Drawing
     /// into a window nobody can see made each frame wait on the render server.
     public var displayAsleep = false
+    /// A turn is running or waiting anywhere (Mac, fed by the menu bar's turn board). Idle
+    /// bots blink and glance only while it is; otherwise they hold still and cost nothing.
+    public var anyWorking = false
+    /// Settings › Appearance › Animate bots (Mac): off, every bot holds still.
+    public static let animateKey = "bots.animate"
+    /// For a decorative bot that plays the working routines (the sidebar's, Home's): on the
+    /// Mac only while something is working, so an idle app holds still (#248); always elsewhere.
+    public var decorativeActive: Bool {
+        #if os(macOS)
+        anyWorking
+        #else
+        true
+        #endif
+    }
     /// True while a list is being scrolled (cleared shortly after the last movement); the Bots
     /// page bots play while it is.
     public var scrolling = false
@@ -1021,6 +1035,14 @@ public struct BotFaceView: View {
     @State private var blobFrozen: Double = 0
     @State private var blobRunning = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Whether this bot's window is where someone can see it (Mac; always true elsewhere).
+    @Environment(\.botsLive) private var windowLive
+    #if os(macOS)
+    @AppStorage(BotAmbient.animateKey) private var animateSetting = true
+    #endif
+    /// A few frames' grace after the bot stops or its look changes while held, so the frame it
+    /// holds is the current one at rest (eyes open, body still), never a half blink.
+    @State private var settling = false
     private var ambient: BotAmbient { BotAmbient.shared }
     /// Per-bot phase: shape, eyes and name, folded to a small non-negative number (the name's
     /// hash wraps, and a negative seed would skew every `%` below it).
@@ -1128,7 +1150,7 @@ public struct BotFaceView: View {
     /// piece in front, each in its own container (in one container they would merge into a
     /// single shape). Sleepy lids are strokes, so they stay painted. The rim sheen is a ring
     /// (the body minus the body shrunk) lit along a short arc.
-    @ViewBuilder private func liveGlass(time t: Double, gaze g: CGPoint, glanceFree: Bool, motion m: BotFace.Motion, wobble: Bool) -> some View {
+    @ViewBuilder private func liveGlass(time t: Double, gaze g: CGPoint, glanceFree: Bool, motion m: BotFace.Motion, wobble: Bool, eyeLife: Bool) -> some View {
         let tint = Color(botHex: spec.hex) ?? Color(red: 0.49, green: 0.36, blue: 1)
         // One shape for every layer: the same plate, morphing in place, never re-created.
         let plate = BotBodyShape(spec: spec, time: t, active: wobble, morph: m.morph, target: m.morphTarget, phase: m.blobPhase)
@@ -1175,12 +1197,12 @@ public struct BotFaceView: View {
                     // The lids are painted; the roll and the fade are applied by the view, once.
                     let lids: BotFace.Motion = { var e = m.transformsStill; e.eyeOpacity = 1; return e }()
                     Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
-                        BotFace.draw(spec, in: &ctx, size: sz, time: t, active: wobble, gaze: g, part: .eyes, breathe: false, idleEyes: !mood.still, move: false, glanceFree: glanceFree, motion: lids)
+                        BotFace.draw(spec, in: &ctx, size: sz, time: t, active: wobble, gaze: g, part: .eyes, breathe: false, idleEyes: eyeLife, move: false, glanceFree: glanceFree, motion: lids)
                     }
                 } else {
                     GlassEffectContainer {
                         Color.clear
-                            .glassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: t, active: !mood.still, gaze: g, glanceFree: glanceFree, motion: m))
+                            .glassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: t, active: eyeLife, gaze: g, glanceFree: glanceFree, motion: m))
                             .glassEffectTransition(.identity)
                     }
                 }
@@ -1190,11 +1212,27 @@ public struct BotFaceView: View {
     }
 
     public var body: some View {
+        // Whether this bot moves at all. On the Mac every bot cost CPU all the time, in the
+        // background too (#248): it moves only while its window is visible and in front, the
+        // display is awake, Animate bots is on and Reduce Motion is off; held, it shows its
+        // current pose at rest. The idle eyes (blinks, glances) play only while something is
+        // working. Elsewhere this is as before: the display flag is never set off the Mac.
+        #if os(macOS)
+        let live = !drawn && windowLive && !ambient.displayAsleep && animateSetting && !reduceMotion
+        let eyeLife = live && ambient.anyWorking && !mood.still
+        #else
+        let live = !drawn && windowLive && !ambient.displayAsleep
+        let eyeLife = live && !mood.still
+        #endif
         // Tilted well past level (Bots page), the eyes stop wandering and follow the phone; within
         // a few degrees they add a little of the tilt to their own glances.
         // Small bots (beside a bubble, on the toolbar) do not follow scrolls or tilt: a long
         // thread has dozens of them and each would redraw on every scroll tick.
+        #if os(macOS)
+        let listens = size >= 32 && ambient.enabled && live
+        #else
         let listens = size >= 32 && ambient.enabled
+        #endif
         let tilt = listens ? ambient.tilt : .zero
         let tiltMag = hypot(tilt.x, tilt.y)
         let held = mood.followsTilt && listens && tiltMag > 0.3
@@ -1206,25 +1244,29 @@ public struct BotFaceView: View {
         // The frame blends from the last pose for 0.4 s after a state change.
         let leaving = Date().timeIntervalSince(exitAt) < 0.5
         // Any state but idle keeps the clock running: the poses are functions of time.
-        let animating = (active || state != .idle || finished != nil || tapped != nil || leaving) && !drawn
-        let wobble = state == .working
+        let animating = (active || state != .idle || finished != nil || tapped != nil || leaving) && live
+        let wobble = state == .working && (live || drawn)
+        let ticks = live && (animating || eyesBusy || gaze != shownGaze)
         let _ = spinTick
-        TimelineView(.animation(minimumInterval: animating ? 1 / 30 : 1 / 24, paused: ambient.displayAsleep || (!animating && !eyesBusy && gaze == shownGaze))) { timeline in
+        TimelineView(.animation(minimumInterval: animating ? 1 / 30 : 1 / 24, paused: !ticks && !settling)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let u = min(1, max(0, timeline.date.timeIntervalSince(gazeChangedAt) / 0.35))
             let ease = u * u * (3 - 2 * u)
             let g0 = CGPoint(x: gazeFrom.x + (gaze.x - gazeFrom.x) * ease, y: gazeFrom.y + (gaze.y - gazeFrom.y) * ease)
             let g = CGPoint(x: max(-1, min(1, g0.x + ambientGaze.x)), y: max(-1, min(1, g0.y + ambientGaze.y)))
-            let m = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped)
+            // Held (not live), the bot stands at rest in its current state: no turn, nod or lean
+            // part-way through, and the eyes open.
+            let posed = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped)
+            let m = live || drawn ? posed : posed.bodyStill
             let _ = { shown.pose = m }()
             Group {
                 if spec.isGlass && BotFace.liveGlass && !drawn && scenePhase == .active {
-                    liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble)
+                    liveGlass(time: t, gaze: g, glanceFree: !held, motion: m, wobble: wobble, eyeLife: eyeLife)
                 } else {
                     // The painted twin: the view applies the transforms, so it gets them zeroed;
                     // the sheen, the hold and the dimming it paints itself.
                     Canvas(opaque: false, rendersAsynchronously: false) { ctx, sz in
-                        BotFace.draw(spec, in: &ctx, size: sz, time: t, active: wobble, gaze: g, breathe: false, idleEyes: !drawn && !mood.still, move: false, glanceFree: !held, light: colorScheme == .light, motion: m.transformsStill)
+                        BotFace.draw(spec, in: &ctx, size: sz, time: t, active: wobble, gaze: g, breathe: false, idleEyes: eyeLife, move: false, glanceFree: !held, light: colorScheme == .light, motion: m.transformsStill)
                     }
                 }
             }
@@ -1246,10 +1288,16 @@ public struct BotFaceView: View {
             exitPose = shown.pose; exitAt = now
             // A silhouette on screen unwinds first: the new state starts 0.4 s later.
             stateSince = exitPose.morph > 0.01 ? now.addingTimeInterval(0.4) : now
+            // Held, the bot still shows the new state, at rest.
+            if !live { settle() }
         }
+        // Stopping (or starting) to move, and the eyes going still: one more frame at rest, so
+        // a held bot never keeps a half blink, an old state or a turn part-way through.
+        .onChange(of: live) { _, _ in settle() }
+        .onChange(of: eyeLife) { _, _ in settle() }
         // The blob's creep: the phase runs from where it froze, and freezes where it is. Reduce
-        // Motion keeps it frozen.
-        .onChange(of: wobble && !reduceMotion, initial: true) { _, running in
+        // Motion, and a held bot, keep it frozen.
+        .onChange(of: wobble && !reduceMotion && live, initial: true) { _, running in
             let now = Date().timeIntervalSinceReferenceDate * 0.19
             if running { blobOffset = blobFrozen - now } else if blobRunning { blobFrozen = now + blobOffset }
             blobRunning = running
@@ -1270,9 +1318,10 @@ public struct BotFaceView: View {
             spinTick += 1
         }
         // A quarter-second poll decides whether an idle bot has a blink or a glance coming up;
-        // between those it costs nothing.
-        .task(id: "\(animating)-\(drawn)-\(mood.still)") {
-            guard !animating, !drawn, !mood.still else { return }
+        // between those it costs nothing. None at all while the eyes are held (not live, or on
+        // the Mac while nothing is working): each poll was a wakeup per bot, four a second.
+        .task(id: "\(animating)-\(eyeLife)") {
+            guard eyeLife, !animating else { eyesBusy = false; return }
             while !Task.isCancelled {
                 eyesBusy = BotFace.eyesBusy(time: Date().timeIntervalSinceReferenceDate, seed: seed)
                 try? await Task.sleep(for: .milliseconds(eyesBusy ? 120 : 250))
@@ -1285,10 +1334,23 @@ public struct BotFaceView: View {
         // is exactly the pop the studio must not do on every tap.
         .onChange(of: spec) { _, _ in
             eyesBusy = true
+            settle()
             Task { try? await Task.sleep(for: .milliseconds(350)); eyesBusy = false }
         }
         .accessibilityHidden(true)
     }
+
+    /// Lets a paused bot draw a few more frames, so the frame it holds is current.
+    private func settle() {
+        settling = true
+        Task { try? await Task.sleep(for: .milliseconds(160)); settling = false }
+    }
+}
+
+extension EnvironmentValues {
+    /// Whether the bots in this window may move: false while the window is hidden, minimised,
+    /// covered or (main window) not in front. Set per window on the Mac; true elsewhere.
+    @Entry public var botsLive: Bool = true
 }
 
 extension Color {

@@ -54,6 +54,8 @@ struct VoryMacApp: App {
         // the menu bar item; the Dock icon, the Window menu or the menu bar item bring it back.
         Window("Vory", id: MacWindow.main) {
             MacRootView()
+                // Bots move only while this window is visible and in front (#248).
+                .botWindowLiveness(needsKey: true)
                 .environment(model)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
@@ -160,6 +162,7 @@ struct VoryMacApp: App {
         // in the menu bar, with a badge on the Dock for what needs you.
         MenuBarExtra {
             TurnMenu().environment(model)
+                .botWindowLiveness(needsKey: false)
         } label: {
             // A waveform while a voice session is live, else the turns and approvals.
             Image(systemName: voiceSession.isActive ? "waveform.badge.mic" : board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
@@ -170,6 +173,7 @@ struct VoryMacApp: App {
         // session starts and closed when it ends.
         Window("Voice Mode", id: MacWindow.voice) {
             MacVoiceHUD()
+                .botWindowLiveness(needsKey: false)
                 .environment(model)
                 .preferredColorScheme(.dark)
         }

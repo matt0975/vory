@@ -393,7 +393,8 @@ private struct RailMore: View {
 private struct NoChatView: View {
     var body: some View {
         VStack(spacing: 12) {
-            BotFaceView(spec: liveVory, size: 72, active: true, mood: BotFaceView.Mood(profile: "vory-mac-empty", state: .guide))
+            // The guide plays only while something is working; idle, it holds still (#248).
+            BotFaceView(spec: liveVory, size: 72, mood: BotFaceView.Mood(profile: "vory-mac-empty", state: BotAmbient.shared.decorativeActive ? .guide : .idle))
             Text("No chat selected").font(.title3.weight(.semibold))
             Text("Pick one from the list, or press ⌘N for a new one.").font(.callout).foregroundStyle(.secondary)
         }
@@ -430,7 +431,7 @@ private struct GatewayFooter: View {
     var body: some View {
         Button { editing = true } label: {
             VStack(spacing: 4) {
-                BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
+                BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil && BotAmbient.shared.decorativeActive, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
                     .overlay(alignment: .bottomTrailing) {
                         Circle().fill(dot).frame(width: 8, height: 8)
                             .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))

@@ -184,7 +184,7 @@ struct DashboardView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
-                BotFaceView(spec: AboutView.voryBot, size: 34, active: true)
+                BotFaceView(spec: AboutView.voryBot, size: 34, active: BotAmbient.shared.decorativeActive)
                 Text(greeting).font(.title.weight(.bold)).lineLimit(2).minimumScaleFactor(0.8)
             }
             Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day()).font(.subheadline).foregroundStyle(.secondary)
