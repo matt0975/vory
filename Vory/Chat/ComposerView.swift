@@ -14,6 +14,17 @@ struct ComposerView: View {
     var namespace: Namespace.ID
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
+    @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
+    /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
+    @AppStorage(ChatStyle.returnSends) private var returnSends = false
+    /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
+    private var holdStartsVoiceMode: Bool {
+        #if os(iOS)
+        return VoiceSettings.HoldMicAction(rawValue: holdMicRaw) == .voiceMode
+        #else
+        return false
+        #endif
+    }
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var showPhotos = false
     @State private var showCamera = false
@@ -80,19 +91,29 @@ struct ComposerView: View {
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
 
+    /// A command picked: it replaces the word being typed, not the whole line.
+    private func pickSlash(_ name: String) {
+        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        if words.isEmpty { words = [""] }
+        words[words.count - 1] = "/" + name
+        text = words.joined(separator: " ") + " "
+    }
+
+    /// Return with a picker open takes its first item (a bare Return would otherwise add a
+    /// line, or send, under a half-typed command). True when something was picked.
+    private func pickFirstSuggestion() -> Bool {
+        if let s = slashSuggestions.first { pickSlash(s.name); return true }
+        if let p = mentionSuggestions.first { pickMention(p); return true }
+        return false
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             if !slashSuggestions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         ForEach(slashSuggestions, id: \.name) { s in
-                            Button {
-                                // Replace the word being typed, not the whole line.
-                                var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-                                if words.isEmpty { words = [""] }
-                                words[words.count - 1] = "/" + s.name
-                                text = words.joined(separator: " ") + " "
-                            } label: {
+                            Button { pickSlash(s.name) } label: {
                                 HStack(spacing: 10) {
                                     Text("/" + s.name).font(.subheadline.monospaced().weight(.medium)).lineLimit(1)
                                     Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -199,19 +220,7 @@ struct ComposerView: View {
                             .padding(.leading, 14).padding(.vertical, 7)
                             .transition(.opacity)
                     } else {
-                    ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
-                                     onSend: { Task { await send() } },
-                                     onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
-                                     onArrow: { recallHistory($0) })
-                        .padding(.leading, 14).padding(.vertical, 7)
-                        .task { catalog = await chat.commandsCatalog() }
-                        .onChange(of: text) { old, new in
-                            // Offered once as the text gets long (a paste lands in one jump;
-                            // typing crosses the line once); "Keep" holds until it shrinks again.
-                            let limit = 800
-                            if new.count >= limit, old.count < limit || new.count - old.count > 400 { withAnimation(.snappy) { longTextOffer = true } }
-                            else if new.count < limit { longTextOffer = false }
-                        }
+                        textField
                     }
                     trailingControl
                         .padding(.trailing, 4).padding(.bottom, 4)
@@ -296,10 +305,33 @@ struct ComposerView: View {
         .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame() }
     }
 
+    /// The field itself (its own view: the body's one expression grew past what the compiler
+    /// types in reasonable time).
+    private var textField: some View {
+        ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
+                         onSend: { Task { await send() } },
+                         onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
+                         onArrow: { recallHistory($0) },
+                         onReturn: { pickFirstSuggestion() },
+                         returnSends: returnSends)
+            .padding(.leading, 14).padding(.vertical, 7)
+            .task { catalog = await chat.commandsCatalog() }
+            .onChange(of: text) { old, new in
+                // Offered once as the text gets long (a paste lands in one jump;
+                // typing crosses the line once); "Keep" holds until it shrinks again.
+                let limit = 800
+                if new.count >= limit, old.count < limit || new.count - old.count > 400 { withAnimation(.snappy) { longTextOffer = true } }
+                else if new.count < limit { longTextOffer = false }
+            }
+    }
+
     /// Mic when the field is empty, send otherwise, stop while a turn runs — one 28pt slot.
     @ViewBuilder private var trailingControl: some View {
         if dictation.isListening {
-            TalkButton(dictation: dictation) { transcript in text = transcript; focused = true }
+            TalkButton(dictation: dictation, engine: chat.runtime.voice) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
+        } else if dictation.isTranscribing {
+            // The recording is being turned into words (on the gateway or here).
+            ProgressView().controlSize(.small).frame(width: 28, height: 28).accessibilityLabel("Transcribing")
         } else if chat.isRunning, text.isEmpty {
             Button { Task { await chat.stop() } } label: {
                 Image(systemName: "stop.fill").font(.caption.weight(.bold)).foregroundStyle(.white)
@@ -307,8 +339,12 @@ struct ComposerView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop")
-        } else if text.isEmpty && chat.staged.isEmpty {
-            TalkButton(dictation: dictation) { transcript in text = transcript; focused = true }
+        } else if text.isEmpty && chat.staged.isEmpty && !HandsFreeSession.shared.isActive {
+            // Dictation steps aside while voice mode has the microphone (its recorder reset the
+            // audio session under the engine).
+            // Held, the mic does what Settings › Voice › Hold the mic to says: dictation, or
+            // the whole conversation by voice on this chat (the Mac's mic is a click; it keeps it).
+            TalkButton(dictation: dictation, engine: chat.runtime.voice, onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else {
             let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
             Button { Task { await send() } } label: {
@@ -345,41 +381,18 @@ struct ComposerView: View {
     }
 
     private var attachPanel: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            #if os(iOS)
-            attachRow("Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true }
-            #endif
-            attachRow("Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true }
-            attachRow("Files", symbol: "folder.fill", color: .blue) { showFiles = true }
-            attachRow("Audio", symbol: "waveform", color: .red) { showRecorder = true }
-            attachRow("Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() }
-            attachRow("Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true }
-        }
-        .padding(.vertical, 10)
-        .frame(width: 272)
-        // The panel is an overlay on a 36 pt button, so it is offered 36 pt of height; without
-        // its own size the glass was drawn for less than the rows and the last one poked out.
-        .fixedSize()
-        .glassEffect(.regular, in: .rect(cornerRadius: 30))
-    }
-
-    private func attachRow(_ title: String, symbol: String, color: Color, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button {
-            withAnimation(.snappy(duration: 0.28)) { showAttach = false }
-            action()
-        } label: {
-            HStack(spacing: 16) {
-                Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 40, height: 40).background(color, in: .circle)
-                Text(title).font(.title3).foregroundStyle(.primary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 18).padding(.vertical, 8)
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.4 : 1)
+        var items: [AttachItem] = []
+        #if os(iOS)
+        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true })
+        #endif
+        items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
+        items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
+        // Not while voice mode has the microphone: the recorder would reset the session under it.
+        items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red, disabled: HandsFreeSession.shared.isActive) { showRecorder = true })
+        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { HandsFreeSession.shared.start(chat: chat) })
+        items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
+        items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
+        return AttachPanel(items: items) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
     }
 
     private func send() async {

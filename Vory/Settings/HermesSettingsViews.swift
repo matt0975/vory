@@ -4,6 +4,14 @@ import VoryCore
 // MARK: Model
 
 struct ModelSettingsView: View {
+    /// "provider/model" for the Current line: the id as the gateway gives it when it already
+    /// names its provider, else the provider put in front; "not set" with no model.
+    static func currentModelLine(provider: String?, model: String?) -> String {
+        guard let model, !model.isEmpty else { return "not set" }
+        guard let provider, !provider.isEmpty, !model.hasPrefix(provider + "/") else { return model }
+        return "\(provider)/\(model)"
+    }
+
     @Environment(AppModel.self) private var model
     @State private var options: ModelOptionsResult?
     @State private var auxiliary: JSONValue?
@@ -18,7 +26,9 @@ struct ModelSettingsView: View {
             SettingsHeaderSection(title: "Model", symbol: "cpu", color: .blue, description: "The default model and provider for this bot.")
             if let o = options {
                 Section {
-                    LabeledContent("Current", value: o.model?.isEmpty == false ? "\(o.provider ?? "")/\(o.model!)" : "not set")
+                    // The gateway's model id carries its provider ("anthropic/…"): shown as it is,
+                    // the provider put in front only when the id lacks it (it read "x/x/model").
+                    LabeledContent("Current", value: Self.currentModelLine(provider: o.provider, model: o.model))
                     // The gateway keeps each provider's model list for an hour and serves a
                     // stale one for up to a week while it refreshes behind; only an explicit
                     // refresh asks every provider again (15 s or more).
@@ -34,7 +44,8 @@ struct ModelSettingsView: View {
                             let task = t["task"]?.stringValue ?? ""
                             let prov = t["provider"]?.stringValue ?? "auto"
                             let mdl = t["model"]?.stringValue ?? ""
-                            modelMenu(title: task.replacingOccurrences(of: "_", with: " ").capitalized + ": " + (mdl.isEmpty ? prov : "\(prov)/\(mdl)"), providers: o.providers, allowAuto: true) { p, m in
+                            // The model id may name its provider already: not repeated (as Current).
+                            modelMenu(title: task.replacingOccurrences(of: "_", with: " ").capitalized + ": " + (mdl.isEmpty ? prov : Self.currentModelLine(provider: prov, model: mdl)), providers: o.providers, allowAuto: true) { p, m in
                                 Task { await set(scope: "auxiliary", task: task, provider: p, model: m, confirmed: false) }
                             }
                         }
@@ -318,8 +329,10 @@ struct ToolsView: View {
                         if let tools = t.tools, !tools.isEmpty { Text(tools.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                     }
                 }
+                .accessibilityIdentifier("tool.toggle.\(t.name)")
             }
         }
+        .accessibilityIdentifier("settings.tools.page")
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
     }

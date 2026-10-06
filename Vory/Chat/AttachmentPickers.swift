@@ -95,115 +95,87 @@ struct AudioRecorderSheet: View {
     }
 }
 
-/// Owns the audio engine and the recognition request, deliberately outside any actor: AVFAudio and
-/// Speech call back on their own queues, and a closure formed inside a @MainActor method inherits
-/// that isolation and traps at runtime — both TestFlight crashes on the mic button were exactly that.
-private final class DictationPipeline: @unchecked Sendable {
-    private let engine = AVAudioEngine()
-    private let request = SFSpeechAudioBufferRecognitionRequest()
-    private var task: SFSpeechRecognitionTask?
-
-    func start(recognizer: SFSpeechRecognizer, onUpdate: @escaping @Sendable (String?, Bool) -> Void, onLevel: @escaping @Sendable (Float) -> Void = { _ in }) throws {
-        request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.removeTap(onBus: 0)
-        let req = request
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            req.append(buffer)
-            // Loudness of this slice for the waveform: RMS of the first channel, mapped to 0...1.
-            if let ch = buffer.floatChannelData?[0] {
-                let n = Int(buffer.frameLength)
-                var sum: Float = 0
-                for i in 0..<n { sum += ch[i] * ch[i] }
-                let rms = n > 0 ? (sum / Float(n)).squareRoot() : 0
-                let db = 20 * log10(max(rms, 1e-6))
-                onLevel(min(1, max(0, (db + 50) / 50)))
-            }
-        }
-        engine.prepare()
-        try engine.start()
-        task = recognizer.recognitionTask(with: req) { result, err in
-            onUpdate(result?.bestTranscription.formattedString, err != nil)
-        }
-    }
-
-    func stop() {
-        engine.stop()
-        engine.inputNode.removeTap(onBus: 0)
-        request.endAudio()
-        task?.finish()
-        task = nil
-    }
-}
-
-/// On-device speech recognition for hold-to-talk.
+/// Dictation for the composer: the mic records (the field shows the waveform), and when it
+/// stops the recording is turned into words by the gateway's provider or this device's own,
+/// as Settings › Voice says. The recording never outlives the transcription.
 @MainActor
 @Observable
 final class DictationController {
-    private var pipeline: DictationPipeline?
+    private var recorder: AVAudioRecorder?
+    private var meter: Timer?
+    private var fileURL: URL?
     var transcript = ""
     var isListening = false
+    /// Between the stop and the words: the composer shows a spinner in the mic's slot.
+    var isTranscribing = false
     var error: String?
     /// Recent loudness samples, newest last, for the waveform in the composer.
     var levels: [Float] = []
     var startedAt: Date?
     static let waveformSamples = 64
 
-    /// TCC invokes the completion on a private queue; built outside any actor for the same reason
-    /// as `DictationPipeline`.
-    private nonisolated static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { (c: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
-            SFSpeechRecognizer.requestAuthorization { @Sendable status in c.resume(returning: status) }
-        }
-    }
-
     func start() {
         Task {
-            let auth = await Self.requestSpeechAuthorization()
-            guard auth == .authorized else { error = "Speech recognition not authorized."; return }
             guard await AVAudioApplication.requestRecordPermission() else { error = "Microphone access denied."; return }
-            guard let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(), recognizer.isAvailable else {
-                error = "Speech recognizer unavailable."; return
-            }
             do {
                 #if os(iOS)
                 let session = AVAudioSession.sharedInstance()
                 try session.setCategory(.record, mode: .measurement, options: .duckOthers)
                 try session.setActive(true, options: .notifyOthersOnDeactivation)
                 #endif
-                transcript = ""
-                let pipe = DictationPipeline()
-                pipeline = pipe
-                try pipe.start(recognizer: recognizer, onUpdate: { [weak self] text, failed in
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("dictation-\(UUID().uuidString).m4a")
+                let settings: [String: Any] = [AVFormatIDKey: Int(kAudioFormatMPEG4AAC), AVSampleRateKey: 24000, AVNumberOfChannelsKey: 1,
+                                               AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue]
+                let r = try AVAudioRecorder(url: url, settings: settings)
+                r.isMeteringEnabled = true
+                guard r.record() else { throw HermesAPIError.transport("The recorder would not start.") }
+                recorder = r; fileURL = url
+                transcript = ""; levels = []; startedAt = Date(); isListening = true
+                // Loudness for the waveform, twenty times a second: the average power in dB mapped to 0…1.
+                meter = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
                     Task { @MainActor in
-                        guard let self else { return }
-                        if let text { self.transcript = text }
-                        if failed {
-                            // Said, not swallowed: the mic turned itself off with nothing to show.
-                            if self.transcript.isEmpty { self.error = "Speech recognition stopped before it heard anything. Check Settings › Vory › Speech Recognition, or try again." }
-                            self.stop()
-                        }
-                    }
-                }, onLevel: { [weak self] level in
-                    Task { @MainActor in
-                        guard let self, self.isListening else { return }
+                        guard let self, let r = self.recorder, self.isListening else { return }
+                        r.updateMeters()
+                        let level = min(1, max(0, (r.averagePower(forChannel: 0) + 50) / 50))
                         self.levels.append(level)
                         if self.levels.count > Self.waveformSamples { self.levels.removeFirst(self.levels.count - Self.waveformSamples) }
                     }
-                })
-                levels = []
-                startedAt = Date()
-                isListening = true
+                }
             } catch { self.error = error.localizedDescription }
         }
     }
 
-    func stop() {
-        pipeline?.stop()
-        pipeline = nil
+    /// Stops the recording and turns it into words through `engine`; empty when nothing was heard.
+    func stop(engine: VoiceEngine?) async -> String {
+        meter?.invalidate(); meter = nil
+        recorder?.stop(); recorder = nil
         isListening = false
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
+        guard let url = fileURL else { return "" }
+        fileURL = nil
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let engine else { error = "Connect a gateway to dictate."; return "" }
+        guard let started = startedAt, Date().timeIntervalSince(started) > 0.4 else { return "" }
+        isTranscribing = true
+        defer { isTranscribing = false }
+        do {
+            transcript = try await engine.transcribe(file: url)
+            if transcript.isEmpty { error = "Nothing was heard. Try again a little closer to the mic." }
+        } catch {
+            self.error = error.localizedDescription
+            transcript = ""
+        }
+        return transcript
+    }
+
+    /// Drops a recording without transcribing it (the composer went away).
+    func cancel() {
+        meter?.invalidate(); meter = nil
+        recorder?.stop(); recorder = nil
+        isListening = false
+        if let url = fileURL { try? FileManager.default.removeItem(at: url); fileURL = nil }
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
@@ -212,37 +184,61 @@ final class DictationController {
 
 /// The mic in the composer: a tap starts listening (the field becomes a waveform), the red stop
 /// ends it and the transcript lands in the field. Messages' audio-message bar is the pattern.
+/// With `onHold` (Settings › Voice › Hold the mic to: Start voice mode) a press held for
+/// half a second starts voice mode instead; letting go then does nothing, and a tap still
+/// dictates. Without it a hold is a tap: a button's own long press never beat it.
 struct TalkButton: View {
     var dictation: DictationController
+    var engine: VoiceEngine?
+    var onHold: (() -> Void)? = nil
     var onTranscript: (String) -> Void
+    /// The press became a hold: its release is not a tap.
+    @State private var held = false
 
     var body: some View {
-        Button {
-            if dictation.isListening {
-                dictation.stop()
-                let t = dictation.transcript
-                if !t.isEmpty { onTranscript(t) }
-            } else {
-                dictation.start()
-            }
-        } label: {
-            if dictation.isListening {
-                ZStack {
-                    Circle().fill(.red)
-                    RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10)
-                }
-                .frame(width: 28, height: 28)
-            } else {
-                Image(systemName: "mic")
-                    .font(.body.weight(.medium))
-                    .frame(width: 28, height: 28)
-                    .foregroundStyle(.secondary)
-            }
+        if let onHold {
+            face
+                .contentShape(.circle)
+                .onTapGesture { if held { held = false } else { tapped() } }
+                .gesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in held = true; onHold() })
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { tapped() }
+                .accessibilityAction(named: "Start voice mode") { onHold() }
+                .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
+                .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Records, then turns it into words as Settings › Voice says. Hold to start voice mode")
+        } else {
+            Button { tapped() } label: { face }
+                .buttonStyle(.plain)
+                .contentShape(.circle)
+                .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
+                .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Records, then turns it into words as Settings › Voice says")
         }
-        .buttonStyle(.plain)
-        .contentShape(.circle)
-        .accessibilityLabel(dictation.isListening ? "Stop dictating" : "Dictate")
-        .accessibilityHint(dictation.isListening ? "Stops listening and puts the words in the field" : "Listens with on-device speech recognition")
+    }
+
+    private func tapped() {
+        if dictation.isListening {
+            Task {
+                let t = await dictation.stop(engine: engine)
+                if !t.isEmpty { onTranscript(t) }
+            }
+        } else {
+            dictation.start()
+        }
+    }
+
+    @ViewBuilder private var face: some View {
+        if dictation.isListening {
+            ZStack {
+                Circle().fill(.red)
+                RoundedRectangle(cornerRadius: 2).fill(.white).frame(width: 10, height: 10)
+            }
+            .frame(width: 28, height: 28)
+        } else {
+            Image(systemName: "mic")
+                .font(.body.weight(.medium))
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -19,6 +19,9 @@
 	<!-- Files chosen in open/save panels and dropped into the composer. -->
 	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
+	<!-- Save to Downloads for a picture from a chat, without a panel. -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
 	<!-- Remote notifications for approvals, clarify prompts, finished turns and cron results.
 	     Xcode rewrites this to "production" when archiving for TestFlight / the App Store. -->
 	<key>com.apple.developer.aps-environment</key>

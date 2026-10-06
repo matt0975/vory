@@ -21,6 +21,26 @@ struct VoryMacApp: App {
         _model = State(initialValue: AppModel.shared)
     }
 
+    @State private var boardCommands = BoardCommands.shared
+    @State private var voice = VoiceCoordinator.shared
+    @State private var voiceSession = HandsFreeSession.shared
+    @Environment(\.openWindow) private var openWindow
+
+    /// Voice mode on the open chat; with none open, a new chat with the default bot, and the
+    /// loop starts on it as soon as it is in front. The main window may be closed (the app
+    /// lives on in the menu bar): it comes back first, or the new chat would have no list to open in.
+    private func toggleVoiceMode() {
+        if voiceSession.isActive { voiceSession.end(); return }
+        if let chat = model.visibleChat { voiceSession.start(chat: chat); return }
+        openWindow(id: MacWindow.main)
+        NSApp.activate()
+        model.requestVoiceMode()
+    }
+    /// The newest finished reply in the open chat, for Chat › Speak Last Reply.
+    private var lastReply: String? { model.visibleChat.flatMap { VoiceCoordinator.lastReply(in: $0.items) } }
+    /// The Board page is the one showing: its menu's keys apply, the Chat menu's ⌘N and ⌘R do not.
+    private var boardInFront: Bool { model.selectedTab == .kanban }
+
     /// The approval the open chat waits on, if any.
     private var pendingApproval: PendingCard? { model.visibleChat?.cards.first { $0.method == "approval" } }
 
@@ -68,9 +88,10 @@ struct VoryMacApp: App {
             // File › Import from iPhone or iPad: Continuity Camera into the composer.
             ImportFromDevicesCommands()
             CommandMenu("Chat") {
+                // ⌘N is New Task while the Board is in front (the Board menu has it there).
                 Button("New Chat") { model.selectedTab = .chats; model.newChatRequest = UUID() }
                     .keyboardShortcut("n", modifiers: .command)
-                    .disabled(model.runtime == nil)
+                    .disabled(model.runtime == nil || boardInFront)
                 Button("New Chat With…") { model.selectedTab = .chats; model.newChatSheetRequest = UUID() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(model.runtime == nil)
@@ -83,7 +104,7 @@ struct VoryMacApp: App {
                     .disabled(model.runtime == nil)
                 Button("Refresh Chats") { NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil) }
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(model.runtime == nil)
+                    .disabled(model.runtime == nil || boardInFront)
                 Button("Find Chats") { model.selectedTab = .chats; model.focusSearchRequest = UUID() }
                     .keyboardShortcut("f", modifiers: .command)
                     .disabled(model.runtime == nil)
@@ -98,6 +119,40 @@ struct VoryMacApp: App {
                 Button("Deny") { answerApproval("deny") }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
                     .disabled(pendingApproval == nil)
+                Divider()
+                // The open chat's newest reply, read aloud by the Speech setting; again stops it.
+                Button(voice.isSpeaking ? "Stop Speaking" : "Speak Last Reply") {
+                    if voice.isSpeaking { voice.stop() } else if let text = lastReply { voice.speak(text) }
+                }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+                // Not while voice mode runs: the window's own speech has the player.
+                .disabled((!voice.isSpeaking && lastReply == nil) || voiceSession.isActive)
+                // Voice mode: the open chat by voice, in the floating window; ⇧⌘V again ends it.
+                Button(voiceSession.isActive ? "End Voice Mode" : "Voice Mode") { toggleVoiceMode() }
+                    .keyboardShortcut("v", modifiers: [.command, .shift])
+                    .disabled(model.runtime == nil)
+            }
+            // The Board page's commands; they do nothing unless it is in front.
+            CommandMenu("Board") {
+                Button("New Task") { boardCommands.newTaskRequest = UUID() }
+                    .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
+                Button("Open Card") { boardCommands.openRequest = UUID() }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Divider()
+                Button("Move Card Left") { boardCommands.move(-1) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Button("Move Card Right") { boardCommands.move(1) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!boardInFront || boardCommands.selectedID == nil)
+                Divider()
+                Button("Nudge Dispatcher") { Task { await model.runtime?.kanban.nudge() } }
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
+                Button("Refresh Board") { Task { await model.runtime?.kanban.refresh() } }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!boardInFront || model.runtime?.kanban.isPresent != true)
             }
         }
 
@@ -106,12 +161,40 @@ struct VoryMacApp: App {
         MenuBarExtra {
             TurnMenu().environment(model)
         } label: {
-            Image(systemName: board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
+            // A waveform while a voice session is live, else the turns and approvals.
+            Image(systemName: voiceSession.isActive ? "waveform.badge.mic" : board.attention > 0 ? "exclamationmark.bubble.fill" : (board.running > 0 ? "ellipsis.message.fill" : "cloud.fill"))
         }
         .menuBarExtraStyle(.window)
+
+        // Voice mode's window: small, above the others, opened by the main window when a
+        // session starts and closed when it ends.
+        Window("Voice Mode", id: MacWindow.voice) {
+            MacVoiceHUD()
+                .environment(model)
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .windowLevel(.floating)
+        .windowBackgroundDragBehavior(.enabled)
+        .restorationBehavior(.disabled)
+        .defaultSize(width: MacVoiceHUD.size.width, height: MacVoiceHUD.size.height)
     }
 }
 
 enum MacWindow {
     static let main = "main"
+    static let voice = "voice"
+
+    /// Opens the main window from outside a view (an App Intent, say): the window's own open
+    /// action, kept from the root view when it first appeared. Nil until then, which only
+    /// happens before the window has ever shown.
+    @MainActor static var openMain: (() -> Void)?
+
+    /// The main window in front, by the kept action; before one exists, the app is activated
+    /// and the window scene restores itself.
+    @MainActor static func bringMainForward() {
+        openMain?()
+        NSApp.activate()
+    }
 }

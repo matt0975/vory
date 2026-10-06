@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import os
 import json
+import re
 import random
 import time
 import uuid
@@ -24,6 +25,34 @@ import uuid
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
 from websockets.http11 import Response
+from websockets import http11 as _http11
+
+
+def _lenient_request_parse(cls, read_line):
+    """websockets parses handshakes only: GET, no body. The app's REST calls are POST, PATCH and
+    DELETE with JSON bodies, so the request line is read leniently and the method and the body
+    are kept on the request."""
+    request_line = yield from _http11.parse_line(read_line)
+    try:
+        method, raw_path, _protocol = request_line.split(b" ", 2)
+    except ValueError:
+        raise ValueError(f"invalid HTTP request line: {request_line!r}") from None
+    headers = yield from _http11.parse_headers(read_line)
+    # The body too, when there is one: `read_line` is a bound method of the protocol's reader,
+    # which can read an exact count as well. Left in the stream it would be taken for a second
+    # request and the connection closed twice over.
+    body = b""
+    length = int(headers.get("Content-Length", "0") or 0)
+    reader = getattr(read_line, "__self__", None)
+    if length and reader is not None:
+        body = yield from reader.read_exact(length)
+    req = cls(raw_path.decode("ascii", "surrogateescape"), headers)
+    req.method = method.decode("ascii", "replace")
+    req.body = body
+    return req
+
+
+_http11.Request.parse = classmethod(_lenient_request_parse)
 
 TOKEN = "mock-token"
 PROFILES = ["default", "work"]
@@ -58,7 +87,10 @@ REPLY_PART_3 = """Done — 4.2 GB freed, and the filesystem is back to 41% used.
 I left `nginx/access.log` and today's `postgres` log alone since both are still open by
 running processes. If you want this to keep happening on its own, `logrotate` already has a
 config at `/etc/logrotate.d/nginx`; it just has `rotate 52` set, which is why a year of logs
-accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB."""
+accumulated. Lowering that to `rotate 8` would hold the directory near 400 MB.
+
+Here is the disk use before and after:
+MEDIA:/home/hermes/.hermes/images/disk-before-after.png"""
 
 
 DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper and pull the answers together."""
@@ -66,6 +98,59 @@ DELEGATE_PART_1 = """Two separate questions there, so I'll hand each to a helper
 DELEGATE_PART_2 = """Both are back. The nginx side has one stale block, `staging.example`, pointing at an
 upstream that is gone; the rest is fine. On disk, 34 rotated logs older than 90 days add up to
 4.2 GB. Say the word and I'll drop the stale block and clear those files."""
+
+
+CARD_PART_1 = """Here is the last week of disk use on the log host, as a card."""
+
+CARD_HTML = """<h3 style="margin:0 0 8px">/var/log, last 7 days</h3>
+<canvas id="c" height="140"></canvas>
+<table style="margin-top:10px;width:100%">
+<tr><th>Directory</th><th>Size</th><th>Change</th></tr>
+<tr><td>nginx</td><td>2.1 GB</td><td>+120 MB</td></tr>
+<tr><td>postgres</td><td>1.4 GB</td><td>+40 MB</td></tr>
+<tr><td>app</td><td>0.7 GB</td><td>−300 MB</td></tr>
+</table>
+<p style="margin:10px 0 0;font-size:90%;opacity:.7">Source: <a href="https://example.com/logs">du, nightly</a></p>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+new Chart(document.getElementById('c'), {type: 'line', data: {labels: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+  datasets: [{label: 'GB used', data: [3.6, 3.7, 3.9, 4.0, 4.1, 4.2, 4.2], tension: 0.3, fill: true}]},
+  options: {plugins: {legend: {display: false}}, scales: {y: {beginAtZero: false}}}});
+</script>"""
+
+CARD_PART_2 = """nginx is still the one growing. Say the word and I'll set its logrotate to `rotate 8`."""
+
+TABLE_REPLY = """## What is using the disk
+
+| Directory | Size | Oldest file |
+|:--|--:|:-:|
+| nginx | 2.1 GB | March |
+| postgres | 1.4 GB | May |
+| app/debug | 0.7 GB | last week |
+
+A second look, written the loose way:
+
+Host | Free
+--|--
+log-1 | 12%
+log-2 | 48%
+
+### What I would do
+
+1. Rotate the big ones
+   - nginx: `rotate 8`
+   - postgres: keep the live file
+     1. check the replication slot first
+2. Then the cleanup
+   - [x] measure
+   - [ ] delete rotated files older than 90 days
+   - [ ] add the logrotate rule
+
+###### A tiny heading
+
+![The week's chart](https://example.com/charts/disk-week.png)
+
+Say the word and I'll run it."""
 
 
 def usage(output: int, calls: int = 1) -> dict:
@@ -182,8 +267,36 @@ CRON_JOBS = [
 ]
 
 
+def _png_data_url(seed: int, width: int = 320, height: int = 200) -> str:
+    """A small PNG made on the spot (a gradient tinted by the seed): what the gateway's media
+    routes hand back as a data URL."""
+    import base64 as _b64, struct, zlib
+    rows = bytearray()
+    for y in range(height):
+        rows += b"\x00"
+        for x in range(width):
+            rows += bytes(((x * 255) // width, (y * 255) // height, (seed * 37) % 256))
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+    return "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
+    if base in ("/api/media", "/api/files/read"):
+        # hermes_cli/web_routers/files.py: a gateway-local image as a data URL. Any image path
+        # gets a picture here; anything else is refused as the real one would.
+        from urllib.parse import unquote
+        p = unquote(query.get("path", ""))
+        ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
+        if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+            return (415, {"detail": "Unsupported media type"}) if base == "/api/media" else (404, {"detail": "File not found"})
+        seed = sum(ord(c) for c in p)
+        if base == "/api/media":
+            return 200, {"data_url": _png_data_url(seed)}
+        return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": 1234, "mime_type": "image/png", "data_url": _png_data_url(seed)}
     if base == "/api/status":
         return 200, {"version": "0.21.4", "gateway": {"status": "running", "pid": 4242},
                      "gateway_running": True, "gateway_state": "running", "active_sessions": 1,
@@ -242,7 +355,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             return 200, {"session_id": sid, "profile": "work", "messages": msgs,
                          "pagination": {"limit": 60, "offset": 0, "order": "latest", "returned": len(msgs)}}
         msgs = [
-            {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look?", "timestamp": iso(row["started_at"])},
+            {"id": 1, "role": "user", "content": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]", "timestamp": iso(row["started_at"])},
             {"id": 2, "role": "assistant", "content": [{"type": "text", "text": REPLY_PART_1 + REPLY_PART_2}], "timestamp": iso(row["last_active"]),
              "tool_calls": [{"id": "c1", "function": {"name": "terminal", "arguments": "{}"}}]},
             {"id": 3, "role": "tool", "content": "/var/log 41G", "name": "terminal", "timestamp": iso(row["last_active"])},
@@ -316,9 +429,6 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             {"name": "kanban", "version": "0.4.2", "description": "A board of the agent's tasks on the dashboard.",
              "source": "bundled", "runtime_status": "bundled", "has_dashboard_manifest": True, "path": "/opt/hermes/plugins/kanban",
              "can_remove": False, "can_update_git": False, "auth_required": False, "user_hidden": False},
-            {"name": "dispatcher", "version": "1.2.0", "description": "Routes cron deliveries and channel messages to the right profile.",
-             "source": "git", "runtime_status": "enabled", "has_dashboard_manifest": True, "path": "/home/hermes/.hermes/plugins/dispatcher",
-             "can_remove": True, "can_update_git": True, "auth_required": False, "user_hidden": False},
             {"name": "memory-sqlite", "version": "0.9.0", "description": "Long-term memory in a local SQLite file.",
              "source": "user", "runtime_status": "disabled", "has_dashboard_manifest": False, "path": "/home/hermes/.hermes/plugins/memory-sqlite",
              "can_remove": True, "can_update_git": False, "auth_required": False, "user_hidden": False},
@@ -374,9 +484,458 @@ ROOMS: list = []
 ROOM_LOGS: dict = {}
 
 
+# ── Kanban (the gateway's bundled plugin, /api/plugins/kanban/…) ─────────────────────────────
+# A board in the real shape (plugins/kanban/dashboard/plugin_api.py): a few tasks per status on
+# two boards, one running worker, a task with comments and two runs, a worker log. Writes answer
+# the lenient parser below hands over the method and the body, so a move, a create, a comment
+# and a reassign are applied; done without a result (and not from review) and a second
+# terminate of the same run are 409s, as on the server. The event socket at /events sends a frame now
+# and then; a write bumps the cursor too so the app refetches.
+
+KANBAN_NOW = int(time.time())
+
+
+def _ktask(tid, title, status, assignee, priority=0, body=None, created_ago=7200, started_ago=None, completed_ago=None,
+           tenant=None, summary=None, comments=0, progress=None, parents=0, children=0, session_id=None, run_id=None,
+           worker_pid=None, diagnostics=None, result=None):
+    created = KANBAN_NOW - created_ago
+    started = KANBAN_NOW - started_ago if started_ago is not None else None
+    completed = KANBAN_NOW - completed_ago if completed_ago is not None else None
+    d = {"id": tid, "title": title, "body": body, "assignee": assignee, "status": status, "priority": priority,
+         "created_by": "dashboard", "created_at": created, "started_at": started, "completed_at": completed,
+         "workspace_kind": "scratch", "workspace_path": None, "claim_lock": f"w-{tid}" if status == "running" else None,
+         "claim_expires": KANBAN_NOW + 3600 if status == "running" else None, "tenant": tenant, "branch_name": None,
+         "project_id": None, "result": result, "idempotency_key": None, "consecutive_failures": 0, "worker_pid": worker_pid,
+         "last_failure_error": None, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 12 if worker_pid else None,
+         "current_run_id": run_id, "workflow_template_id": None, "current_step_key": None, "skills": None,
+         "model_override": None, "provider_override": None, "reasoning_effort": None, "max_retries": None,
+         "goal_mode": False, "goal_max_turns": None, "session_id": session_id, "block_kind": None, "block_recurrences": 0,
+         "completion_contract": None,
+         "age": {"created_age_seconds": created_ago, "started_age_seconds": started_ago,
+                 "time_to_complete_seconds": (completed - (started or created)) if completed else None},
+         "latest_summary": summary, "current_run_started_at": started if status == "running" else None,
+         "link_counts": {"parents": parents, "children": children}, "comment_count": comments, "progress": progress}
+    if diagnostics:
+        d["diagnostics"] = diagnostics
+        d["warnings"] = [x["message"] for x in diagnostics]
+    return d
+
+
+KANBAN_TASKS = {
+    "default": [
+        _ktask("k-101", "Rewrite the nightly export job", "running", "work", priority=1, created_ago=14400, started_ago=720,
+               body="The export times out because the query has no index on created_at. Add the index, re-run, confirm the time.",
+               summary="Index added on created_at; re-running the export to time it.", comments=2, children=2,
+               progress={"done": 1, "total": 2}, session_id="20260921_154212_a1b2c3", run_id=8, worker_pid=4243),
+        _ktask("k-102", "Clear rotated logs older than 90 days", "ready", "default", created_ago=5400,
+               body="34 files under /var/log, 4.2 GB. Keep anything still open.", comments=1),
+        _ktask("k-103", "Add a logrotate rule for nginx", "todo", "default", priority=2, created_ago=4000,
+               body="rotate 8 instead of 52.", parents=1),
+        _ktask("k-104", "Weekly dependency audit", "blocked", "work", created_ago=90000, started_ago=86000,
+               body="Three advisories this week.", summary="Needs the GitHub token to read the private repo.",
+               diagnostics=[{"code": "blocked_waiting", "severity": "warning", "message": "Blocked for a day: waiting on a key"}]),
+        _ktask("k-105", "Write the summary of the disk cleanup", "review", "default", created_ago=3600, started_ago=3000,
+               summary="Draft written; two numbers to check.", comments=1),
+        _ktask("k-106", "Measure /var/log", "done", "work", created_ago=200000, started_ago=199000, completed_ago=198000,
+               summary="4.2 GB in rotated logs, almost all nginx and postgres.", result="4.2 GB in rotated logs, almost all nginx and postgres."),
+        _ktask("k-107", "Propose the cleanup command", "done", "default", created_ago=190000, started_ago=189000, completed_ago=188000,
+               result="find /var/log -name '*.log.*' -mtime +90 -delete"),
+        _ktask("k-108", "Look into the staging upstream", "triage", None, created_ago=600, body="staging.example points at an upstream that is gone."),
+        _ktask("k-109", "Backfill last month's metrics", "scheduled", "work", created_ago=50000),
+    ],
+    "homelab": [
+        _ktask("k-201", "Rotate the Tailscale key", "todo", "default", created_ago=30000, body="Expires next week."),
+        _ktask("k-202", "Snapshot the NAS before the upgrade", "done", "default", created_ago=400000, started_ago=399000, completed_ago=398000,
+               result="Snapshot nas-2026-10-01 taken, 1.2 TB."),
+    ],
+}
+KANBAN_BOARDS = [
+    {"slug": "default", "name": "Default", "description": "", "icon": "", "color": "", "default_workdir": None, "project_id": None,
+     "created_at": None, "archived": False, "default_workspace_kind": "scratch", "project_name": None},
+    {"slug": "homelab", "name": "Homelab", "description": "The house", "icon": "", "color": "", "default_workdir": None, "project_id": None,
+     "created_at": KANBAN_NOW - 800000, "archived": False, "default_workspace_kind": "scratch", "project_name": "Homelab"},
+]
+KANBAN_COMMENTS = {
+    "k-101": [{"id": 1, "task_id": "k-101", "author": "sam", "body": "Keep today's export running while you do it.", "created_at": KANBAN_NOW - 7000},
+              {"id": 2, "task_id": "k-101", "author": "work", "body": "Will do; the index build takes about a minute.", "created_at": KANBAN_NOW - 700}],
+    "k-102": [{"id": 3, "task_id": "k-102", "author": "sam", "body": "Leave nginx/access.log alone.", "created_at": KANBAN_NOW - 5000}],
+    "k-105": [{"id": 4, "task_id": "k-105", "author": "default", "body": "Ready for a look.", "created_at": KANBAN_NOW - 2900}],
+}
+KANBAN_RUNS = {
+    "k-101": [{"id": 7, "task_id": "k-101", "profile": "work", "step_key": None, "status": "ended", "claim_lock": None, "claim_expires": None,
+               "worker_pid": 4242, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 1300, "started_at": KANBAN_NOW - 1500,
+               "ended_at": KANBAN_NOW - 1250, "outcome": "crashed", "summary": None, "metadata": None, "error": "worker exited 1"},
+              {"id": 8, "task_id": "k-101", "profile": "work", "step_key": None, "status": "running", "claim_lock": "w-k-101", "claim_expires": KANBAN_NOW + 3600,
+               "worker_pid": 4243, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 12, "started_at": KANBAN_NOW - 720,
+               "ended_at": None, "outcome": None, "summary": None, "metadata": None, "error": None}],
+    "k-106": [{"id": 3, "task_id": "k-106", "profile": "work", "step_key": None, "status": "ended", "claim_lock": None, "claim_expires": None,
+               "worker_pid": 3001, "max_runtime_seconds": 3600, "last_heartbeat_at": KANBAN_NOW - 198100, "started_at": KANBAN_NOW - 199000,
+               "ended_at": KANBAN_NOW - 198000, "outcome": "completed", "summary": "4.2 GB in rotated logs, almost all nginx and postgres.",
+               "metadata": None, "error": None}],
+}
+KANBAN_EVENTS = {
+    "k-101": [{"id": 38, "task_id": "k-101", "run_id": None, "kind": "status", "payload": {"from": "todo", "to": "ready"}, "created_at": KANBAN_NOW - 9000},
+              {"id": 39, "task_id": "k-101", "run_id": 7, "kind": "status", "payload": {"from": "ready", "to": "running"}, "created_at": KANBAN_NOW - 1500},
+              {"id": 40, "task_id": "k-101", "run_id": 7, "kind": "reclaimed", "payload": {"reason": "worker exited 1"}, "created_at": KANBAN_NOW - 1250},
+              {"id": 41, "task_id": "k-101", "run_id": 8, "kind": "status", "payload": {"from": "ready", "to": "running"}, "created_at": KANBAN_NOW - 720}],
+}
+KANBAN_LOG = ("[12:01:03] claimed k-101 (run 8) as work\n[12:01:04] reading the export job\n[12:01:09] EXPLAIN shows a sequential scan on events\n"
+              "[12:01:10] CREATE INDEX CONCURRENTLY idx_events_created_at ON events (created_at)\n[12:02:14] index built\n[12:02:15] re-running the export…\n")
+KANBAN_CURSOR = [41]
+KANBAN_ENDED_RUNS = set()
+
+
+def _kboard_slug(query):
+    s = query.get("board") or "default"
+    return s if s in KANBAN_TASKS else None
+
+
+def _kfind(slug, tid):
+    return next((t for t in KANBAN_TASKS[slug] if t["id"] == tid), None)
+
+
+def _kbump(tid, kind, payload=None):
+    KANBAN_CURSOR[0] += 1
+    ev = {"id": KANBAN_CURSOR[0], "task_id": tid, "run_id": None, "kind": kind, "payload": payload, "created_at": int(time.time())}
+    KANBAN_EVENTS.setdefault(tid, []).append(ev)
+    return ev
+
+
+def kanban_rest(method, base, query, payload=None):
+    payload = payload or {}
+    slug = _kboard_slug(query)
+    if slug is None:
+        return 404, {"detail": f"board '{query.get('board')}' not found"}
+    tasks = KANBAN_TASKS[slug]
+    sub = base[len("/api/plugins/kanban"):]
+    if sub == "/boards":
+        out = []
+        for b in KANBAN_BOARDS:
+            counts = {}
+            for t in KANBAN_TASKS[b["slug"]]:
+                counts[t["status"]] = counts.get(t["status"], 0) + 1
+            out.append({**b, "is_current": b["slug"] == "default", "counts": counts,
+                        "total": sum(n for s, n in counts.items() if s != "archived")})
+        return 200, {"boards": out, "current": "default"}
+    if sub == "/board":
+        cols = ["triage", "todo", "scheduled", "ready", "running", "blocked", "review", "done"]
+        if query.get("include_archived") == "true":
+            cols.append("archived")
+        return 200, {"columns": [{"name": c, "tasks": [t for t in tasks if t["status"] == c]} for c in cols],
+                     "tenants": sorted({t["tenant"] for t in tasks if t["tenant"]}),
+                     "assignees": sorted({t["assignee"] for t in tasks if t["assignee"] and t["status"] != "archived"}),
+                     "latest_event_id": KANBAN_CURSOR[0], "now": int(time.time())}
+    if sub == "/assignees":
+        return 200, {"assignees": [{"name": n, "on_disk": True, "counts": {}} for n in ("default", "work")]}
+    if sub == "/stats":
+        by = {}
+        for t in tasks:
+            by[t["status"]] = by.get(t["status"], 0) + 1
+        return 200, {"by_status": by, "by_assignee": {}, "oldest_ready_age_seconds": 5400}
+    if sub == "/workers/active":
+        workers = [{"run_id": t["current_run_id"], "task_id": t["id"], "task_title": t["title"], "task_status": t["status"],
+                    "task_assignee": t["assignee"], "profile": t["assignee"], "worker_pid": t["worker_pid"], "started_at": t["started_at"],
+                    "claim_lock": t["claim_lock"], "claim_expires": t["claim_expires"], "last_heartbeat_at": t["last_heartbeat_at"],
+                    "max_runtime_seconds": 3600} for t in tasks if t["status"] == "running" and t["worker_pid"]]
+        return 200, {"workers": workers, "count": len(workers), "checked_at": int(time.time())}
+    if sub == "/dispatch":
+        return 200, {"spawned": 0, "promoted": 0, "dry_run": query.get("dry_run") == "true", "reasons": []}
+    if sub == "/tasks":
+        tid = f"k-{900 + len(tasks)}"
+        assignee = payload.get("assignee") or None
+        status = "triage" if payload.get("triage") else ("ready" if assignee else "todo")
+        t = _ktask(tid, payload.get("title") or "Untitled", status, assignee, priority=int(payload.get("priority") or 0),
+                   body=payload.get("body") or None, created_ago=0, tenant=payload.get("tenant") or None)
+        tasks.insert(0, t)
+        _kbump(tid, "status", {"from": None, "to": status})
+        out = {"task": t}
+        if status == "ready" and assignee:
+            out["warning"] = "No gateway is running for this profile; the task will sit in 'ready' until one is started."
+        return 200, out
+    m = re.match(r"^/runs/(\d+)(/terminate)?$", sub)
+    if m:
+        rid = int(m.group(1))
+        run = next((r for rs in KANBAN_RUNS.values() for r in rs if r["id"] == rid), None)
+        if run is None:
+            return 404, {"detail": f"run {rid} not found"}
+        if m.group(2):
+            if run["ended_at"] is not None or rid in KANBAN_ENDED_RUNS:
+                return 409, {"detail": f"run {rid} already ended"}
+            KANBAN_ENDED_RUNS.add(rid)
+            run["ended_at"] = int(time.time()); run["outcome"] = "reclaimed"; run["status"] = "ended"
+            t = _kfind("default", run["task_id"])
+            if t:
+                t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+            _kbump(run["task_id"], "reclaimed", {"reason": "stopped from Vory"})
+            return 200, {"ok": True, "run_id": rid, "task_id": run["task_id"]}
+        return 200, {"run": run}
+    m = re.match(r"^/tasks/([^/]+)(/.*)?$", sub)
+    if not m:
+        return None
+    tid, tail = m.group(1), m.group(2) or ""
+    t = _kfind(slug, tid)
+    if t is None:
+        return 404, {"detail": f"task {tid} not found"}
+    if tail == "" and method == "DELETE":
+        tasks.remove(t)
+        _kbump(tid, "archived")
+        return 200, {"deleted": True, "task_id": tid}
+    if tail == "" and method == "PATCH":
+        if "assignee" in payload:
+            t["assignee"] = payload["assignee"] or None
+        if "status" in payload and payload["status"]:
+            to = payload["status"]
+            if to == "running":
+                return 409, {"detail": "status 'running' is set by the dispatcher when a worker claims the task"}
+            if to == "done" and t["status"] != "review" and not (payload.get("result") or payload.get("summary") or t.get("result")):
+                return 409, {"detail": "a task can only be marked done from review, or with a result or summary"}
+            if to == "ready" and t["status"] == "running":
+                return 409, {"detail": f"cannot move {tid} to ready while a worker holds it; reclaim it first"}
+            frm = t["status"]; t["status"] = to
+            if to == "done":
+                t["completed_at"] = int(time.time()); t["result"] = payload.get("result") or payload.get("summary") or t.get("result")
+            if to == "blocked" and payload.get("block_reason"):
+                t["latest_summary"] = payload["block_reason"]
+            _kbump(tid, "status", {"from": frm, "to": to})
+        if "priority" in payload and payload["priority"] is not None:
+            t["priority"] = int(payload["priority"]); _kbump(tid, "reprioritized", {"priority": t["priority"]})
+        if payload.get("title"):
+            t["title"] = payload["title"]
+        if "body" in payload:
+            t["body"] = payload["body"]
+        if payload.get("summary") and t["status"] != "done":
+            t["latest_summary"] = payload["summary"]
+        _kbump(tid, "edited")
+        return 200, {"task": t}
+    if tail == "":
+        return 200, {"task": t, "comments": KANBAN_COMMENTS.get(tid, []), "events": KANBAN_EVENTS.get(tid, []), "attachments": [],
+                     "links": {"parents": [], "children": ["k-106", "k-107"] if tid == "k-101" else []}, "link_tasks": {},
+                     "child_results": ([{"id": "k-106", "title": "Measure /var/log", "status": "done", "latest_summary": None,
+                                         "result": "4.2 GB in rotated logs, almost all nginx and postgres."},
+                                        {"id": "k-107", "title": "Propose the cleanup command", "status": "done", "latest_summary": None,
+                                         "result": "find /var/log -name '*.log.*' -mtime +90 -delete"}] if tid == "k-101" else []),
+                     "runs": KANBAN_RUNS.get(tid, [])}
+    if tail == "/comments":
+        c = {"id": 100 + sum(len(v) for v in KANBAN_COMMENTS.values()), "task_id": tid, "author": payload.get("author") or "dashboard",
+             "body": payload.get("body") or "", "created_at": int(time.time())}
+        KANBAN_COMMENTS.setdefault(tid, []).append(c)
+        t["comment_count"] = len(KANBAN_COMMENTS[tid])
+        _kbump(tid, "commented", {"author": "vory"})
+        return 200, {"ok": True}
+    if tail == "/reassign":
+        if t["status"] == "running" and not payload.get("reclaim_first"):
+            return 409, {"detail": f"cannot reassign {tid}: unknown id, or still running (pass reclaim_first=true to release the claim first)"}
+        if t["status"] == "running":
+            t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+        t["assignee"] = payload.get("profile") or None
+        _kbump(tid, "edited", {"assignee": t["assignee"]})
+        return 200, {"ok": True, "task_id": tid, "assignee": t["assignee"]}
+    if tail == "/reclaim":
+        if t["status"] != "running":
+            return 409, {"detail": f"cannot reclaim {tid}: not in a claimable state (not running, or unknown id)"}
+        t["status"] = "ready"; t["worker_pid"] = None; t["current_run_id"] = None; t["current_run_started_at"] = None
+        _kbump(tid, "reclaimed", {"reason": "reclaimed from Vory"})
+        return 200, {"ok": True, "task_id": tid}
+    if tail == "/log":
+        content = KANBAN_LOG if tid == "k-101" else ""
+        return 200, {"task_id": tid, "path": f"/home/hermes/.hermes/kanban/logs/{tid}.log", "exists": bool(content),
+                     "size_bytes": len(content), "content": content, "truncated": False}
+    return None
+
+
+async def kanban_events(ws, query):
+    """The plugin's own socket: a frame when something happened, nothing otherwise. A frame every
+    so often here, so the app's refetch path runs; `since` replays what came after it."""
+    cursor = int(query.get("since") or KANBAN_CURSOR[0])
+    quiet = 0.0
+    while True:
+        new = sorted((e for evs in KANBAN_EVENTS.values() for e in evs if e["id"] > cursor), key=lambda e: e["id"])
+        if new:
+            cursor = new[-1]["id"]
+            quiet = 0.0
+            await ws.send(json.dumps({"events": new, "cursor": cursor}))
+        elif quiet >= 25:
+            # Nothing happened for 25 s: the running worker reports a heartbeat-ish event so a
+            # watcher sees the stream is alive. A liveness frame only: the running worker's
+            # heartbeat moves, which the real server does not file as a task event, so it is
+            # not kept in the task's history.
+            quiet = 0.0
+            KANBAN_CURSOR[0] += 1
+            t = _kfind("default", "k-101")
+            if t and t["status"] == "running":
+                t["last_heartbeat_at"] = int(time.time())
+            ev = {"id": KANBAN_CURSOR[0], "task_id": "k-101", "run_id": 8, "kind": "heartbeat", "payload": None, "created_at": int(time.time())}
+            await ws.send(json.dumps({"events": [ev], "cursor": ev["id"]}))
+            cursor = ev["id"]
+            continue
+        # A write is looked for every second (the real plugin pushes at once); the loop used to
+        # sit 25 s in the quiet branch and a change made in that window reached the app late.
+        await asyncio.sleep(1)
+        quiet += 1
+
+
+# ── Audio (hermes_cli/web_routers/audio.py): a canned transcript, a tone for speech ────────────
+import array, math, struct, wave, io, sys
+
+MOCK_TRANSCRIPT = "Clear the rotated logs older than ninety days, but keep anything still open."
+
+
+def _tone_pcm(seconds: float, rate: int = 24000) -> bytes:
+    """Int16 mono samples with a speech-like cadence: a low tone pulsed four times a second."""
+    n = int(seconds * rate)
+    out = array.array("h")
+    for i in range(n):
+        t = i / rate
+        env = 0.5 * (1 + math.sin(2 * math.pi * 4 * t))          # the syllable pulse
+        fade = min(1.0, t / 0.05, (seconds - t) / 0.1)              # no click at the ends
+        v = 0.35 * env * fade * (math.sin(2 * math.pi * 196 * t) + 0.4 * math.sin(2 * math.pi * 392 * t))
+        out.append(int(max(-1.0, min(1.0, v)) * 32767))
+    return out.tobytes()
+
+
+def _tone_wav_data_url(seconds: float, rate: int = 24000) -> str:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate); w.writeframes(_tone_pcm(seconds, rate))
+    import base64 as _b64
+    return "data:audio/wav;base64," + _b64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _speech_seconds(text: str) -> float:
+    return min(12.0, 0.33 * max(1, len(text.split())) + 0.4)
+
+
+def audio_rest(method, base, payload):
+    if base == "/api/audio/transcribe":
+        data_url = str(payload.get("data_url") or "")
+        if not data_url.startswith("data:") or ";base64," not in data_url:
+            return 400, {"detail": "Invalid audio payload"}
+        size = len(data_url.split(",", 1)[1]) * 3 // 4
+        if size < 400:
+            return 200, {"ok": True, "transcript": "", "provider": "mock-whisper"}
+        return 200, {"ok": True, "transcript": MOCK_TRANSCRIPT, "provider": "mock-whisper"}
+    if base == "/api/audio/speak":
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return 400, {"detail": "Text is required"}
+        return 200, {"ok": True, "data_url": _tone_wav_data_url(_speech_seconds(text)), "mime_type": "audio/wav", "provider": "mock-tts"}
+    if base in ("/api/audio/tts-lease", "/api/audio/stt-lease"):
+        return 200, {"ok": True, "lease": payload.get("lease") or "vory", "active": bool(payload.get("active")), "leases": ["vory"], "action": "acquired"}
+    if base == "/api/audio/voice-live/status":
+        # GPT-Live (tools/voice_live.py resolve_gpt_live_status): off unless the mock is started
+        # with --voice-live; a real run needs a gateway with an OpenAI key.
+        if VOICE_LIVE:
+            return 200, {"ok": True, "mode": "gpt-live", "available": True, "reason": None, "model": "gpt-live-1", "voice": "marin"}
+        return 200, {"ok": True, "mode": "chained", "available": False,
+                     "reason": "no OpenAI API key (set OPENAI_API_KEY or voice.gpt_live.api_key)", "model": "gpt-live-1", "voice": "marin"}
+    if base == "/api/audio/voice-live/session":
+        return 503, {"detail": "GPT-Live is not configured on this gateway"}
+    if base == "/api/audio/elevenlabs/voices":
+        return 200, {"ok": True, "voices": []}
+    if base == "/api/audio/voice-config":
+        return 404, {"detail": "Not found"}
+    return None
+
+
+VOICE_LIVE = "--voice-live" in sys.argv
+
+# --neutral-models: every provider and model name the mock reports becomes a made-up one, for
+# recordings where no vendor's name may appear on screen. The default stays faithful to a real
+# gateway's catalogue (the app's model pickers and cost lines are developed against it). The
+# substitution runs on every JSON body and socket frame on its way out, longest names first.
+NEUTRAL_MODELS = "--neutral-models" in sys.argv
+NEUTRAL_NAMES = [
+    ("claude-subscription/claude-opus-4.6", "local/assistant"),
+    ("claude-subscription-directsdk-experimental", "local-assistant"),
+    ("anthropic/claude-sonnet-4.6", "workshop/assistant"),
+    ("anthropic/claude-opus-4.6", "workshop/assistant-large"),
+    ("anthropic/claude-haiku-4.5", "workshop/assistant-mini"),
+    ("openai/gpt-5.1-mini", "local/assistant-mini"),
+    ("openai/gpt-5.5", "workshop/assistant-large"),
+    ("openai/gpt-5.1", "local/assistant"),
+    ("Needs the Claude Code CLI installed and signed in on the gateway machine.", "Needs the local assistant installed on the gateway machine."),
+    ("Claude subscription", "Local assistant"),
+    ("ANTHROPIC_API_KEY", "WORKSHOP_API_KEY"),
+    ("OPENAI_API_KEY", "LOCAL_API_KEY"),
+    ("Anthropic API key", "Workshop API key"),
+    ("OpenAI API key", "Local assistant key"),
+    ("OpenRouter API key", "Relay API key"),
+    ("OPENROUTER_API_KEY", "RELAY_API_KEY"),
+    ("openrouter", "relay"),
+    ("nous/hermes-4-70b", "free/assistant-open"),
+    ("Nous Research", "Free tier"),
+    ('"nous"', '"free"'),
+    ("GPT-Live", "Live voice"),
+    ("gpt-live-1", "live-voice-1"),
+    ("Anthropic", "Workshop"),
+    ("anthropic", "workshop"),
+    ("OpenAI", "Local"),
+    ("openai", "local"),
+    ("claude", "assistant"),
+]
+
+
+def neutral(text: str) -> str:
+    """The outgoing JSON with vendor and model names replaced, when the flag is on."""
+    if not NEUTRAL_MODELS:
+        return text
+    for real, made_up in NEUTRAL_NAMES:
+        text = text.replace(real, made_up)
+    return text
+
+
+async def speak_stream(ws):
+    """The speak-stream socket: text frames in, {start}, int16 PCM frames and {end} out; {stop}
+    or a disconnect ends it. Like the real one it cuts sentences as the text arrives and speaks
+    each at once (the tone above, as long as the words would take), so a reply is heard while
+    it is still being written."""
+    pending = ""
+    started = False
+
+    async def say(piece: str) -> None:
+        nonlocal started
+        if not piece.strip():
+            return
+        if not started:
+            await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
+            started = True
+        pcm = _tone_pcm(_speech_seconds(piece))
+        step = 4800  # 100 ms a frame
+        for i in range(0, len(pcm), step):
+            await ws.send(pcm[i:i + step])
+            await asyncio.sleep(0.03)
+
+    try:
+        async for raw in ws:
+            if isinstance(raw, bytes):
+                continue
+            try:
+                frame = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if frame.get("text"):
+                pending += str(frame["text"])
+                while True:
+                    m = re.search(r"[.!?…]\s", pending)
+                    if not m:
+                        break
+                    piece, pending = pending[:m.end()], pending[m.end():]
+                    await say(piece)
+            if frame.get("stop"):
+                return
+            if frame.get("done"):
+                break
+        await say(pending)
+        if not started:
+            await ws.send(json.dumps({"type": "start", "sample_rate": 24000, "channels": 1}))
+        await ws.send(json.dumps({"type": "end"}))
+    except websockets.exceptions.ConnectionClosed:
+        return
+
+
 def process_request(connection, request):
     path = request.path
-    if path.split("?")[0] == "/api/ws":
+    if path.split("?")[0] in ("/api/ws", "/api/plugins/kanban/events", "/api/audio/speak-stream"):
         return None  # let the WebSocket handshake proceed
     query = {}
     if "?" in path:
@@ -385,7 +944,14 @@ def process_request(connection, request):
             query[k] = v
     method = getattr(request, "method", "GET") or "GET"
     base = path.split("?")[0]
-    if method == "PATCH" and base.startswith("/api/sessions/"):
+    if base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
+        try:
+            payload = json.loads(getattr(request, "body", b"") or b"{}")
+        except json.JSONDecodeError:
+            payload = {}
+        payload = payload if isinstance(payload, dict) else {}
+        result = kanban_rest(method, base, query, payload) if base.startswith("/api/plugins/kanban/") else audio_rest(method, base, payload)
+    elif method == "PATCH" and base.startswith("/api/sessions/"):
         # Title rename from the chat info sheet; the body is not readable here (websockets only
         # hands us headers), so echo a plausible title so the sheet's "saved" path is exercised.
         sid = base.split("/")[3]
@@ -394,7 +960,7 @@ def process_request(connection, request):
     else:
         result = rest(path, query)
     status, payload = result if result else (404, {"detail": "Not found"})
-    body = json.dumps(payload).encode()
+    body = neutral(json.dumps(payload)).encode()
     return Response(status, "OK", Headers([("Content-Type", "application/json"),
                                            ("Content-Length", str(len(body)))]), body)
 
@@ -441,7 +1007,7 @@ class Gateway:
         self.pending: dict[str, asyncio.Future] = {}
 
     async def send(self, frame: dict) -> None:
-        await self.ws.send(json.dumps(frame))
+        await self.ws.send(neutral(json.dumps(frame)))
 
     async def event(self, kind: str, sid: str, payload: dict | None = None) -> None:
         params = {"type": kind, "session_id": sid}
@@ -531,6 +1097,20 @@ class Gateway:
         for r in rows + tools:
             s.history.append({**r, "row_id": len(s.history) + 1})
 
+    async def _card_turn(self, s: Session, prompt: str) -> None:
+        """A reply with a card in it: a fenced html block (a small table and a Chart.js chart
+        from a CDN) between two paragraphs, as any bot can answer today."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, CARD_PART_1)
+        # The fence streams like any other text: the app shows the code block until it closes.
+        await self.stream_words(s, "\n\n```html\n" + CARD_HTML + "\n```\n\n", delay=0.004)
+        await self.stream_words(s, CARD_PART_2)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        full = CARD_PART_1 + "\n\n```html\n" + CARD_HTML + "\n```\n\n" + CARD_PART_2
+        self.store_turn(s, prompt, [full])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": full, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _delegate_turn(self, s: Session, prompt: str) -> None:
         """A turn that hands part of the work to two helpers: the `subagent.*` events the
         gateway raises on the parent's session (payload fields as its `_SUBAGENT_FIELDS`),
@@ -572,8 +1152,21 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": DELEGATE_PART_1 + "\n\n" + DELEGATE_PART_2, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
+    async def _table_turn(self, s: Session, prompt: str) -> None:
+        """A reply with the markdown PR #133 renders: headings, a table with and without outer
+        pipes, a nested list with task items, and a web image (loaded only on a tap)."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, TABLE_REPLY, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [TABLE_REPLY])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _run_turn(self, s: Session, prompt: str) -> None:
         await asyncio.sleep(0.4)
+        if prompt.strip().lower().startswith("table"):
+            await self._table_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("think"):
             # A long first think, as a real model has before its first word: the prompt sits
             # alone in the thread with the typing bubble for a while (a tester's first message
@@ -581,6 +1174,9 @@ class Gateway:
             await asyncio.sleep(20)
         if prompt.strip().lower().startswith("delegate"):
             await self._delegate_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
+            await self._card_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
@@ -762,6 +1358,11 @@ class Gateway:
             sid, stored = uuid.uuid4().hex[:8], time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
             s = Session(sid, stored, "New chat", profile)
             self.sessions[sid] = s
+            # Live from the start, as a resumed session is: a created session that was not in
+            # LIVE kept its approval frames out of open_frames, so approval.pending listed nothing
+            # for it and the app took an open card for one answered elsewhere.
+            LIVE[sid] = s
+            s.members.add(self)
             if p.get("cwd"):
                 # The real gateway writes the stored row on the first prompt; the mock files it now so
                 # the project grouping can be seen at once.
@@ -806,7 +1407,7 @@ class Gateway:
                     ]
                 elif row:
                     live.history = [
-                        {"role": "user", "text": "The log host is at 94% disk. Can you take a look?",
+                        {"role": "user", "text": "The log host is at 94% disk. Can you take a look? [User attached image: upload_20261003_120000_1.png]",
                          "timestamp": row["started_at"], "row_id": 1},
                         {"role": "assistant", "text": REPLY_PART_1 + REPLY_PART_2 + "\n\n" + REPLY_PART_3,
                          "timestamp": row["last_active"], "row_id": 2},
@@ -939,12 +1540,19 @@ class Gateway:
             s = self.sessions.get(p.get("session_id", ""))
             if s is None:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
+            # A spoken turn (hands-free) carries the voice params the real gateway reads
+            # (tui_gateway/methods_prompt.py): logged so a client can be checked against them.
+            if p.get("surface") or p.get("interrupted"):
+                print(f"prompt.submit surface={p.get('surface')!r} interrupted={bool(p.get('interrupted'))} "
+                      f"voice_context={len(str(p.get('voice_context') or ''))} chars", flush=True)
             asyncio.create_task(self.run_turn(s, str(p.get("text", ""))))
             return ok({"status": "streaming"})
         if method == "session.interrupt":
             return ok({"status": "interrupted", "interrupted": True})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
+            # Voice mode's quick answers set reasoning and fast for the session and put them back.
+            print(f"config.set {p.get('key')}={p.get('value')!r} session={p.get('session_id')} scope={p.get('scope')}", flush=True)
             return ok({"key": p.get("key", ""), "value": str(p.get("value", "")),
                        "info": session_info(s.title if s else "", False, profile)})
         if method in ("session.close", "session.delete"):
@@ -970,7 +1578,9 @@ class Gateway:
         if method == "approval.received":
             return ok({"acknowledged": True})
         if method in ("image.attach_bytes", "pdf.attach"):
-            return ok({"attached": True, "filename": p.get("filename", "")})
+            # The real gateway writes the image into the profile's images dir and says where.
+            name = p.get("filename", "") or "upload.png"
+            return ok({"attached": True, "filename": name, "path": f"/home/hermes/.hermes/images/upload_{int(time.time())}_1.{name.rsplit('.', 1)[-1] if '.' in name else 'png'}", "count": 1})
         if method == "file.attach":
             return ok({"ref_text": f"[file: {p.get('name', 'file')}]"})
         return {"jsonrpc": "2.0", "id": rid,
@@ -978,6 +1588,21 @@ class Gateway:
 
 
 async def ws_handler(ws):
+    # The kanban plugin's event stream has its own path; everything else is the gateway's JSON-RPC.
+    req_path = getattr(getattr(ws, "request", None), "path", "") or ""
+    if req_path.split("?")[0] == "/api/audio/speak-stream":
+        try:
+            await speak_stream(ws)
+        except Exception:
+            pass
+        return
+    if req_path.split("?")[0] == "/api/plugins/kanban/events":
+        query = dict(pair.partition("=")[::2] for pair in req_path.split("?", 1)[1].split("&")) if "?" in req_path else {}
+        try:
+            await kanban_events(ws, query)
+        except Exception:
+            pass
+        return
     gw = Gateway(ws)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
         "type": "gateway.ready", "session_id": "",
@@ -1009,6 +1634,9 @@ async def main() -> None:
     ap.add_argument("--port", type=int, default=9119)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--token", default="mock-token")
+    # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
+    ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
+    ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
     args = ap.parse_args()
     global TOKEN
     TOKEN = args.token

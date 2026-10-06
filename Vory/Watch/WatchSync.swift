@@ -27,8 +27,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
         guard WCSession.isSupported() else { return }
         let session = WCSession.default
         guard session.activationState == .activated, session.isPaired, session.isWatchAppInstalled else { pending = store; return }
-        var secrets: [String: GatewaySecrets] = [:]
-        for c in store.connections { secrets[c.id.uuidString] = store.secrets(for: c.id) }
+        let secrets = Self.contextSecrets(store)
         guard let cdata = try? JSONEncoder().encode(store.connections), let sdata = try? JSONEncoder().encode(secrets) else { return }
         var ctx: [String: Any] = ["connections": cdata, "secrets": sdata, "sent": Date().timeIntervalSince1970]
         if let a = store.activeConnectionID { ctx["active"] = a.uuidString }
@@ -38,7 +37,29 @@ final class WatchSync: NSObject, WCSessionDelegate {
         // Vory Summaries, made here by Apple Intelligence, so the watch shows them without
         // running a model of its own.
         if Self.summariesToWatch, let s = try? JSONEncoder().encode(ChatSummarizer.shared.summaries) { ctx["summaries"] = s }
-        try? session.updateApplicationContext(ctx)
+        do { try session.updateApplicationContext(ctx) } catch {
+            // Too big (photo looks and summaries add up): the gateways and looks still go, the
+            // summaries wait for a smaller day. Silently dropping the whole context left the
+            // watch without its gateways.
+            ctx["summaries"] = nil
+            do { try session.updateApplicationContext(ctx) } catch {
+                ctx["looks"] = nil
+                try? session.updateApplicationContext(ctx)
+            }
+        }
+    }
+
+    /// The secrets the watch gets: what signs a call, never the refresh token. With both devices
+    /// rotating one session, the next context overwrote the watch's newer secrets with the
+    /// phone's older ones.
+    static func contextSecrets(_ store: ConnectionStore) -> [String: GatewaySecrets] {
+        var secrets: [String: GatewaySecrets] = [:]
+        for c in store.connections {
+            var s = store.secrets(for: c.id)
+            s.refreshToken = nil
+            secrets[c.id.uuidString] = s
+        }
+        return secrets
     }
 
     /// Re-send the context after looks or summaries changed, coalesced: summaries arrive one
@@ -72,10 +93,12 @@ final class WatchSync: NSObject, WCSessionDelegate {
         guard let model = AppDelegate.model, let op = m["op"] as? String else { return ["ok": false, "error": "app not ready"] }
         if model.runtime == nil, let c = model.store.active { await model.activate(c) }
         guard let rt = model.runtime else { return ["ok": false, "error": "no gateway"] }
-        if let p = m["profile"] as? String, !p.isEmpty, rt.selectedProfile != p { rt.selectedProfile = p }
+        // The watch's bot goes with each call; the phone's own selection stays where the person
+        // left it (switching it here changed the phone's list under them).
+        let profile = (m["profile"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         if op == "new" {
             // The watch cannot open a socket over the phone link, so the phone creates the session.
-            guard let chat = try? await rt.newChat() else { return ["ok": false, "error": "could not create a chat"] }
+            guard let chat = try? await rt.newChat(profile: profile) else { return ["ok": false, "error": "could not create a chat"] }
             return ["ok": true, "session": chat.storedID, "title": chat.title]
         }
         guard let sid = m["session"] as? String, let chat = try? await rt.openChat(storedID: sid, title: nil, profile: m["profile"] as? String, waitForResume: true) else { return ["ok": false, "error": "could not open the chat"] }

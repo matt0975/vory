@@ -6,9 +6,36 @@ import UniformTypeIdentifiers
 public struct QueuedMessage: Identifiable, Hashable, Sendable {
     public var id = UUID()
     public var text: String
+    /// Set when the message was spoken (hands-free): it goes out with the voice params.
+    public var voice: VoiceTurn? = nil
 
-    public init(text: String) {
+    public init(text: String, voice: VoiceTurn? = nil) {
         self.text = text
+        self.voice = voice
+    }
+}
+
+/// What a spoken turn carries beyond its words (tui_gateway/methods_prompt.py, prompt.submit):
+/// `surface: "voice-live"` has the gateway prepend its spoken-conversation note to the MODEL
+/// INPUT only (a transcript in, short plain sentences out; the stored user row stays the words
+/// said), `voice_context` the recent spoken exchange so "yes" and "Thursday, not Friday" make
+/// sense, `interrupted` that the bot's last reply was cut off by the person.
+public struct VoiceTurn: Hashable, Sendable {
+    public static let surface = "voice-live"
+    /// The gateway keeps at most this much of the context.
+    public static let contextLimit = 6000
+    public var context: String
+    public var interrupted: Bool
+
+    public init(context: String = "", interrupted: Bool = false) {
+        self.context = context
+        self.interrupted = interrupted
+    }
+
+    func apply(to params: inout [String: JSONValue]) {
+        params["surface"] = .string(Self.surface)
+        if !context.isEmpty { params["voice_context"] = .string(String(context.suffix(Self.contextLimit))) }
+        if interrupted { params["interrupted"] = true }
     }
 }
 
@@ -407,6 +434,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             // younger than the question is left alone: it may have arrived after the gateway
             // made its list.
             let open = Set(waiting.compactMap { $0["request_id"]?.stringValue })
+            let held = cards.filter { $0.method == "approval" }.compactMap { $0.approval?.requestId }
+            log.notice("approval.pending: gateway lists \(open.sorted().joined(separator: ","), privacy: .public); held \(held.joined(separator: ","), privacy: .public)")
             for card in cards where card.method == "approval" {
                 guard let rid = card.approval?.requestId, !open.contains(rid),
                       let shown = cardShownAt[card.id], shown.addingTimeInterval(Self.cardGrace) < asked else { continue }
@@ -434,7 +463,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// Sends text (with staged attachments). Returns prefill text when a slash command asks the composer to prefill.
     @discardableResult
-    public func send(_ rawText: String) async -> String? {
+    /// Sends a message (queued behind a running turn). `voice` marks a spoken turn: the gateway
+    /// then answers in short plain sentences, with the recent spoken exchange in mind.
+    public func send(_ rawText: String, voice: VoiceTurn? = nil) async -> String? {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !staged.isEmpty else { return nil }
         await awaitResume()
@@ -442,14 +473,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if !text.isEmpty { composerHistory.append(text) }
         if text.hasPrefix("/"), staged.isEmpty { return await dispatchSlash(text) }
         if isRunning {
-            queue.append(QueuedMessage(text: text))
+            queue.append(QueuedMessage(text: text, voice: voice))
             return nil
         }
-        await submit(text: text, queued: false)
+        await submit(text: text, queued: false, voice: voice)
         return nil
     }
 
-    private func submit(text: String, queued: Bool) async {
+    private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async {
         interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
@@ -469,6 +500,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(outgoing)]
             if queued { params["queued"] = true }
+            voice?.apply(to: &params)
             let r = try await rpc("prompt.submit", params)
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
@@ -540,10 +572,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func removeQueued(_ id: UUID) { queue.removeAll { $0.id == id } }
     public func updateQueued(_ id: UUID, text: String) { if let i = queue.firstIndex(where: { $0.id == id }) { queue[i].text = text } }
 
+    /// Voice mode is on for this chat with this state line (nil: it ended); the platform's turn
+    /// surface shows it.
+    public func noteVoiceMode(_ line: String?) { activity.voiceMode(for: self, line: line) }
+
     private func drainQueue() {
         guard !isRunning, !queue.isEmpty else { return }
         let next = queue.removeFirst()
-        Task { await submit(text: next.text, queued: true) }
+        Task { await submit(text: next.text, queued: true, voice: next.voice) }
     }
 
     // MARK: Slash commands
@@ -708,6 +744,48 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         _ = try await rpc("config.set", ["key": "yolo", "value": .string(on ? "on" : "off"), "session_id": .string(runtimeID), "scope": "session"])
     }
 
+    // MARK: Quick answers (voice)
+
+    /// Voice mode is running with this chat's reasoning turned down and fast replies on.
+    public private(set) var quickAnswersOn = false
+    /// What voice mode puts back, kept on disk per session so an app killed mid-voice can
+    /// restore it on the next open (`restoreQuickAnswersIfNeeded`).
+    private static func quickRestoreKey(_ storedID: String) -> String { "voice.quick.restore." + storedID }
+    /// The effort voice mode runs with; the gateway's levels go none … ultra.
+    public static let quickEffort = "low"
+
+    /// Voice mode begins: low reasoning and fast replies for this chat only, with what it had
+    /// remembered so typed turns after are unaffected. Nothing when the setting is off.
+    public func beginQuickAnswers() async {
+        guard VoiceSettings.quickAnswers, !quickAnswersOn else { return }
+        let before = ["reasoning": info?.reasoningEffort ?? "", "fast": (info?.fast ?? false) ? "on" : "off"]
+        if !storedID.isEmpty { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
+        quickAnswersOn = true
+        try? await setReasoning(Self.quickEffort)
+        try? await setFast(true)
+    }
+
+    /// Voice mode ended: the chat's own reasoning and fast come back.
+    public func endQuickAnswers() async {
+        guard quickAnswersOn else { return }
+        quickAnswersOn = false
+        await restoreQuickAnswers(storedID.isEmpty ? nil : UserDefaults.standard.dictionary(forKey: Self.quickRestoreKey(storedID)) as? [String: String])
+    }
+
+    /// A chat opened after the app was killed mid-voice: what voice mode changed is put back.
+    public func restoreQuickAnswersIfNeeded() async {
+        guard !storedID.isEmpty, let before = UserDefaults.standard.dictionary(forKey: Self.quickRestoreKey(storedID)) as? [String: String] else { return }
+        await restoreQuickAnswers(before)
+    }
+
+    private func restoreQuickAnswers(_ before: [String: String]?) async {
+        if !storedID.isEmpty { UserDefaults.standard.removeObject(forKey: Self.quickRestoreKey(storedID)) }
+        // Only what was recorded goes back; a chat that reported no effort of its own is left
+        // to the gateway's own default rather than guessed at.
+        if let effort = before?["reasoning"], !effort.isEmpty { try? await setReasoning(effort) }
+        if let fast = before?["fast"] { try? await setFast(fast == "on") }
+    }
+
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
     }
@@ -738,7 +816,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard cards.contains(where: { $0.id == card.id }) else { return }
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
-        if let c = inlineAnswers.removeValue(forKey: card.id) { c.resume(returning: .null) }
+        // The gateway's reply slot stays open: answering it with nothing here read as a deny
+        // when the gateway's list had simply missed the card (a tester's Once came back as
+        // "Answered on another device" and a refusal). If the gateway really has its answer
+        // it ignores a late one; the turn's end releases whatever still waits.
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
         runtime.cardNotifier?.cardSettled(card, chat: self)
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: card.method == "approval" ? "Answered on another device" : "No longer waiting for an answer", symbol: "checkmark.shield")))
@@ -810,7 +891,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             streamedCharactersThisTurn += delta.count
             assembler.appendDelta(delta)
             scheduleStreamingUpdate()
-            if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count]) }
+            if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count, "text": delta]) }
         case "reasoning.delta", "thinking.delta":
             if streamingItemID == nil { beginStreaming() }
             if statusLine != "Thinking…" { statusLine = "Thinking…" }
@@ -830,6 +911,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "message.complete":
             let text = p["text"]?.stringValue
             let lastAssistantIndex = finishStreaming(finalText: text)
+            if let spoken = text, !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, p["status"]?.stringValue != "interrupted" {
+                NotificationCenter.default.post(name: .hermesReplyCompleted, object: nil, userInfo: ["storedID": storedID, "text": spoken])
+            }
             if let u = try? p["usage"]?.decode(Usage.self) { usage = u }
             if let idx = lastAssistantIndex, let started = turnStartedAt {
                 items[idx].stats = TurnStats.make(outputBefore: outputTokensAtTurnStart, outputAfter: usage?.output,

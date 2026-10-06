@@ -16,9 +16,18 @@ struct VoryTabBar: View {
     var compose: () -> Void
     /// The full New Message sheet (bots, project, files).
     var composeFull: () -> Void = {}
+    /// A fresh chat straight into voice mode, with the bot named (nil: the current one).
+    var voice: (String?) -> Void = { _ in }
     /// What a tap and a press and hold do (Settings › Appearance › New Chat button).
     @AppStorage(ComposeAction.tapKey) private var tapRaw = ComposeAction.tapDefault.rawValue
     @AppStorage(ComposeAction.holdKey) private var holdRaw = ComposeAction.holdDefault.rawValue
+    /// Settings › Appearance › Voice button: the mic circle beside the bar, or not (the capsule
+    /// takes the room). Applies as it is switched, no relaunch.
+    @AppStorage(Self.showVoiceKey) private var showVoice = true
+    static let showVoiceKey = "tabBar.showVoice"
+    /// Settings › Appearance › Tab labels: the word under the selected tab's icon, or icons only.
+    @AppStorage(Self.showLabelsKey) private var showLabels = true
+    static let showLabelsKey = "tabBar.showLabels"
 
     private func run(_ action: ComposeAction) {
         switch action {
@@ -36,7 +45,9 @@ struct VoryTabBar: View {
     private let barHeight: CGFloat = 56
     private let inset: CGFloat = 4
     private let sideMargin: CGFloat = 21
-    private let circleGap: CGFloat = 12
+    /// Between the capsule and the circles, and between the circles: half what it was (the
+    /// bar had a gap on each side of the mic that read as empty space).
+    private let circleGap: CGFloat = 6
     /// The window's bottom safe-area inset: 34 pt on phones with a home indicator, 0 on a
     /// home-button phone (iPhone SE), which iOS 26 still runs on.
     private static var safeBottom: CGFloat {
@@ -54,6 +65,30 @@ struct VoryTabBar: View {
         GlassEffectContainer(spacing: circleGap) {
             HStack(spacing: circleGap) {
                 capsule
+                // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
+                // held, it offers the bots (#237). With four tabs at most the capsule keeps 49 pt
+                // slots on the narrowest phone. Off in Settings › Appearance, it is not there and
+                // the capsule is wider (voice mode still starts from a chat and the + panel).
+                if showVoice {
+                    Menu {
+                        ForEach(model.runtime?.profiles ?? []) { p in
+                            Button { voice(p.name) } label: { Label(p.label, systemImage: "person.fill") }
+                        }
+                    } label: {
+                        Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
+                            .frame(width: barHeight, height: barHeight)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    } primaryAction: {
+                        voice(nil)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .disabled(model.runtime == nil)
+                    .accessibilityLabel("Voice chat")
+                    .accessibilityHint("Tap for a voice chat with the current bot; press and hold to choose a bot")
+                    .accessibilityIdentifier("chats.voice")
+                    .transition(.scale.combined(with: .opacity))
+                }
                 Button { run(ComposeAction.tap(tapRaw)) } label: {
                     // Centred on the square, not the glyph: the pencil hangs off its top-right
                     // corner. Measured from a simulator screenshot (the square sat 2.5 pt low).
@@ -79,6 +114,7 @@ struct VoryTabBar: View {
         // Reserve only the part above the home-indicator area, like the system bar group; the
         // capsule itself is drawn overflowing into it.
         .frame(height: Self.reservedHeight, alignment: .top)
+        .animation(.snappy(duration: 0.25), value: showVoice)
     }
 
     private var capsule: some View {
@@ -141,10 +177,11 @@ struct VoryTabBar: View {
     }
 
     /// One tab: a large icon on its own, or a smaller icon over its label when it is selected
-    /// (no labels at all while the lens is being dragged, like the system bar).
+    /// (no labels at all while the lens is being dragged, like the system bar, or when
+    /// Settings › Appearance › Tab labels is off).
     @ViewBuilder private func slot(_ tab: AppModel.AppTab, dragging: Bool) -> some View {
         let selected = model.selectedTab == tab
-        let labelled = selected && !dragging
+        let labelled = selected && !dragging && showLabels
         VStack(spacing: 2) {
             icon(for: tab, size: labelled ? 21 : 25)
                 .frame(height: labelled ? 24 : 30)
@@ -162,6 +199,7 @@ struct VoryTabBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tab.title)
+        .accessibilityIdentifier("tab.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
         .accessibilityAction { select(tab) }
     }

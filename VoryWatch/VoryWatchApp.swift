@@ -14,7 +14,11 @@ struct VoryWatchApp: App {
         // widget snapshot are visible to the complications extension too.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
         Keychain.migrateToAccessGroupIfNeeded()
-        _model = State(initialValue: WatchModel())
+        let model = WatchModel()
+        _model = State(initialValue: model)
+        // From the first moment, not from the first screen: a complication push or a notification
+        // action that launches the app in the background found no model and did nothing.
+        WatchAppDelegate.model = model
     }
 
     var body: some Scene {
@@ -42,7 +46,9 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate, UNUserNotificatio
         Task { @MainActor in Self.model?.push.deviceToken = hex; await Self.model?.syncPush() }
     }
 
-    func didFailToRegisterForRemoteNotifications(withError error: Error) {
+    // WatchKit's spelling of the callback; the UIKit-style name only "nearly matched" it, so
+    // a failed registration was never reported on the watch.
+    func didFailToRegisterForRemoteNotificationsWithError(_ error: Error) {
         Task { @MainActor in Self.model?.push.lastError = error.localizedDescription }
     }
 

@@ -403,7 +403,7 @@ extension TranscriptView {
         actions.onSelectText = { selectText = $0 }
         actions.setReasoningOpen = { id, on in if on { openReasoning.insert(id) } else { openReasoning.remove(id) } }
         actions.setToolOpen = { id, on in if on { openTools.insert(id) } else { openTools.remove(id) } }
-        return RowContext(profile: showBots ? chat.profileName : nil, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
+        return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
@@ -566,7 +566,11 @@ final class RowActions {
 /// it leaves the rows it already drew alone.
 @MainActor
 struct RowContext: Equatable {
+    /// The bot beside its bubbles when bots are shown; nil hides it.
     var profile: String?
+    /// The chat's bot whatever is shown: pictures live in its images dir on the gateway (with
+    /// bots hidden, a stored attachment of a non-default bot's chat came back as a placeholder).
+    var bot: String?
     var typingTool: String?
     var showReasoning: Bool
     var currentStepOnly: Bool
@@ -582,7 +586,7 @@ struct RowContext: Equatable {
     var actions: RowActions
 
     static func == (a: RowContext, b: RowContext) -> Bool {
-        a.actions === b.actions && a.profile == b.profile && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
+        a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
@@ -597,7 +601,7 @@ struct RowContext: Equatable {
         }
         let id = row.item.id
         let actions = actions
-        TranscriptRow(item: row.item, profile: profile, botShown: row.lastOfRun,
+        TranscriptRow(item: row.item, profile: profile, bot: bot, botShown: row.lastOfRun,
                       typingTool: typingTool,
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
@@ -796,6 +800,9 @@ private struct TimeRevealPan: UIViewRepresentable {
 extension ChatStyle { static let headerShowsTitle = "chatHeaderShowsTitle" }
 enum ChatStyle {
     static let showToolCalls = "chat.showToolCalls"
+    /// The on-screen keyboard's Return sends (as it did before 1.4) instead of adding a line; off
+    /// by default. A hardware keyboard's Return sends and Shift-Return adds a line either way.
+    static let returnSends = "chat.returnSends"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
     static let showSystemNotes = "chat.showSystemNotes"
@@ -903,7 +910,7 @@ struct SelectTextItem: Identifiable { let text: String; var id: String { text } 
 
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
-        a.item == b.item && a.profile == b.profile && a.botShown == b.botShown && a.typingTool == b.typingTool
+        a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botShown == b.botShown && a.typingTool == b.typingTool
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen.wrappedValue == b.reasoningOpen.wrappedValue
             && a.toolOpen.wrappedValue == b.toolOpen.wrappedValue
@@ -914,6 +921,8 @@ struct TranscriptRow: View, Equatable {
     /// The bot beside its bubble, as in a group chat; nil for none. Only the last bubble of a
     /// run of replies gets the bot (`botShown`); the others keep the same left margin.
     var profile: String? = nil
+    /// The chat's bot, for the pictures (its images dir on the gateway), shown or not.
+    var bot: String? = nil
     var botShown = true
     /// While the reply has no text yet: nil = a grey typing bubble, a name = the dark one with
     /// the tool badge.
@@ -987,9 +996,14 @@ struct TranscriptRow: View, Equatable {
             HStack {
                 Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 6) {
+                    // A stored row keeps "[User attached image: name]" where the picture was: the
+                    // picture comes back from the gateway's images dir, the mark leaves the bubble.
+                    let attached = attachments.isEmpty ? TranscriptMedia.attachedImages(in: text, profile: bot) : []
+                    let shownText = attached.isEmpty ? text : MediaScan.userTextWithoutAttachments(text)
                     if !attachments.isEmpty { AttachmentStrip(attachments: attachments) }
-                    if !text.isEmpty {
-                        Text(text)
+                    if !attached.isEmpty { MediaThumbStrip(refs: attached, profile: bot, side: 120, alignment: .trailing) }
+                    if !shownText.isEmpty {
+                        Text(shownText)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
@@ -1041,7 +1055,11 @@ struct TranscriptRow: View, Equatable {
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
                     if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: reasoningOpen, itemID: item.id) }
-                    MarkdownView(text: text).equatable()
+                    // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
+                    // the words as thumbnails fetched through the gateway.
+                    let media = TranscriptMedia.images(in: text)
+                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text)).equatable()
+                    if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                             .accessibilityLabel("Turn statistics: \(s.label)")
@@ -1051,6 +1069,9 @@ struct TranscriptRow: View, Equatable {
                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
                 .contextMenu {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+                    Button { VoiceCoordinator.shared.toggleSpeaking(text) } label: {
+                        Label(VoiceCoordinator.shared.isSpeaking(text) ? "Stop Speaking" : "Speak", systemImage: VoiceCoordinator.shared.isSpeaking(text) ? "speaker.slash" : "speaker.wave.2")
+                    }
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                     Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
@@ -1350,8 +1371,10 @@ struct MarkdownView: View, Equatable {
     /// Parsed blocks and inline styling, kept for the text they came from: a row that scrolls
     /// off and back (the lazy stack rebuilds it) does not parse its markdown again, and a
     /// finished reply is parsed once for as long as it is in the cache.
-    private static let blockCache = NSCache<NSString, BlocksBox>()
-    private static let inlineCache = NSCache<NSString, InlineBox>()
+    // Bounded: a streaming reply makes a new entry per token, and a long day of chats made
+    // thousands that nothing ever read again.
+    private static let blockCache: NSCache<NSString, BlocksBox> = { let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; return c }()
+    private static let inlineCache: NSCache<NSString, InlineBox> = { let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; return c }()
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     final class InlineBox { let text: AttributedString; init(_ t: AttributedString) { text = t } }
 
@@ -1370,23 +1393,36 @@ struct MarkdownView: View, Equatable {
         return a
     }
 
+    /// Cards (fenced html) whose source is showing instead, by block position.
+    @State private var sourceShown: Set<Int> = []
+
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text }
+
     var body: some View {
         let _ = Perf.tick("markdown")
         let blocks = Self.blocks(text)
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                render(block)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
+                render(block, at: i)
             }
         }
         .textSelection(.enabled)
     }
 
-    @ViewBuilder private func render(_ block: MarkdownBlock) -> some View {
+    @ViewBuilder private func render(_ block: MarkdownBlock, at index: Int) -> some View {
         switch block {
         case .paragraph(let t):
             Text(Self.inline(t))
         case .heading(let level, let t):
-            Text(Self.inline(t)).font(level <= 1 ? .title2.weight(.bold) : level == 2 ? .title3.weight(.semibold) : .headline)
+            Text(Self.inline(t)).font(Self.headingFont(level))
+        case .code(let lang, let code, let closed) where closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
+            // A card the bot drew in HTML, once its fence has closed; while it streams it is
+            // the code block below. Show Source turns it back into one.
+            HTMLCardView(html: code, onShowSource: { withAnimation(.snappy) { _ = sourceShown.insert(index) } })
+                .contextMenu {
+                    Button { withAnimation(.snappy) { _ = sourceShown.insert(index) } } label: { Label("Show Source", systemImage: "chevron.left.forwardslash.chevron.right") }
+                    Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
+                }
         case .code(let lang, let code, let closed):
             // Wrapped, not side-scrolling: a horizontal pan inside a bubble used to fight the
             // timestamp reveal. Long lines wrap; a copy button sits in the corner.
@@ -1394,6 +1430,12 @@ struct MarkdownView: View, Equatable {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
                     Spacer(minLength: 0)
+                    if closed, HTMLCard.isCard(language: lang) {
+                        Button { withAnimation(.snappy) { _ = sourceShown.remove(index) } } label: {
+                            Label("Show Card", systemImage: "rectangle.on.rectangle").font(.caption2).labelStyle(.titleAndIcon)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.tint).padding(.trailing, 6)
+                    }
                     if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)
@@ -1402,25 +1444,206 @@ struct MarkdownView: View, Equatable {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-        case .bullets(let items):
+        case .list(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, it in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("•"); Text(Self.inline(it)) }
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        listMarker(it)
+                        Text(Self.inline(it.text))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.leading, CGFloat(it.depth) * 18)
                 }
             }
-        case .numbered(let items):
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { i, it in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) { Text("\(i + 1).").monospacedDigit(); Text(Self.inline(it)) }
-                }
-            }
+        case .table(let table):
+            MarkdownTableView(table: table)
+        case .image(let alt, let url, let link):
+            MarkdownImageView(alt: alt, url: url, link: link)
         case .quote(let t):
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 2).fill(.secondary).frame(width: 3)
                 Text(Self.inline(t)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         case .rule:
             Divider()
+        }
+    }
+}
+
+extension MarkdownView {
+    /// h1 and h2 keep their original look; h3 to h6 step down so they stay distinguishable.
+    static func headingFont(_ level: Int) -> Font {
+        switch level {
+        case ...1: .title2.weight(.bold)
+        case 2: .title3.weight(.semibold)
+        case 3: .headline
+        case 4: .subheadline.weight(.semibold)
+        case 5: .subheadline.weight(.medium)
+        default: .footnote.weight(.semibold)
+        }
+    }
+
+    @ViewBuilder func listMarker(_ item: MarkdownListItem) -> some View {
+        switch item.marker {
+        case .bullet:
+            Text(item.depth == 0 ? "•" : item.depth == 1 ? "◦" : "▪")
+        case .number(let n):
+            Text("\(n).").monospacedDigit()
+        case .task(let checked):
+            Image(systemName: checked ? "checkmark.square.fill" : "square")
+                .foregroundStyle(checked ? Color.accentColor : Color.secondary)
+                .accessibilityLabel(checked ? "Done" : "Not done")
+        }
+    }
+}
+
+/// A markdown table. Columns share the bubble width and cell text wraps (no side-scrolling,
+/// for the same reason code blocks wrap).
+struct MarkdownTableView: View {
+    var table: MarkdownTable
+
+    private func alignment(_ col: Int) -> Alignment {
+        guard col < table.alignments.count else { return .leading }
+        switch table.alignments[col] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+    private func textAlignment(_ col: Int) -> TextAlignment {
+        guard col < table.alignments.count else { return .leading }
+        switch table.alignments[col] {
+        case .leading: return .leading
+        case .center: return .center
+        case .trailing: return .trailing
+        }
+    }
+
+    private func cell(_ text: String, col: Int, header: Bool) -> some View {
+        Text(MarkdownView.inline(text))
+            .font(header ? .footnote.weight(.semibold) : .footnote)
+            .multilineTextAlignment(textAlignment(col))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: alignment(col))
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            // VoiceOver hears which column a cell is in, not a bare value.
+            .accessibilityLabel(header || col >= table.header.count ? text : "\(table.header[col]): \(text)")
+    }
+
+    var body: some View {
+        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+            GridRow {
+                ForEach(Array(table.header.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: true) }
+            }
+            .background(Color(.tertiarySystemFill))
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                Divider().gridCellUnsizedAxes(.horizontal)
+                GridRow {
+                    ForEach(Array(row.enumerated()), id: \.offset) { c, t in cell(t, col: c, header: false) }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.separator), lineWidth: 0.5))
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A standalone markdown image. It is fetched only after the user taps it: a reply can embed an
+/// arbitrary URL, and auto-loading one would let injected content leak chat data through the
+/// query string (and reveal the device IP) without any interaction. Optionally a link.
+struct MarkdownImageView: View {
+    var alt: String
+    var url: String
+    var link: String?
+    @Environment(\.openURL) private var openURL
+    @State private var loadRequested = false
+    /// Set when a requested load has been pending past `loadTimeout`.
+    @State private var timedOut = false
+
+    var body: some View {
+        // Only remote https images load: a reply must not make the app read local paths, and
+        // App Transport Security rejects cleartext http anyway.
+        if let u = URL(string: url), u.scheme?.lowercased() == "https", let host = u.host() {
+            if loadRequested {
+                loaded(u)
+            } else {
+                Button { loadRequested = true } label: {
+                    Label(alt.isEmpty ? "Load image from \(host)" : "\(alt) (load from \(host))", systemImage: "photo")
+                        .font(.footnote)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityHint("Loads the image from \(host)")
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    /// What a standalone image shows. Pure, so the decision can be unit-tested without a network.
+    enum Display: Equatable { case image, spinner, placeholder }
+
+    /// A finished load wins (even a late one); a failure or a stalled load (`timedOut`) shows the placeholder;
+    /// otherwise the spinner keeps turning.
+    static func display(success: Bool, failure: Bool, timedOut: Bool) -> Display {
+        if success { return .image }
+        if failure || timedOut { return .placeholder }
+        return .spinner
+    }
+
+    static func placeholderTitle(alt: String) -> String { alt.isEmpty ? "Image unavailable" : alt }
+
+    /// The one fallback for every image that cannot be shown: a blocked scheme, a failed load, a stalled load.
+    private var placeholder: some View {
+        Label(Self.placeholderTitle(alt: alt), systemImage: "photo")
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+
+    /// AsyncImage has no timeout of its own: past this, a stalled load shows the placeholder, and an image that
+    /// still arrives later replaces it.
+    private static let loadTimeout: Duration = .seconds(15)
+
+    @State private var picture: UIImage?
+    @State private var failed = false
+
+    @ViewBuilder private func loaded(_ u: URL) -> some View {
+        // Fetched to the caches and decoded downsampled, off the main thread, like a picture
+        // from the gateway: AsyncImage decoded the whole bitmap in the row.
+        let image = Group {
+            switch Self.display(success: picture != nil, failure: failed, timedOut: timedOut) {
+            case .image: if let picture { Image(uiImage: picture).resizable().scaledToFit().clipShape(.rect(cornerRadius: 8)) }
+            case .placeholder: placeholder
+            case .spinner: ProgressView().frame(maxWidth: .infinity, minHeight: 60)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: u) { await fetch(u) }
+        .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+        if let link, let target = URL(string: link), ["http", "https"].contains(target.scheme?.lowercased() ?? "") {
+            Button { openURL(target) } label: { image }.buttonStyle(.plain)
+        } else {
+            image
+        }
+    }
+
+    private func fetch(_ u: URL) async {
+        let clock = Task { try? await Task.sleep(for: Self.loadTimeout); timedOut = true }
+        defer { clock.cancel() }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: u)
+            let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("vory-web-images", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            var name = u.absoluteString.utf8.reduce(UInt64(5381)) { ($0 << 5) &+ $0 &+ UInt64($1) }.description
+            if !u.pathExtension.isEmpty { name += "." + u.pathExtension }
+            let file = dir.appendingPathComponent(name)
+            try data.write(to: file)
+            guard !Task.isCancelled else { return }
+            if let decoded = await AttachmentThumbs.imageAsync(at: file, side: 1200) { picture = decoded } else { failed = true }
+        } catch {
+            failed = true
         }
     }
 }
@@ -1486,6 +1709,9 @@ struct ToolCardView: View {
                 if showOutput, let r = activity.resultText, !r.isEmpty {
                     Text("Output").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     CodeBlock(text: r, lineCap: 30)
+                    // A tool that made or found pictures (a screenshot, a render): shown, not just named.
+                    let shots = MediaScan.imagePaths(inToolOutput: r)
+                    if !shots.isEmpty { MediaThumbStrip(refs: shots, profile: nil, side: 110) }
                 }
                 Button { showFull = true } label: {
                     Label("Open the full call", systemImage: "arrow.up.left.and.arrow.down.right").font(.caption.weight(.medium))

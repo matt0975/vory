@@ -9,7 +9,8 @@ import VoryCore
 /// more than one starts a group chat with all of them.
 struct NewChatSheet: View {
     enum Start {
-        case chat(profile: String, text: String, attachments: [AttachmentPreview], cwd: String?)
+        /// `voice`: straight into voice mode once the chat exists, after the first message if any.
+        case chat(profile: String, text: String, attachments: [AttachmentPreview], cwd: String?, voice: Bool)
         case group(room: Room, text: String)
     }
     var runtime: GatewayRuntime
@@ -30,6 +31,8 @@ struct NewChatSheet: View {
     enum Field { case to }
     /// The message field is UIKit (ComposerTextView), so its focus is a plain flag.
     @State private var messageFocused = false
+    /// Settings › Appearance › Return key sends; the field adds a line otherwise.
+    @AppStorage(ChatStyle.returnSends) private var returnSends = false
     /// Files picked before the chat exists; staged into the chat as soon as it opens.
     @State private var staged: [AttachmentPreview] = []
     /// The project the chat starts in ("" for none): the Chats filter's project, else the
@@ -39,7 +42,10 @@ struct NewChatSheet: View {
     @State private var showPhotos = false
     @State private var showCamera = false
     @State private var showFiles = false
+    @State private var showRecorder = false
     @State private var stagedPreview: URL?
+    @State private var showAttach = false
+    @State private var attachPanelHeight: CGFloat = 356
 
     private var candidates: [ProfileInfo] {
         let q = typed.trimmingCharacters(in: .whitespaces).lowercased()
@@ -188,29 +194,37 @@ struct NewChatSheet: View {
                     }
                 }
             HStack(alignment: .bottom, spacing: 8) {
-                Menu {
-                    Button { showPhotos = true } label: { Label("Photo Library", systemImage: "photo.on.rectangle") }
-                    #if os(iOS)
-                    Button { showCamera = true } label: { Label("Camera", systemImage: "camera") }
-                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                    #endif
-                    Button { showFiles = true } label: { Label("Files", systemImage: "folder") }
-                    Button { pasteAttachment() } label: { Label("Paste", systemImage: "doc.on.clipboard") }
+                // The same + panel as a chat's composer (#236); it takes the keyboard's place.
+                Button {
+                    if !showAttach { messageFocused = false; focus = nil }
+                    withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
                 } label: {
                     Image(systemName: "plus").font(.body.weight(.semibold))
+                        .rotationEffect(.degrees(showAttach ? 45 : 0))
                         .frame(width: 36, height: 36)
                         .glassEffect(.regular.interactive(), in: .circle)
                 }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
                 .disabled(chosen.count != 1)
-                .accessibilityLabel("Attach")
+                .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
+                .accessibilityIdentifier("newchat.attach")
                 HStack(alignment: .bottom, spacing: 6) {
-                    ComposerTextView(text: $text, placeholder: chosen.isEmpty ? "Choose a bot first" : "Message", focused: $messageFocused,
+                    ComposerTextView(text: $text, placeholder: chosen.isEmpty ? "Choose a bot first" : "Message", focused: $messageFocused, accessibilityID: "newchat.text",
                                      onSend: { Task { await start() } },
-                                     onPasteData: { data, name, type in stage(data, name: name, type: type) })
+                                     onPasteData: { data, name, type in stage(data, name: name, type: type) },
+                                     returnSends: returnSends)
                         .padding(.leading, 14).padding(.vertical, 7)
                         .disabled(chosen.isEmpty)
+                    // Voice mode with the bot chosen; whatever is typed or attached goes first.
+                    Button { startVoice() } label: {
+                        Image(systemName: "mic.fill").font(.body.weight(.semibold))
+                            .foregroundStyle(chosen.count == 1 ? Color.primary : Color.secondary)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain).disabled(chosen.count != 1 || busy)
+                    .padding(.bottom, 4)
+                    .accessibilityLabel("Voice mode")
+                    .accessibilityIdentifier("newchat.voice")
                     Button { Task { await start() } } label: {
                         Image(systemName: busy ? "ellipsis" : "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
                             .frame(width: 28, height: 28).background(canSend ? AnyShapeStyle(Color.vory) : AnyShapeStyle(.tertiary), in: .circle)
@@ -218,10 +232,28 @@ struct NewChatSheet: View {
                     .buttonStyle(.plain).disabled(!canSend)
                     .padding(.trailing, 4).padding(.bottom, 4)
                     .accessibilityLabel("Send")
+                    .accessibilityIdentifier("newchat.send")
                 }
                 .frame(minHeight: 36)
                 // Plain glass: an interactive capsule answered touches meant for the field's Paste menu.
                 .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            }
+            // The panel grows out of the + button and sits above the field.
+            .overlay(alignment: .topLeading) {
+                if showAttach {
+                    AttachPanel(items: attachItems) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachPanelHeight = $0 }
+                        .offset(y: -(attachPanelHeight + 10))
+                        .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                        .zIndex(2)
+                }
+            }
+            // Anything tapped outside the panel closes it.
+            .background {
+                if showAttach {
+                    Color.clear.contentShape(.rect).frame(width: 3000, height: 4000)
+                        .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+                }
             }
             }
             .padding(.horizontal, 16).padding(.vertical, 8)
@@ -237,6 +269,34 @@ struct NewChatSheet: View {
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url) }.sheetFrame(.compact) }
+    }
+
+    /// The + panel's rows: a chat composer's, with Message History greyed (there is no chat yet).
+    private var attachItems: [AttachItem] {
+        var items: [AttachItem] = []
+        #if os(iOS)
+        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true })
+        #endif
+        items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
+        items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
+        items.append(AttachItem(title: "Audio", symbol: "waveform", color: .red) { showRecorder = true })
+        #if os(iOS)
+        items.append(AttachItem(title: "Voice mode", symbol: "waveform.badge.mic", color: .pink) { startVoice() })
+        #endif
+        items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { pasteAttachment() })
+        items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: true) {})
+        return items
+    }
+
+    /// Voice mode from here: the chat with the one bot chosen, what was typed or attached as
+    /// its first turn, then hands-free; ending voice mode leaves the person in that chat (#236).
+    private func startVoice() {
+        guard !busy else { return }
+        guard chosen.count == 1 else { error = chosen.isEmpty ? "Choose a bot first." : "Voice mode is a conversation with one bot."; return }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        onStart(.chat(profile: chosen[0].name, text: t, attachments: staged, cwd: runtime.projects.project(id: projectID)?.startPath, voice: true))
+        dismiss()
     }
 
     // MARK: Attachments before the chat exists
@@ -304,7 +364,7 @@ struct NewChatSheet: View {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !chosen.isEmpty, canSend else { return }
         if chosen.count == 1 {
-            onStart(.chat(profile: chosen[0].name, text: t, attachments: staged, cwd: runtime.projects.project(id: projectID)?.startPath))
+            onStart(.chat(profile: chosen[0].name, text: t, attachments: staged, cwd: runtime.projects.project(id: projectID)?.startPath, voice: false))
             dismiss()
             return
         }

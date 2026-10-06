@@ -86,9 +86,16 @@ struct TurnMenu: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
     @State private var board = TurnBoard.shared
+    @State private var voice = HandsFreeSession.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // A voice session first: what it is doing, and Mute and End right here, so a
+            // conversation can be stopped when its window is behind everything else.
+            if voice.isActive, let chat = voice.chat {
+                voiceRow(chat)
+                Divider().padding(.horizontal, 12)
+            }
             if board.turns.isEmpty {
                 HStack(spacing: 10) {
                     BotFaceView(spec: BotLookSpec(shape: "cloud", eyes: "classic", hex: "#3B7BFF", finish: "flat"), size: 28, active: false, mood: BotFaceView.Mood(profile: "vory-menubar"))
@@ -142,6 +149,35 @@ struct TurnMenu: View {
             }
         }
         .padding(12)
+    }
+
+    private func voiceRow(_ chat: ChatSession) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            BotAvatar(profile: chat.profileName, size: 30, active: true, mood: BotFaceView.Mood(profile: chat.profileName, state: voice.state.phase == .speaking ? .streaming : .working))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform.badge.mic").font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                    Text("Voice mode · \(voice.state.title)").font(.subheadline.weight(.semibold)).lineLimit(1)
+                }
+                Text(chat.title).font(.caption).lineLimit(1)
+                HStack(spacing: 8) {
+                    Button(voice.state.isMuted ? "Unmute" : "Mute") { voice.toggleMute() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(voice.state.phase == .paused)
+                        .accessibilityIdentifier("menubar.voice.mute")
+                    Button("End") { voice.end() }
+                        .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
+                        .accessibilityIdentifier("menubar.voice.end")
+                    Button("Show") { openWindow(id: MacWindow.voice); NSApp.activate() }
+                        .buttonStyle(.plain).font(.caption).foregroundStyle(.tint)
+                        .help("The voice window in front")
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(12)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Voice mode, \(voice.state.title), \(chat.title)")
     }
 
     /// Brings the app forward, on the chat when one is named.

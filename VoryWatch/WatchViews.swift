@@ -301,14 +301,10 @@ struct WatchProfilePicker: View {
     }
 }
 
-/// The same deterministic palette the phone uses when no colour was picked for a bot.
+/// The same deterministic palette the phone uses when no colour was picked for a bot: the
+/// phone's list itself, from VoryCore (a copy here had every colour off by a digit).
 enum WatchBotColor {
-    static let hexes = ["#7D5CFF", "#0A85FF", "#30D159", "#FF9E0A", "#FF385E", "#63D1FF", "#BF59F2", "#FFD60A", "#FF6B36", "#59C7FA"]
-    static func hex(for profile: String) -> String {
-        var hash: UInt64 = 5381
-        for b in profile.utf8 { hash = (hash &* 33) &+ UInt64(b) }
-        return hexes[Int(hash % UInt64(hexes.count))]
-    }
+    static func hex(for profile: String) -> String { BotPalette.defaultHex(for: profile) }
     static func color(for profile: String) -> Color { Color(botHex: hex(for: profile)) ?? .accentColor }
 }
 
@@ -343,6 +339,8 @@ struct WatchChatView: View {
     @State private var chat: ChatSession?
     @State private var text = ""
     @State private var error: String?
+    /// Talk: a recording to the gateway, the reply read aloud here.
+    @State private var talk = WatchTalk()
     /// REST-polling fallback state (used when the socket cannot open, e.g. over Bluetooth).
     @State private var proxied = false
     @State private var items: [TranscriptItem] = []
@@ -371,7 +369,10 @@ struct WatchChatView: View {
                             ForEach(chat.items.suffix(shown)) { item in WatchTranscriptRow(item: item, profile: chat.profileName).id(item.id) }
                             if let s = chat.statusLine, chat.isRunning { Text(s).font(.caption2).foregroundStyle(.secondary) }
                             if let card = chat.firstCard { WatchCardView(chat: chat, card: card) }
-                            Color.clear.frame(height: 1).id("bottom")
+                            // Room under a card for the bottom bar (the field, or Talk's wait line
+                            // and its (x)): the bar is laid over the content, and a card's Once
+                            // and Deny sat under it as it arrived.
+                            Color.clear.frame(height: chat.firstCard != nil ? 44 : 1).id("bottom")
                         }
                     }
                     .defaultScrollAnchor(.bottom)
@@ -418,14 +419,36 @@ struct WatchChatView: View {
         }
     }
 
-    /// The message field and its send button, one row on the bottom edge.
+    /// The message field, Talk and the send button, one row on the bottom edge. While Talk
+    /// works the row says what it is doing instead of the field.
     private func composer(send: @escaping () async -> Void) -> some View {
         HStack(spacing: 6) {
-            TextField("Message", text: $text)
-            Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }
-                .buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
-                .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+            if talk.isBusy {
+                Text(talk.phaseText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                TextField("Message", text: $text)
+            }
+            if let chat {
+                // While the reply is awaited the same button gives the wait up (the reply still
+                // lands in the chat); before, only the header's Stop or the 180 s limit ended it.
+                Button { talk.tap(chat: chat) } label: {
+                    Image(systemName: talk.phase == .recording ? "stop.circle.fill" : talk.phase == .speaking ? "speaker.slash.circle.fill" : talk.phase == .waiting ? "xmark.circle.fill" : "mic.circle.fill")
+                        .font(.title3)
+                        .symbolEffect(.pulse, isActive: talk.phase == .recording || talk.phase == .waiting)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(talk.phase == .recording ? Color.red : talk.isBusy ? Color.accentColor : Color.secondary)
+                .disabled(talk.phase == .transcribing)
+                .accessibilityLabel(talk.phase == .recording ? "Stop and send" : talk.phase == .speaking ? "Stop speaking" : talk.phase == .waiting ? "Stop waiting for the reply" : "Talk")
+            }
+            if !talk.isBusy {
+                Button { Task { await send() } } label: { Image(systemName: "arrow.up.circle.fill").font(.title3) }
+                    .buttonStyle(.plain).disabled(text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
+            }
         }
+        .onChange(of: talk.error) { _, e in if let e { error = nil; chat?.banner = e; talk.error = nil } }
     }
 
     // MARK: REST + phone proxy
@@ -543,9 +566,11 @@ struct WatchTranscriptRow: View {
             } else {
                 HStack { Spacer(minLength: 24); Text(t).font(.footnote).padding(8).background(Color.accentColor, in: .rect(cornerRadius: 12)).foregroundStyle(.white) }
             }
-        case .assistant(let t, _, let streaming):
+        case .assistant(let raw, _, let streaming):
+            // Pictures the bot sent are names here, not paths: the MEDIA: line stays out.
+            let t = MediaScan.textWithoutMedia(raw)
             HStack(alignment: .bottom, spacing: 4) {
-                if let profile { WatchBotFace(profile: profile, size: 16) }
+                if let profile { WatchBotFace(profile: profile, size: 16).accessibilityHidden(true) }
                 // Bold, italics, code and links once the reply is whole; plain while it streams.
                 Group {
                     if streaming { Text(t.isEmpty ? "…" : t) } else { Text(WatchMarkdown.inline(t)) }

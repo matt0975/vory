@@ -7,10 +7,14 @@ public protocol TurnActivityReporting: AnyObject {
     func start(for chat: ChatSession)
     func update(for chat: ChatSession, attention: Bool, detail: String?)
     func end(for chat: ChatSession, phase: String)
+    /// Voice mode's state line for this chat ("Listening…", "Speaking"), nil once it ends: the
+    /// surface stays up between turns while it is on and offers End.
+    func voiceMode(for chat: ChatSession, line: String?)
 }
 
 public extension TurnActivityReporting {
     func update(for chat: ChatSession, attention: Bool) { update(for: chat, attention: attention, detail: nil) }
+    func voiceMode(for chat: ChatSession, line: String?) {}
 }
 
 /// Local (foreground-only) notifications for cards and finished turns.

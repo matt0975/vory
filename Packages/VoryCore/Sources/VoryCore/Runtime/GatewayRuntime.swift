@@ -43,6 +43,10 @@ public final class GatewayRuntime {
 
     /// The gateway's projects for the selected bot, and which chat is in which.
     public let projects = ProjectsStore()
+    /// The gateway's kanban board (its bundled plugin), when it has one.
+    public let kanban = KanbanStore()
+    /// Speech in and out, by the Speech setting: the gateway's providers or this device's engines.
+    public let voice = VoiceEngine()
 
     public init(connection: GatewayConnection, store: ConnectionStore) {
         self.connection = connection
@@ -110,10 +114,26 @@ public final class GatewayRuntime {
         return (url, secrets.access.headers)
     }
 
+    /// A socket URL for a plugin's own endpoint (the kanban event stream), credentialled the
+    /// same way as the main socket: a minted ticket for bearer gateways, `?token=` otherwise.
+    nonisolated func pluginWebsocketURL(path: String, query: [URLQueryItem]) async throws -> (URL, [String: String]) {
+        let (gateway, authMode, secrets) = await (connection.gateway, connection.authMode, self.secrets)
+        var items = query
+        if authMode.usesBearer {
+            let r: [String: JSONValue] = try await api.send("POST", "/api/auth/ws-ticket", body: EmptyBody())
+            if let t = r["ticket"]?.stringValue, !t.isEmpty { items.append(URLQueryItem(name: "ticket", value: t)) }
+        } else if let t = secrets.sessionToken, !t.isEmpty {
+            items.append(URLQueryItem(name: "token", value: t))
+        }
+        return (gateway.websocket(path, query: items), secrets.access.headers)
+    }
+
     // MARK: Lifecycle
 
     public func start() async {
         projects.attach(self)
+        kanban.attach(self)
+        voice.attach(self)
         await socket.connect()
         await loadProfiles()
         await refreshCapabilities()
@@ -122,6 +142,7 @@ public final class GatewayRuntime {
 
     public func stop() async {
         globalEventTask?.cancel()
+        kanban.stopEvents()
         await socket.disconnect()
     }
 
@@ -200,6 +221,7 @@ public final class GatewayRuntime {
                 profileHome = cfg["home"]?.stringValue
             }
             await projects.refresh()
+            await kanban.probe()
             await pushRegistrar?.syncRegistration(runtime: self)
             await probeCodeSkew()
         } catch {
@@ -294,6 +316,8 @@ public final class GatewayRuntime {
         let session = ChatSession(runtime: self, storedID: storedID, title: title, profile: owner)
         registry.add(session)
         session.beginResume()
+        // Voice mode's quick answers are put back if the app died with them on.
+        Task { await session.awaitResume(); if session.resumeError == nil { await session.restoreQuickAnswersIfNeeded() } }
         if waitForResume {
             await session.awaitResume()
             if let e = session.resumeError { registry.remove(session); throw HermesAPIError.transport(e) }
@@ -302,8 +326,10 @@ public final class GatewayRuntime {
     }
 
     /// `cwd`: a folder on the gateway the chat works in, so it belongs to that project.
-    public func newChat(cwd: String? = nil) async throws -> ChatSession {
-        let session = ChatSession(runtime: self, storedID: nil, title: nil)
+    /// `profile`: the bot the chat is with when it is not the selected one (the watch's choice,
+    /// without switching the phone's list under the person).
+    public func newChat(cwd: String? = nil, profile: String? = nil) async throws -> ChatSession {
+        let session = ChatSession(runtime: self, storedID: nil, title: nil, profile: profile)
         try await session.create(cwd: cwd)
         registry.add(session)
         return session
@@ -397,6 +423,8 @@ public extension Notification.Name {
     public static let hermesNewChatRequested = Notification.Name("hermesNewChatRequested")
     /// A piece of reply text arrived for a chat (`storedID`, `count` characters).
     public static let hermesStreamDelta = Notification.Name("hermesStreamDelta")
+    /// A reply finished (`storedID`, `text`: the whole assistant turn), for reading it aloud.
+    public static let hermesReplyCompleted = Notification.Name("hermesReplyCompleted")
     public static let hermesCronChanged = Notification.Name("hermesCronChanged")
     public static let hermesOpenSession = Notification.Name("hermesOpenSession")
 }

@@ -39,7 +39,9 @@ struct TabLayout: Equatable, Sendable {
 
     /// Tabs to render. Bots lists the gateway's profiles, so it is always available; `hasBotMode`
     /// is kept for callers that still pass it and only gates the hosted-rooms section inside.
-    func visible(hasBotMode: Bool = true) -> [AppModel.AppTab] { tabs }
+    /// `hiding` leaves out pages the gateway cannot show (the Board without its plugin) without
+    /// touching the saved layout: they come back by themselves.
+    func visible(hasBotMode: Bool = true, hiding: Set<AppModel.AppTab> = []) -> [AppModel.AppTab] { tabs.filter { !hiding.contains($0) } }
 
     mutating func set(_ tab: AppModel.AppTab, enabled: Bool) {
         if Self.required.contains(tab) { return }

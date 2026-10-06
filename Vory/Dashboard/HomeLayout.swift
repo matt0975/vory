@@ -69,6 +69,7 @@ struct HomeLayout: Codable, Equatable {
 
 /// Settings › Home: the name, the launch choice, and the cards (order, size, shown or not).
 struct HomeSettingsView: View {
+    @Environment(AppModel.self) private var model
     @AppStorage("user.name") private var userName = ""
     @AppStorage("launchTab") private var launchTab = "chats"
     @AppStorage(TabLayout.storageKey) private var tabLayoutRaw = ""
@@ -102,7 +103,8 @@ struct HomeSettingsView: View {
                     var l = TabLayout.parse(tabLayoutRaw)
                     if !l.contains(tab) { l.set(tab, enabled: true); tabLayoutRaw = l.encoded }
                 })) {
-                    ForEach(TabLayout.parse(tabLayoutRaw).visible()) { tab in Label(tab.title, systemImage: tab.symbol).tag(tab) }
+                    // Not a page the gateway cannot show (the Board without its plugin): it opened blank.
+                    ForEach(TabLayout.parse(tabLayoutRaw).visible(hiding: model.hiddenTabs)) { tab in Label(tab.title, systemImage: tab.symbol).tag(tab) }
                 }
             } footer: { Text(DeviceWords.isMac ? "The page the app opens on. Only pages in the sidebar are offered; add one from Appearance › Sidebar." : "The tab the app opens on. Only tabs on the bar are offered; add one from Appearance › Tab bar.") }
             Section {

@@ -9,6 +9,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
+        // The daily backup while the app runs (the phone has its background refresh for this).
+        Task { @MainActor in BackupScheduler.start() }
     }
 
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {

@@ -33,6 +33,7 @@ struct ConversationView: View {
     /// the keyboard.
     @State private var keyboardInset: CGFloat = 0
     @State private var sentInitial = false
+    @State private var voiceStarted = false
     @State private var confirming: ApprovalConfirm?
     private var confirmTitle: String { confirming?.choice == "deny" ? "Deny this action?" : "Approve this action?" }
     @Namespace private var glassNamespace
@@ -123,6 +124,16 @@ struct ConversationView: View {
                     .help(macSubtitle(chat))
                     .accessibilityIdentifier("chat.bot")
                 }
+                // The whole conversation by voice, in its own small window.
+                ToolbarItem(placement: .primaryAction) {
+                    let on = HandsFreeSession.shared.isActive(for: chat)
+                    Button { if on { HandsFreeSession.shared.end() } else { HandsFreeSession.shared.start(chat: chat) } } label: {
+                        Label(on ? "End Voice Mode" : "Voice Mode", systemImage: on ? "waveform.badge.mic" : "mic")
+                    }
+                    .tint(on ? .accentColor : nil)
+                    .help(on ? "End Voice Mode (⇧⌘V)" : "Voice Mode (⇧⌘V)")
+                    .accessibilityIdentifier("chat.voice")
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
@@ -143,6 +154,16 @@ struct ConversationView: View {
             .ignoresSafeArea(.keyboard, edges: .bottom)
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification), perform: keyboardChanged)
             .overlay(alignment: .top) { header(chat) }
+            // Voice mode runs out of sight under its pill, and in front on its own screen.
+            .overlay(alignment: .top) {
+                if HandsFreeSession.shared.isActive(for: chat), HandsFreeSession.shared.minimized {
+                    HandsFreePill(chat: chat).padding(.top, headerHeight + 6).transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .fullScreenCover(isPresented: Binding(get: { HandsFreeSession.shared.isActive(for: chat) && !HandsFreeSession.shared.minimized },
+                                                   set: { if !$0, HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.minimized = true } })) {
+                HandsFreeView(chat: chat)
+            }
         #endif
     }
 
@@ -157,6 +178,13 @@ struct ConversationView: View {
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
+            // Opened for "Start voice mode" (the intent, or the Mac's ⇧⌘V with no chat open):
+            // hands-free begins as soon as the chat exists.
+            if let chat, model.voiceModeRequested {
+                let wanted = model.voiceModeWanted
+                model.voiceModeRequested = false
+                if wanted { HandsFreeSession.shared.start(chat: chat) }
+            }
             // The first message from the compose sheet goes out as soon as the chat exists.
             if let chat, !sentInitial, let t = route.initialText, !t.isEmpty || !route.initialAttachments.isEmpty {
                 sentInitial = true
@@ -167,6 +195,13 @@ struct ConversationView: View {
                 }
                 _ = await chat.send(t)
                 NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+            }
+            // Opened for voice mode (the Chats page's mic, the sheet's Voice mode): hands-free
+            // begins once the first message, if any, is on its way, so the reply is spoken.
+            if let chat, route.startVoice, !voiceStarted {
+                voiceStarted = true
+                // Not twice: a "Start voice mode" request may have started it a moment ago.
+                if !HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.start(chat: chat) }
             }
         } catch {
             loadError = error.localizedDescription
@@ -486,6 +521,16 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
+        #if os(iOS)
+        // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.
+        if let last = VoiceCoordinator.lastReply(in: chat.items) {
+            Button { VoiceCoordinator.shared.toggleSpeaking(last) } label: {
+                Label(VoiceCoordinator.shared.isSpeaking(last) ? "Stop Speaking" : "Speak Last Reply", systemImage: VoiceCoordinator.shared.isSpeaking(last) ? "stop.circle" : "speaker.wave.2")
+            }
+            .disabled(HandsFreeSession.shared.isActive)
+        }
+        #endif
         ChatProjectMenu(chat: chat)
         Divider()
         Button(action: onNewChat) { Label("New Chat", systemImage: "square.and.pencil") }
@@ -560,10 +605,22 @@ final class FullScreenPop: NSObject, UIGestureRecognizerDelegate {
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let nav, nav.viewControllers.count > 1 else { return false }
         guard let pan = g as? UIPanGestureRecognizer, g === self.pan else { return true }
+        // A row of a list keeps its own swipe (the Board's Done and Unblock are a leading swipe,
+        // which this pan ate on a Board pushed from Settings); the edge gesture still goes back there.
+        if let hit = pan.view?.hitTest(pan.location(in: pan.view), with: nil), Self.isInListRow(hit) { return false }
         // Only a clear rightward, mostly horizontal drag; vertical scrolling and the leftward
         // time-reveal drag in the thread are left alone.
         let v = pan.velocity(in: pan.view)
         return v.x > 250 && abs(v.x) > abs(v.y) * 1.8
+    }
+
+    private static func isInListRow(_ view: UIView) -> Bool {
+        var v: UIView? = view
+        while let x = v {
+            if x is UICollectionViewListCell || x is UITableViewCell { return true }
+            v = x.superview
+        }
+        return false
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { false }

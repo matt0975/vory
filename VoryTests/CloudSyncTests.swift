@@ -228,6 +228,44 @@ struct CloudSyncTests {
         #expect(s.settings == 1 && s.bots == 1 && s.device == "phone")
     }
 
+    /// "Last backup" is the latest write from any device, this one included: it used to prefer
+    /// another device's word, so a backup made here stayed invisible (stuck on the Mac's date).
+    @Test func theLastBackupFollowsEveryWriteThisDevicesAndTheOthers() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        joined(phone, mac)
+        // The Mac writes: both see the Mac as the last.
+        macDefaults.set("pink", forKey: AppTheme.accentKey)
+        mac.reconcile(.merge)
+        let macWrote = clock.t
+        var s = phone.summary()
+        #expect(s.device == "mac" && !s.isOwnDevice && s.date == Date(timeIntervalSince1970: macWrote))
+        // Then this phone backs up: its own write is the latest, and it says so.
+        phone.reconcile(.merge)   // takes the Mac's value
+        phone.reconcile(.backUp)
+        phone.stamp()
+        let phoneWrote = clock.t
+        s = phone.summary()
+        #expect(s.device == "phone" && s.isOwnDevice && s.date == Date(timeIntervalSince1970: phoneWrote), "the phone's own backup is the last one: \(String(describing: s.device))")
+        // An external change arrives (the Mac wrote again): the Mac is the last once more.
+        macDefaults.set("teal", forKey: AppTheme.accentKey)
+        mac.reconcile(.merge)
+        s = phone.summary()
+        #expect(s.device == "mac" && !s.isOwnDevice && s.date == Date(timeIntervalSince1970: clock.t))
+        _ = phoneDefaults
+    }
+
+    /// The daily backup: due when there was none, or the last was a day or more ago.
+    @Test func theDailyBackupIsDueAfterADayOrWhenThereWasNone() {
+        let now: Double = 2_000_000
+        #expect(CloudSync.backupDue(lastBackupAt: nil, now: now))
+        #expect(!CloudSync.backupDue(lastBackupAt: now - 3600, now: now))
+        #expect(!CloudSync.backupDue(lastBackupAt: now - CloudSync.backupInterval + 1, now: now))
+        #expect(CloudSync.backupDue(lastBackupAt: now - CloudSync.backupInterval, now: now))
+        #expect(CloudSync.backupDue(lastBackupAt: now - 3 * 86_400, now: now))
+    }
+
     @Test func aLongBotNameStillFitsACloudKey() {
         let name = String(repeating: "long-bot-name-", count: 8)
         #expect(CloudMerge.lookKey(name).utf8.count <= 64)

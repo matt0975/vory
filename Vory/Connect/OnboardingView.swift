@@ -554,7 +554,7 @@ private struct SummariesDemo: View {
                                     : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done — 4.2 GB freed. Want log rotation set up so it")
                         .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                         .contentTransition(.numericText())
-                    Text("claude-sonnet · 2 min ago").font(.caption2).foregroundStyle(.tertiary)
+                    Text("Ada · 2 min ago").font(.caption2).foregroundStyle(.tertiary)
                 }
                 Spacer(minLength: 0)
             }
@@ -569,7 +569,7 @@ private struct SummariesDemo: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .glassEffect(.regular, in: .rect(cornerRadius: 18))
-            Text("You can change this later in Settings › Appearance.").font(.caption).foregroundStyle(.tertiary)
+            Text("You can change this later in Settings › Vory Summaries.").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 4)
         .task(id: live) {

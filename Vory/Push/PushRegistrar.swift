@@ -279,6 +279,13 @@ final class PushRegistrar: PushRegistrationSyncing {
             lastRegistrationPath = path
             registeredAt = Date()
             lastError = nil
+            // Registered: whether the gateway runs the Companion can be read now. The launch
+            // read ran before this (it needs a registration) and found nothing, so until the
+            // next foreground the app posted its own banner beside the Companion's push: two
+            // per reply and per approval (on the Mac, until Settings was opened).
+            if AppModel.shared.companionInstalledVersion == nil {
+                Task { @MainActor in await AppModel.shared.refreshCompanionUpdateFlag() }
+            }
             if let sid = liveActivitySessionID { LiveActivityController.note("token published for session \(sid.prefix(12))") }
         } catch {
             lastError = "Could not publish the push registration: \(error.localizedDescription)"
@@ -321,7 +328,11 @@ enum LocalNotifier {
     @MainActor static var isForeground = true
     /// Once this phone is registered with the gateway, the companion sends these; a local copy
     /// would arrive as a duplicate.
-    @MainActor static var companionDelivers: Bool { AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured }
+    /// Only a gateway with the Companion on it sends anything: registered with a gateway that has
+    /// none, the phone would have waited for pushes that never come and shown nothing itself.
+    @MainActor static var companionDelivers: Bool {
+        AppModel.shared.push.registeredAt != nil && PushRelay.isConfigured && AppModel.shared.companionInstalledVersion != nil
+    }
     @MainActor private static func botName(_ chat: ChatSession) -> String {
         chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
     }

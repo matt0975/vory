@@ -61,7 +61,7 @@ final class AppModel {
 
     enum AppTab: String, Hashable, CaseIterable, Sendable, Identifiable {
         var id: String { rawValue }
-        case chats, dashboard, bots, files, sessions, cron, approvals, system, projects, status, settings
+        case chats, dashboard, bots, files, sessions, cron, kanban, approvals, system, projects, status, settings
 
         var title: String {
             switch self {
@@ -71,6 +71,7 @@ final class AppModel {
             case .files: return "Files"
             case .sessions: return "Sessions"
             case .cron: return "Tasks"
+            case .kanban: return "Board"
             case .approvals: return "Approvals"
             case .system: return "System"
             case .projects: return "Projects"
@@ -87,6 +88,7 @@ final class AppModel {
             case .files: return "folder"
             case .sessions: return "list.bullet.rectangle"
             case .cron: return "calendar.badge.clock"
+            case .kanban: return "rectangle.split.3x1"
             case .approvals: return "checkmark.shield"
             case .system: return "server.rack"
             case .projects: return "folder.fill"
@@ -94,16 +96,44 @@ final class AppModel {
             case .settings: return "gear"
             }
         }
+
+        /// Pages that exist only when the gateway has the plugin behind them.
+        var needsPlugin: String? { self == .kanban ? "Kanban" : nil }
     }
+
+    /// Pages the gateway cannot show right now: the Board without the kanban plugin (or with no
+    /// gateway). They stay in the saved layout and come back when the plugin does.
+    var hiddenTabs: Set<AppTab> { runtime?.kanban.isPresent == true ? [] : [.kanban] }
 
     /// Raised when the compose circle is tapped; the screen in front decides which bot the new
     /// chat is with.
     var newChatRequest: UUID?
+    /// "Start voice mode" (Siri, a Shortcut, the Action Button): the next new chat starts hands-free.
+    var voiceModeRequested = false
+    private var voiceModeRequestedAt: Date?
+    /// The request stands for a moment only: asked with no chat list to answer it (the Mac's
+    /// window closed), it must not start voice mode on whatever chat opens an hour later.
+    var voiceModeWanted: Bool { voiceModeRequested && Date().timeIntervalSince(voiceModeRequestedAt ?? .distantPast) < 20 }
+    func requestVoiceMode() {
+        voiceModeRequested = true
+        voiceModeRequestedAt = Date()
+        composeProfile = nil
+        selectedTab = .chats
+        // Launched for the intent, the chat list may still be mounting: a moment before it is asked.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            newChatRequest = UUID()
+        }
+    }
     /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.
     struct ChatStepRequest { let direction: Int; let id = UUID() }
     var chatStepRequest: ChatStepRequest?
     /// The compose circle held down: the full New Message sheet instead of a fresh chat.
     var newChatSheetRequest: UUID?
+    /// The mic circle beside it (or a bot picked under it): a fresh chat with that bot (nil:
+    /// the selected one), straight into voice mode (#237).
+    struct VoiceChatRequest { let profile: String?; let id = UUID() }
+    var voiceChatRequest: VoiceChatRequest?
     /// The tab the compose circle was tapped on when that was not Chats: the chat opens on
     /// Chats, and that tab comes back once the chat (or the sheet) is closed. Cleared by any
     /// other way of opening a chat and by a tap on the bar.
@@ -204,6 +234,15 @@ final class AppModel {
         if url.host == "home" {
             // From the Overview widget: Home when it is on the bar, else Chats.
             selectedTab = TabLayout.parse(UserDefaults.standard.string(forKey: TabLayout.storageKey)).visible().contains(.dashboard) ? .dashboard : .chats
+            return
+        }
+        if url.host == "voice" {
+            // From the Live Activity's End: voice mode ends, the app stays where it is.
+            #if os(iOS)
+            if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "action" })?.value == "end" {
+                HandsFreeSession.shared.end()
+            }
+            #endif
             return
         }
         selectedTab = .chats
@@ -392,6 +431,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         LiveActivityController.observePushStarts()
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
+        CloudBackupTask.register()
         BotLooksMirror.mirror()   // so the notification extensions show the right bot from the start
         #if DEBUG
         // Simulator testing: `simctl push` only works once the app has asked for notification permission.

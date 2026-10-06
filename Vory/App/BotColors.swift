@@ -12,7 +12,8 @@ import VoryCore
 /// and the Live Activity.
 enum BotColors {
     static let storageKey = "botColors"
-    static let palette: [String] = ["#7C5CFF", "#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#64D2FF", "#BF5AF2", "#FFD60A", "#FF6B35", "#5AC8FA"]
+    /// The watch and the Mac pick from the same list (VoryCore's), so a bot is one colour everywhere.
+    static let palette: [String] = BotPalette.hexes
 
     static func stored() -> [String: String] {
         guard let raw = UserDefaults.standard.string(forKey: storageKey), let data = raw.data(using: .utf8),
@@ -33,11 +34,7 @@ enum BotColors {
     }
 
     /// Deterministic palette pick: same name, same colour, on every device.
-    static func defaultHex(for profile: String) -> String {
-        var hash: UInt64 = 5381
-        for b in profile.utf8 { hash = (hash &* 33) &+ UInt64(b) }
-        return palette[Int(hash % UInt64(palette.count))]
-    }
+    static func defaultHex(for profile: String) -> String { BotPalette.defaultHex(for: profile) }
 
     static func color(for profile: String, overrides: [String: String]? = nil) -> Color {
         Color(hex: hex(for: profile, overrides: overrides)) ?? .accentColor
