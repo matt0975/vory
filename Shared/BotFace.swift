@@ -1043,6 +1043,7 @@ public struct BotFaceView: View {
     /// A few frames' grace after the bot stops or its look changes while held, so the frame it
     /// holds is the current one at rest (eyes open, body still), never a half blink.
     @State private var settling = false
+    @State private var settleGeneration = 0
     private var ambient: BotAmbient { BotAmbient.shared }
     /// Per-bot phase: shape, eyes and name, folded to a small non-negative number (the name's
     /// hash wraps, and a negative seed would skew every `%` below it).
@@ -1114,11 +1115,11 @@ public struct BotFaceView: View {
     /// new one grows. Reduce Motion jumps to the end pose with the body frozen (a held lean stays;
     /// it does not move); painted renders keep the transforms still. Under 32 pt (beside a bubble,
     /// on the toolbar) the body keeps its shape: eyes, and a lean or nudge, only.
-    private func pose(time t: Double, now: Date, since: Double, finished: Double?, tapped: Double?) -> BotFace.Motion {
+    private func pose(time t: Double, now: Date, since: Double, finished: Double?, tapped: Double?, held: Bool = false) -> BotFace.Motion {
         let group: (index: Int, count: Int)? = mood.groupCount > 1 ? (mood.groupIndex, mood.groupCount) : nil
         var m = BotFace.motion(time: t, seed: seed, spec: spec, state: state, since: since, finishedAt: finished, tappedAt: tapped, group: group)
         let back = now.timeIntervalSince(exitAt)
-        if back < 0.4, !reduceMotion {
+        if back < 0.4, !reduceMotion, !held {
             let ex = exitPose
             let k = 1 - BotFace.smooth(back / 0.4)
             func lerp(_ a: Double, _ b: Double) -> Double { a + (b - a) * k }
@@ -1132,7 +1133,9 @@ public struct BotFaceView: View {
         }
         if mood.squint { m.eyeOpen = min(m.eyeOpen, 0.42); m.blinkPeriod = 2.8; m.blinkLength = 0.22 }
         m.blobPhase = blobRunning ? t * 0.19 + blobOffset : blobFrozen
-        if reduceMotion {
+        // Held (not moving, #248), the frame is the state's end pose too: a held frame part-way
+        // through a change would keep the approval's "!" barely formed.
+        if reduceMotion || held {
             let end = BotFace.motion(time: t, seed: seed, spec: spec, state: state, since: 10, group: group)
             m = m.bodyStill
             m.morphTarget = end.morphTarget; m.morph = end.morphTarget == .none ? 0 : 1
@@ -1215,11 +1218,11 @@ public struct BotFaceView: View {
         // Whether this bot moves at all. On the Mac every bot cost CPU all the time, in the
         // background too (#248): it moves only while its window is visible and in front, the
         // display is awake, Animate bots is on and Reduce Motion is off; held, it shows its
-        // current pose at rest. The idle eyes (blinks, glances) play only while something is
-        // working. Elsewhere this is as before: the display flag is never set off the Mac.
+        // current pose at rest. An idle bot's eyes (blinks, glances) play only while something
+        // is working. Elsewhere this is as before: the display flag is never set off the Mac.
         #if os(macOS)
         let live = !drawn && windowLive && !ambient.displayAsleep && animateSetting && !reduceMotion
-        let eyeLife = live && ambient.anyWorking && !mood.still
+        let eyeLife = live && !mood.still && (ambient.anyWorking || self.state != .idle)
         #else
         let live = !drawn && windowLive && !ambient.displayAsleep
         let eyeLife = live && !mood.still
@@ -1254,10 +1257,9 @@ public struct BotFaceView: View {
             let ease = u * u * (3 - 2 * u)
             let g0 = CGPoint(x: gazeFrom.x + (gaze.x - gazeFrom.x) * ease, y: gazeFrom.y + (gaze.y - gazeFrom.y) * ease)
             let g = CGPoint(x: max(-1, min(1, g0.x + ambientGaze.x)), y: max(-1, min(1, g0.y + ambientGaze.y)))
-            // Held (not live), the bot stands at rest in its current state: no turn, nod or lean
-            // part-way through, and the eyes open.
-            let posed = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped)
-            let m = live || drawn ? posed : posed.bodyStill
+            // Held (not live), the bot stands at rest in its current state's end pose: no turn,
+            // nod or blend part-way through, and the idle eyes open.
+            let m = pose(time: t, now: timeline.date, since: timeline.date.timeIntervalSince(stateSince), finished: finished, tapped: tapped, held: !live && !drawn)
             let _ = { shown.pose = m }()
             Group {
                 if spec.isGlass && BotFace.liveGlass && !drawn && scenePhase == .active {
@@ -1342,8 +1344,13 @@ public struct BotFaceView: View {
 
     /// Lets a paused bot draw a few more frames, so the frame it holds is current.
     private func settle() {
+        settleGeneration += 1
+        let generation = settleGeneration
         settling = true
-        Task { try? await Task.sleep(for: .milliseconds(160)); settling = false }
+        Task {
+            try? await Task.sleep(for: .milliseconds(160))
+            if settleGeneration == generation { settling = false }
+        }
     }
 }
 

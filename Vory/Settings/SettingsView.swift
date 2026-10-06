@@ -638,7 +638,7 @@ struct AppearanceView: View {
             Section {
                 Toggle("Animate bots", isOn: $animateBots)
             } footer: {
-                Text("Off, the bots hold still. On, they move while Vory is the window in front and blink only while a bot is working; Reduce Motion in System Settings holds them still too.")
+                Text("Off, the bots hold still. On, they move while Vory is in front and can be seen, and idle bots blink only while a bot is working; Reduce Motion in System Settings holds them still too.")
             }
             // The Mac's sidebar holds every page: a switch each, arrows for the order.
             Section {

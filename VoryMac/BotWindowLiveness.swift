@@ -3,17 +3,21 @@ import SwiftUI
 
 /// Bots move only where someone can see them (#248): their window must be on screen (not
 /// minimised, not hidden with the app, not on another Space, not fully covered, the screen not
-/// locked) and, for the main window, in front. The floating voice window and the menu bar
-/// panel are never key, so they ask only to be seen.
+/// locked) and, for the main window, Vory must be the app in front. App activity rather than
+/// the key window: the voice window becomes key while it runs, and the main window's bots should
+/// not hold still under it. The floating voice window and the menu bar panel ask only to be seen.
 struct BotWindowLiveness: ViewModifier {
     var needsKey: Bool
     @State private var visible = true
+    @State private var appActive = NSApp?.isActive ?? true
     @Environment(\.appearsActive) private var appearsActive
 
     func body(content: Content) -> some View {
         content
             .background(WindowVisibilityProbe(visible: $visible))
-            .environment(\.botsLive, visible && (!needsKey || appearsActive))
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in appActive = true }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in appActive = false }
+            .environment(\.botsLive, visible && (!needsKey || appearsActive || appActive))
     }
 }
 

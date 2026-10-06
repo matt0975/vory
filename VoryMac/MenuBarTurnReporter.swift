@@ -48,6 +48,12 @@ final class MenuBarTurnReporter: TurnActivityReporting {
     private var id: String?
     private var startedAt = Date()
 
+    /// A chat closed or deleted mid-turn takes its reporter with it: its row must not stay on the
+    /// board, where it kept every idle bot's eyes going (#248).
+    isolated deinit {
+        if let id { TurnBoard.shared.remove(id) }
+    }
+
     func start(for chat: ChatSession) {
         // Called again for each part of a reply and when the session's snapshot arrives: a turn
         // already on the board keeps its start, so its timer runs on instead of going back to 0:00.
