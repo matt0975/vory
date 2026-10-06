@@ -230,11 +230,12 @@ final class AppModel {
         #endif
     }
 
-    /// Back in front, or unlocked, with the gateway in use refusing its session: the remembered
-    /// sign-in gets its go now, if it could not while the app was away or locked.
+    /// Back in front, or unlocked, with the gateway in use refusing its session because it
+    /// turned the refresh token down: the remembered sign-in gets its go now, if it could not
+    /// while the app was away or locked. A socket refused for another reason is left to the
+    /// person (see `RememberedSignInCoordinator.signInAgainOnReturn`).
     func signInAgainIfExpired() async {
-        guard let rt = runtime, case .authRejected = rt.socketState else { return }
-        guard let renewed = await rememberedSignIn.signInAgain(rt.connection, access: rt.secrets.access), runtime === rt else { return }
+        guard let rt = runtime, let renewed = await rememberedSignIn.signInAgainOnReturn(rt), runtime === rt else { return }
         await rt.replaceSecrets(renewed)
     }
 

@@ -105,6 +105,11 @@ public final class GatewayRuntime {
     /// it to the person, as before. Set by the app, never on the watch. Returns the new session,
     /// or nil to fall back to asking.
     public var signInAgain: (@MainActor (GatewayConnection, GatewaySecrets) async -> GatewaySecrets?)?
+    /// The gateway turned the refresh token down and nothing has signed it in since: the
+    /// session ended for good. A socket refused while this is false (a 4401 close, a ws-ticket
+    /// refused right after a renewal that worked) is not mended by signing in again, so the app
+    /// does not use a remembered sign-in for it.
+    public private(set) var refreshRefused = false
 
     private func refreshSigner() async throws -> RequestSigner {
         guard connection.authMode.usesBearer else { throw HermesAPIError.unauthorized("") }
@@ -112,10 +117,14 @@ public final class GatewayRuntime {
         do {
             refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
         } catch HermesAPIError.sessionExpired {
-            guard let signInAgain, let renewed = await signInAgain(connection, secrets) else { throw HermesAPIError.sessionExpired }
+            guard let signInAgain, let renewed = await signInAgain(connection, secrets) else {
+                refreshRefused = true
+                throw HermesAPIError.sessionExpired
+            }
             refreshed = renewed
             refreshed.access = secrets.access
         }
+        refreshRefused = false
         secrets = refreshed
         store.saveSecrets(refreshed, for: connection.id)
         return RequestSigner(authMode: connection.authMode, secrets: refreshed)
@@ -129,6 +138,7 @@ public final class GatewayRuntime {
     }
 
     public func replaceSecrets(_ s: GatewaySecrets) async {
+        refreshRefused = false
         secrets = s
         store.saveSecrets(s, for: connection.id)
         await api.updateSigner(RequestSigner(authMode: connection.authMode, secrets: s))

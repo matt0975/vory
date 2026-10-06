@@ -102,15 +102,17 @@ final class RememberedSignInCoordinator {
         /// The check was turned down (or failed) since the last sign-in: not asked again by
         /// itself, only from the Sign In sheet's button.
         case declined
-        /// It signed this gateway in less than `cooldown` ago, and the session is refused
-        /// again already. A sign-in that goes through without making the gateway work (a proxy
-        /// that refuses the socket, say) would otherwise ask for Face ID and send the password
-        /// on every return to the app. Only the Sign In sheet's button uses it until then.
+        /// It signed this gateway in less than `cooldown` ago, and the app came back to find
+        /// the session refused again already. A sign-in that goes through without making the
+        /// gateway work would otherwise ask for Face ID and send the password on every return
+        /// to the app. Until then only the Sign In sheet's button uses it, or the runtime when
+        /// the gateway turns the refresh token down again.
         case tooSoon
     }
 
     /// The decision, from facts alone. `asked`: the person tapped the button for it.
-    /// `usedRecently`: it signed this gateway in less than `cooldown` ago.
+    /// `usedRecently`: it signed this gateway in less than `cooldown` ago, which counts only on
+    /// a return to the app (see `signInAgainOnReturn`).
     nonisolated static func decide(authMode: AuthMode, remembered: Bool, canAuthenticate: Bool, canPromptNow: Bool, declined: Bool, usedRecently: Bool, asked: Bool) -> Decision {
         guard authMode == .password else { return .askPerson(.notPasswordSignIn) }
         guard remembered else { return .askPerson(.nothingRemembered) }
@@ -122,8 +124,9 @@ final class RememberedSignInCoordinator {
         return .useRemembered
     }
 
-    /// How long after it signs a gateway in the remembered sign-in waits before doing so by
-    /// itself again: at most once in ten minutes per gateway.
+    /// How long after it signs a gateway in the remembered sign-in waits before doing so again
+    /// on a return to the app: at most once in ten minutes per gateway. The runtime does not
+    /// wait (see `signInAgain`).
     nonisolated static let cooldown: TimeInterval = 10 * 60
 
     /// What saving the gateway's form does to its remembered sign-in.
@@ -177,19 +180,38 @@ final class RememberedSignInCoordinator {
         return SystemDeviceOwnerAuthenticator()
     }
 
-    func decision(for c: GatewayConnection, asked: Bool) -> Decision {
-        let usedRecently = lastUsed[c.id].map { now().timeIntervalSince($0) < Self.cooldown } ?? false
+    /// `onReturn`: asked as the app comes back to the front or is unlocked, the one way in that
+    /// waits out `cooldown`.
+    func decision(for c: GatewayConnection, asked: Bool, onReturn: Bool = false) -> Decision {
+        let usedRecently = onReturn && (lastUsed[c.id].map { now().timeIntervalSince($0) < Self.cooldown } ?? false)
         return Self.decide(authMode: c.authMode, remembered: vault.contains(c.id), canAuthenticate: authenticator.canAuthenticate,
                            canPromptNow: asked || canPromptNow(), declined: declined.contains(c.id), usedRecently: usedRecently, asked: asked)
     }
 
-    /// The session ran out: the remembered sign-in, when the decision allows it. nil sends the
-    /// person to the sign-in prompt; a failure is never more than that.
+    /// The gateway turned the refresh token down (the runtime asks the moment it does): the
+    /// remembered sign-in, when the decision allows it. nil sends the person to the sign-in
+    /// prompt; a failure is never more than that. No cooldown: a refused refresh is a session
+    /// that really ended (a gateway that restarts with a new signing key ends them all), and a
+    /// gateway restarted twice in ten minutes ends it twice.
     func signInAgain(_ c: GatewayConnection, access: CloudflareAccess) async -> GatewaySecrets? {
+        await signInByItself(c, access: access, onReturn: false)
+    }
+
+    /// Back in front, or unlocked, with the gateway in use refusing its session: the remembered
+    /// sign-in, which the runtime could not use while the app was away or locked. Only when the
+    /// gateway turned the refresh token down. A socket refused after a renewal that worked (a
+    /// 4401 close, a refused ws-ticket) is not mended by signing in again, and that asked for
+    /// Face ID and sent the password on every return for nothing. Waits out `cooldown`.
+    func signInAgainOnReturn(_ rt: GatewayRuntime) async -> GatewaySecrets? {
+        guard case .authRejected = rt.socketState, rt.refreshRefused else { return nil }
+        return await signInByItself(rt.connection, access: rt.secrets.access, onReturn: true)
+    }
+
+    private func signInByItself(_ c: GatewayConnection, access: CloudflareAccess, onReturn: Bool) async -> GatewaySecrets? {
         // A list the device was too locked to read at launch is read now, rather than taken
         // for "nothing remembered".
         if !vault.isKnown { vault.reload() }
-        guard decision(for: c, asked: false) == .useRemembered else { return nil }
+        guard decision(for: c, asked: false, onReturn: onReturn) == .useRemembered else { return nil }
         do { return try await run(c, access: access) } catch {
             declined.insert(c.id)
             return nil

@@ -281,6 +281,8 @@ struct CloudGatewayTests {
     final class FakeStore: GatewayStoring {
         var connections: [GatewayConnection] = []
         var secretsByID: [UUID: GatewaySecrets] = [:]
+        /// The gateways whose remembered sign-in was forgotten, in order.
+        var forgotten: [UUID] = []
         func connection(id: UUID) -> GatewayConnection? { connections.first { $0.id == id } }
         func secrets(for id: UUID) -> GatewaySecrets { secretsByID[id] ?? GatewaySecrets() }
         func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws {
@@ -288,6 +290,7 @@ struct CloudGatewayTests {
             secretsByID[connection.id] = secrets
         }
         func remove(_ id: UUID) { connections.removeAll { $0.id == id }; secretsByID[id] = nil }
+        func forgetRememberedSignIn(_ id: UUID) { forgotten.append(id) }
     }
 
     final class Cloud { var file = CloudGatewayFile(); var clock: Double = 1_000
@@ -337,6 +340,38 @@ struct CloudGatewayTests {
             #expect(mac.sync() == CloudGateways.Outcome())
         }
         #expect(cloud.file.gateways.count == 1 && cloud.file.gateways[0].connection.name == "House")
+    }
+
+    /// A sign-in remembered on a device was typed for the gateway's address and method: either
+    /// one changed on another device forgets it there, rather than still offer it behind Face ID
+    /// and drop it only after the prompt. A rename keeps it.
+    @Test func aNewAddressOrMethodFromAnotherDeviceForgetsTheRememberedSignIn() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        var g = GatewayConnection(name: "Home", gateway: try GatewayURL.normalize("https://hermes.example.com", pathPrefix: nil), authMode: .password, authProvider: "basic")
+        try phone.store.upsert(g, secrets: GatewaySecrets(provider: "basic"))
+        phone.sync()
+        #expect(mac.sync().added.count == 1)
+
+        g.name = "House"
+        try phone.store.upsert(g, secrets: GatewaySecrets(provider: "basic"))
+        phone.sync()
+        #expect(mac.sync().changed == [g.id])
+        #expect(mac.store.forgotten.isEmpty, "a rename forgot the sign-in")
+
+        g.gateway = try GatewayURL.normalize("https://moved.example.com", pathPrefix: nil)
+        try phone.store.upsert(g, secrets: GatewaySecrets(provider: "basic"))
+        phone.sync()
+        #expect(mac.sync().changed == [g.id])
+        #expect(mac.store.connections.first?.gateway == g.gateway)
+        #expect(mac.store.forgotten == [g.id])
+
+        g.authMode = .oauth
+        try phone.store.upsert(g, secrets: GatewaySecrets())
+        phone.sync()
+        #expect(mac.sync().changed == [g.id])
+        #expect(mac.store.forgotten == [g.id, g.id])
+        // The device that made the change forgets its own in the form, not here.
+        #expect(phone.store.forgotten.isEmpty)
     }
 
     @Test func aDeviceWithNoGatewayTakesNoneUntilItRestores() throws {

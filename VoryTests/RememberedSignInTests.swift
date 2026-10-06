@@ -34,11 +34,34 @@ struct RememberedSignInTests {
         GatewayConnection(name: name, gateway: address, authMode: mode, authProvider: "basic")
     }
 
+    /// Whether this test host has a Keychain at all. An unsigned test build has none
+    /// (errSecMissingEntitlement): the Mac's, and a simulator build made without signing.
+    nonisolated static let hasKeychain: Bool = {
+        var q = KeychainRememberedSignInBackend.query(account: nil)
+        q[kSecReturnAttributes as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitAll
+        var out: AnyObject?
+        return SecItemCopyMatching(q as CFDictionary, &out) != errSecMissingEntitlement
+    }()
+
     /// A clock the test moves by hand.
     @MainActor final class Clock { var now = Date(timeIntervalSince1970: 1_800_000_000) }
 
     private func coordinator(_ backend: MemoryRememberedSignInBackend = MemoryRememberedSignInBackend(), auth: FakeAuthenticator = FakeAuthenticator()) -> RememberedSignInCoordinator {
         RememberedSignInCoordinator(vault: RememberedSignInVault(backend: backend), authenticator: auth)
+    }
+
+    /// The gateway in use as the app comes back to it, its socket refused. `refused`: the gateway
+    /// turned the refresh token down (none is saved, so the renewal fails at once, without a
+    /// request); otherwise the socket alone was refused, as a 4401 close is.
+    private func runtime(for c: GatewayConnection, refused: Bool) async -> GatewayRuntime {
+        let store = ConnectionStore()
+        store.remembered = RememberedSignInVault(backend: MemoryRememberedSignInBackend())
+        let rt = GatewayRuntime(connection: c, store: store)
+        rt.socketEnabled = false
+        if refused { _ = try? await rt.refreshSession() }
+        rt.socketState = .authRejected("The gateway rejected the WebSocket credential (4401).")
+        return rt
     }
 
     // MARK: Storage policy
@@ -142,8 +165,8 @@ struct RememberedSignInTests {
         #expect(K.accounts(status: errSecSuccess, found: found) == ["signin.a", "signin.b"])
         #expect(K.accounts(status: errSecSuccess, found: nil) == nil)
         #if os(iOS)
-        // The device Keychain itself (the Mac's unsigned test build has none): an answer.
-        #expect(K().accounts() != nil)
+        // The device Keychain itself, where the test build has one: an answer.
+        if Self.hasKeychain { #expect(K().accounts() != nil) }
         #endif
     }
 
@@ -256,16 +279,44 @@ struct RememberedSignInTests {
         await #expect(throws: RememberedSignInError.cancelled) { try await co.signInWithRemembered(c, access: CloudflareAccess()) }
         auth.answer = true
         #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
-        // Signed in: no longer declined, so asked by itself again next time (once the cooldown
-        // after any sign-in it made has passed).
+        // Signed in: no longer declined, so asked by itself again next time (on a return to the
+        // app, once the cooldown after any sign-in it made has passed).
         #expect(!co.declined.contains(c.id))
-        clock.now += RememberedSignInCoordinator.cooldown
         #expect(co.decision(for: c, asked: false) == .useRemembered)
+        clock.now += RememberedSignInCoordinator.cooldown
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered)
     }
 
-    /// A sign-in that goes through but does not keep the gateway working (a proxy that refuses
-    /// the socket) must not ask for Face ID and send the password on every return to the app.
-    @Test func itSignsInByItselfAtMostOnceInTenMinutes() async throws {
+    /// Back in front to a refused socket: only a refresh the gateway turned down is mended by
+    /// signing in again. A socket refused after a renewal that worked (a 4401 close, a refused
+    /// ws-ticket) must not ask for Face ID or send the password at all.
+    @Test func onReturnOnlyARefusedRefreshSignsInAgain() async throws {
+        let auth = FakeAuthenticator()
+        let c = try gateway(), co = coordinator(auth: auth)
+        try co.vault.remember(secret, for: c.id)
+        co.signIn = { _, _, _ in Issue.record("signed in for a socket a sign-in does not mend"); return GatewaySecrets() }
+
+        let socketOnly = await runtime(for: c, refused: false)
+        #expect(!socketOnly.refreshRefused)
+        #expect(await co.signInAgainOnReturn(socketOnly) == nil)
+        // Turned down, but the socket is not refused (it is still opening): nothing either.
+        let opening = await runtime(for: c, refused: true)
+        opening.socketState = .connecting
+        #expect(await co.signInAgainOnReturn(opening) == nil)
+        #expect(auth.reasons.isEmpty)
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered, "not declined: nothing was asked")
+
+        // The refresh token turned down while the app was away: signed in again now.
+        co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
+        let expired = await runtime(for: c, refused: true)
+        #expect(expired.refreshRefused)
+        #expect(await co.signInAgainOnReturn(expired)?.accessToken == "a")
+        #expect(auth.reasons == ["Sign in to Home"])
+    }
+
+    /// A sign-in that goes through but leaves the session refused must not ask for Face ID and
+    /// send the password on every return to the app: on a return, at most once in ten minutes.
+    @Test func onReturnItSignsInByItselfAtMostOnceInTenMinutes() async throws {
         let auth = FakeAuthenticator()
         let c = try gateway(), co = coordinator(auth: auth)
         let clock = Clock()
@@ -273,31 +324,52 @@ struct RememberedSignInTests {
         try co.vault.remember(secret, for: c.id)
         let signIns = Recorder<Int>()
         co.signIn = { _, _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "a") }
+        let rt = await runtime(for: c, refused: true)
 
-        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(await co.signInAgainOnReturn(rt)?.accessToken == "a")
         // Refused again a moment later: not by itself…
         clock.now += 60
-        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
-        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        #expect(await co.signInAgainOnReturn(rt) == nil)
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
         clock.now += RememberedSignInCoordinator.cooldown - 61
-        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(await co.signInAgainOnReturn(rt) == nil)
         #expect(auth.reasons.count == 1 && signIns.items.count == 1)
         #expect(co.vault.contains(c.id), "waiting is not forgetting")
         // …but the Sign In sheet's button, whenever it is tapped (which starts the wait again).
         #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
-        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
         // Ten minutes on: by itself again.
         clock.now += RememberedSignInCoordinator.cooldown
-        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(await co.signInAgainOnReturn(rt)?.accessToken == "a")
         #expect(auth.reasons.count == 3 && signIns.items.count == 3)
         // Signed in by hand in the form: a fresh start, no wait.
         co.didSignIn(c.id)
-        #expect(co.decision(for: c, asked: false) == .useRemembered)
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered)
         // Per gateway: another one is not held up by this one's wait.
         let other = try gateway(name: "Office")
         try co.vault.remember(secret, for: other.id)
-        #expect(await co.signInAgain(c, access: CloudflareAccess()) != nil)
-        #expect(co.decision(for: other, asked: false) == .useRemembered)
+        #expect(await co.signInAgainOnReturn(rt) != nil)
+        #expect(co.decision(for: other, asked: false, onReturn: true) == .useRemembered)
+    }
+
+    /// The gateway turned the refresh token down: the session really ended (a gateway restarted
+    /// with a new signing key ends them all), however soon after the last sign-in. Restarted
+    /// twice in ten minutes, it is signed in again twice.
+    @Test func aRefusedRefreshSignsInAgainHoweverSoon() async throws {
+        let auth = FakeAuthenticator()
+        let c = try gateway(), co = coordinator(auth: auth)
+        let clock = Clock()
+        co.now = { clock.now }
+        try co.vault.remember(secret, for: c.id)
+        co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
+
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        clock.now += 5 * 60
+        #expect(co.decision(for: c, asked: false) == .useRemembered)
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(auth.reasons.count == 2)
+        // A return to the app inside the ten minutes still waits.
+        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
     }
 
     /// The password goes only to the address it was typed for: a gateway moved since (here, or
@@ -385,23 +457,37 @@ struct RememberedSignInTests {
         // Nothing saved for it, so no refresh token: the renewal is turned down at once, without
         // a request.
         let rt = GatewayRuntime(connection: c, store: store)
+        rt.socketEnabled = false
+        #expect(!rt.refreshRefused)
 
         // Without the hook: today's "Sign in again".
         await #expect(throws: HermesAPIError.self) { try await rt.refreshSession() }
+        #expect(rt.refreshRefused, "the session ended for good")
 
         let asked = Recorder<String>()
         rt.signInAgain = { conn, _ in asked.items.append(conn.name); return nil }
         await #expect(throws: HermesAPIError.self) { try await rt.refreshSession() }
+        #expect(rt.refreshRefused)
 
         rt.signInAgain = { _, _ in GatewaySecrets(accessToken: "fresh", refreshToken: "r2", provider: "basic", access: CloudflareAccess(clientId: "other", clientSecret: "other")) }
         try await rt.refreshSession()
+        #expect(!rt.refreshRefused, "signed in again")
         #expect(rt.secrets.accessToken == "fresh" && rt.secrets.refreshToken == "r2")
         #expect(rt.secrets.access == CloudflareAccess(), "the gateway's own Access headers are kept")
         #expect(asked.items == ["test remembered sign-in"])
         #if os(iOS)
-        // Through the real Keychain, which an unsigned Mac test build does not have.
-        #expect(store.secrets(for: c.id).accessToken == "fresh", "saved for the next launch")
+        // Through the real Keychain, which an unsigned test build does not have.
+        if Self.hasKeychain { #expect(store.secrets(for: c.id).accessToken == "fresh", "saved for the next launch") }
         #endif
+
+        // Turned down again (a session with no refresh token), then signed in by other means
+        // (the Sign In sheet): no longer refused.
+        rt.signInAgain = nil
+        await rt.replaceSecrets(GatewaySecrets(accessToken: "typed", provider: "basic"))
+        await #expect(throws: HermesAPIError.self) { try await rt.refreshSession() }
+        #expect(rt.refreshRefused)
+        await rt.replaceSecrets(GatewaySecrets(accessToken: "typed-again", provider: "basic"))
+        #expect(!rt.refreshRefused)
     }
 
     // MARK: Never travels, and goes with the gateway
@@ -425,9 +511,11 @@ struct RememberedSignInTests {
     }
 
     #if os(iOS)
-    // These two go through the real Keychain, which an unsigned Mac test build does not have.
+    // These two go through the real Keychain, which an unsigned test build does not have (the
+    // Mac's never has one).
 
-    @Test func theICloudCopyCarriesNoRememberedSignIn() throws {
+    @Test(.enabled(if: RememberedSignInTests.hasKeychain, "no Keychain in an unsigned test build"))
+    func theICloudCopyCarriesNoRememberedSignIn() throws {
         let store = ConnectionStore()
         store.remembered = RememberedSignInVault(backend: MemoryRememberedSignInBackend())
         let c = GatewayConnection(name: "test cloud copy", gateway: try GatewayURL.normalize("https://gateway.example.com"), authMode: .password)
@@ -445,7 +533,8 @@ struct RememberedSignInTests {
         #expect(!sent.contains(secret.password) && !sent.contains(secret.username))
     }
 
-    @Test func theWatchGetsNoRememberedSignIn() throws {
+    @Test(.enabled(if: RememberedSignInTests.hasKeychain, "no Keychain in an unsigned test build"))
+    func theWatchGetsNoRememberedSignIn() throws {
         let store = ConnectionStore()
         store.remembered = RememberedSignInVault(backend: MemoryRememberedSignInBackend())
         let c = GatewayConnection(name: "test watch copy", gateway: try GatewayURL.normalize("http://127.0.0.1:1"), authMode: .password)

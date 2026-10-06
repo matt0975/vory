@@ -424,10 +424,13 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
         GatewayRuntime.signposter.endInterval("snapshot", signpost)
         if snapshotsBuilding == 0 {
-            let held = heldEvents.dropFirst(heldShownBySnapshot)
+            let held = heldEvents
+            let shownBy = heldShownBySnapshot
             heldEvents = []
             heldShownBySnapshot = 0
-            for ev in held { handle(event: ev) }
+            // Those the snapshot shows still do what it cannot show (`handleShownBySnapshot`).
+            for ev in held.prefix(shownBy) { handleShownBySnapshot(ev) }
+            for ev in held.dropFirst(shownBy) { handle(event: ev) }
         }
     }
 
@@ -505,18 +508,25 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         fetchedRowIDs = Set(items.map(\.id))
         items += added
         if let q = r["queued"]?["user"]?.stringValue, !q.isEmpty { queue = [QueuedMessage(text: q)] }
-        // The snapshot's questions are as old as its reply (the `answeredAt` filter above).
+        // The snapshot's questions are as old as its reply (the `answeredAt` filter above), and
+        // so is its word on one taken down here since (`removedHereAt`).
         if let open = r["open_requests"]?.arrayValue {
             for o in open {
-                guard let id = o["id"]?.stringValue, let method = o["method"]?.stringValue else { continue }
+                guard let id = o["id"]?.stringValue, let method = o["method"]?.stringValue,
+                      !removedHere(id, since: answeredAt), !removedHere(o["params"]?["request_id"]?.stringValue, since: answeredAt) else { continue }
                 addCard(PendingCard(id: id, method: method, params: o["params"] ?? .object([:])), asOf: answeredAt)
             }
         }
-        if let pa = r["pending_approval"], !pa.isNull, let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) {
+        if let pa = r["pending_approval"], !pa.isNull, let rid = pa["request_id"]?.stringValue,
+           !cards.contains(where: { $0.approval?.requestId == rid }), !removedHere(rid, since: answeredAt) {
             var params = pa.objectValue ?? [:]
             params["session_id"] = .string(runtimeID)
             addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: answeredAt)
         }
+        // A card taken down before this reply and the last look at the pending approvals: every
+        // list still to come was read after that, and has it right.
+        let listedSince = min(answeredAt, lastApprovalCheck)
+        removedHereAt = removedHereAt.filter { $0.value >= listedSince }
         if isRunning { activity.start(for: self) }
         saveTranscriptCache()
         Task { await pollPendingApprovals() }
@@ -548,7 +558,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
         let list = waiting ?? (r["request_id"] != nil ? [r] : [])
         for pa in list {
-            guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }) else { continue }
+            guard let rid = pa["request_id"]?.stringValue, !cards.contains(where: { $0.approval?.requestId == rid }),
+                  !removedHere(rid, since: asked) else { continue }
             var params = pa.objectValue ?? [:]
             params["session_id"] = .string(runtimeID)
             addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: asked)
@@ -926,14 +937,32 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// When the gateway last said each card's question was waiting: when the question came, or
     /// when the list that had it was read (a snapshot's reply, the pending approvals).
     private var cardAsOf: [String: Date] = [:]
+    /// When this device took each card down (answered it, or found it answered elsewhere), by
+    /// card id and by request id. A list of open questions read before then (a snapshot whose
+    /// rows were being made, the pending approvals) still has it: put back, an answered card
+    /// asked for attention again and a second tap answered a request already closed.
+    private var removedHereAt: [String: Date] = [:]
     private var lastApprovalCheck = Date.distantPast
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
+
+    private func noteRemovedHere(_ card: PendingCard) {
+        let now = Date()
+        for key in [card.id, card.params["request_id"]?.stringValue].compactMap({ $0 }) { removedHereAt[key] = now }
+    }
+
+    /// Whether the card or request `key` was taken down here at or after `asOf`, when a list
+    /// that still has it was read.
+    private func removedHere(_ key: String?, since asOf: Date) -> Bool {
+        guard let key, let at = removedHereAt[key] else { return false }
+        return at >= asOf
+    }
 
     /// A card this device shows was answered on another one (or its turn ended without it):
     /// it goes, whoever waits on it here is released, and the chat stops asking for attention.
     private func settleElsewhere(_ card: PendingCard) {
         guard cards.contains(where: { $0.id == card.id }) else { return }
+        noteRemovedHere(card)
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
         // The gateway's reply slot stays open: answering it with nothing here read as a deny
@@ -969,6 +998,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func respond(card: PendingCard, result: JSONValue) async {
+        noteRemovedHere(card)
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
@@ -989,7 +1019,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func cancelCard(id: String, reason: String) {
-        guard cards.contains(where: { $0.id == id }) else { return }
+        guard let card = cards.first(where: { $0.id == id }) else { return }
+        // Never while a snapshot is made (its event waits), but a look at the pending
+        // approvals may be on its way back.
+        noteRemovedHere(card)
         cards.removeAll { $0.id == id }
         cardShownAt[id] = nil
         if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false) }
@@ -1135,6 +1168,59 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             break
         default:
             log.debug("unhandled event \(ev.type, privacy: .public)")
+        }
+    }
+
+    /// An event held while a snapshot was made that came before the reply of the one applied
+    /// (`heldShownBySnapshot`). What it did to the thread, the cards and whether the turn runs,
+    /// the snapshot shows; the rest is still done. Left out with it, a turn that ended then
+    /// never sent the message queued behind it and voice, Siri and the watch never heard its
+    /// reply; a question withdrawn then kept its waiter here for good.
+    private func handleShownBySnapshot(_ ev: GatewayEvent) {
+        let p = ev.payload
+        switch ev.type {
+        case "message.delta":
+            // Hands-free speaks a reply as it streams.
+            let delta = p["text"]?.stringValue ?? ""
+            if !delta.isEmpty { NotificationCenter.default.post(name: .hermesStreamDelta, object: nil, userInfo: ["storedID": storedID, "count": delta.count, "text": delta]) }
+        case "message.complete":
+            let text = p["text"]?.stringValue
+            if let spoken = text, !spoken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, p["status"]?.stringValue != "interrupted" {
+                NotificationCenter.default.post(name: .hermesReplyCompleted, object: nil, userInfo: ["storedID": storedID, "text": spoken])
+            }
+            if let u = try? p["usage"]?.decode(Usage.self) { usage = u }
+            if let w = p["warning"]?.stringValue, !w.isEmpty { banner = w }
+            // Its timing and its sealed text are not the next turn's.
+            turnStartedAt = nil
+            sealedTurnText = ""
+            // The snapshot may have the next turn running already; if not, this one ends here.
+            if !isRunning {
+                startedHere = false
+                statusLine = nil
+                activityEndTask?.cancel(); activityEndTask = nil
+                activity.end(for: self, phase: (p["status"]?.stringValue == "error" || p["error"]?.stringValue?.isEmpty == false) ? "error" : "done")
+            }
+            runtime.cardNotifier?.turnFinished(chat: self, error: p["error"]?.stringValue)
+            drainQueue()
+        case "error":
+            if !isRunning {
+                startedHere = false
+                activityEndTask?.cancel(); activityEndTask = nil
+                activity.end(for: self, phase: "error")
+            }
+        case "request.cancel":
+            // Its card went with the snapshot, which no longer lists the question (a card shown
+            // now was asked since): whoever waits on it here is let go.
+            let id = p["id"]?.stringValue ?? ""
+            if !cards.contains(where: { $0.id == id }) { inlineAnswers.removeValue(forKey: id)?.resume(returning: .null) }
+        case "session.reclaimed":
+            // Only when the snapshot is of the session that went: a resume after it is on a new one.
+            if (p["session_id"]?.stringValue ?? ev.sessionID) == runtimeID { handle(event: ev) }
+        case "session.usage", "notification.show", "notification.clear":
+            handle(event: ev)
+        default:
+            // The rest change only what the snapshot shows.
+            break
         }
     }
 

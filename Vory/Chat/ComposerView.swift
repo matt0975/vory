@@ -137,9 +137,11 @@ struct ComposerView: View {
 
     /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
     /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
-    /// SlashMenu.returnAction). True when Return was used here.
+    /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
+    /// as a message, so Return keeps its own meaning instead. True when Return was used here.
     private func takeOnReturn() -> Bool {
-        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex) {
+        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex,
+                                      canRun: quote.isEmpty && chat.staged.isEmpty) {
         case .take(let item): pick(item); return true
         case .send: Task { await send() }; return true
         case .keep: break

@@ -206,6 +206,34 @@ import VoryCore
         #expect(M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: "elsewhere", query: "assistant").filter(\.current).count == 2)
     }
 
+    @Test func aRowCheckedByItsIdAloneStillSwitches() throws {
+        // On its own provider the row is the chat's own and has nothing to switch; the same id at
+        // its maker is a switch.
+        let home = M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: "relay", query: "assistant")
+        let own = try #require(home.first { $0.id == "relay|workshop/assistant" })
+        let maker = try #require(home.first { $0.id == "workshop|workshop/assistant" })
+        #expect(own.own && !maker.own)
+        #expect(M.outcome(of: own, in: "/model assistant", wholeText: true, completing: false, canRun: true) == .keepModel)
+        #expect(M.outcome(of: maker, in: "/model assistant", wholeText: true, completing: false, canRun: true) == .switchModel)
+
+        // The chat's provider not in the list (a custom endpoint, say) or unknown: both rows with the
+        // id are checked, but either may be another provider, so taking one switches, as the model
+        // menu does.
+        for provider in ["elsewhere", nil] as [String?] {
+            let checked = M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: provider, query: "assistant").filter(\.current)
+            #expect(checked.count == 2)
+            #expect(checked.allSatisfy { !$0.own })
+            #expect(checked.allSatisfy { M.outcome(of: $0, in: "/model assistant", wholeText: true, completing: false, canRun: true) == .switchModel })
+            // A bare "/model " marks none of them, so a habitual Return Return switches nothing: it
+            // sends "/model" as typed.
+            let bare = try #require(M.context(for: "/model "))
+            let listed = M.modelItems(Self.sharedID, current: "workshop/assistant", currentProvider: provider, query: "")
+            #expect(listed.filter(\.current).count == 2)
+            #expect(M.markedIndex(listed, context: bare, mark: nil) == nil)
+            #expect(M.returnAction(listed, context: bare, marked: nil) == .send)
+        }
+    }
+
     // MARK: The mark and the keys
 
     @Test func theCommandListMarksItsTopRowAndABareModelListTheChatsModel() throws {
@@ -214,7 +242,7 @@ import VoryCore
         #expect(M.markedIndex(commands, context: co, mark: nil) == 0)
         // "/model ": the chat's own model, not the first listed (it is third here).
         let bare = try #require(M.context(for: "/model "))
-        let models = M.modelItems(Self.options, current: "workshop/assistant", query: "")
+        let models = M.modelItems(Self.options, current: "workshop/assistant", currentProvider: "workshop", query: "")
         #expect(M.markedIndex(models, context: bare, mark: nil) == 2)
         // The chat's model is not listed: nothing is marked.
         #expect(M.markedIndex(M.modelItems(Self.options, current: "elsewhere/unlisted", query: ""), context: bare, mark: nil) == nil)
@@ -265,6 +293,18 @@ import VoryCore
         #expect(M.returnAction([], context: typed, marked: nil) == .send)
         // Chosen with the arrows: that row.
         #expect(M.returnAction(minis, context: typed, marked: 1) == .take(minis[1]))
+    }
+
+    @Test func aTypedModelNameIsNotSentWithAReplyQuotedOrFilesStaged() throws {
+        // The text would go to the bot as a message (the quote above it, or the files with it), so
+        // Return keeps its own meaning, as a picked command waits in the field then.
+        let typed = try #require(M.context(for: "/model mini"))
+        let minis = M.modelItems(Self.options, current: "", query: "mini")
+        #expect(M.returnAction(minis, context: typed, marked: nil, canRun: false) == .keep)
+        #expect(M.returnAction([], context: typed, marked: nil, canRun: false) == .keep)
+        // A row chosen with the arrows still switches: a switch is not a message.
+        #expect(M.returnAction(minis, context: typed, marked: 1, canRun: false) == .take(minis[1]))
+        #expect(M.outcome(of: minis[1], in: "/model mini", wholeText: true, completing: false, canRun: false) == .switchModel)
     }
 
     @Test func modelReturnReturnKeepsTheChatsModel() throws {

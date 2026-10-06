@@ -36,6 +36,11 @@ enum SlashMenu {
         var provider: String?
         var current = false
         var needsKey = false
+        /// Models: the row is the chat's model on the chat's own provider for certain (that
+        /// provider is known and lists it), so taking it has nothing to switch. A row checked by
+        /// its id alone (the provider unknown, or not in the list) can be the same id somewhere
+        /// else, and taking it switches, as in the model menu.
+        var own = false
         var id: String { kind == .model ? (provider ?? "") + "|" + name : name }
     }
 
@@ -156,7 +161,7 @@ enum SlashMenu {
     /// model a provider lists. Providers the gateway can use come first, as in the menu.
     /// `currentProvider` is the chat's provider: the same id under another provider is another
     /// switch, so only the chat's own row is checked when that provider lists it (every row with
-    /// the id is, when the provider is unknown or not in the list).
+    /// the id is, when the provider is unknown or not in the list, and none of them is `own`).
     static func modelItems(_ options: ModelOptionsResult, current: String, currentProvider: String? = nil, query: String) -> [Item] {
         let home = currentProvider.flatMap { slug in
             options.providers.first { $0.slug == slug && (($0.models ?? []) + ($0.featuredModels ?? [])).contains(current) }?.slug
@@ -173,7 +178,7 @@ enum SlashMenu {
             for m in models where seen.insert(p.slug + "|" + m).inserted {
                 let item = Item(kind: .model, name: m, detail: p.name, provider: p.slug,
                                 current: m == current && (home == nil || p.slug == home),
-                                needsKey: p.authenticated == false)
+                                needsKey: p.authenticated == false, own: m == current && p.slug == home)
                 let s = query.isEmpty ? 0 : score(name: m, detail: p.name + " " + p.slug, query: query)
                 if let s { scored.append((item, s, scored.count)) }
             }
@@ -193,14 +198,16 @@ enum SlashMenu {
     /// The row Return takes, shown marked. A row marked on purpose keeps the mark. Otherwise the
     /// command list marks its top row; a bare "/model " marks the chat's own model, so a habitual
     /// "/model" Return Return keeps it (it used to take the first model listed and switch); a
-    /// typed model name marks nothing, and Return sends it as typed (see `returnAction`). Nil when
-    /// nothing is marked.
+    /// typed model name marks nothing, and Return sends it as typed (see `returnAction`). Rows
+    /// checked by their id alone (the chat's provider unknown or not listed) are not marked either:
+    /// taking one switches to its provider, so Return sends "/model" and the gateway says which
+    /// model the chat is on. Nil when nothing is marked.
     static func markedIndex(_ items: [Item], context: Context, mark: Mark?) -> Int? {
         guard !items.isEmpty else { return nil }
         if let mark, mark.context == context, let i = items.firstIndex(where: { $0.id == mark.id }) { return i }
         switch context.kind {
         case .command: return 0
-        case .model: return context.query.isEmpty ? items.firstIndex(where: \.current) : nil
+        case .model: return context.query.isEmpty ? items.firstIndex(where: \.own) : nil
         }
     }
 
@@ -225,12 +232,14 @@ enum SlashMenu {
     /// Return takes the marked row. A model name typed and not chosen from the list goes to the
     /// gateway as typed: it resolves aliases ("sonnet"), the user's own names and ids the list
     /// does not have, on the chat's own provider, as it did before the list. Taking the closest
-    /// listed match instead switched to whichever provider sorted first. `context` is nil when
-    /// no chooser is open (none for the text, or closed with Escape).
-    static func returnAction(_ items: [Item], context: Context?, marked: Int?) -> ReturnAction {
+    /// listed match instead switched to whichever provider sorted first. Not with a reply quoted
+    /// or files staged (`canRun` false): the text would go out as a message to the bot, so Return
+    /// keeps its own meaning, as `outcome` keeps a command in the field then. `context` is nil
+    /// when no chooser is open (none for the text, or closed with Escape).
+    static func returnAction(_ items: [Item], context: Context?, marked: Int?, canRun: Bool = true) -> ReturnAction {
         guard let context else { return .keep }
         if let marked, items.indices.contains(marked) { return .take(items[marked]) }
-        return context.kind == .model ? .send : .keep
+        return context.kind == .model && canRun ? .send : .keep
     }
 
     /// What taking a row does to the chat and the field.
@@ -241,7 +250,7 @@ enum SlashMenu {
         case fill(String)
         /// Switch the chat to the row's model.
         case switchModel
-        /// The row is the chat's own model: nothing to switch.
+        /// The row is the chat's own model on its own provider: nothing to switch.
         case keepModel
     }
 
@@ -250,12 +259,13 @@ enum SlashMenu {
     /// "/model ") and never runs or switches anything (it used to run /stop, /new or /yolo with
     /// no second key). Return and a tap run a command that takes nothing
     /// when it is the whole message and `canRun` (nothing quoted or staged, which would make it
-    /// a message), and switch to a model unless it is the chat's own. Anything else goes in the
+    /// a message), and switch to a model unless it is the chat's own (`own`: a row checked by its
+    /// id alone may be under another provider, and switches). Anything else goes in the
     /// field, ready for what follows (a pick of "/model" opens the model list).
     static func outcome(of item: Item, in text: String, wholeText: Bool, completing: Bool, canRun: Bool) -> Outcome {
         if item.kind == .model {
             if completing { return .fill("/model " + item.name) }
-            return item.current ? .keepModel : .switchModel
+            return item.own ? .keepModel : .switchModel
         }
         if !completing, item.runsOnPick, wholeText, canRun { return .run("/" + item.name) }
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)

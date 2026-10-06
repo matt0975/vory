@@ -9,8 +9,8 @@ import VoryCore
 ///   "<name> is typing…") with a working status, until a resting one.
 /// - When the gateway files only the ends of turns (a hosted room files no start), its turn
 ///   order: the bots answer a message one at a time, the ones it @mentions (all of them when it
-///   mentions none) in the room's order, so the first of those not heard from since is the one
-///   working. Then come up to two more rounds for the bots another bot @mentioned that have not
+///   mentions none) in the room's order, so the first of those not heard from since (and not
+///   already caught up with the thread) is the one working. Then come up to two more rounds for the bots another bot @mentioned that have not
 ///   answered since, the gateway turning that list by one place a round (its `_rotate`), so the
 ///   second of them goes first in the first of those rounds. A room that has said it settled,
 ///   or a message nothing has followed for `guessWindow`, has nobody working.
@@ -160,9 +160,10 @@ enum GroupActivity {
         guard reported.isEmpty, !reportsStarts, let question else { return Reading(reported: reported, lastAt: lastAt) }
 
         // The first round: the bots the message asks (all of them when it names none), in the
-        // room's order.
+        // room's order. As in every round, a bot that has read the whole thread already is passed
+        // over: one whose reply to the message before was filed after this one has.
         let asked = mentioned(in: text(question), members: members)
-        if let first = (asked.isEmpty ? members : asked).first(where: { !heard.contains(key($0)) }) {
+        if let first = (asked.isEmpty ? members : asked).first(where: { !heard.contains(key($0)) && (readTo[key($0)] ?? 0) < newest }) {
             return Reading(next: first, lastAt: lastAt)
         }
         // The two after it, as the gateway plans them (plan_next_task): the bots another bot

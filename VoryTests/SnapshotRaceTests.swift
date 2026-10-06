@@ -64,7 +64,7 @@ actor SnapshotBuildGate {
     /// An exchange from before, then (`prompt`) a turn: its rows the gateway has already
     /// stored (`flushed`), and what it has in flight.
     private func snapshot(_ sid: String = "s1", running: Bool, prompt: String? = nil, flushed: [JSONValue] = [],
-                          partial: String? = nil, open: [JSONValue] = []) -> JSONValue {
+                          partial: String? = nil, open: [JSONValue] = [], pending: JSONValue? = nil) -> JSONValue {
         var messages: [JSONValue] = [
             .object(["role": "user", "text": "Check the disk", "timestamp": .number(turnStart - 100), "row_id": 1]),
             .object(["role": "assistant", "text": "It is full.", "timestamp": .number(turnStart - 90), "row_id": 2]),
@@ -73,6 +73,7 @@ actor SnapshotBuildGate {
         var r: [String: JSONValue] = ["session_id": .string(sid), "stored_session_id": "stored-1", "running": .bool(running),
                                       "messages": .array(messages), "info": .object(["title": "Disk", "running": .bool(running)]),
                                       "open_requests": .array(open)]
+        if let pending { r["pending_approval"] = pending }
         if let prompt {
             r["turn_started_at"] = .number(turnStart)
             r["inflight"] = .object(["user": .string(prompt), "assistant": .string(partial ?? ""), "streaming": .bool(partial != nil)])
@@ -81,6 +82,28 @@ actor SnapshotBuildGate {
     }
 
     @MainActor private final class Answer { var value: JSONValue? }
+
+    /// What the chat told the platform: the cards that arrived, the turns that finished.
+    @MainActor private final class Notes: CardNotifying {
+        var arrived: [String] = []
+        var finished = 0
+        func cardArrived(_ card: PendingCard, chat: ChatSession) { arrived.append(card.id) }
+        func turnFinished(chat: ChatSession, error: String?) { finished += 1 }
+    }
+
+    /// How often the chat said a reply was finished (what voice, Siri and the watch wait for),
+    /// counting only this reply: other tests post theirs meanwhile.
+    @MainActor private final class Heard {
+        var count = 0
+        private var observer: NSObjectProtocol?
+        init(_ reply: String) {
+            observer = NotificationCenter.default.addObserver(forName: .hermesReplyCompleted, object: nil, queue: nil) { [weak self] n in
+                guard n.userInfo?["storedID"] as? String == "stored-1", n.userInfo?["text"] as? String == reply else { return }
+                MainActor.assumeIsolated { self?.count += 1 }
+            }
+        }
+        func stop() { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    }
 
     /// What the bot's request got back, or nil while it still waits (a request whose card was
     /// lost waits for good, so this does not wait on it).
@@ -205,6 +228,42 @@ actor SnapshotBuildGate {
         #expect(await reply(to: answering) == .null, "the bot's request is let go")
     }
 
+    /// A card answered here while the rows are made stays answered. The snapshot was read
+    /// before the answer, so it still lists the question (an approval in the approval queue
+    /// too): put back, the chat asked for attention again and a second tap answered a request
+    /// the bot had already closed.
+    @Test(arguments: ["approval", "clarify"])
+    func aCardAnsweredWhileTheSnapshotIsMadeStaysAnswered(method: String) async throws {
+        let rt = try runtime()
+        let notes = Notes()
+        rt.cardNotifier = notes
+        let gate = SnapshotBuildGate()
+        let c = openChat(rt, gate: gate)
+        let approval = method == "approval"
+        let params: JSONValue = approval
+            ? .object(["session_id": "s1", "request_id": "ap-1", "command": "rm -rf /var/log/old", "description": "Delete the old logs"])
+            : .object(["session_id": "s1", "question": "Delete the old logs?"])
+        let open: JSONValue = .object(["id": "req-1", "method": .string(method), "params": params])
+        let queued: JSONValue? = approval ? .object(["request_id": "ap-1", "command": "rm -rf /var/log/old", "description": "Delete the old logs"]) : nil
+        // On screen from before the socket dropped.
+        await gate.release(0)
+        await c.apply(snapshot: snapshot(running: true, prompt: "Free up space", open: [open], pending: queued))
+        #expect(c.cards.map(\.id) == ["req-1"])
+        #expect(rt.needsAttention.contains("stored-1"))
+        let card = try #require(c.cards.first)
+        // The reattach's rows are being made, and the person answers meanwhile.
+        let applying = Task { await c.apply(snapshot: snapshot(running: true, prompt: "Free up space", open: [open], pending: queued)) }
+        await gate.begun(2)
+        await c.respond(card: card, result: approval ? .object(["choice": "once"]) : .object(["answer": "yes"]))
+        #expect(c.cards.isEmpty)
+        await gate.release(1)
+        await applying.value
+        #expect(c.cards.isEmpty, "the answered card does not come back")
+        #expect(!rt.needsAttention.contains("stored-1"), "and the chat does not ask for attention again")
+        #expect(notes.arrived == ["req-1"], "nor is the card announced again")
+        #expect(texts(c).filter { $0.hasPrefix("note: Approval") } == (approval ? ["note: Approval: once"] : []))
+    }
+
     // MARK: A second snapshot of the same chat
 
     /// Two re-reads of one chat in flight (a reconnect and the return to the app). The events
@@ -250,6 +309,78 @@ actor SnapshotBuildGate {
                              "tool: du -sh /var", "tool: rm old logs", "streaming: Freed 12 GB."])
         #expect(!c.items.contains { $0.id == "tool-t1" }, "the tool call before the second reply is history's row, not a second one")
         #expect(Set(c.items.map(\.id)).count == c.items.count)
+    }
+
+    /// The turn ends between the two replies. The newer snapshot shows its reply, and its end
+    /// still does what a snapshot cannot: voice, Siri and the watch hear the reply, and the
+    /// message queued behind the turn goes out. Before, both were lost with the reply's rows.
+    @Test(arguments: [false, true])
+    func aTurnThatEndedBeforeTheNewerSnapshotStillEndsHere(newerFinishesFirst: Bool) async throws {
+        let rt = try runtime()
+        let notes = Notes()
+        rt.cardNotifier = notes
+        let gate = SnapshotBuildGate()
+        let c = openChat(rt, gate: gate)
+        await gate.release(0)
+        await c.apply(snapshot: snapshot(running: true, prompt: "Free up space", partial: "Looking"))
+        #expect(c.isRunning)
+        // Typed while the turn runs: it waits for the turn to end.
+        _ = await c.send("Then empty the trash")
+        #expect(c.queue.map(\.text) == ["Then empty the trash"])
+        let reply = "Looking around. Emptied the cache."
+        let heard = Heard(reply)
+        defer { heard.stop() }
+        let first = Task { await c.apply(snapshot: snapshot(running: true, prompt: "Free up space", partial: "Looking around.")) }
+        await gate.begun(2)
+        rt.handle(batch: [event("message.complete", "s1", ["text": .string(reply), "status": "complete"])])
+        // The second reply has the finished turn.
+        let flushed: [JSONValue] = [
+            .object(["role": "user", "text": "Free up space", "timestamp": .number(turnStart), "row_id": 3]),
+            .object(["role": "assistant", "text": .string(reply), "timestamp": .number(turnStart + 5), "row_id": 4]),
+        ]
+        let second = Task { await c.apply(snapshot: snapshot(running: false, flushed: flushed)) }
+        await gate.begun(3)
+        if newerFinishesFirst {
+            await gate.release(2)
+            await second.value
+            await gate.release(1)
+            await first.value
+        } else {
+            await gate.release(1)
+            await first.value
+            await gate.release(2)
+            await second.value
+        }
+        #expect(heard.count == 1, "the reply is heard once")
+        #expect(notes.finished == 1)
+        for _ in 0..<1000 where !texts(c).contains("user: Then empty the trash") { await Task.yield() }
+        #expect(c.queue.isEmpty)
+        #expect(texts(c) == ["user: Check the disk", "reply: It is full.", "user: Free up space", "reply: \(reply)",
+                             "user: Then empty the trash"])
+        #expect(c.isRunning, "the queued message is the next turn")
+    }
+
+    /// A question asked and withdrawn between the two replies: the newer snapshot no longer
+    /// lists it, and the bot's request here is let go all the same (it waited for good).
+    @Test func aQuestionWithdrawnBeforeTheNewerSnapshotLetsItsWaiterGo() async throws {
+        let rt = try runtime()
+        let gate = SnapshotBuildGate()
+        let c = openChat(rt, gate: gate)
+        let first = Task { await c.apply(snapshot: snapshot(running: true, prompt: "Free up space")) }
+        await gate.begun(1)
+        let asked = ServerRequest(id: "req-1", method: "clarify", params: .object(["session_id": "s1", "question": "Delete the old logs?"]))
+        let answering = Task { await c.answer(serverRequest: asked) }
+        for _ in 0..<1000 where c.cards.isEmpty { await Task.yield() }
+        try #require(c.cards.map(\.id) == ["req-1"])
+        rt.handle(batch: [event("request.cancel", "s1", ["id": "req-1", "reason": "timeout"])])
+        let second = Task { await c.apply(snapshot: snapshot(running: true, prompt: "Free up space")) }
+        await gate.begun(2)
+        await gate.release(1)
+        await second.value
+        await gate.release(0)
+        await first.value
+        #expect(c.cards.isEmpty)
+        #expect(await reply(to: answering) == .null, "the bot's request is let go")
     }
 
     // MARK: A message sent meanwhile

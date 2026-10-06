@@ -109,6 +109,26 @@ import Testing
         #expect(names(events) == ["Default"], "Default's turn for the new message is still to come")
     }
 
+    @Test func aBotWhoseLateReplyIsTheNewestMessageIsPassedOverInTheFirstRound() {
+        // Default's reply to the first message is filed just after the second one: it has read the
+        // whole thread, so the gateway passes it over for the second message and Work goes first.
+        var entries: [(String, RoomActor, JSONValue)] = [
+            ("message.user", user, ["text": "plan?", "thread_id": "main"]),
+            ("message.user", user, ["text": "actually, status?", "thread_id": "main"]),
+            ("message.member", member("m1"), ["member_id": "m1", "text": "Notes are done.", "round_index": 0,
+                                              "discussion_event_id": "e1", "thread_id": "main"]),
+            ("turn.settled", gateway, ["member_id": "m1", "round_index": 0, "discussion_event_id": "e1",
+                                       "thread_id": "main", "seen_through_seq": 1, "passed": false]),
+        ]
+        #expect(names(log(entries)) == ["Work"], "Default has read the thread already")
+        // Work answers: that is new to Default, which has its turn now.
+        entries.append(("message.member", member("m2"), ["member_id": "m2", "text": "Build is green.", "round_index": 0,
+                                                         "discussion_event_id": "e2", "thread_id": "main"]))
+        entries.append(("turn.settled", gateway, ["member_id": "m2", "round_index": 0, "discussion_event_id": "e2",
+                                                  "thread_id": "main", "seen_through_seq": 5, "passed": false]))
+        #expect(names(log(entries)) == ["Default"])
+    }
+
     @Test func aReadingOfTheLogStillGoesStale() {
         // A page reads the log once per change and asks the reading each time it draws.
         let reading = GroupActivity.read(members: members, events: log([("message.user", user, ["text": "@work status?", "thread_id": "main"])]))
