@@ -114,6 +114,7 @@ public final class GatewayRuntime {
     private func refreshSigner() async throws -> RequestSigner {
         guard connection.authMode.usesBearer else { throw HermesAPIError.unauthorized("") }
         var refreshed: GatewaySecrets
+        var signedInAgain = false
         do {
             refreshed = try await NativeAuthClient.refresh(gateway: connection.gateway, secrets: secrets)
         } catch HermesAPIError.sessionExpired {
@@ -123,11 +124,31 @@ public final class GatewayRuntime {
             }
             refreshed = renewed
             refreshed.access = secrets.access
+            signedInAgain = true
         }
         refreshRefused = false
         secrets = refreshed
         store.saveSecrets(refreshed, for: connection.id)
-        return RequestSigner(authMode: connection.authMode, secrets: refreshed)
+        let signer = RequestSigner(authMode: connection.authMode, secrets: refreshed)
+        if signedInAgain { await reopenRefusedSocket(signer) }
+        return signer
+    }
+
+    /// Signed in again by `signInAgain` while the socket stands refused (a REST call ran into the
+    /// ended session first, or the socket was refused again while no prompt could show): opened
+    /// again, as `replaceSecrets` does. Nothing else would. A return to the app signs in only
+    /// while `refreshRefused`, which this sign-in cleared, so the socket stayed closed and the
+    /// banner asked for a sign-in the person had just made.
+    private func reopenRefusedSocket(_ signer: RequestSigner) async {
+        guard socketEnabled else { return }
+        var refused = false
+        if case .authRejected = socketState { refused = true }
+        // What the socket says itself, in case its last word is still on its way here.
+        else if case .authRejected = await socket.state { refused = true }
+        guard refused else { return }
+        // Its ticket is asked for with the new session, not the one the gateway turned down.
+        await api.updateSigner(signer)
+        await socket.connect()
     }
 
     /// Renews the session the way a 401 mid-request does, for a caller that got "session

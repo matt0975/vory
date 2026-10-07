@@ -3,6 +3,7 @@ import SwiftUI
 import UIKit
 #else
 import AppKit
+import Carbon.HIToolbox
 #endif
 import UniformTypeIdentifiers
 
@@ -20,6 +21,86 @@ enum ComposerReturnRule {
         return returnSends ? .send : .newline
     }
 }
+
+/// An input method (Japanese, Chinese, Korean and others) is composing: the text it has not
+/// handed over yet (kana before conversion, a pinyin syllable, a Korean block being built) is
+/// marked in the field. Its keys are its own until then: Return takes the candidate, the arrows
+/// move through the list, Backspace, Tab and Escape edit or drop it. The composer's and the
+/// New Message sheet's own key handling steps aside (Return used to send the half-converted
+/// text, and the arrows stepped through history under it).
+@MainActor
+enum InputComposition {
+    /// The focused field (the key window's first responder) is composing.
+    static var isActive: Bool { isComposing(focusedResponder) }
+
+    /// Marked text is not always an input method's: a grey inline prediction is shown as marked
+    /// text too, and so is a dead key's accent. Neither takes the keys, so marked text counts
+    /// only while the keyboard is an input method's: on the Mac, an input source that is not a
+    /// plain keyboard layout; on iOS, any keyboard but an English one, dictation or emoji (none
+    /// has an input method). Settable for the tests, which cannot change the keyboard.
+    static var inputMethod: (Responder) -> Bool = { isInputMethod($0) }
+
+    #if os(macOS)
+    typealias Responder = NSResponder
+
+    static func isComposing(_ responder: NSResponder?) -> Bool {
+        guard let responder, (responder as? NSTextInputClient)?.hasMarkedText() == true else { return false }
+        return inputMethod(responder)
+    }
+
+    /// The kind of input source from Text Input Sources: a keyboard layout, or an input method
+    /// (with modes or without).
+    static func isInputMethod(sourceType: String) -> Bool { sourceType != kTISTypeKeyboardLayout as String }
+
+    /// The Mac has one input source for the app, whichever field is typed in. One Text Input
+    /// Sources cannot tell is not an input method's: the keys stay the composer's, as they are
+    /// for a dead key's accent or a prediction.
+    private static func isInputMethod(_ responder: NSResponder) -> Bool {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let type = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return false }
+        return isInputMethod(sourceType: Unmanaged<CFString>.fromOpaque(type).takeUnretainedValue() as String)
+    }
+
+    /// A SwiftUI field being edited: the window's field editor.
+    private static var focusedResponder: NSResponder? { NSApp.keyWindow?.firstResponder }
+    #else
+    typealias Responder = UIResponder
+
+    static func isComposing(_ responder: UIResponder?) -> Bool {
+        guard let responder, (responder as? UITextInput)?.markedTextRange != nil else { return false }
+        return inputMethod(responder)
+    }
+
+    /// A keyboard in this language (its input mode's primary language) may have an input
+    /// method unless it is English; one whose language is not known may too. Dictation and the
+    /// emoji keyboard are input modes of their own ("dictation", "emoji"), with no candidates
+    /// to take the keys: while one is up, Return, the arrows and Escape are the composer's.
+    static func isInputMethod(language: String?) -> Bool {
+        guard let language else { return true }
+        if language == "dictation" || language == "emoji" { return false }
+        return Locale.Language(identifier: language).languageCode != .english
+    }
+
+    private static func isInputMethod(_ responder: UIResponder) -> Bool {
+        isInputMethod(language: responder.textInputMode?.primaryLanguage)
+    }
+
+    /// UIKit has no public first responder: an action sent to no one reaches it first.
+    private static var focusedResponder: UIResponder? {
+        found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.reportFirstResponder), to: nil, from: nil, for: nil)
+        return found
+    }
+    private static weak var found: UIResponder?
+    fileprivate static func report(_ responder: UIResponder) { found = responder }
+    #endif
+}
+
+#if !os(macOS)
+extension UIResponder {
+    @objc(vory_reportFirstResponder) fileprivate func reportFirstResponder() { InputComposition.report(self) }
+}
+#endif
 
 #if os(macOS)
 /// The Mac composer: SwiftUI's own field, growing to `maxLines`. Return sends, Option-Return
@@ -46,6 +127,8 @@ struct ComposerTextView: View {
     var onTab: () -> Bool = { false }
     var onEscape: () -> Bool = { false }
     @FocusState private var isFocused: Bool
+    /// The keys an input method has while it composes (see ComposedKeys).
+    @State private var composed = ComposedKeys()
 
     static let acceptedTypes: [UTType] = [.image, .movie, .pdf, .audio, .plainText, .text, .fileURL, .data]
     private static let attachmentTypes: [UTType] = [.image, .movie, .pdf, .audio]
@@ -55,25 +138,60 @@ struct ComposerTextView: View {
             .textFieldStyle(.plain)
             .lineLimit(1...maxLines)
             .focused($isFocused)
-            .onSubmit { if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() } }
-            .onKeyPress(.upArrow) { onArrow(-1) ? .handled : .ignored }
-            .onKeyPress(.downArrow) { onArrow(1) ? .handled : .ignored }
-            // Shift-Return is a line break, as on a hardware keyboard on iOS (Option-Return too, by
-            // default). A bare Return with a chooser open takes its item: it used to send the
-            // half-typed command under it.
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.shift) { text += "\n"; return .handled }
+            .background(ComposedKeys.Anchor(keys: composed))
+            .onSubmit {
+                if let key = composed.takeReturn() { handOn(key); return }
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() }
+            }
+            // Every key below is the input method's while it is composing (see InputComposition
+            // and ComposedKeys).
+            .onKeyPress(.upArrow) { !composed.isComposing && onArrow(-1) ? .handled : .ignored }
+            .onKeyPress(.downArrow) { !composed.isComposing && onArrow(1) ? .handled : .ignored }
+            // Shift-Return is a line break where the cursor is, as on a hardware keyboard on iOS
+            // (Option-Return too, by default). A bare Return with a chooser open takes its item: it
+            // used to send the half-typed command under it. A held Return repeats: Shift adds a
+            // line each time, Option's line break is the field's own, as on the first press, and
+            // any other does nothing more (the repeats reached the field's submit and sent the
+            // half-written message, again and again). The line break goes in through the field's
+            // editor: `text` here is as of SwiftUI's last update, which repeats can outrun.
+            .onKeyPress(.return, phases: [.down, .repeat, .up]) { press in
+                guard press.phase != .up else { composed.returnUp(); return .ignored }
+                if composed.returnDown(press.modifiers) { return .ignored }
+                if press.modifiers.contains(.shift) {
+                    if !composed.insertLineBreak() { text += "\n" }
+                    return .handled
+                }
+                if press.phase == .repeat { return press.modifiers.contains(.option) ? .ignored : .handled }
                 if press.modifiers.isEmpty, onReturn() { return .handled }
                 return .ignored
             }
             // Tab and Escape are the chooser's only while it is open; Tab moves the focus otherwise.
-            .onKeyPress(.tab, phases: .down) { press in menuOpen && press.modifiers.isEmpty && onTab() ? .handled : .ignored }
-            .onKeyPress(.escape, phases: .down) { _ in menuOpen && onEscape() ? .handled : .ignored }
+            .onKeyPress(.tab, phases: .down) { press in
+                guard menuOpen, press.modifiers.isEmpty else { return .ignored }
+                if composed.tabDown({ onTab() ? text : nil }) { return .ignored }
+                return onTab() ? .handled : .ignored
+            }
+            .onKeyPress(.escape, phases: .down) { _ in menuOpen && !composed.isComposing && onEscape() ? .handled : .ignored }
             .onPasteCommand(of: Self.attachmentTypes) { providers in paste(providers) }
             .accessibilityIdentifier(accessibilityID ?? "composer.field")
             .onAppear { isFocused = focused }
             .onChange(of: focused) { _, f in if isFocused != f { isFocused = f } }
             .onChange(of: isFocused) { _, f in if focused != f { focused = f } }
+    }
+
+    /// A Return the input method passed on once its text was in (Korean does): what a Return
+    /// does when nothing is composing. It reached the field as a Return, so the field ended its
+    /// editing and took it up again with all of it selected, as after a send: the line break or
+    /// the chooser's item waits for that, and goes into the field itself.
+    private func handOn(_ key: ComposedKeys.Return) {
+        DispatchQueue.main.async {
+            if key.shift {
+                if !composed.insertLineBreak(key) { text += "\n" }
+                return
+            }
+            if key.bare, onReturn() { composed.show(text); return }
+            if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() }
+        }
     }
 
     /// Same rules as the iOS paste delegate: text pastes as text; anything else is an attachment
@@ -99,6 +217,142 @@ struct ComposerTextView: View {
                 Task { @MainActor in handler(data, name, concrete) }
             }
         }
+    }
+}
+
+/// The Mac composer's keys while an input method composes. SwiftUI runs the composer's key
+/// handlers before the input method sees the key, so they step aside and the key goes to it.
+/// Japanese and Chinese take a Return or a Tab whole, and that is all. Korean takes its block and
+/// passes the key on to the field, where it does what it does when nothing is composing, as on
+/// iOS: Shift-Return adds a line, Return takes the chooser's item or sends, Tab completes the
+/// item. Without this, a Return passed on reached the field's own submit and sent.
+@MainActor
+final class ComposedKeys {
+    /// A Return pressed while composing, until the key comes up. `tail` is the length of the
+    /// text after the composed text: the line break goes in before it.
+    struct Return {
+        var shift: Bool
+        var bare: Bool
+        var tail: Int
+    }
+
+    private(set) var composedReturn: Return?
+    private weak var anchor: NSView?
+    /// The composer's field, as its editor last had it while composing.
+    private weak var field: NSView?
+
+    /// The window's field editor, while a field in it is typed in.
+    private var editor: NSTextView? {
+        guard let e = anchor?.window?.firstResponder as? NSTextView, e.isFieldEditor else { return nil }
+        return e
+    }
+
+    /// The editor while it is the composer field's.
+    private var fieldEditor: NSTextView? {
+        guard let e = editor, let field, e.delegate as? NSView === field else { return nil }
+        return e
+    }
+
+    var isComposing: Bool { InputComposition.isComposing(editor) }
+
+    /// A Return going down: kept for the field while composing (true), forgotten otherwise.
+    func returnDown(_ modifiers: SwiftUI.EventModifiers) -> Bool {
+        guard isComposing, let e = editor else { composedReturn = nil; return false }
+        field = e.delegate as? NSView
+        composedReturn = Return(shift: modifiers.contains(.shift), bare: modifiers.isEmpty,
+                                tail: (e.string as NSString).length - NSMaxRange(e.markedRange()))
+        return true
+    }
+
+    /// The Return coming up: one the input method took whole leaves nothing behind.
+    func returnUp() { composedReturn = nil }
+
+    /// The field had the Return (its submit): the input method passed it on.
+    func takeReturn() -> Return? {
+        defer { composedReturn = nil }
+        return composedReturn
+    }
+
+    /// A Shift-Return's line break where the cursor is, put in through the window's field
+    /// editor (the composer's, while its keys come in) as Option-Return puts one. False when no
+    /// field is typed in.
+    func insertLineBreak() -> Bool {
+        guard let e = editor else { return false }
+        e.insertNewlineIgnoringFieldEditor(nil)
+        return true
+    }
+
+    /// A Shift-Return's line break, where the Return was pressed, put in through the field's
+    /// editor as Option-Return puts one. False when the field is not being typed in.
+    func insertLineBreak(_ key: Return) -> Bool {
+        guard let e = fieldEditor else { return false }
+        place(key.tail)
+        e.insertNewlineIgnoringFieldEditor(nil)
+        return true
+    }
+
+    /// Text set just as the field takes up its editing again can miss the field: it is put in
+    /// the editor, with the cursor at the end (the field takes it up with all of it selected).
+    func show(_ text: String) {
+        guard let e = fieldEditor else { return }
+        if e.string != text { e.string = text }
+        e.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+    }
+
+    /// The cursor in the field's editor, `tail` from the end of its text.
+    private func place(_ tail: Int) {
+        guard let e = fieldEditor else { return }
+        e.setSelectedRange(NSRange(location: max(0, (e.string as NSString).length - tail), length: 0))
+    }
+
+    /// A Tab pressed while composing ended the field's editing: the input method passed it on.
+    private var tabPassedOn = false
+    private var tabEnd: (any NSObjectProtocol)?
+
+    /// A Tab going down with the chooser open: true while composing, and the key goes to the
+    /// input method. One that takes its text and passes the key on has the field end its
+    /// editing with a Tab, and the focus move on (or the field take up its editing again, when
+    /// it is the only one). Then the field is typed in again, `complete` runs (the text it
+    /// leaves, nil when it took no item) and the cursor goes after the item, or back where it
+    /// was: not all of the text selected, as the field takes it up. One that takes the Tab
+    /// whole leaves the field to it. Whether the focus left is not the sign: with the composer
+    /// alone in its window, it never does.
+    func tabDown(_ complete: @escaping @MainActor () -> String?) -> Bool {
+        guard isComposing, let window = anchor?.window, let e = editor, let field = e.delegate as? NSView else { return false }
+        self.field = field
+        let tail = (e.string as NSString).length - NSMaxRange(e.markedRange())
+        tabPassedOn = false
+        if let tabEnd { NotificationCenter.default.removeObserver(tabEnd) }
+        tabEnd = NotificationCenter.default.addObserver(forName: NSControl.textDidEndEditingNotification, object: field, queue: nil) { [weak self] note in
+            let movement = note.userInfo?["NSTextMovement"] as? Int
+            MainActor.assumeIsolated { if movement == NSTextMovement.tab.rawValue { self?.tabPassedOn = true } }
+        }
+        // The input method has had the key by the next turn of the run loop.
+        DispatchQueue.main.async { [weak self, weak window] in
+            guard let self else { return }
+            if let tabEnd = self.tabEnd { NotificationCenter.default.removeObserver(tabEnd) }
+            self.tabEnd = nil
+            guard self.tabPassedOn, let window else { return }
+            self.tabPassedOn = false
+            guard self.fieldEditor != nil || window.makeFirstResponder(field) else { return }
+            if let text = complete() { self.show(text) } else { self.place(tail) }
+        }
+        return true
+    }
+
+    /// A view behind the field, for its window.
+    struct Anchor: NSViewRepresentable {
+        let keys: ComposedKeys
+        func makeNSView(context: Context) -> NSView {
+            let view = AnchorView()
+            keys.anchor = view
+            return view
+        }
+        func updateNSView(_ view: NSView, context: Context) { keys.anchor = view }
+    }
+
+    private final class AnchorView: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }
 #else
@@ -205,9 +459,19 @@ struct ComposerTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ v: UITextView) { if parent.focused { parent.focused = false } }
 
         func textView(_ v: UITextView, shouldChangeTextIn range: NSRange, replacementText s: String) -> Bool {
+            // A hardware Tab the input method took while composing with the chooser open, handed
+            // on as a tab once its text is in: the chooser's item, as through the key commands.
+            if s == "\t", (v as? PasteTextView)?.takeComposedTab() == true { return !parent.onTab() }
             // A newline from the on-screen keyboard (a hardware keyboard's Return comes through
             // the key commands instead): the picker's item, a send, or the line break itself.
             guard s == "\n" else { return true }
+            // A hardware Return the input method took while composing, handed on as a line break
+            // once its text is in (Korean does): the hardware rule, as through the key commands.
+            if let key = (v as? PasteTextView)?.takeComposedReturn() {
+                if key.shift { return true }
+                hardwareReturn(v, shift: false, command: key.command)
+                return false
+            }
             switch ComposerReturnRule.action(hardware: false, shift: false, command: false, pickerOpen: false, returnSends: parent.returnSends) {
             case .pick: return !parent.onReturn()
             case .send:
@@ -292,10 +556,24 @@ final class PasteTextView: UITextView {
             let pb = UIPasteboard.general
             return pb.hasStrings || pb.hasImages || pb.hasURLs || pb.numberOfItems > 0
         }
+        // UIKit can hold on to the key commands from before the composing began: one found then
+        // is declined, and its key goes on to the input method.
+        if isComposing, Self.keyActions.contains(action) { return false }
         return super.canPerformAction(action, withSender: sender)
     }
 
+    /// An input method is composing in the field (see InputComposition): the keys are its own.
+    var isComposing: Bool { InputComposition.isComposing(self) }
+
+    private static let keyActions: Set<Selector> = [
+        #selector(arrowUp), #selector(arrowDown), #selector(returnPressed), #selector(shiftReturnPressed),
+        #selector(commandReturnPressed), #selector(tabPressed), #selector(escapePressed),
+    ]
+
     override var keyCommands: [UIKeyCommand]? {
+        // None while an input method is composing: Return takes its candidate, the arrows move
+        // through its list, Tab and Escape are its own. They come back once the text is in.
+        if isComposing { return [] }
         let up = UIKeyCommand(input: UIKeyCommand.inputUpArrow, modifierFlags: [], action: #selector(arrowUp))
         let down = UIKeyCommand(input: UIKeyCommand.inputDownArrow, modifierFlags: [], action: #selector(arrowDown))
         // A hardware keyboard, as on the Mac: Return sends, Shift-Return adds a line, ⌘-Return sends.
@@ -312,13 +590,63 @@ final class PasteTextView: UITextView {
         for c in commands where c.modifierFlags.isEmpty { c.wantsPriorityOverSystemBehavior = true }
         return commands
     }
-    @objc private func arrowUp() { if coordinator?.parent.onArrow(-1) != true { moveCursor(up: true) } }
-    @objc private func arrowDown() { if coordinator?.parent.onArrow(1) != true { moveCursor(up: false) } }
-    @objc private func returnPressed() { coordinator?.hardwareReturn(self, shift: false, command: false) }
-    @objc private func shiftReturnPressed() { coordinator?.hardwareReturn(self, shift: true, command: false) }
-    @objc private func commandReturnPressed() { coordinator?.hardwareReturn(self, shift: false, command: true) }
-    @objc private func tabPressed() { if coordinator?.parent.onTab() != true { insertText("\t") } }
-    @objc private func escapePressed() { _ = coordinator?.parent.onEscape() }
+    // Should one be called while composing all the same, it does nothing: nothing is sent,
+    // stepped through or picked from under the input method.
+    @objc private func arrowUp() { guard !isComposing else { return }; if coordinator?.parent.onArrow(-1) != true { moveCursor(up: true) } }
+    @objc private func arrowDown() { guard !isComposing else { return }; if coordinator?.parent.onArrow(1) != true { moveCursor(up: false) } }
+    @objc private func returnPressed() { guard !isComposing else { return }; coordinator?.hardwareReturn(self, shift: false, command: false) }
+    @objc private func shiftReturnPressed() { guard !isComposing else { return }; coordinator?.hardwareReturn(self, shift: true, command: false) }
+    @objc private func commandReturnPressed() { guard !isComposing else { return }; coordinator?.hardwareReturn(self, shift: false, command: true) }
+    @objc private func tabPressed() { guard !isComposing else { return }; if coordinator?.parent.onTab() != true { insertText("\t") } }
+    @objc private func escapePressed() { guard !isComposing else { return }; _ = coordinator?.parent.onEscape() }
+
+    /// A hardware Return pressed while composing, until the key comes up: an input method that
+    /// hands it on as a line break after taking its text has that break count as this Return.
+    var composedReturn: (shift: Bool, command: Bool)?
+    /// A hardware Tab pressed while composing with the chooser open, the same way: a tab handed
+    /// on once the text is in completes the chooser's item.
+    var composedTab = false
+
+    func takeComposedReturn() -> (shift: Bool, command: Bool)? {
+        defer { composedReturn = nil }
+        return composedReturn
+    }
+
+    func takeComposedTab() -> Bool {
+        defer { composedTab = false }
+        return composedTab
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        // Before the input method sees the key: once it has, the text is no longer marked.
+        if isComposing {
+            let keys = presses.compactMap(\.key)
+            if let key = keys.first(where: Self.isReturn) {
+                composedReturn = (key.modifierFlags.contains(.shift), key.modifierFlags.contains(.command))
+            }
+            if coordinator?.parent.menuOpen == true, keys.contains(where: { Self.isTab($0) && $0.modifierFlags.isDisjoint(with: [.shift, .control, .alternate, .command]) }) {
+                composedTab = true
+            }
+        }
+        super.pressesBegan(presses, with: event)
+    }
+    // Japanese and Chinese take the Return whole: nothing is handed on, and the key coming up
+    // ends the wait, so a later line break from the on-screen keyboard is its own.
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesEnded(presses, with: event)
+        keysUp(presses)
+    }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        super.pressesCancelled(presses, with: event)
+        keysUp(presses)
+    }
+    private func keysUp(_ presses: Set<UIPress>) {
+        let keys = presses.compactMap(\.key)
+        if keys.contains(where: Self.isReturn) { composedReturn = nil }
+        if keys.contains(where: Self.isTab) { composedTab = false }
+    }
+    private static func isReturn(_ key: UIKey) -> Bool { key.keyCode == .keyboardReturnOrEnter || key.keyCode == .keypadEnter }
+    private static func isTab(_ key: UIKey) -> Bool { key.keyCode == .keyboardTab }
 
     private func moveCursor(up: Bool) {
         guard let r = selectedTextRange else { return }

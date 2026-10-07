@@ -96,7 +96,8 @@ struct NewChatSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .frame(minWidth: 90, minHeight: 28)
                         .onSubmit { if let first = candidates.first { add(first) } }
-                        .onKeyPress(.delete) { if typed.isEmpty, let last = chosen.last { remove(last); return .handled }; return .ignored }
+                        // Backspace while an input method is composing edits its text, never a chip.
+                        .onKeyPress(.delete) { if typed.isEmpty, let last = chosen.last, !InputComposition.isActive { remove(last); return .handled }; return .ignored }
                         .onChange(of: query) { old, new in
                             guard !chosen.isEmpty else { return }
                             if !new.contains(mark) {

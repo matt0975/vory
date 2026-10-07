@@ -342,6 +342,8 @@ protocol GatewayStoring: AnyObject {
     func secrets(for id: UUID) -> GatewaySecrets
     func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws
     /// Forgets the sign-in this device remembers for the gateway, if any (no Face ID needed).
+    /// A merge while the device is locked cannot delete it: it is no longer offered, and is
+    /// deleted once the device is unlocked (see `RememberedSignInVault.pendingForgets`).
     func forgetRememberedSignIn(_ id: UUID)
 }
 

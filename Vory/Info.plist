@@ -71,8 +71,11 @@
 	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
+		<!-- One window on the iPad. Every window shares the one app model, so a
+		     second one mirrored the first and a single tap could start two chats.
+		     Off until windows keep their own state. -->
 		<key>UIApplicationSupportsMultipleScenes</key>
-		<true/>
+		<false/>
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>

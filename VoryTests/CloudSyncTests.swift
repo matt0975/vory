@@ -283,6 +283,8 @@ struct CloudGatewayTests {
         var secretsByID: [UUID: GatewaySecrets] = [:]
         /// The gateways whose remembered sign-in was forgotten, in order.
         var forgotten: [UUID] = []
+        /// The device's remembered sign-ins, for a test that follows one into the vault.
+        var vault: RememberedSignInVault?
         func connection(id: UUID) -> GatewayConnection? { connections.first { $0.id == id } }
         func secrets(for id: UUID) -> GatewaySecrets { secretsByID[id] ?? GatewaySecrets() }
         func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws {
@@ -290,7 +292,7 @@ struct CloudGatewayTests {
             secretsByID[connection.id] = secrets
         }
         func remove(_ id: UUID) { connections.removeAll { $0.id == id }; secretsByID[id] = nil }
-        func forgetRememberedSignIn(_ id: UUID) { forgotten.append(id) }
+        func forgetRememberedSignIn(_ id: UUID) { forgotten.append(id); vault?.forget(id) }
     }
 
     final class Cloud { var file = CloudGatewayFile(); var clock: Double = 1_000
@@ -372,6 +374,48 @@ struct CloudGatewayTests {
         #expect(mac.store.forgotten == [g.id, g.id])
         // The device that made the change forgets its own in the form, not here.
         #expect(phone.store.forgotten.isEmpty)
+    }
+
+    /// A merge while the device is locked (a launch in the background, the backup task, an
+    /// iCloud change) cannot delete the remembered sign-in, which is kept only while it is
+    /// unlocked. From that moment it is never offered, not after a relaunch either, and it is
+    /// deleted once the device is unlocked.
+    @Test func aSignInForgottenWhileTheDeviceIsLockedIsDeletedOnceItIsUnlocked() throws {
+        let cloud = Cloud(), phone = Device(cloud), mac = Device(cloud)
+        let keychain = MemoryRememberedSignInBackend()
+        let vault = RememberedSignInVault(backend: keychain, defaults: mac.defaults)
+        mac.store.vault = vault
+        var g = GatewayConnection(name: "Home", gateway: try GatewayURL.normalize("https://hermes.example.com", pathPrefix: nil), authMode: .password, authProvider: "basic")
+        try phone.store.upsert(g, secrets: GatewaySecrets(provider: "basic"))
+        phone.sync()
+        #expect(mac.sync().added.count == 1)
+        try vault.remember(RememberedSignIn(provider: "basic", username: "sam", password: "pw", gateway: g.gateway), for: g.id)
+        let item = RememberedSignInVault.account(g.id)
+
+        // Moved on the phone, and merged on the other device while it is locked.
+        g.gateway = try GatewayURL.normalize("https://moved.example.com", pathPrefix: nil)
+        try phone.store.upsert(g, secrets: GatewaySecrets(provider: "basic"))
+        phone.sync()
+        keychain.unreadable = true; keychain.undeletable = true
+        #expect(mac.sync().changed == [g.id])
+        #expect(mac.store.forgotten == [g.id])
+        #expect(keychain.items[item] != nil, "deleted while locked")
+        #expect(!vault.contains(g.id), "offered while it waits to be deleted")
+        #expect(try vault.signIn(for: g.id, context: nil) == nil, "used while it waits to be deleted")
+
+        // The next launch, still locked, and a list read before it could be deleted: not offered.
+        let relaunched = RememberedSignInVault(backend: keychain, defaults: mac.defaults)
+        #expect(relaunched.pendingForgets == [g.id] && !relaunched.contains(g.id))
+        keychain.unreadable = false
+        relaunched.reload()
+        #expect(relaunched.isKnown && !relaunched.contains(g.id))
+
+        // Unlocked: deleted, and nothing is left waiting.
+        keychain.undeletable = false
+        relaunched.reload()
+        #expect(keychain.items[item] == nil)
+        #expect(relaunched.pendingForgets.isEmpty && !relaunched.contains(g.id))
+        #expect(mac.defaults.object(forKey: RememberedSignInVault.pendingForgetsKey) == nil)
     }
 
     @Test func aDeviceWithNoGatewayTakesNoneUntilItRestores() throws {

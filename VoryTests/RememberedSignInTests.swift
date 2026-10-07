@@ -126,6 +126,63 @@ struct RememberedSignInTests {
         #expect(!vault.contains(other))
     }
 
+    /// Forgotten while the Keychain cannot delete it (the device is locked): never offered or
+    /// used from that moment, not after a relaunch either, and deleted by the next read that
+    /// can (on unlock, or coming to the front). A sign-in remembered again meanwhile stays.
+    @Test func aForgetTheKeychainCannotDoIsDoneLaterAndNothingIsOfferedMeanwhile() throws {
+        let backend = MemoryRememberedSignInBackend()
+        let suite = "remembered-pending-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = UUID(), kept = UUID()
+        let vault = RememberedSignInVault(backend: backend, defaults: defaults)
+        try vault.remember(secret, for: id)
+        try vault.remember(secret, for: kept)
+
+        backend.undeletable = true
+        #expect(!vault.forget(id), "a delete that failed reported as done")
+        #expect(backend.items[RememberedSignInVault.account(id)] != nil)
+        #expect(vault.pendingForgets == [id])
+        #expect(!vault.contains(id) && vault.contains(kept))
+        #expect(try vault.signIn(for: id, context: LAContext()) == nil)
+        #expect(backend.readsWithContext == 0, "the item was opened")
+        // Read again while it still cannot be deleted: not listed.
+        vault.reload()
+        #expect(!vault.contains(id) && vault.contains(kept))
+        // The next launch, still locked: not listed either, and still waiting.
+        let relaunched = RememberedSignInVault(backend: backend, defaults: defaults)
+        #expect(relaunched.pendingForgets == [id] && !relaunched.contains(id) && relaunched.contains(kept))
+
+        // Unlocked: deleted by the next read, and nothing is left waiting.
+        backend.undeletable = false
+        relaunched.reload()
+        #expect(backend.items[RememberedSignInVault.account(id)] == nil)
+        #expect(relaunched.pendingForgets.isEmpty && relaunched.ids == [kept])
+        #expect(defaults.object(forKey: RememberedSignInVault.pendingForgetsKey) == nil)
+        #expect(RememberedSignInVault(backend: backend, defaults: defaults).pendingForgets.isEmpty)
+
+        // Remembered again before the old one could be deleted: the new one is not deleted
+        // in its place.
+        backend.undeletable = true
+        relaunched.forget(kept)
+        try relaunched.remember(secret, for: kept)
+        backend.undeletable = false
+        relaunched.reload()
+        #expect(relaunched.contains(kept) && backend.items[RememberedSignInVault.account(kept)] != nil)
+        #expect(relaunched.pendingForgets.isEmpty)
+        // A delete that goes through is said to.
+        #expect(relaunched.forget(kept) && !relaunched.contains(kept))
+    }
+
+    /// The Keychain's answer to a delete: gone, or never there. A locked device is neither.
+    @Test func whatTheKeychainDeleteMeans() {
+        typealias K = KeychainRememberedSignInBackend
+        #expect(K.deleted(status: errSecSuccess))
+        #expect(K.deleted(status: errSecItemNotFound))
+        #expect(!K.deleted(status: errSecInteractionNotAllowed), "locked is not deleted")
+        #expect(!K.deleted(status: errSecMissingEntitlement))
+    }
+
     /// A launch while the phone is locked (a watch message, a notification, the backup task)
     /// cannot read the list: it is not known, and it is read again once it can be.
     @Test func aListThatCannotBeReadIsUnknownUntilItCanBe() throws {
@@ -263,8 +320,6 @@ struct RememberedSignInTests {
     @Test func aCancelFallsBackToThePromptAndIsNotAskedAgainByItself() async throws {
         let auth = FakeAuthenticator(); auth.answer = false
         let c = try gateway(), co = coordinator(auth: auth)
-        let clock = Clock()
-        co.now = { clock.now }
         try co.vault.remember(secret, for: c.id)
         let signIns = Recorder<Int>()
         co.signIn = { _, _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "a") }
@@ -279,12 +334,10 @@ struct RememberedSignInTests {
         await #expect(throws: RememberedSignInError.cancelled) { try await co.signInWithRemembered(c, access: CloudflareAccess()) }
         auth.answer = true
         #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
-        // Signed in: no longer declined, so asked by itself again next time (on a return to the
-        // app, once the cooldown after any sign-in it made has passed).
+        // Signed in: no longer declined, so asked by itself again next time, and at once: the
+        // button's sign-in does not count toward the floor.
         #expect(!co.declined.contains(c.id))
         #expect(co.decision(for: c, asked: false) == .useRemembered)
-        clock.now += RememberedSignInCoordinator.cooldown
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered)
     }
 
     /// Back in front to a refused socket: only a refresh the gateway turned down is mended by
@@ -304,7 +357,7 @@ struct RememberedSignInTests {
         opening.socketState = .connecting
         #expect(await co.signInAgainOnReturn(opening) == nil)
         #expect(auth.reasons.isEmpty)
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered, "not declined: nothing was asked")
+        #expect(co.decision(for: c, asked: false) == .useRemembered, "not declined: nothing was asked")
 
         // The refresh token turned down while the app was away: signed in again now.
         co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
@@ -314,9 +367,52 @@ struct RememberedSignInTests {
         #expect(auth.reasons == ["Sign in to Home"])
     }
 
-    /// A sign-in that goes through but leaves the session refused must not ask for Face ID and
-    /// send the password on every return to the app: on a return, at most once in ten minutes.
-    @Test func onReturnItSignsInByItselfAtMostOnceInTenMinutes() async throws {
+    /// The gateway turned the refresh token down: the session really ended (a gateway restarted
+    /// with a new signing key ends them all), however soon after the last sign-in, and by either
+    /// way in. Signed in by the runtime, then ended again while no prompt could show (the app
+    /// away, or behind its own lock): the return a few minutes later signs in. A ten-minute
+    /// wait on the return left the socket refused and the banner up.
+    @Test func aReturnAfterARefusedRefreshSignsInHoweverSoon() async throws {
+        let auth = FakeAuthenticator()
+        let c = try gateway(), co = coordinator(auth: auth)
+        let clock = Clock()
+        co.now = { clock.now }
+        try co.vault.remember(secret, for: c.id)
+        co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
+
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        // Two minutes on, ended again with the app away: later, not never.
+        clock.now += 2 * 60
+        co.canPromptNow = { false }
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(auth.reasons.count == 1)
+        // Five minutes after the first, back in front to the refused session: signed in.
+        clock.now += 3 * 60
+        co.canPromptNow = { true }
+        let rt = await runtime(for: c, refused: true)
+        #expect(await co.signInAgainOnReturn(rt)?.accessToken == "a")
+        #expect(auth.reasons.count == 2)
+        // And by the runtime again, three minutes later.
+        clock.now += 3 * 60
+        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
+        #expect(auth.reasons.count == 3)
+    }
+
+    /// A gateway that keeps ending its sessions (restarting over and over with a new signing
+    /// key, or servers behind one address that each sign with their own) must not ask for
+    /// Face ID and send the password every minute: by itself at most once a minute and three
+    /// times in ten minutes per gateway, by either way in. The Sign In sheet's button is never
+    /// held back, and does not count.
+    @Test func signingInByItselfHasAFloor() async throws {
+        typealias C = RememberedSignInCoordinator
+        let t = Date(timeIntervalSince1970: 0)
+        #expect(C.allowedByFloor([], now: t))
+        #expect(!C.allowedByFloor([t], now: t + 59) && C.allowedByFloor([t], now: t + 60))
+        #expect(!C.allowedByFloor([t, t + 60, t + 120], now: t + 599))
+        #expect(C.allowedByFloor([t, t + 60, t + 120], now: t + 600))
+        // The clock set back an hour: the time after now is not counted.
+        #expect(C.allowedByFloor([t + 3600, t + 3660, t + 3720], now: t))
+
         let auth = FakeAuthenticator()
         let c = try gateway(), co = coordinator(auth: auth)
         let clock = Clock()
@@ -326,50 +422,40 @@ struct RememberedSignInTests {
         co.signIn = { _, _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "a") }
         let rt = await runtime(for: c, refused: true)
 
-        #expect(await co.signInAgainOnReturn(rt)?.accessToken == "a")
-        // Refused again a moment later: not by itself…
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) != nil)
+        // Ended again thirty seconds later: not by itself, by either way in.
+        clock.now += 30
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        #expect(await co.signInAgainOnReturn(rt) == nil)
+        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        #expect(!co.declined.contains(c.id), "held back is not turned down")
+        // A minute after the last one: again, by either.
+        clock.now += 30
+        #expect(await co.signInAgainOnReturn(rt) != nil)
         clock.now += 60
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) != nil)
+        // Three in ten minutes: no more by itself until the first of them is ten minutes old.
+        clock.now += 60
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) == nil)
+        clock.now += 6 * 60 + 59
         #expect(await co.signInAgainOnReturn(rt) == nil)
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
-        clock.now += RememberedSignInCoordinator.cooldown - 61
-        #expect(await co.signInAgainOnReturn(rt) == nil)
-        #expect(auth.reasons.count == 1 && signIns.items.count == 1)
-        #expect(co.vault.contains(c.id), "waiting is not forgetting")
-        // …but the Sign In sheet's button, whenever it is tapped (which starts the wait again).
-        #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
-        // Ten minutes on: by itself again.
-        clock.now += RememberedSignInCoordinator.cooldown
-        #expect(await co.signInAgainOnReturn(rt)?.accessToken == "a")
+        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
         #expect(auth.reasons.count == 3 && signIns.items.count == 3)
-        // Signed in by hand in the form: a fresh start, no wait.
-        co.didSignIn(c.id)
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .useRemembered)
-        // Per gateway: another one is not held up by this one's wait.
+        #expect(co.vault.contains(c.id), "waiting is not forgetting")
+        // The Sign In sheet's button, whenever it is tapped, and it does not count.
+        #expect(try await co.signInWithRemembered(c, access: CloudflareAccess()).accessToken == "a")
+        #expect(signIns.items.count == 4)
+        clock.now += 1
+        #expect(co.decision(for: c, asked: false) == .useRemembered)
+        #expect(await co.signInAgain(c, access: CloudflareAccess()) != nil)
+        #expect(co.decision(for: c, asked: false) == .askPerson(.tooSoon))
+        // Per gateway: another one is not held back by this one's.
         let other = try gateway(name: "Office")
         try co.vault.remember(secret, for: other.id)
-        #expect(await co.signInAgainOnReturn(rt) != nil)
-        #expect(co.decision(for: other, asked: false, onReturn: true) == .useRemembered)
-    }
-
-    /// The gateway turned the refresh token down: the session really ended (a gateway restarted
-    /// with a new signing key ends them all), however soon after the last sign-in. Restarted
-    /// twice in ten minutes, it is signed in again twice.
-    @Test func aRefusedRefreshSignsInAgainHoweverSoon() async throws {
-        let auth = FakeAuthenticator()
-        let c = try gateway(), co = coordinator(auth: auth)
-        let clock = Clock()
-        co.now = { clock.now }
-        try co.vault.remember(secret, for: c.id)
-        co.signIn = { _, _, _ in GatewaySecrets(accessToken: "a") }
-
-        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
-        clock.now += 5 * 60
+        #expect(co.decision(for: other, asked: false) == .useRemembered)
+        // Signed in by hand in the form: a fresh start.
+        co.didSignIn(c.id)
         #expect(co.decision(for: c, asked: false) == .useRemembered)
-        #expect(await co.signInAgain(c, access: CloudflareAccess())?.accessToken == "a")
-        #expect(auth.reasons.count == 2)
-        // A return to the app inside the ten minutes still waits.
-        #expect(co.decision(for: c, asked: false, onReturn: true) == .askPerson(.tooSoon))
     }
 
     /// The password goes only to the address it was typed for: a gateway moved since (here, or
@@ -488,6 +574,49 @@ struct RememberedSignInTests {
         #expect(rt.refreshRefused)
         await rt.replaceSecrets(GatewaySecrets(accessToken: "typed-again", provider: "basic"))
         #expect(!rt.refreshRefused)
+    }
+
+    /// Signed in again by the runtime while the socket stands refused (a call ran into the ended
+    /// session first, or it ended again while no prompt could show): the socket opens again.
+    /// Nothing else would, as the return to the app signs in only after a refused refresh, and
+    /// this sign-in mended that: the banner asked for a sign-in the person had just made.
+    @Test func aSignInByTheRuntimeOpensARefusedSocketAgain() async throws {
+        let store = ConnectionStore()
+        store.remembered = RememberedSignInVault(backend: MemoryRememberedSignInBackend())
+        // Nothing listens there: once opened, the socket only keeps trying.
+        let c = GatewayConnection(name: "test socket opened again", gateway: try GatewayURL.normalize("http://127.0.0.1:1"), authMode: .password)
+        defer { store.delete(id: c.id) }
+        let rt = GatewayRuntime(connection: c, store: store)
+        // No refresh token in what it signs in with, so every renewal is turned down at once.
+        let signIns = Recorder<Int>()
+        rt.signInAgain = { _, _ in signIns.items.append(1); return GatewaySecrets(accessToken: "fresh", provider: "basic") }
+
+        // Never opened (or closed on purpose): left closed.
+        try await rt.refreshSession()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(rt.socketState == .idle)
+        #expect(await rt.socket.state == .idle)
+
+        // Not signed in again: left refused.
+        rt.socketState = .authRejected("The gateway rejected the WebSocket credential (4401).")
+        let hook = rt.signInAgain
+        rt.signInAgain = { _, _ in nil }
+        await #expect(throws: HermesAPIError.self) { try await rt.refreshSession() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await rt.socket.state == .idle)
+
+        // Signed in again while refused: opened again.
+        rt.signInAgain = hook
+        try await rt.refreshSession()
+        #expect(signIns.items.count == 2 && !rt.refreshRefused)
+        var opened = false
+        for _ in 0..<50 {
+            if case .authRejected = rt.socketState {} else if rt.socketState != .idle { opened = true; break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(opened, "the socket stayed \(rt.socketState)")
+        #expect(await rt.socket.state != .idle)
+        await rt.stop()
     }
 
     // MARK: Never travels, and goes with the gateway

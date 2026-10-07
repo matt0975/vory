@@ -180,8 +180,9 @@ final class AppModel {
         }
         #if os(iOS)
         // Started while the phone was locked (a watch message, a notification, the backup task),
-        // the app could not read which gateways have a remembered sign-in: it can once the
-        // phone is unlocked. Coming to the front reads them too (VoryApp).
+        // the app could not read which gateways have a remembered sign-in, nor delete one an
+        // iCloud change forgot: it can once the phone is unlocked. Coming to the front reads
+        // them too (VoryApp).
         NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.store.remembered.reload() }
         }

@@ -225,6 +225,8 @@ enum SlashMenu {
         case take(Item)
         /// Send the field as typed, as the Send button would.
         case send
+        /// Nothing: the text stays in the field as it is.
+        case hold
         /// Nothing to do with the chooser: Return keeps its own meaning (a send or a line).
         case keep
     }
@@ -233,13 +235,36 @@ enum SlashMenu {
     /// gateway as typed: it resolves aliases ("sonnet"), the user's own names and ids the list
     /// does not have, on the chat's own provider, as it did before the list. Taking the closest
     /// listed match instead switched to whichever provider sorted first. Not with a reply quoted
-    /// or files staged (`canRun` false): the text would go out as a message to the bot, so Return
-    /// keeps its own meaning, as `outcome` keeps a command in the field then. `context` is nil
-    /// when no chooser is open (none for the text, or closed with Escape).
+    /// or files staged (`canRun` false): the text would go out as a message to the bot, so it
+    /// stays in the field, as `outcome` keeps a command there then. (Return used to keep its own
+    /// meaning here, which is a send on a hardware keyboard, on the Mac and with Return key sends
+    /// on, so the half-typed "/model …" went to the bot all the same.) `context` is nil when no
+    /// chooser is open (none for the text, or closed with Escape).
     static func returnAction(_ items: [Item], context: Context?, marked: Int?, canRun: Bool = true) -> ReturnAction {
         guard let context else { return .keep }
         if let marked, items.indices.contains(marked) { return .take(items[marked]) }
-        return context.kind == .model && canRun ? .send : .keep
+        guard context.kind == .model else { return .keep }
+        return canRun ? .send : .hold
+    }
+
+    /// The row Tab completes (see `outcome`: Tab never runs or switches anything), and whether
+    /// it stays marked for the Return after it.
+    struct TabCompletion: Equatable {
+        var item: Item
+        var marks: Bool
+    }
+
+    /// Tab completes the marked row, and a typed model name its best match (the top row). A bare
+    /// "/model " with nothing marked (no row is the chat's own for certain: its provider unknown
+    /// or not listed) completes the chat's model, the checked row, and leaves it unmarked, so a
+    /// Return after it sends that id as typed for the chat's own provider rather than switching
+    /// to whichever provider listing it sorted first. With no checked row either, Tab does
+    /// nothing: the top row is only the first provider's first model, and Tab used to put it in.
+    static func tabCompletion(_ items: [Item], context: Context, marked: Int?) -> TabCompletion? {
+        if let marked, items.indices.contains(marked) { return TabCompletion(item: items[marked], marks: true) }
+        guard let top = items.first else { return nil }
+        if context.kind == .command || !context.query.isEmpty { return TabCompletion(item: top, marks: true) }
+        return items.first(where: \.current).map { TabCompletion(item: $0, marks: false) }
     }
 
     /// What taking a row does to the chat and the field.

@@ -138,22 +138,31 @@ struct ComposerView: View {
     /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
     /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
     /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
-    /// as a message, so Return keeps its own meaning instead. True when Return was used here.
+    /// as a message, so it stays in the field instead. True when Return was used here.
     private func takeOnReturn() -> Bool {
         switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex,
                                       canRun: quote.isEmpty && chat.staged.isEmpty) {
         case .take(let item): pick(item); return true
         case .send: Task { await send() }; return true
+        case .hold: return true
         case .keep: break
         }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
     }
 
-    /// Tab completes the marked row (the top one when none is marked) and never runs anything.
+    /// Tab completes the marked row (see SlashMenu.tabCompletion for when none is) and never
+    /// runs anything. With the list open and nothing to complete it does nothing, rather than
+    /// put a tab in the field or move the focus.
     private func completeOnTab() -> Bool {
         let items = menuItems
-        if !items.isEmpty { pick(items[markedIndex ?? 0], completing: true); return true }
+        if let ctx = openMenuContext, !items.isEmpty {
+            if let completion = SlashMenu.tabCompletion(items, context: ctx, marked: markedIndex) {
+                pick(completion.item, completing: true)
+                if !completion.marks { menuMark = nil }
+            }
+            return true
+        }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
     }

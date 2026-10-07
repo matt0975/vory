@@ -149,6 +149,12 @@ struct ImageViewerSheet: View {
     @State private var saving = false
 
     #if os(iOS)
+    /// Why the last Save to Photos did not work, shown over the picture. It has its own state:
+    /// `error` is for a picture that could not be shown, and with the picture up nothing showed
+    /// it, so a refused save went from "Saving…" back to "Save to Photos" without a word.
+    @State private var saveFailure: PhotoSaveFailure?
+    @Environment(\.openURL) private var openURL
+
     private func saveToPhotos(_ url: URL) {
         saving = true
         Task {
@@ -156,7 +162,7 @@ struct ImageViewerSheet: View {
                 try await Self.addToPhotos(url)
                 saved = true
             } catch {
-                self.error = error.localizedDescription
+                saveFailure = PhotoSaveFailure(error, addOnly: PHPhotoLibrary.authorizationStatus(for: .addOnly))
             }
             saving = false
         }
@@ -248,6 +254,18 @@ struct ImageViewerSheet: View {
                 }
             }
             .preferredColorScheme(.dark)
+            #if os(iOS)
+            .alert("Not saved to Photos", isPresented: Binding(get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } }),
+                   presenting: saveFailure) { failure in
+                // Once refused, iOS does not ask again: the switch is in Settings.
+                if failure.accessOff {
+                    Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
+                }
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure.message)
+            }
+            #endif
         }
         .task { await load() }
     }
@@ -274,3 +292,32 @@ struct ImageViewerSheet: View {
         }
     }
 }
+
+#if os(iOS)
+/// What the image viewer says when Save to Photos did not work. Photos access turned off (Don't
+/// Allow in the prompt, or off in Settings later) gets its own words and a way to Settings: iOS
+/// asks only once, so a second tap fails the same way without a prompt.
+struct PhotoSaveFailure: Equatable {
+    var message: String
+    /// Photos access is off for the app (refused, or restricted on the device).
+    var accessOff: Bool
+
+    static let accessOffMessage = "Photos access is off for Vory. Turn on Add Photos Only in Settings to save pictures."
+
+    /// `error` is what the save threw; `addOnly` is the app's add-only Photos access as it stands
+    /// after it (Photos does not always answer a refusal with its access error).
+    init(_ error: any Error, addOnly: PHAuthorizationStatus) {
+        let refused = (error as? PHPhotosError).map { $0.code == .accessUserDenied || $0.code == .accessRestricted } ?? false
+        if refused || addOnly == .denied || addOnly == .restricted {
+            self.init(message: Self.accessOffMessage, accessOff: true)
+        } else {
+            self.init(message: "Photos did not take the picture: \(error.localizedDescription)", accessOff: false)
+        }
+    }
+
+    init(message: String, accessOff: Bool) {
+        self.message = message
+        self.accessOff = accessOff
+    }
+}
+#endif

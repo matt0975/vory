@@ -42,7 +42,9 @@ public protocol RememberedSignInBackend: AnyObject {
     /// The item's data, read with `context`: an already evaluated Face ID or passcode check, so
     /// the Keychain does not ask a second time. nil when there is no item.
     func read(account: String, context: LAContext?) throws -> Data?
-    func delete(account: String)
+    /// False when the item may still be there: the Keychain could not delete it (the device is
+    /// locked). An item that was not there counts as deleted.
+    @discardableResult func delete(account: String) -> Bool
     /// Every account that has an item, from the attributes alone: nothing is unlocked or asked.
     /// nil when they could not be read (the device is locked): not known, which is not none.
     func accounts() -> [String]?
@@ -114,8 +116,15 @@ public final class KeychainRememberedSignInBackend: RememberedSignInBackend {
         return out as? Data
     }
 
-    public func delete(account: String) {
-        SecItemDelete(Self.query(account: account) as CFDictionary)
+    @discardableResult public func delete(account: String) -> Bool {
+        Self.deleted(status: SecItemDelete(Self.query(account: account) as CFDictionary))
+    }
+
+    /// What a delete's answer means: gone, or never there. Anything else leaves the item where
+    /// it was, errSecInteractionNotAllowed among them: it is kept only while the device is
+    /// unlocked, and so is everything about it, its deletion included.
+    public static func deleted(status: OSStatus) -> Bool {
+        status == errSecSuccess || status == errSecItemNotFound
     }
 
     public func accounts() -> [String]? {
@@ -150,13 +159,19 @@ public final class MemoryRememberedSignInBackend: RememberedSignInBackend {
     public private(set) var readsWithContext = 0
     /// Stands in for a locked device: which accounts there are cannot be read.
     public var unreadable = false
+    /// Stands in for a locked device too: an item cannot be deleted.
+    public var undeletable = false
     public init() {}
     public func write(_ data: Data, account: String) throws { items[account] = data }
     public func read(account: String, context: LAContext?) throws -> Data? {
         if context != nil { readsWithContext += 1 }
         return items[account]
     }
-    public func delete(account: String) { items[account] = nil }
+    @discardableResult public func delete(account: String) -> Bool {
+        guard !undeletable else { return false }
+        items[account] = nil
+        return true
+    }
     public func accounts() -> [String]? { unreadable ? nil : Array(items.keys) }
 }
 
@@ -170,18 +185,31 @@ public final class RememberedSignInVault {
     /// locked (a watch message, a notification, the backup task) cannot read it, and until it
     /// can, no gateway counts as remembered, but none may be forgotten on that say-so either.
     public private(set) var isKnown = false
+    /// Gateways whose sign-in was forgotten while the Keychain could not delete it: the device
+    /// was locked (an iCloud merge in a launch in the background, the backup task). Deleted by
+    /// the next `reload()`, which runs when the device is unlocked and when the app comes to
+    /// the front; until then never offered or used, whatever the Keychain still holds.
+    public private(set) var pendingForgets: Set<UUID> = []
     private let backend: any RememberedSignInBackend
+    /// Where `pendingForgets` is kept across launches: gateway ids only, nothing secret. nil
+    /// keeps it for this process only (the tests, and the demo copy, whose items die with it).
+    private let defaults: UserDefaults?
+    static let pendingForgetsKey = "rememberedSignIn.pendingForgets"
 
-    public init(backend: any RememberedSignInBackend) {
+    public init(backend: any RememberedSignInBackend, defaults: UserDefaults? = nil) {
         self.backend = backend
+        self.defaults = defaults
+        pendingForgets = Set((defaults?.stringArray(forKey: Self.pendingForgetsKey) ?? []).compactMap(UUID.init(uuidString:)))
         reload()
     }
 
     /// Reads which gateways have one again: at the start, and when the app comes to the front
-    /// or the device is unlocked. A read that fails keeps what was known.
+    /// or the device is unlocked. A read that fails keeps what was known. What could not be
+    /// forgotten before is deleted first.
     public func reload() {
+        for id in pendingForgets where backend.delete(account: Self.account(id)) { setPending(id, false) }
         guard let accounts = backend.accounts() else { return }
-        let read = Set(accounts.compactMap(Self.id(account:)))
+        let read = Set(accounts.compactMap(Self.id(account:))).subtracting(pendingForgets)
         if read != ids { ids = read }
         if !isKnown { isKnown = true }
     }
@@ -191,7 +219,7 @@ public final class RememberedSignInVault {
         #if DEBUG
         if Keychain.memoryOnly { return RememberedSignInVault(backend: MemoryRememberedSignInBackend()) }
         #endif
-        return RememberedSignInVault(backend: KeychainRememberedSignInBackend())
+        return RememberedSignInVault(backend: KeychainRememberedSignInBackend(), defaults: .standard)
     }
 
     nonisolated static func account(_ id: UUID) -> String { "signin." + id.uuidString }
@@ -199,16 +227,19 @@ public final class RememberedSignInVault {
         account.hasPrefix("signin.") ? UUID(uuidString: String(account.dropFirst("signin.".count))) : nil
     }
 
-    public func contains(_ id: UUID) -> Bool { ids.contains(id) }
+    public func contains(_ id: UUID) -> Bool { ids.contains(id) && !pendingForgets.contains(id) }
 
     public func remember(_ signIn: RememberedSignIn, for id: UUID) throws {
         try backend.write(JSONEncoder().encode(signIn), account: Self.account(id))
+        // It replaced the item still to be deleted, and must not be deleted in its place.
+        setPending(id, false)
         ids.insert(id)
     }
 
     /// The remembered sign-in, opened with `context` (the evaluated Face ID or passcode check).
     /// nil when it is gone: the passcode was turned off, which deletes it, or it was forgotten.
     public func signIn(for id: UUID, context: LAContext?) throws -> RememberedSignIn? {
+        guard !pendingForgets.contains(id) else { return nil }
         guard let data = try backend.read(account: Self.account(id), context: context) else {
             ids.remove(id)
             return nil
@@ -217,8 +248,20 @@ public final class RememberedSignInVault {
     }
 
     /// Deleting needs no Face ID, so this works from anywhere, the gateway's removal included.
-    public func forget(_ id: UUID) {
-        backend.delete(account: Self.account(id))
+    /// False when the Keychain could not delete it (the device is locked): it counts as
+    /// forgotten all the same, and is deleted once it can be (see `pendingForgets`).
+    @discardableResult
+    public func forget(_ id: UUID) -> Bool {
         ids.remove(id)
+        let deleted = backend.delete(account: Self.account(id))
+        setPending(id, !deleted)
+        return deleted
+    }
+
+    private func setPending(_ id: UUID, _ pending: Bool) {
+        guard pendingForgets.contains(id) != pending else { return }
+        if pending { pendingForgets.insert(id) } else { pendingForgets.remove(id) }
+        if pendingForgets.isEmpty { defaults?.removeObject(forKey: Self.pendingForgetsKey) }
+        else { defaults?.set(pendingForgets.map(\.uuidString).sorted(), forKey: Self.pendingForgetsKey) }
     }
 }

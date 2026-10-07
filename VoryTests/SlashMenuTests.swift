@@ -297,11 +297,21 @@ import VoryCore
 
     @Test func aTypedModelNameIsNotSentWithAReplyQuotedOrFilesStaged() throws {
         // The text would go to the bot as a message (the quote above it, or the files with it), so
-        // Return keeps its own meaning, as a picked command waits in the field then.
+        // it stays in the field, as a picked command waits there then. Not `.keep`: Return's own
+        // meaning is a send on a hardware keyboard, on the Mac and with Return key sends on.
         let typed = try #require(M.context(for: "/model mini"))
         let minis = M.modelItems(Self.options, current: "", query: "mini")
-        #expect(M.returnAction(minis, context: typed, marked: nil, canRun: false) == .keep)
-        #expect(M.returnAction([], context: typed, marked: nil, canRun: false) == .keep)
+        #expect(M.returnAction(minis, context: typed, marked: nil, canRun: false) == .hold)
+        #expect(M.returnAction([], context: typed, marked: nil, canRun: false) == .hold)
+        // A bare "/model " with no row the chat's own: the same.
+        let bare = try #require(M.context(for: "/model "))
+        let checkedByID = M.modelItems(Self.options, current: "workshop/assistant", query: "")
+        #expect(M.returnAction(checkedByID, context: bare, marked: M.markedIndex(checkedByID, context: bare, mark: nil), canRun: false) == .hold)
+        // The command list is not held: its top row is taken, and waits in the field (`outcome`).
+        let co = try #require(M.context(for: "/co"))
+        let commands = M.commandItems(Self.catalog, query: "co")
+        #expect(M.returnAction(commands, context: co, marked: 0, canRun: false) == .take(commands[0]))
+        #expect(M.returnAction([], context: M.context(for: "/zzz"), marked: nil, canRun: false) == .keep)
         // A row chosen with the arrows still switches: a switch is not a message.
         #expect(M.returnAction(minis, context: typed, marked: 1, canRun: false) == .take(minis[1]))
         #expect(M.outcome(of: minis[1], in: "/model mini", wholeText: true, completing: false, canRun: false) == .switchModel)
@@ -342,6 +352,52 @@ import VoryCore
         let mini = try #require(M.modelItems(Self.options, current: "workshop/assistant", query: "mini").first)
         #expect(M.outcome(of: mini, in: "/model mini", wholeText: true, completing: false, canRun: true) == .switchModel)
         #expect(M.outcome(of: mini, in: "/model mini", wholeText: true, completing: true, canRun: true) == .fill("/model workshop/assistant-mini"))
+    }
+
+    @Test func tabOnABareModelListWithNothingMarkedCompletesTheChatsModelNotTheFirstListed() throws {
+        let bare = try #require(M.context(for: "/model "))
+        // The chat's provider unknown (or not listed): its model is checked by its id alone, so
+        // nothing is marked, and the first row listed is another provider's model.
+        for provider in [nil, "elsewhere"] as [String?] {
+            let items = M.modelItems(Self.options, current: "workshop/assistant", currentProvider: provider, query: "")
+            #expect(items[0].name == "free/assistant-open")
+            let marked = M.markedIndex(items, context: bare, mark: nil)
+            #expect(marked == nil)
+            let tab = try #require(M.tabCompletion(items, context: bare, marked: marked))
+            #expect(tab.item.id == "workshop|workshop/assistant" && tab.item.current)
+            // Completed, never switched, and left unmarked: Return then sends the id as typed (for
+            // the chat's own provider), rather than taking the row and its provider.
+            #expect(!tab.marks)
+            guard case .fill(let filled) = M.outcome(of: tab.item, in: "/model ", wholeText: true, completing: true, canRun: true) else {
+                Issue.record("Tab did not complete"); return
+            }
+            #expect(filled == "/model workshop/assistant")
+            let ctx = try #require(M.context(for: filled))
+            let after = M.modelItems(Self.options, current: "workshop/assistant", currentProvider: provider, query: ctx.query)
+            #expect(M.returnAction(after, context: ctx, marked: M.markedIndex(after, context: ctx, mark: nil)) == .send)
+        }
+        // The chat's model not listed: no checked row, and Tab completes nothing.
+        let unlisted = M.modelItems(Self.options, current: "elsewhere/unlisted", query: "")
+        #expect(M.tabCompletion(unlisted, context: bare, marked: M.markedIndex(unlisted, context: bare, mark: nil)) == nil)
+        // The chat's own row is marked, and Tab completes it, marked, so Return keeps the model.
+        let own = M.modelItems(Self.options, current: "workshop/assistant", currentProvider: "workshop", query: "")
+        let ownTab = try #require(M.tabCompletion(own, context: bare, marked: M.markedIndex(own, context: bare, mark: nil)))
+        #expect(ownTab.item.own && ownTab.marks)
+        // A row marked with the arrows: that one.
+        #expect(M.tabCompletion(own, context: bare, marked: 0) == M.TabCompletion(item: own[0], marks: true))
+    }
+
+    @Test func tabCompletesATypedModelNameToItsBestMatchAndTheCommandListToItsMark() throws {
+        let typed = try #require(M.context(for: "/model mini"))
+        let minis = M.modelItems(Self.options, current: "", query: "mini")
+        #expect(M.markedIndex(minis, context: typed, mark: nil) == nil)
+        #expect(M.tabCompletion(minis, context: typed, marked: nil) == M.TabCompletion(item: minis[0], marks: true))
+        #expect(M.tabCompletion(minis, context: typed, marked: 1) == M.TabCompletion(item: minis[1], marks: true))
+        // Nothing listed yet (the models loading): nothing to complete.
+        #expect(M.tabCompletion([], context: typed, marked: nil) == nil)
+        let co = try #require(M.context(for: "/co"))
+        let commands = M.commandItems(Self.catalog, query: "co")
+        #expect(M.tabCompletion(commands, context: co, marked: M.markedIndex(commands, context: co, mark: nil))?.item == commands[0])
     }
 
     @Test func aModelCompletedWithTabIsTheOneReturnTakesProviderAndAll() throws {
