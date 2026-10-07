@@ -123,9 +123,28 @@ final class RotationUITests: XCTestCase {
         sleep(3)
         shot("rotation-4-portrait-again")
         XCTAssertEqual(app.state, .runningForeground)
-        XCTAssertTrue(back.isHittable, "the back button is not tappable after rotating back")
+        // Back where it belongs on the portrait screen. (Not `isHittable`: XCUITest asks the
+        // app's elements from the last to the first, so in a long chat the reply that runs up
+        // under the floating header answers for Back's point; a finger, and VoiceOver, which
+        // asks from the first, get Back.)
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(back.exists && window.contains(CGPoint(x: back.frame.midX, y: back.frame.midY)) && back.frame.minY < window.height / 4,
+                      "the back button is not on screen after rotating back (\(back.frame) in \(window))")
         // Still taking input: the field keeps what was typed and takes more.
         app.typeText("!")
         XCTAssertEqual(app.state, .runningForeground, "the app left the foreground after typing")
+        // And still answering a tap: Back, tapped where it is drawn, leaves the chat.
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: back.frame.midX, dy: back.frame.midY)).tap()
+        XCTAssertTrue(hittableNewChat(), "Back did not leave the chat after rotating back")
+    }
+
+    /// The compose circle is on screen and takes a tap: the chat list is in front.
+    private func hittableNewChat() -> Bool {
+        let deadline = Date().addingTimeInterval(8)
+        while Date() < deadline {
+            if app.buttons.matching(identifier: "chats.new").allElementsBoundByIndex.contains(where: { $0.isHittable }) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        return false
     }
 }
