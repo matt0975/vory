@@ -17,8 +17,44 @@ struct PendingRoute: Hashable, Sendable {
     var profile: String?
     var kind: String?
     var replyText: String?
+    /// The question a notification or the Live Activity is about: for an approval its request's
+    /// id (all the Companion's pushes carry), else the card's.
     var requestID: String?
     var action: String?
+    /// The card this app posted the notification for (`LocalNotifier`), beside `requestID`.
+    var cardID: String?
+
+    /// What Approve or Deny answers (`ChatSession.approvalToAnswer(named:)`): that and nothing
+    /// else, or with none the chat's approval when it has just one.
+    var cardKeys: [String] { [cardID, requestID].compactMap { $0 }.filter { !$0.isEmpty } }
+}
+
+extension PendingRoute {
+    /// The chat a notification is about (its `hermes` part), and the card when it names one;
+    /// nil when it names no chat.
+    init?(notification userInfo: [AnyHashable: Any]) {
+        guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return nil }
+        self.init(storedSessionID: sid)
+        connectionID = (hermes["connection_id"] as? String).flatMap(UUID.init(uuidString:))
+        gateway = hermes["gateway"] as? String
+        profile = hermes["profile"] as? String
+        kind = hermes["kind"] as? String
+        requestID = hermes["request_id"] as? String
+        cardID = hermes["card_id"] as? String
+    }
+
+    /// The Live Activity's Approve / Deny (`vory://approval?session=…&choice=…&request=…`): its
+    /// chat, the choice as the notification's action, and the approval the activity showed. One
+    /// without it (an activity the Companion last updated) answers the chat's approval when it
+    /// has just one; with several the chat opens on them.
+    init?(approvalURL url: URL) {
+        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let sid = items.first(where: { $0.name == "session" })?.value, !sid.isEmpty else { return nil }
+        let profile = items.first(where: { $0.name == "profile" })?.value
+        self.init(storedSessionID: sid, profile: profile?.isEmpty == false ? profile : nil)
+        action = items.first(where: { $0.name == "choice" })?.value == "deny" ? LocalNotifier.denyAction : LocalNotifier.approveOnceAction
+        requestID = items.first(where: { $0.name == "request" })?.value
+    }
 }
 
 @MainActor
@@ -311,12 +347,8 @@ final class AppModel {
             pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
         }
         // From the Live Activity's Approve / Deny: open the chat on its card and apply the choice.
-        if url.host == "approval", let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-           let sid = items.first(where: { $0.name == "session" })?.value, !sid.isEmpty {
-            let choice = items.first(where: { $0.name == "choice" })?.value ?? "once"
-            let profile = items.first(where: { $0.name == "profile" })?.value
-            var r = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: sid, profile: profile?.isEmpty == false ? profile : nil)
-            r.action = choice == "deny" ? LocalNotifier.denyAction : LocalNotifier.approveOnceAction
+        if url.host == "approval", var r = PendingRoute(approvalURL: url) {
+            r.connectionID = runtime?.connection.id
             pendingRoute = r
             Task { await ensureConnection(for: r) }
         }
@@ -417,13 +449,7 @@ final class AppModel {
     // MARK: Notification routing
 
     func route(from userInfo: [AnyHashable: Any], action: String?, replyText: String? = nil) {
-        guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return }
-        var r = PendingRoute(storedSessionID: sid)
-        r.connectionID = (hermes["connection_id"] as? String).flatMap(UUID.init(uuidString:))
-        r.gateway = hermes["gateway"] as? String
-        r.profile = hermes["profile"] as? String
-        r.kind = hermes["kind"] as? String
-        r.requestID = hermes["request_id"] as? String
+        guard var r = PendingRoute(notification: userInfo) else { return }
         r.action = action
         r.replyText = replyText
         pendingRoute = r
@@ -462,9 +488,13 @@ final class AppModel {
             }
             if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil, profile: r.profile) {
                 let choice = action == LocalNotifier.approveOnceAction ? "once" : "deny"
-                let deadline = Date().addingTimeInterval(8)
-                while chat.cards.isEmpty, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-                guard let card = chat.cards.first(where: { $0.method == "approval" }) else { return }
+                guard let card = await Self.approvalCard(for: r, in: chat) else {
+                    // Gone (answered elsewhere, withdrawn, its turn over), or none named and not
+                    // just one waiting: the chat opens on its cards (`pendingRoute`), and nothing
+                    // is answered.
+                    LiveActivityController.note("\(choice) from outside the chat: \(r.cardKeys.isEmpty ? "no single approval waits" : "the approval it names is not waiting"), nothing sent")
+                    return
+                }
                 if ApprovalConfirm.shouldAsk(for: card.approval) {
                     // Settings › Security › Confirm approvals: the chat is open on its card; the
                     // conversation asks once more and only then answers.
@@ -475,6 +505,14 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// The approval an Approve or Deny from outside the chat is for: the card the notification
+    /// or the Live Activity names (`PendingRoute.cardKeys`), or with none named the chat's only
+    /// approval (`ChatSession.approvalToAnswer`), looked for while the chat opens (`wait`). Nil
+    /// when that request is gone, or none is named and the chat has no approval or several.
+    static func approvalCard(for r: PendingRoute, in chat: ChatSession, wait: TimeInterval = 8) async -> PendingCard? {
+        await chat.approvalToAnswer(named: r.cardKeys, waitingUpTo: wait)
     }
 }
 

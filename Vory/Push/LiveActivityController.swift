@@ -369,6 +369,10 @@ final class LiveActivityController: TurnActivityReporting {
             startedAt = existing.content.state.startedAt
             let h = ActivityHandle(existing)
             handle = h
+            // One that says it needs you was announced with that (the Companion's push, or this
+            // app before it was relaunched): alerted again, the Island expanded and the phone
+            // buzzed for an approval it had buzzed for already.
+            alertedAttention = existing.content.state.needsAttention
             tokenTask = h.observePushTokens(storedID: chat.storedID, startedAt: startedAt)
             // `pushTokenUpdates` only reports changes; the token this activity already holds must
             // reach the gateway too, or the companion cannot end it.
@@ -419,6 +423,28 @@ final class LiveActivityController: TurnActivityReporting {
 
     func update(for chat: ChatSession, attention: Bool, detail: String?) {
         guard let handle else { return }
+        let state = contentState(for: chat, attention: attention, detail: detail)
+        // Away from the app the alert (the Island expanding, the buzz) comes from the
+        // companion's push when one is installed; only without it does the app raise its own.
+        if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
+            alertedAttention = true
+            let botName = handle.activity.attributes.botName ?? chat.profileName
+            handle.alert(state, title: botName, body: state.attentionKind == "input" ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
+            Self.note("approval alert from the app (background)")
+            return
+        }
+        if !attention { alertedAttention = false }
+        handle.update(state)
+    }
+
+    func showCards(for chat: ChatSession) {
+        guard let handle, !chat.cards.isEmpty else { return }
+        handle.update(contentState(for: chat, attention: true, detail: nil))
+    }
+
+    /// What the card shows for the chat now: its first card when `attention`, else the step the
+    /// turn is on (`detail`, or the chat's status line).
+    private func contentState(for chat: ChatSession, attention: Bool, detail: String?) -> HermesTurnAttributes.ContentState {
         let card = chat.firstCard
         let inputKind = attention && card != nil && card?.method != "approval"
         let text = detail ?? (attention ? (card?.method == "sudo" ? "sudo password needed" : (card?.approval?.description ?? (inputKind ? "Your input is needed" : "Needs your answer"))) : (chat.statusLine ?? "Thinking…"))
@@ -433,19 +459,11 @@ final class LiveActivityController: TurnActivityReporting {
                                                        outputTokens: chat.usage?.output ?? 0, contextPercent: chat.usage?.contextPercent, needsAttention: attention,
                                                        startedAt: startedAt, contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
         state.attentionKind = attention ? (inputKind ? "input" : "approval") : nil
+        // The approval Approve / Deny here answer, and no other (`AppModel.approvalCard`).
+        state.attentionRequest = attention && !inputKind ? (card?.approval?.requestId ?? card?.id) : nil
         state.goal = idleVoice ? nil : ChatGoals.shared.goal(for: chat.storedID)
         state.voiceMode = voiceLine
-        // Away from the app the alert (the Island expanding, the buzz) comes from the
-        // companion's push when one is installed; only without it does the app raise its own.
-        if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
-            alertedAttention = true
-            let botName = handle.activity.attributes.botName ?? chat.profileName
-            handle.alert(state, title: botName, body: inputKind ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
-            Self.note("approval alert from the app (background)")
-            return
-        }
-        if !attention { alertedAttention = false }
-        handle.update(state)
+        return state
     }
 
     /// Voice mode's state line, while it is on for this chat.

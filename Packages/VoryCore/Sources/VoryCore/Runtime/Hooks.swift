@@ -10,11 +10,18 @@ public protocol TurnActivityReporting: AnyObject {
     /// Voice mode's state line for this chat ("Listening…", "Speaking"), nil once it ends: the
     /// surface stays up between turns while it is on and offers End.
     func voiceMode(for chat: ChatSession, line: String?)
+    /// The chat's cards as they are now, its first one as `update` shows it, and never with an
+    /// alert (the Island expanding, the buzz): on a surface just started or taken over, which
+    /// said "Thinking…" or what it said before, and after the card it showed went while others
+    /// stay. Each card was announced when it came.
+    func showCards(for chat: ChatSession)
 }
 
 public extension TurnActivityReporting {
     func update(for chat: ChatSession, attention: Bool) { update(for: chat, attention: attention, detail: nil) }
     func voiceMode(for chat: ChatSession, line: String?) {}
+    /// A surface that raises no alerts of its own (the Mac's menu-bar item).
+    func showCards(for chat: ChatSession) { update(for: chat, attention: !chat.cards.isEmpty) }
 }
 
 /// Local (foreground-only) notifications for cards and finished turns.

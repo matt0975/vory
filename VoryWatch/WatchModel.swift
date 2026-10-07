@@ -303,6 +303,11 @@ final class WatchModel {
         guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return }
         pendingChat = sid
         guard let action else { return }
+        // What Approve or Deny may answer: the approval the notification was for, by its card or
+        // its request (`PendingCard.isNamed(by:)`). Gone, nothing is answered and the chat opens:
+        // the first approval shown was answered once, a newer one nobody had read. One that names
+        // none (posted by an older build) answers the chat's approval when it has just one.
+        let names = ["card_id", "request_id"].compactMap { hermes[$0] as? String }.filter { !$0.isEmpty }
         guard let rt = runtime, socketUsable else {
             // No socket of its own (launched in the background by the action, or a watch that
             // goes through its iPhone): the phone answers for it over the watch link. With a
@@ -321,8 +326,13 @@ final class WatchModel {
                     let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
                     let r = try await connectivity.request(base.merging(["op": "cards"]) { $1 })
                     guard r["ok"] as? Bool == true else { WatchNotifier.notSent(r["error"] as? String); return }
-                    guard let card = (r["cards"] as? [[String: Any]])?.first(where: { ($0["method"] as? String) == "approval" }), let id = card["id"] as? String else {
-                        WatchNotifier.notSent("The approval was not found. It may have been answered already.")
+                    let approvals = (r["cards"] as? [[String: Any]] ?? []).filter { ($0["method"] as? String) == "approval" }
+                    let named = names.isEmpty ? (approvals.count == 1 ? approvals.first : nil) : approvals.first { c in
+                        names.contains { PendingCard.isNamed(id: c["id"] as? String ?? "", requestID: c["request"] as? String, by: $0) }
+                    }
+                    guard let card = named, let id = card["id"] as? String else {
+                        WatchNotifier.notSent(names.isEmpty && approvals.count > 1 ? "Several approvals are waiting. Open the chat to answer the one you mean."
+                                              : "The approval was not found. It may have been answered already.")
                         return
                     }
                     let a = try await connectivity.request(base.merging(["op": "approval", "card": id, "choice": choice]) { $1 })
@@ -335,9 +345,7 @@ final class WatchModel {
             guard let chat = try? await rt.openChat(storedID: sid, title: nil, profile: hermes["profile"] as? String) else { return }
             if action == WatchNotifier.replyAction, let text = replyText, !text.isEmpty { await chat.send(text); return }
             let choice = action == WatchNotifier.approveOnceAction ? "once" : "deny"
-            let deadline = Date().addingTimeInterval(8)
-            while chat.cards.isEmpty, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-            if let card = chat.cards.first(where: { $0.method == "approval" }) { await chat.respond(card: card, result: ["choice": .string(choice)]) }
+            if let card = await chat.approvalToAnswer(named: names, waitingUpTo: 8) { await chat.respond(card: card, result: ["choice": .string(choice)]) }
         }
     }
 }
@@ -491,16 +499,20 @@ final class WatchCardNotifier: CardNotifying {
         content.subtitle = chat.title
         content.body = card.approval?.description ?? card.approval?.command ?? card.clarify?.question ?? "Needs your answer"
         content.categoryIdentifier = card.method == "approval" ? WatchNotifier.approvalCategory : WatchNotifier.clarifyCategory
-        content.userInfo = ["hermes": ["session_id": chat.storedID, "kind": card.method]]
+        // The card and its request, so Approve here answers this one (`WatchModel.route`).
+        content.userInfo = ["hermes": ["session_id": chat.storedID, "kind": card.method, "card_id": card.id,
+                                       "request_id": card.approval?.requestId ?? card.id]]
         content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "card-\(card.id)", content: content, trigger: nil))
     }
 
-    /// Answered on another device: the banner that offered Approve here is out of date.
+    /// Answered on another device: the banner that offered Approve here is out of date, whether
+    /// it was posted for this card or for the approval queue's card it took the place of.
     func cardSettled(_ card: PendingCard, chat: ChatSession) {
         let center = UNUserNotificationCenter.current()
-        center.removeDeliveredNotifications(withIdentifiers: ["card-\(card.id)"])
-        center.removePendingNotificationRequests(withIdentifiers: ["card-\(card.id)"])
+        let ids = [card.id, card.approval.map { "queue-" + $0.requestId }].compactMap { $0 }.map { "card-" + $0 }
+        center.removeDeliveredNotifications(withIdentifiers: ids)
+        center.removePendingNotificationRequests(withIdentifiers: ids)
     }
 
     func turnFinished(chat: ChatSession, error: String?) {

@@ -18,6 +18,11 @@ public struct HermesTurnAttributes: ActivityAttributes, Sendable {
         /// "approval" (Approve / Deny make sense) or "input" (a password, a secret, a question):
         /// the widget must not offer Approve on a sudo prompt. Absent on older pushes.
         public var attentionKind: String? = nil
+        /// The approval Approve / Deny answer: its request's id (or its card's), set by the app.
+        /// Absent (the Companion's pushes), they answer the chat's approval only when it has
+        /// just one; with several the chat opens on them, as the first shown may be another
+        /// approval than the one this card said.
+        public var attentionRequest: String? = nil
         /// What the bot is working toward this turn ("Finding why the export times out"), when
         /// Vory Summaries has written one. Leads the card while the turn runs; `detail` is then
         /// the step under it. Absent on pushes from a Companion older than 1.0.36.
@@ -78,6 +83,15 @@ public struct HermesTurnAttributes: ActivityAttributes, Sendable {
         self.tintHex = tintHex
         self.botName = botName
         self.avatar = avatar
+    }
+
+    /// Approve / Deny on the card: the app opens on the chat and answers the approval the card
+    /// shows (`attentionRequest`), if it still waits (`AppModel.open`).
+    public func approvalURL(choice: String, state: ContentState) -> URL {
+        var c = URLComponents(); c.scheme = "vory"; c.host = "approval"
+        c.queryItems = [URLQueryItem(name: "session", value: storedSessionID), URLQueryItem(name: "choice", value: choice)]
+        if let request = state.attentionRequest, !request.isEmpty { c.queryItems?.append(URLQueryItem(name: "request", value: request)) }
+        return c.url!
     }
 }
 #endif

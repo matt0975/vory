@@ -276,7 +276,7 @@ struct ConversationView: View {
     @ViewBuilder private func confirmButtons(chat: ChatSession) -> some View {
         let deny = confirming?.choice == "deny"
         Button(deny ? "Deny" : "Approve once", role: deny ? .destructive : nil) {
-            if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }) {
+            if let c = confirming, let card = chat.approvalCard(named: [c.cardID]) {
                 Task { await chat.respond(card: card, result: ["choice": .string(c.choice)]) }
             }
             confirming = nil; model.approvalConfirm = nil
@@ -284,7 +284,7 @@ struct ConversationView: View {
         Button("Cancel", role: .cancel) { confirming = nil; model.approvalConfirm = nil }
     }
     @ViewBuilder private func confirmMessage(chat: ChatSession) -> some View {
-        if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }), let a = card.approval {
+        if let c = confirming, let card = chat.approvalCard(named: [c.cardID]), let a = card.approval {
             Text([a.description, a.command].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
         } else {
             Text("The request is no longer waiting.")

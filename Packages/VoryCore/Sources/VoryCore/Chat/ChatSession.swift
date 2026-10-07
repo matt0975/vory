@@ -60,6 +60,20 @@ public struct PendingCard: Identifiable, Hashable, Sendable {
         self.method = method
         self.params = params
     }
+
+    /// Whether `key` names this card, as a notification, the Live Activity or the watch does:
+    /// its own id, or for an approval its request's id, bare (the Companion's pushes) or as the
+    /// approval queue's card has it (`queue-<id>`). Either card of one approval answers it.
+    public func isNamed(by key: String) -> Bool { Self.isNamed(id: id, requestID: approval?.requestId, by: key) }
+
+    /// `isNamed(by:)` for a card known only by its id and its approval's request id (the list
+    /// the watch gets from its iPhone).
+    public static func isNamed(id: String, requestID: String?, by key: String) -> Bool {
+        guard !key.isEmpty else { return false }
+        if key == id { return true }
+        guard let rid = requestID, !rid.isEmpty else { return false }
+        return key == rid || key == "queue-" + rid
+    }
 }
 
 /// One live conversation. Owns the transcript, streaming assembly, pending cards, the local send queue and staged attachments.
@@ -129,7 +143,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         adoptingTurn = true
         Task { [weak self] in
             guard let self else { return }
-            if let r = try? await rpc("session.resume", ["session_id": .string(storedID), "cols": 80]) { await apply(snapshot: r) }
+            try? await resumeFromGateway()
             adoptingTurn = false
         }
     }
@@ -196,8 +210,14 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// The runtime's call with this chat's bot attached.
     private func rpc(_ method: String, _ params: [String: JSONValue] = [:], timeout: Double = 120) async throws -> JSONValue {
-        try await runtime.rpc(method, params, owner: profile, timeout: timeout)
+        if let gatewayStandIn { return try await gatewayStandIn(method, params) }
+        return try await runtime.rpc(method, params, owner: profile, timeout: timeout)
     }
+
+    /// Answers this chat's calls in place of the gateway; nil in the app. A test says what each
+    /// call gets back, and when.
+    var gatewayStandIn: (@MainActor (String, [String: JSONValue]) async throws -> JSONValue)?
+
     public var modelName: String { info?.model ?? "" }
     public var subtitle: String {
         let m = modelName.isEmpty ? "no model" : (modelName.split(separator: "/").last.map(String.init) ?? modelName)
@@ -208,6 +228,37 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
     public var firstCard: PendingCard? { cards.first }
     public var needsAttention: Bool { !cards.isEmpty }
+
+    /// The approval an Approve or Deny from outside the chat was for (a notification, the Live
+    /// Activity, the watch): the card `keys` name (`PendingCard.isNamed(by:)`). None once that
+    /// request is gone (answered, withdrawn, its turn over) or when nothing is named: another
+    /// card is never taken in its place. Going by the first approval shown, a banner left from
+    /// an earlier one approved a newer one nobody had read.
+    public func approvalCard(named keys: [String]) -> PendingCard? {
+        cards.first { card in card.method == "approval" && keys.contains(where: card.isNamed(by:)) }
+    }
+
+    /// The approval an Approve or Deny from outside the chat answers: the one `keys` name, and
+    /// no other (`approvalCard(named:)`). One that names none (the Live Activity as the
+    /// Companion last updated it, a push or a notification without a usable id) answers the
+    /// chat's approval when it has just one, as before approvals were named; with several,
+    /// which one was meant is unknown and none is answered. Answering none at all, Approve on
+    /// the Companion's activity only opened the app.
+    public func approvalToAnswer(named keys: [String]) -> PendingCard? {
+        guard keys.isEmpty else { return approvalCard(named: keys) }
+        let approvals = cards.filter { $0.method == "approval" }
+        return approvals.count == 1 ? approvals.first : nil
+    }
+
+    /// `approvalToAnswer(named:)`, looked for while the chat opens (`wait`): until the approval
+    /// named shows, or with none named until any approval does.
+    public func approvalToAnswer(named keys: [String], waitingUpTo wait: TimeInterval) async -> PendingCard? {
+        let deadline = Date().addingTimeInterval(wait)
+        while keys.isEmpty ? !cards.contains(where: { $0.method == "approval" }) : approvalCard(named: keys) == nil, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+        return approvalToAnswer(named: keys)
+    }
 
     // MARK: Lifecycle
 
@@ -224,15 +275,25 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func resume() async throws {
-        let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
-        await apply(snapshot: r)
+        try await resumeFromGateway()
         await loadUsage()
+    }
+
+    /// The session's snapshot (`session.resume`), applied as a list of open questions read no
+    /// earlier than the call went out. The gateway reads them last, just before it answers, and
+    /// an answer sent from here meanwhile may reach it after that: taken as read when the reply
+    /// came, a card answered then came back.
+    private func resumeFromGateway() async throws {
+        let asked = Date()
+        let asking = askingForList(at: asked)
+        defer { listCame(asking) }
+        let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
+        await apply(snapshot: r, listedAt: asked)
     }
 
     public func reattachAfterReconnect() async {
         do {
-            let r = try await rpc("session.resume", ["session_id": .string(storedID), "cols": 80])
-            await apply(snapshot: r)
+            try await resumeFromGateway()
             stale = false
             if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
         } catch is CancellationError {
@@ -334,12 +395,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// Snapshots whose rows are being made off the main actor; events wait meanwhile.
     private var snapshotsBuilding = 0
     var isBuildingSnapshot: Bool { snapshotsBuilding > 0 }
-    /// Events that arrived while a snapshot was being made, handled after it in their order.
-    private var heldEvents: [GatewayEvent] = []
+    /// Events that arrived while a snapshot was being made, and when each came, handled after it
+    /// in their order.
+    private var heldEvents: [(event: GatewayEvent, at: Date)] = []
     /// How many of the held events came before the reply of the snapshot applied last. That
     /// snapshot shows them already: handled again on top of it, a tool call came twice and a
     /// reply's text doubled.
     private var heldShownBySnapshot = 0
+    /// Cards the snapshot applied last left up without listing them, asked after it was asked
+    /// for and before its reply came (`applyCards`): the turn's end among those events ends the
+    /// ones up before it came (`settleLeftUpBySnapshot`).
+    private var leftUpBySnapshot: Set<String> = []
     /// Snapshot replies in the order they came, and the newest one applied. Two can be in
     /// flight for one chat (a reconnect and the return to the app both re-read it); the older
     /// one finishing last must not put the thread back as it was.
@@ -380,7 +446,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// A snapshot of the session from the gateway. Its rows are made off the main actor
     /// (`snapshotRows`); events that arrive meanwhile wait, and are handled after it in the
     /// order they came, as they were when the snapshot was applied the moment it arrived.
-    func apply(snapshot r: JSONValue) async {
+    /// `listedAt`: when the snapshot was asked for; nil takes it as read when its reply came.
+    func apply(snapshot r: JSONValue, listedAt: Date? = nil) async {
         // The reply's ids are the chat's at once. Events are routed to a chat by its runtime id
         // (`GatewayRuntime.handle(event:)`): taken only after the rows were made, every event of
         // a turn already running went nowhere meanwhile, on a chat just opened (no id yet) or
@@ -392,6 +459,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // Events held so far came before this reply: the snapshot shows them already.
         let heldBefore = heldEvents.count
         let answeredAt = Date()
+        let listedAt = listedAt ?? answeredAt
+        // Its list of open questions is still to come until it is applied (`listsAskedAt`).
+        let asking = askingForList(at: listedAt)
+        defer { listCame(asking) }
         let snapInfo = try? r["info"]?.decode(SessionLiveInfo.self)
         let running = r["running"]?.boolValue ?? snapInfo?.running ?? false
         let shown = items
@@ -420,7 +491,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             // thread as it is now, leaving out the rows that stay as they are.
             let paired = unchanged && streamingItemID == streamingID ? rows.paired
                 : Self.keepingIDs(rows.built, from: items.filter { $0.id != streamingItemID && !addedIDs.contains($0.id) })
-            apply(snapshot: r, info: snapInfo, rows: paired, answeredAt: answeredAt, added: added)
+            apply(snapshot: r, info: snapInfo, rows: paired, listedAt: listedAt, answeredAt: answeredAt, added: added)
         }
         GatewayRuntime.signposter.endInterval("snapshot", signpost)
         if snapshotsBuilding == 0 {
@@ -429,26 +500,22 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             heldEvents = []
             heldShownBySnapshot = 0
             // Those the snapshot shows still do what it cannot show (`handleShownBySnapshot`).
-            for ev in held.prefix(shownBy) { handleShownBySnapshot(ev) }
-            for ev in held.dropFirst(shownBy) { handle(event: ev) }
+            for h in held.prefix(shownBy) { handleShownBySnapshot(h.event, arrivedAt: h.at) }
+            leftUpBySnapshot = []
+            for h in held.dropFirst(shownBy) { handle(event: h.event) }
         }
     }
 
-    /// `answeredAt`: when the snapshot's reply came; a question asked since is newer than it.
-    /// `added`: rows this device added after the reply, which go after the snapshot's.
-    private func apply(snapshot r: JSONValue, info snapInfo: SessionLiveInfo?, rows: [TranscriptItem], answeredAt: Date, added: [TranscriptItem]) {
+    /// `listedAt`: when the snapshot was asked for. `answeredAt`: when its reply came; a question
+    /// asked since is newer than it. `added`: rows this device added after the reply, which go
+    /// after the snapshot's.
+    private func apply(snapshot r: JSONValue, info snapInfo: SessionLiveInfo?, rows: [TranscriptItem], listedAt: Date, answeredAt: Date, added: [TranscriptItem]) {
         info = snapInfo
         if let t = info?.title, !t.isEmpty { title = t }
         var keptAttachments: [String: [AttachmentPreview]] = [:]
         for it in items { if case .user(let t, let a) = it.kind, !a.isEmpty { keptAttachments[t] = a } }
         items = rows
         toolIndex = [:]
-        // A question asked while the rows were made (an approval, a clarify, a password) is
-        // newer than the snapshot's open requests, so it stays: cleared, the bot waited out the
-        // question with nothing on screen to answer it. One only an older list had goes.
-        cards = cards.filter { (cardAsOf[$0.id] ?? .distantPast) >= answeredAt }
-        cardShownAt = cardShownAt.filter { id, _ in cards.contains { $0.id == id } }
-        cardAsOf = cardAsOf.filter { id, _ in cards.contains { $0.id == id } }
         // A message sent here since is a turn the snapshot cannot know about yet.
         let sentSince = startedHere && added.contains { if case .user = $0.kind { return true }; return false }
         isRunning = (r["running"]?.boolValue ?? info?.running ?? false) || sentSince
@@ -508,28 +575,92 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         fetchedRowIDs = Set(items.map(\.id))
         items += added
         if let q = r["queued"]?["user"]?.stringValue, !q.isEmpty { queue = [QueuedMessage(text: q)] }
-        // The snapshot's questions are as old as its reply (the `answeredAt` filter above), and
-        // so is its word on one taken down here since (`removedHereAt`).
-        if let open = r["open_requests"]?.arrayValue {
-            for o in open {
-                guard let id = o["id"]?.stringValue, let method = o["method"]?.stringValue,
-                      !removedHere(id, since: answeredAt), !removedHere(o["params"]?["request_id"]?.stringValue, since: answeredAt) else { continue }
-                addCard(PendingCard(id: id, method: method, params: o["params"] ?? .object([:])), asOf: answeredAt)
-            }
+        applyCards(of: r, listedAt: listedAt, answeredAt: answeredAt)
+        if isRunning {
+            activity.start(for: self)
+            // A card up before the activity was (one the snapshot brought, announced to no
+            // activity yet, or one asked before the turn was known here): an activity started
+            // now said "Thinking…" while the bot waited on it. Shown with no alert: the card was
+            // announced when it came, and an activity taken over may have announced it already.
+            if !cards.isEmpty { activity.showCards(for: self) }
         }
-        if let pa = r["pending_approval"], !pa.isNull, let rid = pa["request_id"]?.stringValue,
-           !cards.contains(where: { $0.approval?.requestId == rid }), !removedHere(rid, since: answeredAt) {
-            var params = pa.objectValue ?? [:]
-            params["session_id"] = .string(runtimeID)
-            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: answeredAt)
-        }
-        // A card taken down before this reply and the last look at the pending approvals: every
-        // list still to come was read after that, and has it right.
-        let listedSince = min(answeredAt, lastApprovalCheck)
-        removedHereAt = removedHereAt.filter { $0.value >= listedSince }
-        if isRunning { activity.start(for: self) }
         saveTranscriptCache()
         Task { await pollPendingApprovals() }
+    }
+
+    /// The cards a snapshot leaves: those it lists, and those that came since it was asked for.
+    /// A card shown already stays as it was, announced once (put back each time a snapshot
+    /// listed it, it buzzed or notified again and the gateway was told again that it arrived).
+    /// One the snapshot no longer has goes with what was posted for it, and with the chat's call
+    /// for attention when it was the last (`cardWent`).
+    private func applyCards(of r: JSONValue, listedAt: Date, answeredAt: Date) {
+        // Its questions, less those taken down here since it was asked for: the gateway reads
+        // them at some point before it answers, so one answered here meanwhile may still be on
+        // it (`removedHereAt`).
+        var listed: [PendingCard] = []
+        for o in r["open_requests"]?.arrayValue ?? [] {
+            guard let id = o["id"]?.stringValue, let method = o["method"]?.stringValue, !listed.contains(where: { $0.id == id }),
+                  !removedHere(id, since: listedAt), !removedHere(o["params"]?["request_id"]?.stringValue, since: listedAt) else { continue }
+            listed.append(PendingCard(id: id, method: method, params: o["params"] ?? .object([:])))
+        }
+        if let pa = r["pending_approval"], !pa.isNull, let rid = pa["request_id"]?.stringValue,
+           !listed.contains(where: { $0.approval?.requestId == rid }), !removedHere(rid, since: listedAt) {
+            var params = pa.objectValue ?? [:]
+            params["session_id"] = .string(runtimeID)
+            listed.append(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true))
+        }
+        // One question, under its own id or the approval queue's.
+        func same(_ a: PendingCard, _ b: PendingCard) -> Bool {
+            if a.id == b.id { return true }
+            guard let rid = a.approval?.requestId else { return false }
+            return rid == b.approval?.requestId
+        }
+        let before = cards
+        // A question that came after the snapshot was asked for (an approval, a clarify, a
+        // password) may be newer than its list, so it stays: the gateway reads its open
+        // questions on the way to its reply, and one asked after that read comes before the
+        // reply without being on it. Cleared, the bot waited out the question with nothing on
+        // screen to answer it. One asked before the snapshot was, and not on it, is over.
+        let kept = before.filter { card in (cardAsOf[card.id] ?? .distantPast) >= listedAt || listed.contains { same($0, card) } }
+        let fresh = listed.filter { card in !before.contains { same($0, card) } }
+        let dropped = before.filter { card in !kept.contains { $0.id == card.id } }
+        // One approval kept under both ids (`areTwins`): the request's own stays, where the
+        // first of the two was. The question is still open, so nothing is taken down for the
+        // other.
+        var shown: [PendingCard] = []
+        for card in kept {
+            guard let i = shown.firstIndex(where: { Self.areTwins($0, card) }) else { shown.append(card); continue }
+            let (own, queued) = card.viaApprovalRPC ? (shown[i], card) : (card, shown[i])
+            shown[i] = own
+            carryOver(from: queued, to: own)
+        }
+        cards = shown + fresh
+        for card in shown where listed.contains(where: { same($0, card) }) { cardAsOf[card.id] = max(cardAsOf[card.id] ?? .distantPast, answeredAt) }
+        let now = Date()
+        for card in fresh { cardShownAt[card.id] = now; cardAsOf[card.id] = answeredAt }
+        cardShownAt = cardShownAt.filter { id, _ in cards.contains { $0.id == id } }
+        cardAsOf = cardAsOf.filter { id, _ in cards.contains { $0.id == id } }
+        // Up though the snapshot does not list them, asked before its reply came: a turn that
+        // ended before the reply, its end held while the rows were made, ends those up before it
+        // (`handleShownBySnapshot`). Left up, the chat said it needed you after the turn was over.
+        leftUpBySnapshot = Set(cards.filter { card in
+            (cardAsOf[card.id] ?? .distantPast) < answeredAt && !listed.contains { same($0, card) }
+        }.map(\.id))
+        // The gateway waits on these no more (answered on another device, withdrawn, the turn
+        // over). Left as they were, the chat still said it needed you (the chat list, the tab,
+        // the Dashboard, the widget, the watch) with nothing to answer, and the notification
+        // still offered Approve. An older list still on its way does not put one back.
+        for card in dropped {
+            noteRemovedHere(card)
+            runtime.cardNotifier?.cardSettled(card, chat: self)
+            // Whoever waits on it here is let go with nothing sent (nil): should the gateway
+            // still have the question after all, it stays open there and the next list brings
+            // it back. Answered with nothing (`.null`), the gateway took it as answered: a
+            // clarify as cancelled, a password as skipped, an approval as a deny.
+            inlineAnswers.removeValue(forKey: card.id)?.resume(returning: nil)
+        }
+        if !dropped.isEmpty || (cards.isEmpty && runtime.needsAttention.contains(storedID)) { cardWent() }
+        for card in fresh { announce(card) }
     }
 
     /// The fallback the gateway offers for a missed approval frame: anything still waiting on
@@ -537,6 +668,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func pollPendingApprovals() async {
         let asked = Date()
         lastApprovalCheck = asked
+        let asking = askingForList(at: asked)
+        defer { listCame(asking) }
         guard let r = try? await rpc("approval.pending", ["session_id": .string(runtimeID)], timeout: 10) else { return }
         // The gateway's own list of what still waits, when it sent one (an older gateway
         // answers with a single approval, which says nothing about the others).
@@ -562,7 +695,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                   !removedHere(rid, since: asked) else { continue }
             var params = pa.objectValue ?? [:]
             params["session_id"] = .string(runtimeID)
-            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true), asOf: asked)
+            // Asked by the time the reply came (`cardAsOf`), not by `asked`: the list was read
+            // after that, and a snapshot asked for in between may have been read before it.
+            addCard(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true))
         }
     }
 
@@ -935,13 +1070,20 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// When each card appeared here.
     private var cardShownAt: [String: Date] = [:]
     /// When the gateway last said each card's question was waiting: when the question came, or
-    /// when the list that had it was read (a snapshot's reply, the pending approvals).
+    /// when the reply of a list that had it came (a snapshot, the pending approvals). It had
+    /// been asked by then, so a list asked for later that no longer has it was read after it was
+    /// asked, and the question is over.
     private var cardAsOf: [String: Date] = [:]
     /// When this device took each card down (answered it, or found it answered elsewhere), by
-    /// card id and by request id. A list of open questions read before then (a snapshot whose
-    /// rows were being made, the pending approvals) still has it: put back, an answered card
-    /// asked for attention again and a second tap answered a request already closed.
+    /// card id and by request id. A list of open questions asked for before then (a snapshot,
+    /// the pending approvals) may still have it: put back, an answered card asked for attention
+    /// again and a second tap answered a request already closed.
     private var removedHereAt: [String: Date] = [:]
+    /// When each list of open questions still to come was asked for (a snapshot, a look at the
+    /// pending approvals). Looks overlap: kept only past the newest one, a card taken down
+    /// between an older look and the newest was forgotten, and the older look, coming back
+    /// last, put it back.
+    private var listsAskedAt: [UUID: Date] = [:]
     private var lastApprovalCheck = Date.distantPast
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
@@ -951,8 +1093,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         for key in [card.id, card.params["request_id"]?.stringValue].compactMap({ $0 }) { removedHereAt[key] = now }
     }
 
+    /// A list of open questions asked for at `at`; `listCame` once it has been applied or failed.
+    private func askingForList(at: Date) -> UUID {
+        let id = UUID()
+        listsAskedAt[id] = at
+        return id
+    }
+
+    /// A card taken down before the oldest list still to come was asked for is right on every
+    /// one of them, so it is forgotten.
+    private func listCame(_ id: UUID) {
+        listsAskedAt[id] = nil
+        let oldest = listsAskedAt.values.min() ?? Date()
+        removedHereAt = removedHereAt.filter { $0.value >= oldest }
+    }
+
     /// Whether the card or request `key` was taken down here at or after `asOf`, when a list
-    /// that still has it was read.
+    /// that still has it was asked for.
     private func removedHere(_ key: String?, since asOf: Date) -> Bool {
         guard let key, let at = removedHereAt[key] else { return false }
         return at >= asOf
@@ -969,7 +1126,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // when the gateway's list had simply missed the card (a tester's Once came back as
         // "Answered on another device" and a refusal). If the gateway really has its answer
         // it ignores a late one; the turn's end releases whatever still waits.
-        if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
+        cardWent()
         runtime.cardNotifier?.cardSettled(card, chat: self)
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: card.method == "approval" ? "Answered on another device" : "No longer waiting for an answer", symbol: "checkmark.shield")))
     }
@@ -982,26 +1139,69 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         Task { await pollPendingApprovals() }
     }
 
-    /// `asOf`: when the gateway last said the question was waiting (`cardAsOf`); now, unless it
-    /// came in a list.
+    /// `asOf`: when the gateway last said the question was waiting (`cardAsOf`); now, as the
+    /// question or the reply of the list that had it came.
     private func addCard(_ card: PendingCard, asOf: Date = Date()) {
         guard !cards.contains(where: { $0.id == card.id }) else { return }
+        if let i = cards.firstIndex(where: { Self.areTwins($0, card) }) {
+            // Up already under the other id: the queue's card adds nothing, and the request's
+            // own takes the queue card's place (its waiter is here, `answer(serverRequest:)`).
+            guard !card.viaApprovalRPC else { return }
+            let queued = cards[i]
+            cards[i] = card
+            carryOver(from: queued, to: card, asOf: asOf)
+            acknowledge(card)
+            return
+        }
         cardShownAt[card.id] = Date()
         cardAsOf[card.id] = asOf
         cards.append(card)
+        announce(card)
+    }
+
+    /// One approval under the approval queue's id and its request's own. The gateway queues an
+    /// approval a moment before it asks, and a list read in between (the pending approvals, a
+    /// snapshot's `pending_approval`) put the queue's card up: two cards for one question, and
+    /// a tap on one left the other asking.
+    private static func areTwins(_ a: PendingCard, _ b: PendingCard) -> Bool {
+        guard a.viaApprovalRPC != b.viaApprovalRPC, let rid = a.approval?.requestId else { return false }
+        return rid == b.approval?.requestId
+    }
+
+    /// The request's own card in its twin's place (`areTwins`): shown since the first of them
+    /// was, and announced with it.
+    private func carryOver(from queued: PendingCard, to own: PendingCard, asOf: Date? = nil) {
+        cardShownAt[own.id] = [cardShownAt[own.id], cardShownAt.removeValue(forKey: queued.id)].compactMap { $0 }.min() ?? Date()
+        cardAsOf[own.id] = [cardAsOf[own.id], cardAsOf.removeValue(forKey: queued.id), asOf].compactMap { $0 }.max()
+    }
+
+    /// A card new on this device: the chat asks for attention, the platform says so (a buzz, a
+    /// notification), and the gateway hears that an approval reached a client.
+    private func announce(_ card: PendingCard) {
         runtime.setAttention(storedID: storedID, needed: true)
         activity.update(for: self, attention: true)
-        if card.method == "approval", let rid = card.approval?.requestId, !card.viaApprovalRPC {
-            Task { _ = try? await rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
-        }
+        acknowledge(card)
         runtime.cardNotifier?.cardArrived(card, chat: self)
     }
 
+    /// The gateway hears that the approval's request reached this client (one only the approval
+    /// queue listed was never sent as a request).
+    private func acknowledge(_ card: PendingCard) {
+        if card.method == "approval", let rid = card.approval?.requestId, !card.viaApprovalRPC {
+            Task { _ = try? await rpc("approval.received", ["session_id": .string(runtimeID), "request_id": .string(rid)]) }
+        }
+    }
+
     public func respond(card: PendingCard, result: JSONValue) async {
+        // The card up now for its question. An approval's queue card gives way to the request's
+        // own when that comes (`addCard`), and whoever took it before (the watch, a confirmation)
+        // still holds the queue's: answered as that, nothing was taken down and the answer went
+        // through the approval queue while the bot's request waited.
+        let card = approvalCard(named: [card.id]) ?? card
         noteRemovedHere(card)
         cards.removeAll { $0.id == card.id }
         cardShownAt[card.id] = nil
-        if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
+        cardWent()
         if card.method == "approval" {
             runtime.pushRegistrar?.noteAnswer(requestID: card.approval?.requestId ?? card.id, session: storedID, runtime: runtime)
         }
@@ -1019,22 +1219,39 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func cancelCard(id: String, reason: String) {
-        guard let card = cards.first(where: { $0.id == id }) else { return }
+        guard let card = cards.first(where: { $0.id == id }) else {
+            // Its card went already (taken for answered elsewhere, `settleElsewhere`) and left
+            // its waiter open; withdrawn now, the request is over and the waiter let go.
+            inlineAnswers.removeValue(forKey: id)?.resume(returning: .null)
+            return
+        }
         // Never while a snapshot is made (its event waits), but a look at the pending
         // approvals may be on its way back.
         noteRemovedHere(card)
         cards.removeAll { $0.id == id }
         cardShownAt[id] = nil
-        if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false) }
+        // What was posted for it goes too, as for a card answered elsewhere: left, a withdrawn
+        // approval's notification still offered Approve and the activity said "Approval needed".
+        cardWent()
+        runtime.cardNotifier?.cardSettled(card, chat: self)
         if let c = inlineAnswers.removeValue(forKey: id) { c.resume(returning: .null) }
         items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Request withdrawn (\(reason)).", symbol: "xmark.circle")))
+    }
+
+    /// A card went. The last one: the chat stops asking for attention, and the activity says
+    /// the turn runs on. With others left the activity shows the one now first, its words and
+    /// the request its Approve answers: left as it was, it showed the card that went, its
+    /// Approve named a request no longer waiting, and a question was offered Approve or Deny.
+    private func cardWent() {
+        if cards.isEmpty { runtime.setAttention(storedID: storedID, needed: false); activity.update(for: self, attention: false) }
+        else { activity.showCards(for: self) }
     }
 
     // MARK: Events
 
     public func handle(event ev: GatewayEvent) {
         // A snapshot is being made: this comes after it (see `apply(snapshot:)`).
-        if snapshotsBuilding > 0 { heldEvents.append(ev); return }
+        if snapshotsBuilding > 0 { heldEvents.append((ev, Date())); return }
         let p = ev.payload
         if !startedHere, !isRunning, !adoptingTurn, !isResuming, Self.turnOpeners.contains(ev.type) { adoptTurnStartedElsewhere() }
         if ev.type == "message.complete" || ev.type == "error" { startedHere = false }
@@ -1175,8 +1392,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// (`heldShownBySnapshot`). What it did to the thread, the cards and whether the turn runs,
     /// the snapshot shows; the rest is still done. Left out with it, a turn that ended then
     /// never sent the message queued behind it and voice, Siri and the watch never heard its
-    /// reply; a question withdrawn then kept its waiter here for good.
-    private func handleShownBySnapshot(_ ev: GatewayEvent) {
+    /// reply; a question withdrawn then kept its waiter here for good, and its card when the
+    /// snapshot left it up; a card the snapshot left up outlived the turn it waited on.
+    /// `arrivedAt`: when the event came here.
+    private func handleShownBySnapshot(_ ev: GatewayEvent, arrivedAt: Date) {
         let p = ev.payload
         switch ev.type {
         case "message.delta":
@@ -1197,6 +1416,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             if !isRunning {
                 startedHere = false
                 statusLine = nil
+                settleLeftUpBySnapshot(upBefore: arrivedAt)
                 activityEndTask?.cancel(); activityEndTask = nil
                 activity.end(for: self, phase: (p["status"]?.stringValue == "error" || p["error"]?.stringValue?.isEmpty == false) ? "error" : "done")
             }
@@ -1205,14 +1425,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "error":
             if !isRunning {
                 startedHere = false
+                settleLeftUpBySnapshot(upBefore: arrivedAt)
                 activityEndTask?.cancel(); activityEndTask = nil
                 activity.end(for: self, phase: "error")
             }
         case "request.cancel":
-            // Its card went with the snapshot, which no longer lists the question (a card shown
-            // now was asked since): whoever waits on it here is let go.
-            let id = p["id"]?.stringValue ?? ""
-            if !cards.contains(where: { $0.id == id }) { inlineAnswers.removeValue(forKey: id)?.resume(returning: .null) }
+            // A withdrawn request never comes back. Its card went with the snapshot, which no
+            // longer lists it, and whoever waits on it here is let go; or it is still shown, the
+            // snapshot read before the withdrawal or asked for before the question came, and it
+            // goes now.
+            cancelCard(id: p["id"]?.stringValue ?? "", reason: p["reason"]?.stringValue ?? "cancelled")
         case "session.reclaimed":
             // Only when the snapshot is of the session that went: a resume after it is on a new one.
             if (p["session_id"]?.stringValue ?? ev.sessionID) == runtimeID { handle(event: ev) }
@@ -1222,6 +1444,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             // The rest change only what the snapshot shows.
             break
         }
+    }
+
+    /// The turn ended before the reply of the snapshot applied (its end came here at `end`),
+    /// and the snapshot has nothing running: a card it left up only for being asked after it
+    /// was asked for (`leftUpBySnapshot`), up before that end came, waited on that turn and goes
+    /// as at a turn's end (`settleElsewhere`). One asked since is the next turn's, which the
+    /// gateway had not begun when it read the snapshot: taken down with the turn before it, the
+    /// bot waited on it with nothing on screen to answer.
+    private func settleLeftUpBySnapshot(upBefore end: Date) {
+        for card in cards where leftUpBySnapshot.contains(card.id) && (cardShownAt[card.id] ?? .distantPast) < end { settleElsewhere(card) }
     }
 
     /// One row per helper, made on whichever `subagent.*` event comes first and kept up to date
