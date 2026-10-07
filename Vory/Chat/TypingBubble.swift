@@ -26,18 +26,34 @@ struct TypingBubble: View {
 /// Three dots, each rising and brightening in turn, then a beat of rest — Messages' rhythm.
 struct TypingDots: View {
     var color: Color
+    #if os(macOS)
+    /// On the Mac the dots hold still where no one can see them, or under Reduce Motion (#248).
+    @Environment(\.botsLive) private var botsLive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #endif
     var body: some View {
+        #if os(macOS)
+        if botsLive && !reduceMotion { moving } else { dots(at: 0.3) }
+        #else
+        moving
+        #endif
+    }
+
+    private var moving: some View {
         TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
-            let t = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { i in
-                    let p = (t * 1.05 - Double(i) * 0.16).truncatingRemainder(dividingBy: 1)
-                    let k = p < 0.55 ? sin(p / 0.55 * .pi) : 0
-                    Circle().fill(color)
-                        .frame(width: 8, height: 8)
-                        .opacity(0.45 + 0.55 * k)
-                        .offset(y: -3 * k)
-                }
+            dots(at: timeline.date.timeIntervalSinceReferenceDate)
+        }
+    }
+
+    private func dots(at t: Double) -> some View {
+        HStack(spacing: 6) {
+            ForEach(0..<3, id: \.self) { i in
+                let p = (t * 1.05 - Double(i) * 0.16).truncatingRemainder(dividingBy: 1)
+                let k = p < 0.55 ? sin(p / 0.55 * .pi) : 0
+                Circle().fill(color)
+                    .frame(width: 8, height: 8)
+                    .opacity(0.45 + 0.55 * k)
+                    .offset(y: -3 * k)
             }
         }
     }

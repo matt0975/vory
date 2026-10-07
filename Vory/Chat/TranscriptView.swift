@@ -1156,15 +1156,28 @@ struct TranscriptRow: View, Equatable {
                 }
                 .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
+                #if os(macOS)
+                // The whole bubble takes the right-click, padding and gaps too: on the words the
+                // Mac's selectable text gives its own menu, which has no Copy for the reply (#255).
+                .contentShape(.rect)
+                #endif
                 .contextMenu {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { VoiceCoordinator.shared.toggleSpeaking(text) } label: {
                         Label(VoiceCoordinator.shared.isSpeaking(text) ? "Stop Speaking" : "Speak", systemImage: VoiceCoordinator.shared.isSpeaking(text) ? "speaker.slash" : "speaker.wave.2")
                     }
+                    #if os(macOS)
+                    Button { UIPasteboard.general.string = TranscriptMedia.copyText(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    #else
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    #endif
                     Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                 }
+                #if os(macOS)
+                // Copy on hover, past the bubble's trailing edge (#255); not while it streams.
+                .modifier(ReplyCopyHover(text: text, enabled: !streaming))
+                #endif
                 Spacer(minLength: wide ? 0 : 24)
                 }
             }
