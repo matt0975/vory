@@ -68,10 +68,10 @@ final class VoiceEntryUITests: XCTestCase {
         shot("voice-entry-transcript")
         end.tap()
 
-        // Ending leaves the person in the chat (its composer is there), not on the list.
-        let send = app.buttons["composer.send"].firstMatch
-        let composer = app.textViews.firstMatch
-        XCTAssertTrue(send.waitForExistence(timeout: 10) || composer.waitForExistence(timeout: 5), "not left in the chat")
+        // Ending leaves the person in the chat, not on the list: its header, and at the bottom its
+        // composer or, when the bot's turn has come to a question (the mock's scripted turn ends
+        // at an approval), the card that takes the composer's place.
+        XCTAssertTrue(leftInTheChat(), "not left in the chat")
         shot("voice-entry-chat-after")
         let back = app.buttons["chat.back"].firstMatch
         XCTAssertTrue(back.waitForExistence(timeout: 5))
@@ -93,5 +93,18 @@ final class VoiceEntryUITests: XCTestCase {
         XCTAssertTrue(app.buttons["attach.voice-mode"].firstMatch.waitForExistence(timeout: 5), "no Voice mode row in the + panel")
         XCTAssertFalse(app.buttons["attach.message-history"].firstMatch.isEnabled, "Message History should be greyed before a chat exists")
         shot("voice-entry-sheet-panel")
+    }
+
+    /// In a chat: its Back button on screen, and its composer or a waiting card at the bottom.
+    private func leftInTheChat(timeout: TimeInterval = 15) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let back = app.buttons["chat.back"].firstMatch.exists
+            let composer = app.descendants(matching: .any).matching(identifier: "composer.text").firstMatch.exists
+            let card = app.staticTexts["Approval needed"].exists || app.buttons["Deny"].exists
+            if back && (composer || card) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        return false
     }
 }

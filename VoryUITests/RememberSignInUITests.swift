@@ -178,7 +178,13 @@ final class RememberSignInUITests: XCTestCase {
             return
         }
         settingsTab.tap()
-        try XCTUnwrap(hittable(app.buttons.matching(identifier: "settings.row.gateways")), "no Gateways row").tap()
+        guard let gateways = hittable(app.buttons.matching(identifier: "settings.row.gateways")) else {
+            // Seen once on a busy run, after two system password prompts: what was on screen.
+            print("NO-GATEWAYS-TREE \(app.debugDescription)")
+            shot("remember-no-gateways-row")
+            return XCTFail("no Gateways row")
+        }
+        gateways.tap()
         let forget = try XCTUnwrap(hittable(app.buttons.matching(identifier: "gateway.forgetSignIn")), "no Forget row for the remembered sign-in")
         shot("remembered-in-settings")
 

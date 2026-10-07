@@ -231,18 +231,14 @@ final class VoryUITests: XCTestCase {
         shot("04-chats")
         newChat.tap()
         attachDiagnostics("04b-after-new-chat")
-        // On a gateway with several bots, New Message opens the sheet with a To: field; the composer
-        // only appears after a bot is picked. Return in the empty field takes the first bot listed.
-        let to = app.textFields["Bot name"].firstMatch
-        if to.waitForExistence(timeout: 10) { to.tap(); to.typeText("\n") }
-        let composer = app.descendants(matching: .any).matching(identifier: "newchat.text").firstMatch
-        let composerFound = composer.waitForExistence(timeout: 30)
-        XCTAssertTrue(composerFound, "newchat.text missing. \(screenSummary())")
+        // One tap on the compose circle is a fresh chat with the current bot, straight in (press
+        // and hold is the New Message sheet): the chat's own composer sends the first message.
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30), "composer.text missing after New Chat. \(screenSummary())")
         composer.tap(); composer.typeText("vory-e2e: reply with exactly the single word: pong")
         shot("05-composer")
-        // Sending from the New Message sheet creates the chat and submits the first message.
-        let send = app.buttons["newchat.send"].firstMatch
-        XCTAssertTrue(send.waitForExistence(timeout: 5), "newchat.send missing. \(screenSummary())")
+        let send = app.buttons["composer.send"].firstMatch
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "composer.send missing. \(screenSummary())")
         send.tap()
         // Wait for either a streamed reply or the gateway's error surface.
         // The user's own prompt also contains "pong", so match the reply exactly rather than by substring.

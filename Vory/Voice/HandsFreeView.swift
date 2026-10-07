@@ -116,8 +116,11 @@ struct HandsFreeView: View {
     /// What the empty transcript says.
     private var prompt: String { session.isLive ? "Say something." : "Say something. I'll answer when you pause." }
 
+    /// The three buttons share a line through their circles' centres; Mute's and Pause's words
+    /// hang below theirs. (Centred as whole columns, words and all, the two smaller circles sat
+    /// higher than End's.)
     private var controls: some View {
-        HStack(spacing: 28) {
+        HStack(alignment: .controlCircle, spacing: 19) {
             control(state.isMuted ? "mic.slash.fill" : "mic.fill", label: state.isMuted ? "Unmute" : "Mute", on: state.isMuted) { session.toggleMute() }
                 .disabled(state.phase == .paused)
             Button { session.end() } label: {
@@ -140,11 +143,24 @@ struct HandsFreeView: View {
                     .background(on ? AnyShapeStyle(Color.white) : AnyShapeStyle(.white.opacity(0.18)), in: .circle)
             }
             .buttonStyle(.plain)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            .alignmentGuide(.controlCircle) { $0[VerticalAlignment.center] }
+            Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.6)
         }
+        // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays
+        // in the middle.
+        .frame(width: 76)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
     }
+}
+
+private extension VerticalAlignment {
+    /// The middle of a voice-mode control's circle (End's, which has no words under it, is its
+    /// own middle).
+    enum ControlCircle: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+    static let controlCircle = VerticalAlignment(ControlCircle.self)
 }
 
 #endif
