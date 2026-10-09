@@ -291,7 +291,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         await apply(snapshot: r, listedAt: asked)
     }
 
-    public func reattachAfterReconnect() async {
+    public func reattachAfterReconnect(retrying: Bool = true) async {
         do {
             try await resumeFromGateway()
             stale = false
@@ -299,6 +299,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         } catch is CancellationError {
             // A newer reconnect superseded this one; it will re-attach the chat itself.
             stale = true
+        } catch SocketError.notConnected {
+            // The socket went between the reconnect and this call (a network still settling
+            // after the app came back, a socket found dead on return): the reconnect that
+            // follows re-attaches the chat itself, so no banner for a failure the next try
+            // undoes (a tester's "Reconnected, but the chat could not be re-attached: Not
+            // connected to the gateway" after coming back).
+            stale = true
+        } catch SocketError.timeout where retrying {
+            // The gateway was slow to answer once; once more before saying so.
+            try? await Task.sleep(for: .seconds(2))
+            await reattachAfterReconnect(retrying: false)
         } catch {
             stale = true
             if !(error is CancellationError), !error.localizedDescription.contains("CancellationError") {

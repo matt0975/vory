@@ -92,6 +92,20 @@ import Testing
         await s.disconnect()
     }
 
+    @Test func comingBackToASocketThatStoppedAnsweringTearsItDown() async throws {
+        let server = try SilentServer(greeting: Self.ready)
+        defer { server.stop() }
+        let s = socket(port: server.port)
+        await s.connect()
+        try await s.waitUntilReady(timeout: 10)
+        #expect(await s.state == .open)
+        let began = Date()
+        await s.checkAlive(timeout: 1)
+        #expect(await s.state != .open, "a socket that answers no ping is still open")
+        #expect(Date().timeIntervalSince(began) < 5)
+        await s.disconnect()
+    }
+
     @Test func aCallThatIsCancelledReturnsAtOnce() async throws {
         let server = try SilentServer(greeting: Self.ready)
         defer { server.stop() }

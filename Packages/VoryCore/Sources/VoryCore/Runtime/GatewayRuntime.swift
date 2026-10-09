@@ -17,7 +17,13 @@ public final class GatewayRuntime {
     /// The app is out of sight (the phone's app in the background): streaming replies gather
     /// their text without being redrawn, and are drawn once when it comes back.
     public var isAway = false {
-        didSet { if oldValue, !isAway { for chat in registry.all { chat.cameBack() } } }
+        didSet {
+            guard oldValue, !isAway else { return }
+            for chat in registry.all { chat.cameBack() }
+            // A socket that died quietly while the app was away is found out now, not at the
+            // next heartbeat (see `GatewaySocket.checkAlive`).
+            Task { [socket] in await socket?.checkAlive() }
+        }
     }
     /// False where no socket is opened at all (a watch going through its iPhone): start,
     /// reconnect and new credentials leave it closed, and the capability probe skips it.

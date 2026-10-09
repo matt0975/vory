@@ -247,10 +247,24 @@ public actor GatewaySocket {
         }
     }
 
+    /// Asks the gateway for a sign of life now and treats silence as the connection lost. The
+    /// app coming back to a socket that died quietly while it was suspended should not wait
+    /// for the next heartbeat to find out: every resume and send would queue on the dead
+    /// socket until then and fail together when it was finally torn down ("Reconnected, but
+    /// the chat could not be re-attached", a tester coming back after a while).
+    public func checkAlive(timeout: Double = 5) async {
+        guard task != nil, state == .open else { return }
+        do { _ = try await call("ping", params: [:], timeout: timeout) }
+        catch { connectionLost(reason: "no answer to a ping after coming back") }
+    }
+
     private func connectionLost(reason: String) {
         guard task != nil else { return }
         log.warning("connection lost: \(reason, privacy: .public)")
         teardown(reason: reason)
+        // Not open from this moment, not from the reconnect loop's first turn: a call made in
+        // between saw `.open`, skipped the ready wait and failed on the torn-down socket.
+        setState(wantConnected ? .reconnecting(attempt: attempt + 1, delay: 0) : .idle)
         if wantConnected, reconnectTask == nil {
             reconnectTask = Task { await self.runConnectLoop() }
         }
