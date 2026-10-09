@@ -71,8 +71,11 @@ enum Perf {
         thread.qualityOfService = .utility
         thread.start()
     }
+    /// One line in the perf log, for a timing measured in place (a panel's first layout, say).
+    static func note(_ line: String) { log.notice("\(line, privacy: .public)") }
     #else
     @inline(__always) static func tick(_ name: String) {}
     @inline(__always) static func watchMainThread() {}
+    @inline(__always) static func note(_ line: String) {}
     #endif
 }

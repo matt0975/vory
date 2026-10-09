@@ -49,6 +49,7 @@ struct ComposerView: View {
     @State private var longTextOffer = false
     @State private var showAttach = false
     @State private var attachPanelHeight: CGFloat = 356
+    @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var model
 
@@ -206,6 +207,13 @@ struct ComposerView: View {
     }
 
     var body: some View {
+        // One glass container for the composer, so the + button's glass can become the
+        // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
+        // outside a container, and the panel just scaled in.
+        GlassEffectContainer(spacing: 0) { composerStack }
+    }
+
+    private var composerStack: some View {
         VStack(spacing: 8) {
             if !menuItems.isEmpty || menuLoading {
                 SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
@@ -327,9 +335,15 @@ struct ComposerView: View {
             if showAttach {
                 attachPanel
                     .glassEffectID("attach", in: namespace)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachPanelHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                        attachPanelHeight = h
+                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
+                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
+                    }
                     .offset(y: -(attachPanelHeight + 10))
-                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                    // The glass grows out of the button and folds back into it; the rows fade.
+                    .glassEffectTransition(.matchedGeometry)
+                    .transition(.opacity)
                     .zIndex(2)
             }
         }
@@ -367,6 +381,10 @@ struct ComposerView: View {
         #endif
         // Why the mic did nothing (no permission, no recognizer): said in the banner, not swallowed.
         .onChange(of: dictation.error) { _, e in if let e { chat.banner = e; dictation.error = nil } }
+        #if os(iOS)
+        // The camera question answered before the + panel can need it (see cameraAvailable).
+        .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
+        #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
         // the box, ready to type, as the box is after a message goes out (#212).
@@ -456,7 +474,7 @@ struct ComposerView: View {
             // The panel takes the keyboard's place, as the + tray does in Messages: with the
             // keyboard up it grew over the thread and covered the header (a tester, on the
             // first build with Voice mode in it).
-            if !showAttach { focused = false }
+            if !showAttach { focused = false; attachTappedAt = Date() }
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
@@ -471,10 +489,23 @@ struct ComposerView: View {
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
     }
 
+    #if os(iOS)
+    /// Whether a camera is there, asked once: the system's answer takes a moment the first
+    /// time (it wakes the capture devices), and it used to be asked on the tap that opens
+    /// the panel, which is where the first open lagged (#285). Warmed when the chat opens.
+    nonisolated(unsafe) private static var cameraAvailableCache: Bool?
+    private static var cameraAvailable: Bool {
+        if let c = cameraAvailableCache { return c }
+        let c = UIImagePickerController.isSourceTypeAvailable(.camera)
+        cameraAvailableCache = c
+        return c
+    }
+    #endif
+
     private var attachPanel: some View {
         var items: [AttachItem] = []
         #if os(iOS)
-        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true })
+        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !Self.cameraAvailable) { showCamera = true })
         #endif
         items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })
