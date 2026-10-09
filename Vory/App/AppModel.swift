@@ -461,8 +461,8 @@ final class AppModel {
         // Launched in the background for a notification action: keep the process alive long enough
         // to connect and send, and bring the saved gateway up first.
         #if os(iOS)
-        let assertion = UIApplication.shared.beginBackgroundTask(withName: "vory.notification.route")
-        defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+        let time = BackgroundTime("vory.notification.route")
+        defer { time.end() }
         #endif
         if runtime == nil { await activateSavedConnection() }
         let target: GatewayConnection? = r.connectionID.flatMap { store.connection(id: $0) }

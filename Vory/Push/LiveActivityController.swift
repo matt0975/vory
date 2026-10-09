@@ -238,9 +238,9 @@ final class LiveActivityController: TurnActivityReporting {
         let model = AppModel.shared
         guard model.runtime == nil else { return }
         note("connecting to publish the token (launched in the background)")
-        let task = UIApplication.shared.beginBackgroundTask(withName: "vory.live-activity.token") {}
+        let time = BackgroundTime("vory.live-activity.token")
         await model.activateSavedConnection()
-        UIApplication.shared.endBackgroundTask(task)
+        time.end()
     }
 
     /// The goal line (Vory Summaries) reaches the card the moment it is written or rewritten,

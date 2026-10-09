@@ -16,6 +16,9 @@ enum CloudBackupTask {
             // The task comes on the scheduler's queue and is completed from the main actor: it
             // is carried over in a box (BGTask is not Sendable; completing it from any thread is fine).
             let handed = UncheckedBox(task)
+            // Time up before the backup ran (the main actor was busy): the task is given back
+            // unfinished; without this the system ends the app for an unfinished task.
+            task.expirationHandler = { handed.value.setTaskCompleted(success: false) }
             Task { @MainActor in
                 CloudSync.shared.backUpIfDue()
                 log.notice("daily backup task ran; last own backup \(CloudSync.shared.lastOwnBackupAt?.description ?? "none", privacy: .public)\(CloudSync.shared.lastAutoBackupError.map { "; " + $0 } ?? "", privacy: .public)")

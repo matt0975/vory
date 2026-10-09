@@ -174,12 +174,15 @@ public enum MarkdownParser {
             let line = lines[i]
             i += 1
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if var codeLines = code {
+            if code != nil {
                 if trimmed.hasPrefix(fence) {
-                    out.append(.code(language: codeLang, text: codeLines.joined(separator: "\n"), closed: true))
+                    out.append(.code(language: codeLang, text: code!.joined(separator: "\n"), closed: true))
                     code = nil; codeLang = nil
                 } else {
-                    codeLines.append(line); code = codeLines
+                    // In place, with no second name on the array: a copy taken per line made a
+                    // long block's parse grow with the square of its length, on the main
+                    // thread, at every streaming redraw.
+                    code!.append(line)
                 }
                 continue
             }

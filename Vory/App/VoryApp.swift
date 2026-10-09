@@ -55,7 +55,14 @@ struct VoryApp: App {
                         model.lock.willEnterForeground()
                         // "Last checked" moves every time the app comes forward, and the day's
                         // backup runs from here when it is due (the Mac does the same on activation).
-                        CloudSync.shared.syncNow()
+                        // A moment after the transition, not in it: the sync reads the synced
+                        // Keychain several times and asks iCloud to flush, synchronous calls that
+                        // can wait on the system right after an unlock, and the foreground
+                        // transition is where the watchdog counts the main thread's seconds.
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1))
+                            CloudSync.shared.syncNow()
+                        }
                         Task { await model.push.refreshAuthorization() }
                         Task { await model.refreshCompanionUpdateFlag() }
                         // Live Activities whose turn ended while the app was away must not linger,
