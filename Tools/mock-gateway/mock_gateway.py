@@ -2221,6 +2221,10 @@ class Gateway:
         if method in ("image.attach_bytes", "pdf.attach"):
             # The real gateway writes the image into the profile's images dir and says where.
             name = p.get("filename", "") or "upload.png"
+            # A gateway without the PDF tools refuses every PDF with this (a tester's
+            # "attachments seem to be broken"): any file whose name says "refuse" gets it.
+            if method == "pdf.attach" and "refuse" in name.lower():
+                return err(-32000, "pdftoppm not installed (poppler-utils package required)")
             return ok({"attached": True, "filename": name, "path": f"/home/hermes/.hermes/images/upload_{int(time.time())}_1.{name.rsplit('.', 1)[-1] if '.' in name else 'png'}", "count": 1})
         if method == "file.attach":
             return ok({"ref_text": f"[file: {p.get('name', 'file')}]"})

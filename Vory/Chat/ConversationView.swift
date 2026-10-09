@@ -178,6 +178,14 @@ struct ConversationView: View {
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
+            #if DEBUG
+            // For a UI test: `-vory-test-stage <name>.pdf` stages a small PDF of that name in
+            // the chat as it opens, where the system file picker cannot be driven.
+            if let chat, chat.staged.isEmpty, let name = UserDefaults.standard.string(forKey: "vory-test-stage"), !name.isEmpty {
+                let pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+                chat.stageAttachment(data: Data(pdf.utf8), name: name, kind: .pdf)
+            }
+            #endif
             // Opened for "Start voice mode" (the intent, or the Mac's ⇧⌘V with no chat open):
             // hands-free begins as soon as the chat exists.
             if let chat, model.voiceModeRequested {

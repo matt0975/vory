@@ -750,7 +750,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 if let ref = try await upload(a) { outgoing += (outgoing.isEmpty ? "" : "\n") + ref }
                 previews.append(a)
             } catch {
-                items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: "Attachment \(a.name) failed: \(error.localizedDescription)")))
+                items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: Self.attachmentFailure(name: a.name, kind: a.kind, error: error))))
             }
         }
         staged = []
@@ -776,6 +776,27 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     /// Uploads one staged attachment through the gateway and returns the text reference to append (for files).
+    /// The error row for an attachment the gateway did not take. A gateway missing the tool it
+    /// reads a kind of file with says so in its own words ("pdftoppm not installed
+    /// (poppler-utils package required)"), which read as the app being broken ("attachments
+    /// seem to be broken", a tester on 1.4 (8)); those are put in plain words, with what still
+    /// works. Anything else is quoted as it came.
+    nonisolated static func attachmentFailure(name: String, kind: AttachmentPreview.Kind, error: Error) -> String {
+        let why = error.localizedDescription
+        let lower = why.lowercased()
+        let missingTool = lower.contains("not installed") || lower.contains("package required") || lower.contains("no such file")
+            || lower.contains("command not found") || lower.contains("not found: ")
+        guard missingTool else { return "Attachment \(name) failed: \(why)" }
+        switch kind {
+        case .pdf:
+            return "Attachment \(name) was not taken: the gateway is missing the tool it reads PDFs with (the poppler-utils package). Pictures and text files still go through. The gateway said: \(why)"
+        case .image:
+            return "Attachment \(name) was not taken: the gateway is missing a tool it needs for pictures. The gateway said: \(why)"
+        case .audio, .video, .file:
+            return "Attachment \(name) was not taken: the gateway is missing a tool it needs for this kind of file. The gateway said: \(why)"
+        }
+    }
+
     private func upload(_ a: AttachmentPreview) async throws -> String? {
         guard let url = a.localURL, let data = try? Data(contentsOf: url) else { return nil }
         let b64 = data.base64EncodedString()
