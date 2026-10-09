@@ -283,7 +283,7 @@ struct TranscriptView: View {
             // the threshold, so without it a slightly taller dock showed the arrow at the very end.
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
-            } action: { _, distance in
+            } action: { was, distance in
                 metrics.distanceFromBottom = distance
                 // Past the end with no finger on it: a scroll-to-bottom that used the lazy stack's
                 // estimated height lands beyond the real content and the thread shows nothing
@@ -297,7 +297,12 @@ struct TranscriptView: View {
                 // drag had covered 24 pt, and again whenever a token landed between touches).
                 // Scrolling back to the end, finger off, locks it again.
                 if metrics.userScrolling, distance > 24 || distance > metrics.touchStartDistance + 6 { metrics.stickToBottom = false }
-                if distance < 4, !metrics.userScrolling { metrics.stickToBottom = true }
+                // Only a distance that closed smoothly, not one that fell to nothing in a step:
+                // the content shrinking for a frame (a re-read of the chat replacing its rows,
+                // a lazy row re-measured) clamps the offset to the new end, read as "at the
+                // end", locked the thread, and the next token pulled a reader who was up the
+                // thread to the bottom (#277, "you have to fight against Vory to scroll").
+                if distance < 4, !metrics.userScrolling, was < 60 { metrics.stickToBottom = true }
             }
             .onScrollPhaseChange { _, phase in
                 // A finger on the thread counts from the touch, before it has moved.
@@ -350,7 +355,7 @@ struct TranscriptView: View {
             // Streaming text follows unanimated (tokens arrive faster than an animated scroll
             // settles); a new message fades in where it belongs and the thread eases up to it.
             .onChange(of: chat.items.last) { _, _ in
-                if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+                if mayFollow() { scrollPosition.scrollTo(edge: .bottom) }
             }
             .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
@@ -359,13 +364,13 @@ struct TranscriptView: View {
             // Once the history is in and laid out, make sure the end is really on screen.
             .task(id: chat.isResuming) { await landAfterResume() }
             .onChange(of: chat.statusLine) { _, _ in
-                if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The turn ending takes the typing bubble and status line out from under the last
             // reply; a locked thread follows so no blank band is left there.
             .onChange(of: chat.isRunning) { _, running in
                 if !running, collapseAfterTurn { withAnimation(.snappy) { openReasoning = []; openTools = [] } }
-                if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The dock changing height (an approval card arriving or leaving) moves the bottom
             // margin; a locked thread follows, so no blank band opens under the last row. Once
@@ -492,9 +497,21 @@ extension TranscriptView {
         }
     }
 
+    /// Whether a change at the end of the thread may scroll the thread to it: locked, no finger
+    /// on it, and within reach. A token adds a line or two between frames; a thread that is a
+    /// screen and a half or more from its end has a reader up it, and a lock that says
+    /// otherwise is stale (set by a frame in which the content shrank, see the geometry
+    /// handler). The lock goes then, not the reader's place (#277).
+    private func mayFollow() -> Bool {
+        guard metrics.stickToBottom, !metrics.userScrolling else { return false }
+        let reach = max(900, metrics.containerHeight * 1.5)
+        if metrics.distanceFromBottom > reach { metrics.stickToBottom = false; return false }
+        return true
+    }
+
     /// A row came or went under a locked thread: the thread eases to its end with it.
     private func followRows(from old: Int, to new: Int) {
-        guard metrics.stickToBottom, !metrics.userScrolling else { return }
+        guard mayFollow() else { return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
         // lands at its end at once then, with nothing to glide through.
         let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
