@@ -41,6 +41,8 @@ struct ComposerView: View {
     @State private var menuMark: SlashMenu.Mark?
     /// Escape closed the chooser for the word being typed; a new word opens it again.
     @State private var menuDismissed = false
+    /// Why the last Return did nothing (see SlashMenu.holdNote); gone with the next edit.
+    @State private var holdNote: String?
     @State private var dictation = DictationController()
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
@@ -140,15 +142,23 @@ struct ComposerView: View {
     /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
     /// as a message, so it stays in the field instead. True when Return was used here.
     private func takeOnReturn() -> Bool {
-        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex,
-                                      canRun: quote.isEmpty && chat.staged.isEmpty) {
+        let canRun = quote.isEmpty && chat.staged.isEmpty
+        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex, canRun: canRun) {
         case .take(let item): pick(item); return true
         case .send: Task { await send() }; return true
-        case .hold: return true
+        case .hold: held(canRun: canRun); return true
         case .keep: break
         }
+        // The chooser closed (Escape) or never opened for the line (a provider flag typed past
+        // "/model"): a model command still does not go as a message with a quote or files.
+        if SlashMenu.holdsClosed(text, canRun: canRun) { held(canRun: canRun); return true }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
+    }
+
+    /// Return kept the field as it is: say why under it.
+    private func held(canRun: Bool) {
+        withAnimation(.snappy(duration: 0.2)) { holdNote = SlashMenu.holdNote(text: text, canRun: canRun, loading: menuLoading) }
     }
 
     /// Tab completes the marked row (see SlashMenu.tabCompletion for when none is) and never
@@ -201,6 +211,14 @@ struct ComposerView: View {
                 SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
                     // In place, not sliding up from under the keyboard.
                     .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
+            if let holdNote {
+                Text(holdNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .accessibilityIdentifier("composer.holdNote")
+                    .transition(.opacity)
+            }
             if !mentionSuggestions.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -389,6 +407,7 @@ struct ComposerView: View {
             .onChange(of: menuContext.map { "\($0.kind)-\($0.anchor)" }) { _, _ in menuDismissed = false }
             .onChange(of: menuContext) { _, ctx in if menuMark?.context != ctx { menuMark = nil } }
             .onChange(of: text) { old, new in
+                holdNote = nil
                 // Offered once as the text gets long (a paste lands in one jump;
                 // typing crosses the line once); "Keep" holds until it shrinks again.
                 let limit = 800

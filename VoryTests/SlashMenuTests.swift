@@ -433,3 +433,38 @@ import VoryCore
         #expect(ChatSession.modelOptionsProfile(chat: nil, selected: nil) == nil)
     }
 }
+
+// A "/model" line with a reply quoted or files staged never goes as a message, chooser or no
+// chooser, and a held Return says why (#272).
+@Suite struct SlashMenuHoldTests {
+    typealias M = SlashMenu
+
+    @Test func aModelLineIsOneWithOrWithoutTheChooser() {
+        #expect(M.isModelLine("/model"))
+        #expect(M.isModelLine("/model "))
+        #expect(M.isModelLine("/model mini"))
+        #expect(M.isModelLine("/model x --provider y"))
+        #expect(M.isModelLine("  /Model mini"))
+        #expect(!M.isModelLine("/models"))
+        #expect(!M.isModelLine("/modelx"))
+        #expect(!M.isModelLine("model mini"))
+        #expect(!M.isModelLine("/help"))
+    }
+
+    @Test func aClosedChooserStillHoldsAModelLineThatCannotRun() {
+        // Escape closed the list, or the line was typed past it: with a quote or files, held.
+        #expect(M.holdsClosed("/model mini", canRun: false))
+        #expect(M.holdsClosed("/model x --provider y", canRun: false))
+        // Free to run, or not a model line: Return keeps its own meaning.
+        #expect(!M.holdsClosed("/model mini", canRun: true))
+        #expect(!M.holdsClosed("/help", canRun: false))
+        #expect(!M.holdsClosed("hello", canRun: false))
+    }
+
+    @Test func aHeldReturnSaysWhy() {
+        #expect(M.holdNote(text: "/model mini", canRun: false, loading: false) == "/model does not go with a quote or files. Remove them first, or send the rest as a message.")
+        #expect(M.holdNote(text: "/model ", canRun: true, loading: true) == "The model list is still loading.")
+        #expect(M.holdNote(text: "/model mini", canRun: true, loading: false) == nil)
+        #expect(M.holdNote(text: "hello", canRun: false, loading: false) == nil)
+    }
+}

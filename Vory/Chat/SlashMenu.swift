@@ -247,6 +247,28 @@ enum SlashMenu {
         return canRun ? .send : .hold
     }
 
+    /// Whether the field holds a "/model" line: the chooser's, or one typed past it (a provider
+    /// flag, say) or closed with Escape. With a reply quoted or files staged it never goes out
+    /// as a message, chooser or no chooser (#272).
+    static func isModelLine(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespaces).lowercased()
+        return t == "/model" || t.hasPrefix("/model ")
+    }
+
+    /// Whether a bare Return keeps the field as it is although the chooser is closed: a
+    /// "/model" line that cannot run (a quote or files would make it a message).
+    static func holdsClosed(_ text: String, canRun: Bool) -> Bool { !canRun && isModelLine(text) }
+
+    /// Why Return did nothing, in a line under the field; nil when it did something. A held
+    /// Return used to say nothing, and with the list closed or not loaded there was nothing
+    /// on screen to explain it.
+    static func holdNote(text: String, canRun: Bool, loading: Bool) -> String? {
+        guard isModelLine(text) else { return nil }
+        if !canRun { return "/model does not go with a quote or files. Remove them first, or send the rest as a message." }
+        if loading { return "The model list is still loading." }
+        return nil
+    }
+
     /// The row Tab completes (see `outcome`: Tab never runs or switches anything), and whether
     /// it stays marked for the Return after it.
     struct TabCompletion: Equatable {
