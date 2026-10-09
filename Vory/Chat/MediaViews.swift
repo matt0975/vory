@@ -79,8 +79,9 @@ struct MacMediaMenu: View {
     }
 
     private func save() async {
-        guard let url = await file(), let saved = try? MediaSave.toDownloads(url, name: ref.name) else { return }
-        MediaSave.showInFinder(saved)
+        guard let url = await file() else { return }
+        do { MediaSave.showInFinder(try MediaSave.toDownloads(url, name: ref.name)) }
+        catch { MediaSave.explainFailure(name: ref.name, error: error) }
     }
 }
 #endif
@@ -265,6 +266,13 @@ struct ImageViewerSheet: View {
             } message: { failure in
                 Text(failure.message)
             }
+            #else
+            .alert("Not saved to Downloads", isPresented: Binding(get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } }),
+                   presenting: saveFailure) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure)
+            }
             #endif
         }
         .task { await load() }
@@ -273,9 +281,13 @@ struct ImageViewerSheet: View {
     #if os(macOS)
     /// Where the picture was saved this time, for the Show in Finder that follows.
     @State private var savedTo: URL?
+    /// Why the last Save to Downloads did not happen, shown over the picture as the iPhone shows
+    /// a refused Save to Photos: it used to go into `error`, which only shows when the picture
+    /// itself could not load, so a full disk or a folder that refused the file said nothing.
+    @State private var saveFailure: String?
 
     private func saveToDownloads(_ url: URL) {
-        do { savedTo = try MediaSave.toDownloads(url, name: ref.name) } catch { self.error = "Could not save: \(error.localizedDescription)" }
+        do { savedTo = try MediaSave.toDownloads(url, name: ref.name) } catch { saveFailure = MediaSave.failureMessage(name: ref.name, error: error) }
     }
     #endif
 

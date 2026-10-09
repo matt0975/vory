@@ -25,5 +25,11 @@ import Testing
         let second = MediaSave.uniqueName("pic.png") { FileManager.default.fileExists(atPath: dir.appendingPathComponent($0).path) }
         #expect(first == "pic.png" && second == "pic 2.png")
     }
+
+    @Test func aFailedSaveNamesTheFileAndTheReason() {
+        let full = NSError(domain: NSCocoaErrorDomain, code: CocoaError.fileWriteOutOfSpace.rawValue,
+                           userInfo: [NSLocalizedDescriptionKey: "The disk is full."])
+        #expect(MediaSave.failureMessage(name: "shot.png", error: full) == "shot.png was not saved to Downloads. The disk is full.")
+    }
 }
 #endif
