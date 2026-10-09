@@ -176,6 +176,14 @@ struct ComposerTextView: View {
                 return onTab() ? .handled : .ignored
             }
             .onKeyPress(.escape, phases: .down) { _ in menuOpen && !composed.isComposing && onEscape() ? .handled : .ignored }
+            // ⌘V with a picture, a PDF, a movie or a sound on the pasteboard stages it. The field's
+            // editor takes `paste:` itself and, with nothing it can insert, does nothing, so the
+            // paste command below never reached this view for anything but text (#284 on the Mac:
+            // a copied picture pasted into the composer went nowhere).
+            .onKeyPress(KeyEquivalent("v"), phases: .down) { press in
+                guard ComposedKeys.plain(press.modifiers) == .command, !composed.isComposing else { return .ignored }
+                return pasteAttachments(from: NSPasteboard.general) ? .handled : .ignored
+            }
             .onPasteCommand(of: Self.attachmentTypes) { providers in paste(providers) }
             .accessibilityIdentifier(accessibilityID ?? "composer.field")
             .onAppear { isFocused = focused }
@@ -196,6 +204,28 @@ struct ComposerTextView: View {
             if key.bare, onReturn() { composed.show(text); return }
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSend() }
         }
+    }
+
+    /// What is on the pasteboard, as an attachment when it is one: a picture, a PDF, a movie or a
+    /// sound (a picture that also comes as text, as a copied web image does, is the picture).
+    /// Plain text is left to the field. True when something was staged.
+    private func pasteAttachments(from pasteboard: NSPasteboard) -> Bool {
+        guard let items = pasteboard.pasteboardItems, !items.isEmpty else { return false }
+        var providers: [NSItemProvider] = []
+        for item in items {
+            let types = item.types.compactMap { UTType($0.rawValue) }
+            guard let type = Self.attachmentTypes.first(where: { t in types.contains { $0.conforms(to: t) } }),
+                  let concrete = types.first(where: { $0.conforms(to: type) }),
+                  let data = item.data(forType: NSPasteboard.PasteboardType(concrete.identifier)) else { continue }
+            let provider = NSItemProvider()
+            provider.registerDataRepresentation(forTypeIdentifier: concrete.identifier, visibility: .all) { completion in
+                completion(data, nil); return nil
+            }
+            providers.append(provider)
+        }
+        guard !providers.isEmpty else { return false }
+        paste(providers)
+        return true
     }
 
     /// Same rules as the iOS paste delegate: text pastes as text; anything else is an attachment

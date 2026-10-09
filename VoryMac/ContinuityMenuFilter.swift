@@ -8,18 +8,30 @@ import AppKit
 /// menu opens.
 @MainActor
 enum ContinuityMenuFilter {
-    private static var observer: NSObjectProtocol?
+    private static var observers: [NSObjectProtocol] = []
 
     static func start() {
-        guard observer == nil else { return }
-        observer = NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { note in
+        guard observers.isEmpty else { return }
+        observers.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { note in
             // Delivered on the main queue; the menu is only touched there.
             nonisolated(unsafe) let menu = note.object as? NSMenu
             MainActor.assumeIsolated { if let menu { strip(menu) } }
             // AppKit may add the items as the menu comes up: once more after this turn (the main
             // queue is served while a menu tracks).
             DispatchQueue.main.async { MainActor.assumeIsolated { if let menu { strip(menu) } } }
-        }
+        })
+        // A reply bubble's menu (the whole-bubble one, since 1.4 (8)) gets the items later still,
+        // as AppKit fills the menu in while it is already up: the moment one of them is added
+        // to a menu that is tracking, the menu is stripped on the next turn (never while
+        // AppKit is still adding to it).
+        observers.append(NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { note in
+            nonisolated(unsafe) let menu = note.object as? NSMenu
+            nonisolated(unsafe) let index = (note.userInfo?["NSMenuItemIndex"] as? Int) ?? -1
+            MainActor.assumeIsolated {
+                guard let menu, index >= 0, index < menu.items.count, isContinuityItem(menu.items[index]) else { return }
+                DispatchQueue.main.async { MainActor.assumeIsolated { strip(menu) } }
+            }
+        })
     }
 
     /// Takes the Continuity Camera items (and the separator they leave) out of a right-click
