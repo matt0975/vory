@@ -347,6 +347,17 @@ import Testing
         return { InputComposition.inputMethod = kept }
     }
 
+    /// Caps Lock being on and a key sitting on the keypad are modifiers to SwiftUI; to the
+    /// composer they are not chords, so a Return or a Tab under them still reaches the chooser,
+    /// and the keypad's Enter is the Return key the handler listens for (#275).
+    @Test func capsLockAndTheKeypadDoNotMakeAChord() {
+        #expect(ComposedKeys.plain([.capsLock, .numericPad]).isEmpty)
+        #expect(ComposedKeys.plain([.shift, .capsLock]) == [.shift])
+        #expect(ComposedKeys.plain([.command]) == [.command])
+        #expect(ComposedKeys.keypadEnter == KeyEquivalent("\u{3}"))
+        #expect(ComposedKeys.keypadEnter != .return)
+    }
+
     @Test func aFieldEditorWithMarkedTextIsComposing() {
         let restore = keyboard(inputMethod: true)
         defer { restore() }

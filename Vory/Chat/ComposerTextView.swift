@@ -154,20 +154,24 @@ struct ComposerTextView: View {
             // any other does nothing more (the repeats reached the field's submit and sent the
             // half-written message, again and again). The line break goes in through the field's
             // editor: `text` here is as of SwiftUI's last update, which repeats can outrun.
-            .onKeyPress(.return, phases: [.down, .repeat, .up]) { press in
+            // Keypad Enter (fn-Return) is a Return here too, as on iOS: it went past this handler
+            // to the field's submit, past the chooser and the held-key guard. Caps Lock and the
+            // keypad count as modifiers to SwiftUI, so they are left out before a key is judged bare.
+            .onKeyPress(keys: [.return, ComposedKeys.keypadEnter], phases: [.down, .repeat, .up]) { press in
                 guard press.phase != .up else { composed.returnUp(); return .ignored }
-                if composed.returnDown(press.modifiers) { return .ignored }
-                if press.modifiers.contains(.shift) {
+                let modifiers = ComposedKeys.plain(press.modifiers)
+                if composed.returnDown(modifiers) { return .ignored }
+                if modifiers.contains(.shift) {
                     if !composed.insertLineBreak() { text += "\n" }
                     return .handled
                 }
-                if press.phase == .repeat { return press.modifiers.contains(.option) ? .ignored : .handled }
-                if press.modifiers.isEmpty, onReturn() { return .handled }
+                if press.phase == .repeat { return modifiers.contains(.option) ? .ignored : .handled }
+                if modifiers.isEmpty, onReturn() { return .handled }
                 return .ignored
             }
             // Tab and Escape are the chooser's only while it is open; Tab moves the focus otherwise.
             .onKeyPress(.tab, phases: .down) { press in
-                guard menuOpen, press.modifiers.isEmpty else { return .ignored }
+                guard menuOpen, ComposedKeys.plain(press.modifiers).isEmpty else { return .ignored }
                 if composed.tabDown({ onTab() ? text : nil }) { return .ignored }
                 return onTab() ? .handled : .ignored
             }
@@ -228,6 +232,15 @@ struct ComposerTextView: View {
 /// item. Without this, a Return passed on reached the field's own submit and sent.
 @MainActor
 final class ComposedKeys {
+    /// The keypad's Enter key as SwiftUI reports it (fn-Return on a MacBook).
+    static let keypadEnter = KeyEquivalent("\u{3}")
+
+    /// The modifiers that mean something here: Caps Lock being on and a key being on the keypad
+    /// both count as modifiers to SwiftUI, and neither is a chord.
+    nonisolated static func plain(_ modifiers: SwiftUI.EventModifiers) -> SwiftUI.EventModifiers {
+        modifiers.subtracting([.capsLock, .numericPad])
+    }
+
     /// A Return pressed while composing, until the key comes up. `tail` is the length of the
     /// text after the composed text: the line break goes in before it.
     struct Return {
