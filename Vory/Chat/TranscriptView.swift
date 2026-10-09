@@ -51,12 +51,6 @@ struct TranscriptView: View {
     @State private var floorTask: Task<Void, Never>?
     /// Height of the floating header (the nav bar is hidden in a chat).
     var topInset: CGFloat = 96
-    #if os(iOS)
-    /// The status bar's band at the top of the window, where the rows fade out.
-    private var statusBarHeight: CGFloat {
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }.first ?? 0
-    }
-    #endif
     /// Locked to the bottom: the thread follows every new token, tool call and card. Only the
     /// user's own drag releases it; the jump button (or scrolling back down) locks it again.
     @State private var awayFromBottom = false
@@ -223,20 +217,7 @@ struct TranscriptView: View {
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
             .contentMargins(.bottom, bottomInset + 8, for: .scrollContent)
-            #if os(iOS)
-            // The scroll view starts below the floating header and draws its rows on up under the
-            // header's glass and the status bar, unclipped. Its frame is what accessibility hit-tests
-            // against: while it ran up under the header, a reply passing under Back or the pill was
-            // found there before the header was (XCUITest looks through the thread first), so the
-            // circles and the pill were not hittable and an element tap on Back missed. Out of its
-            // bounds, nothing in the thread claims a point the header is drawn on, and the rows keep
-            // their groups and identifiers.
-            .contentMargins(.top, 8, for: .scrollContent)
-            .scrollClipDisabled()
-            .padding(.top, topInset)
-            #else
             .contentMargins(.top, topInset + 8, for: .scrollContent)
-            #endif
             // The keyboard is handled by hand (below) so the last message rides up with it instead
             // of vanishing under the composer; SwiftUI's own avoidance would then double the inset.
             .ignoresSafeArea(.keyboard, edges: .bottom)
@@ -366,19 +347,6 @@ struct TranscriptView: View {
             #if os(iOS)
             // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
-            // The scroll view's own edge effect softened the rows under the clock; its top edge is
-            // below the header now (see the top margin), where it draws none, so the rows fade out
-            // there instead, as the Mac's thread does under its pill.
-            .mask {
-                VStack(spacing: 0) {
-                    let band = statusBarHeight + 40
-                    LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.35), location: statusBarHeight / band),
-                                           .init(color: .black, location: 1)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: band)
-                    Color.black
-                }
-                .ignoresSafeArea()
-            }
             #endif
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)

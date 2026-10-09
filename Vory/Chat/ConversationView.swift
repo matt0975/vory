@@ -269,6 +269,17 @@ struct ConversationView: View {
         ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+            // One group for VoiceOver, placed after the thread and the dock in the accessibility
+            // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
+            // the screen's elements from the last one back, as if the last were on top, and goes
+            // into the first whose frame holds the point. The thread runs up under the header, so
+            // with the header first (where its place on the screen put it) the thread was tried
+            // first, and the last reply's group (each message is one) answered at Back's point.
+            // Last, the header is tried first; drawn on top, it is also what a finger finds.
+            // A swipe through the screen now reaches it after the composer: VoiceOver starts on
+            // Back when the chat opens, and the pill is a heading for the rotor (`ChatHeader`).
+            .accessibilityElement(children: .contain)
+            .accessibilitySortPriority(-1)
     }
     #if os(iOS)
     private func keyboardChanged(_ n: Notification) {
@@ -446,6 +457,10 @@ struct ChatHeader: View {
     @Environment(\.colorScheme) private var scheme
     /// The bot pops into the header the way a contact does in Messages.
     @State private var popped = false
+    /// VoiceOver starts on Back when the chat opens, as it did while the header came first in
+    /// the screen's order: it comes last now (see `ConversationView.header`), and the first
+    /// element would otherwise be the oldest message laid out.
+    @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
     private var botLabel: String { chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
@@ -460,6 +475,7 @@ struct ChatHeader: View {
                     .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+            .accessibilityFocused($backFocused)
             Spacer(minLength: 0)
             Button {
                 // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
@@ -519,6 +535,9 @@ struct ChatHeader: View {
                 Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
             }
             .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
+            // The chat's title, as a navigation bar's is: the rotor's Headings reach the header
+            // from anywhere in the thread.
+            .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("chat.titlePill")
             Spacer(minLength: 0)
             Menu {
@@ -536,6 +555,12 @@ struct ChatHeader: View {
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).
         .contentShape(.rect)
         .onTapGesture {}
+        // Once the push has settled: VoiceOver moves to the new screen's first element when the
+        // transition ends, and would take over a request made before it.
+        .task {
+            try? await Task.sleep(for: .milliseconds(600))
+            backFocused = true
+        }
     }
 }
 
