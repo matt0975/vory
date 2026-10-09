@@ -13,6 +13,8 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
         Task { @MainActor in BackupScheduler.start() }
         // Continuity Camera only where a photo can go, not in every right-click menu.
         Task { @MainActor in ContinuityMenuFilter.start() }
+        // Sleep and wake are the Mac's away and back (the phone's are its scene phase).
+        Task { @MainActor in MacSleepAway.shared.start() }
     }
 
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
