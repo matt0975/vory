@@ -1038,6 +1038,9 @@ VOICE_LIVE = "--voice-live" in sys.argv
 # gateway's catalogue (the app's model pickers and cost lines are developed against it). The
 # substitution runs on every JSON body and socket frame on its way out, longest names first.
 NEUTRAL_MODELS = "--neutral-models" in sys.argv
+# A gateway without the PDF tools: every PDF is refused the way the real one refuses them (a
+# tester's "attachments seem to be broken").
+NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
 NEUTRAL_NAMES = [
     ("claude-subscription/claude-opus-4.6", "local/assistant"),
     ("claude-subscription-directsdk-experimental", "local-assistant"),
@@ -2221,9 +2224,7 @@ class Gateway:
         if method in ("image.attach_bytes", "pdf.attach"):
             # The real gateway writes the image into the profile's images dir and says where.
             name = p.get("filename", "") or "upload.png"
-            # A gateway without the PDF tools refuses every PDF with this (a tester's
-            # "attachments seem to be broken"): any file whose name says "refuse" gets it.
-            if method == "pdf.attach" and "refuse" in name.lower():
+            if method == "pdf.attach" and NO_PDF_TOOLS:
                 return err(-32000, "pdftoppm not installed (poppler-utils package required)")
             return ok({"attached": True, "filename": name, "path": f"/home/hermes/.hermes/images/upload_{int(time.time())}_1.{name.rsplit('.', 1)[-1] if '.' in name else 'png'}", "count": 1})
         if method == "file.attach":
@@ -2284,6 +2285,7 @@ async def main() -> None:
     # Read at import time (VOICE_LIVE, NEUTRAL_MODELS); declared so the parser accepts them.
     ap.add_argument("--voice-live", action="store_true", help="GPT-Live status answers available")
     ap.add_argument("--neutral-models", action="store_true", help="no vendor or model names in anything sent (for recordings)")
+    ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     args = ap.parse_args()
     global TOKEN

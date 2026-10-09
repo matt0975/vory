@@ -3,7 +3,7 @@ import XCTest
 /// A PDF the gateway refuses for want of its PDF tools: the chat says so in plain words, with
 /// what still works, instead of quoting the tool's error (a tester's "attachments seem to be
 /// broken", #284). The demo copy stages the PDF as the chat opens (`-vory-test-stage`), since
-/// the system file picker cannot be driven; the mock refuses any PDF whose name says "refuse".
+/// the system file picker cannot be driven; the mock runs with `--no-pdf-tools`.
 ///
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set. HERMES_E2E_BUNDLE=
 /// com.vorantx.vory.demo drives the demo copy, pointed at the gateway by launch argument.
@@ -47,7 +47,7 @@ final class AttachRefusalUITests: XCTestCase {
         }
         continueAfterFailure = false
         app = XCUIApplication(bundleIdentifier: bundle)
-        app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-vory-test-stage", "refuse-me.pdf"]
+        app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-vory-test-stage", "report.pdf"]
         app.launch()
 
         let newChat = app.buttons["chats.new"].firstMatch
@@ -55,24 +55,25 @@ final class AttachRefusalUITests: XCTestCase {
         wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: newChat)], timeout: 60)
         newChat.tap()
         // The staged PDF shows over the composer (its card is a button, "PDF: <name>").
-        let staged = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "refuse-me.pdf")).firstMatch
+        let staged = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "report.pdf")).firstMatch
         XCTAssertTrue(staged.waitForExistence(timeout: 30), "the PDF was not staged")
         shot("attach-refusal-staged")
 
         let composer = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30))
         composer.tap()
-        composer.typeText("card: read this")
+        composer.typeText("card: summarize the report")
         let send = try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10))
         send.tap()
 
-        // The explained refusal, not the tool's words alone.
+        // The explained refusal, not the tool's words alone: shot at once, before the reply
+        // streams over it.
         let explained = text("the gateway is missing the tool it reads PDFs with")
         XCTAssertTrue(explained.firstMatch.waitForExistence(timeout: 30), "the refusal was not explained")
+        shot("attach-refusal-explained")
         XCTAssertTrue(text("Pictures and text files still go through").firstMatch.exists)
         XCTAssertTrue(text("pdftoppm not installed").firstMatch.exists, "the gateway's own words are not kept")
-        shot("attach-refusal-explained")
         // The message itself still went, without the PDF.
-        XCTAssertTrue(text("read this").firstMatch.waitForExistence(timeout: 10))
+        XCTAssertTrue(text("summarize the report").firstMatch.waitForExistence(timeout: 10))
     }
 }
