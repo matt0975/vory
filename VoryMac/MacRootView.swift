@@ -60,7 +60,7 @@ struct MacRootView: View {
         .onChange(of: model.lock.isLocked) { _, _ in offerCompanion() }
         .sheet(isPresented: Binding(get: { !model.signInPrompt.isEmpty && !model.lock.isLocked && !showCompanionPrompt && !showInstaller },
                                     set: { if !$0 { model.signInPrompt = [] } })) {
-            GatewaySignInSheet(connections: model.signInPrompt)
+            GatewaySignInSheet(connections: model.signInPrompt).withAppModel()
         }
         .sheet(isPresented: $showCompanionPrompt) {
             CompanionPromptSheet(found: companionFound, install: {
@@ -75,6 +75,7 @@ struct MacRootView: View {
                 setupCardDone = false
                 showCompanionPrompt = false
             })
+            .withAppModel()
         }
         .sheet(isPresented: $showInstaller) {
             NavigationStack {
@@ -82,6 +83,7 @@ struct MacRootView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
             .frame(minWidth: 560, minHeight: 680)
+            .withAppModel()
         }
     }
 }
@@ -385,6 +387,7 @@ private struct RailMore: View {
             }
             .padding(16)
             .frame(width: 240)
+            .withAppModel()
         }
     }
 }
@@ -452,6 +455,7 @@ private struct GatewayFooter: View {
         .sheet(isPresented: $editing) {
             NavigationStack { GatewayFormView(existing: model.store.active) }
                 .frame(minWidth: 520, minHeight: 640)
+                .withAppModel()
         }
     }
 }

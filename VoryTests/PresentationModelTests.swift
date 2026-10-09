@@ -31,10 +31,14 @@ import Testing
 
     @Test func everyPresentationInTheAppsViewsHandsItsContentTheModel() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let views = root.appendingPathComponent("Vory")
-        let files = try #require(FileManager.default.enumerator(at: views, includingPropertiesForKeys: nil)?
-            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }, "the app's sources are not readable here")
-        try #require(!files.isEmpty, "no Swift files under \(views.path)")
+        // The iPhone app's views and the Mac app's own, held to the same rule.
+        let files = try ["Vory", "VoryMac"].flatMap { dir -> [URL] in
+            let views = root.appendingPathComponent(dir)
+            let found = try #require(FileManager.default.enumerator(at: views, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }, "the app's sources are not readable here")
+            try #require(!found.isEmpty, "no Swift files under \(views.path)")
+            return found
+        }
         var found = 0
         var missing: [String] = []
         for file in files {
