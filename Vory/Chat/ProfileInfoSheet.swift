@@ -102,10 +102,18 @@ struct ProfileCardView: View {
             } header: { Text("Model") } footer: { Text("Writes this profile's config.yaml. Running chats keep their own model.") }
             if let chat {
                 Section {
+                    // A pencil says the name can be changed (#286); the row opens the dialog.
                     Button { renameText = chat.title; renaming = true } label: {
-                        LabeledContent("Name", value: chat.title.isEmpty ? "Untitled" : chat.title)
+                        LabeledContent("Name") {
+                            HStack(spacing: 6) {
+                                Text(chat.title.isEmpty ? "Untitled" : chat.title).foregroundStyle(.secondary)
+                                Image(systemName: "pencil").foregroundStyle(.tint)
+                            }
+                        }
                     }
                     .tint(.primary)
+                    .accessibilityHint("Renames this chat")
+                    .accessibilityIdentifier("profile.rename")
                     Menu { ModelMenuContent(chat: chat) } label: {
                         LabeledContent("Model", value: chat.modelName.isEmpty ? "Choose…" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))
                     }

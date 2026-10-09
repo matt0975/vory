@@ -43,13 +43,18 @@ final class ProfileCardUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", fragment))
     }
 
-    /// Scrolls the sheet until the text shows, a few swipes at most.
+    /// Scrolls the sheet until the text shows: down the list first, then back up.
     private func reach(_ fragment: String) -> Bool {
+        func onScreen() -> Bool { text(fragment).allElementsBoundByIndex.contains { $0.exists && $0.isHittable } }
         for _ in 0..<8 {
-            if let e = text(fragment).allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { _ = e; return true }
+            if onScreen() { return true }
             app.swipeUp(velocity: .slow)
         }
-        return text(fragment).firstMatch.exists
+        for _ in 0..<12 {
+            if onScreen() { return true }
+            app.swipeDown(velocity: .slow)
+        }
+        return onScreen()
     }
 
     private func openCard() {
@@ -87,13 +92,35 @@ final class ProfileCardUITests: XCTestCase {
         app.buttons["Rename chat"].firstMatch.tap()
         XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat opened no dialog")
         app.alerts.buttons["Cancel"].firstMatch.tap()
+        // The Name row says it can be changed (#286) and opens the same dialog.
+        XCTAssertTrue(reach("This chat"))
+        // The row is reached by its own word (a list row's button does not carry its identifier out).
+        // The row's button reads as one element, "Name, <title>", so it is found by its start.
+        let nameRow = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Name'")).firstMatch
+        XCTAssertTrue(nameRow.waitForExistence(timeout: 5), "no Name row")
+        shot("profile-card-light-this-chat")
+        nameRow.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "the Name row opened no dialog")
+        app.alerts.buttons["Cancel"].firstMatch.tap()
         // The Info sections, in order, each reached by scrolling.
-        for section in ["Character", "Instructions (SOUL.md)", "Description", "Default model", "This chat", "Show in chats", "Home"] {
+        for section in ["Character", "Instructions (SOUL.md)", "Description", "Writes this profile", "This chat", "Show in chats", "Home"] {
             XCTAssertTrue(reach(section), "\(section) is not on the card")
         }
         shot("profile-card-light-bottom")
         app.buttons["profile.close"].firstMatch.tap()
         XCTAssertFalse(app.buttons["profile.close"].firstMatch.waitForExistence(timeout: 3), "Close did not close the card")
+        // From the chat itself: the … menu and a long press on the pill both offer Rename chat (#286).
+        app.buttons["chat.more"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "the chat's menu has no Rename chat")
+        app.buttons["Rename chat"].firstMatch.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat from the menu opened no dialog")
+        app.alerts.buttons["Cancel"].firstMatch.tap()
+        app.buttons["chat.titlePill"].firstMatch.press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "a long press on the pill offers no Rename chat")
+        shot("rename-from-pill")
+        app.buttons["Rename chat"].firstMatch.tap()
+        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat from the pill opened no dialog")
+        app.alerts.buttons["Cancel"].firstMatch.tap()
 
         // Dark.
         app.terminate()

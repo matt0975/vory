@@ -9,6 +9,9 @@ struct ConversationView: View {
     @State private var loadError: String?
     @State private var showContext = false
     @State private var showProfile = false
+    /// Rename chat, from the header's menu or a long press on the title pill (#286).
+    @State private var renaming = false
+    @State private var renameText = ""
     @State private var composerText = ""
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
@@ -68,6 +71,15 @@ struct ConversationView: View {
                         model.runtime?.returnToDefaultProfile()
                     }
                     .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
+                    .alert("Rename chat", isPresented: $renaming) {
+                        TextField("Name", text: $renameText)
+                        Button("Save") {
+                            let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { return }
+                            Task { await chat.rename(name) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("The new name shows in the chat list and the header.") }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
@@ -136,7 +148,7 @@ struct ConversationView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
+                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
                                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                     } label: { Label("Chat options", systemImage: "ellipsis") }
                     .menuIndicator(.hidden)
@@ -254,7 +266,7 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onContext: { showContext = true },
+        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
     }
@@ -427,6 +439,7 @@ struct ChatHeader: View {
     @Bindable var chat: ChatSession
     var onBack: () -> Void
     var onProfile: () -> Void
+    var onRename: () -> Void
     var onContext: () -> Void
     var onNewChat: () -> Void
     var onClose: () -> Void
@@ -500,11 +513,16 @@ struct ChatHeader: View {
             // it is cut short only when its text does not fit.
             .layoutPriority(1)
             .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.05)) { popped = true } }
+            // A long press on the pill offers the rename; a tap opens the card as before.
+            .contextMenu {
+                Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
+                Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+            }
             .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
             .accessibilityIdentifier("chat.titlePill")
             Spacer(minLength: 0)
             Menu {
-                ChatMenuItems(chat: chat, onProfile: onProfile, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
+                ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold))
                     .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
@@ -525,6 +543,7 @@ struct ChatHeader: View {
 struct ChatMenuItems: View {
     @Bindable var chat: ChatSession
     var onProfile: () -> Void
+    var onRename: () -> Void
     var onContext: () -> Void
     var onNewChat: () -> Void
     var onClose: () -> Void
@@ -535,6 +554,7 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
         Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
         #if os(iOS)
         // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.
