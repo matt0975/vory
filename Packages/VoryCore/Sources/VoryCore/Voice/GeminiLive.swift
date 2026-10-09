@@ -187,6 +187,9 @@ public enum GeminiLive {
                                  bargeIn: Bool = true, silenceMs: Int? = nil) -> String {
             var detection: [String: JSONValue] = ["prefixPaddingMs": .number(Double(prefixPaddingMs))]
             if let silenceMs { detection["silenceDurationMs"] = .number(Double(silenceMs)) }
+            // Harder to start a turn: the bot's own voice from the speaker, cancelled but not
+            // gone, interrupted it and it answered itself (#280). The person's voice still does.
+            if bargeIn { detection["startOfSpeechSensitivity"] = .string("START_SENSITIVITY_LOW") }
             var setup: [String: JSONValue] = [
                 "model": .string("models/" + model),
                 "generationConfig": .object([

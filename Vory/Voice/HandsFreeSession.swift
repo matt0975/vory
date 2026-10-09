@@ -648,6 +648,8 @@ final class HandsFreeSession {
 
     private func run(_ effects: [HandsFreeEffect]) {
         for e in effects { perform(e) }
+        // While the bot speaks, the ears hold the mic to the echo's level (#280).
+        listener.guardingPlayback = state.phase == .speaking
         updateCue()
         // The Live Activity carries the state (and End) to the Lock Screen and the Island.
         syncSurface()
