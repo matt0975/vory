@@ -18,12 +18,12 @@ import Testing
         private var connections: [NWConnection] = []
         private let queue = DispatchQueue(label: "dev.vory.tests.silent-server")
 
-        init(greeting: String?) throws {
+        init(greeting: String?, on fixedPort: UInt16? = nil) throws {
             let params = NWParameters.tcp
             let ws = NWProtocolWebSocket.Options()
             ws.autoReplyPing = true
             params.defaultProtocolStack.applicationProtocols.insert(ws, at: 0)
-            listener = try NWListener(using: params, on: .any)
+            listener = try NWListener(using: params, on: fixedPort.flatMap { NWEndpoint.Port(rawValue: $0) } ?? .any)
             let ready = DispatchSemaphore(value: 0)
             listener.stateUpdateHandler = { state in
                 if case .ready = state { ready.signal() }
@@ -118,6 +118,46 @@ import Testing
         t.cancel()
         await #expect(throws: Error.self) { _ = try await t.value }
         #expect(Date().timeIntervalSince(began) < 5)
+        await s.disconnect()
+    }
+}
+
+/// First open with the route still coming up (#305): the socket keeps trying quickly and
+/// quietly, and is connected within a second or two of the gateway becoming reachable.
+@Suite struct FirstOpenRetryTests {
+    @Test func theFirstRetriesAreQuickAndThenBackOff() {
+        #expect(GatewaySocket.retryDelay(attempt: 1) == 1)
+        #expect(GatewaySocket.retryDelay(attempt: 2) == 1)
+        #expect(GatewaySocket.retryDelay(attempt: 3) == 1)
+        #expect(GatewaySocket.retryDelay(attempt: 4) == 2)
+        #expect(GatewaySocket.retryDelay(attempt: 5) == 4)
+        #expect(GatewaySocket.retryDelay(attempt: 8) == 30)
+        #expect(GatewaySocket.retryDelay(attempt: 40) == 30)
+    }
+
+    @Test func aGatewayThatAppearsAFewSecondsAfterLaunchIsReachedWithinAMoment() async throws {
+        // A port with nothing on it yet: a listener claims one and lets it go.
+        let probe = try SocketTimeoutTests.SilentServer(greeting: nil)
+        let port = probe.port
+        probe.stop()
+        try await Task.sleep(for: .milliseconds(300))
+        let s = GatewaySocket(urlProvider: { (URL(string: "ws://127.0.0.1:\(port)/api/ws")!, [:]) },
+                              onEvent: { _ in }, onState: { _ in }, onServerRequest: { _ in nil }, onReconnected: {})
+        let began = Date()
+        await s.connect()
+        // Refused for two and a half seconds, then the gateway is there.
+        try await Task.sleep(for: .milliseconds(2500))
+        let server = try SocketTimeoutTests.SilentServer(greeting: SocketTimeoutTests.ready, on: port)
+        defer { server.stop() }
+        let appeared = Date()
+        var open = false
+        while Date().timeIntervalSince(appeared) < 6 {
+            if await s.state == .open { open = true; break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        let after = Date().timeIntervalSince(appeared)
+        #expect(open, "not connected \(Int(Date().timeIntervalSince(began))) s after launch, \(Int(after)) s after the gateway appeared")
+        #expect(after < 3, "took \(after) s after the gateway appeared")
         await s.disconnect()
     }
 }

@@ -204,6 +204,10 @@ public final class GatewayRuntime {
         kanban.attach(self)
         voice.attach(self)
         if socketEnabled { await socket.connect() }
+        // The first HTTP call waits for the socket, briefly: on first open the route may still
+        // be coming up, and a profile list asked for before it failed and put up an error the
+        // connect loop was about to make moot (#305). The reconnect loads what this missed.
+        if socketEnabled { try? await socket.waitUntilReady(timeout: 8) }
         await loadProfiles()
         await refreshCapabilities()
         publishSnapshot(refreshSessions: true)
@@ -238,6 +242,8 @@ public final class GatewayRuntime {
 
     private func didReconnect() async {
         await advertiseCapabilities()
+        // The bots, if the first load went out before the route was up (#305).
+        if profiles.isEmpty { lastError = nil; await loadProfiles() }
         for chat in registry.all { await chat.reattachAfterReconnect() }
         await probeCodeSkew()
     }
