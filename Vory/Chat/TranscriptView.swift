@@ -1176,8 +1176,11 @@ struct TranscriptRow: View, Equatable {
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
-                    MarkdownView(text: media.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
+                    // Other files the bot hands back are cards under the words (#309).
+                    let files = TranscriptMedia.files(in: text)
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
+                    if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
                         Text(s.label).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                             .accessibilityLabel("Turn statistics: \(s.label)")

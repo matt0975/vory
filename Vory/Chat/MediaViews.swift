@@ -12,6 +12,12 @@ enum TranscriptMedia {
                 || text.contains("\r\n/") || text.contains("\r\n~/") else { return [] }
         return MediaScan.images(in: text)
     }
+    /// Files that are not pictures (#309), with the same cheap look first.
+    static func files(in text: String) -> [MediaRef] {
+        guard text.contains("MEDIA:") || text.contains("](") || text.contains("\n/") || text.contains("\n~/") || text.hasPrefix("/") || text.hasPrefix("~/")
+                || text.contains("\r\n/") || text.contains("\r\n~/") else { return [] }
+        return MediaScan.files(in: text)
+    }
     static func attachedImages(in text: String, profile: String?) -> [MediaRef] {
         guard text.contains("[User attached image:") else { return [] }
         return MediaScan.attachedImageNames(in: text).map { MediaScan.attachedImageRef(name: $0, profile: profile) }

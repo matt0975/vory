@@ -492,6 +492,27 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         p = unquote(query.get("path", ""))
         ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
         if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+            # The files route reads other files the gateway allows (#309): a small PDF and a CSV
+            # here, a refusal for a path under /etc, "gone" for one that says so, too large for
+            # one that says so.
+            if base == "/api/files/read" and ext in ("pdf", "csv"):
+                import base64
+                if p.startswith("/etc/"):
+                    return 403, {"detail": "Access denied"}
+                if "gone" in p:
+                    return 404, {"detail": "File not found"}
+                if "huge" in p:
+                    return 413, {"detail": "File too large"}
+                if ext == "pdf":
+                    body = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+                            b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]/Contents 4 0 R>>endobj\n"
+                            b"4 0 obj<</Length 44>>stream\nBT /F1 18 Tf 24 80 Td (Mock report) Tj ET\nendstream\nendobj\ntrailer<</Root 1 0 R>>\n%%EOF\n")
+                    mime = "application/pdf"
+                else:
+                    body = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n"
+                    mime = "text/csv"
+                return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": len(body), "mime_type": mime,
+                             "data_url": f"data:{mime};base64," + base64.b64encode(body).decode()}
             return (415, {"detail": "Unsupported media type"}) if base == "/api/media" else (404, {"detail": "File not found"})
         seed = sum(ord(c) for c in p)
         if base == "/api/media":
@@ -1750,6 +1771,18 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("files"):
+            # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
+            # its name as a markdown link, and a path that only looks like one.
+            await self.event("message.start", s.sid)
+            text = ("The report is ready.\n\nMEDIA:/home/hermes/out/report.pdf\n\n"
+                    "The numbers behind it: [raw numbers](</home/hermes/out/raw numbers.csv>). "
+                    "Nothing was written under /var/log this time.\n")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
         if prompt.strip().lower().startswith("mention"):
             # Hand-offs between bots, as a group chat reads: "@work" and "@default" are bots the

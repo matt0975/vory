@@ -84,9 +84,18 @@ public enum MediaScan {
                 let target = String(m.2)
                 return target.hasPrefix("/") || target.hasPrefix("~") ? String(m.1) : String(m.0)
             }
+            // A link to a file on the gateway leaves its words behind (the card is under the bubble).
+            line = line.replacing(/(^|[^!])\[([^\]]*)\]\(<([^>]+)>\)/) { m in
+                let lead = String(m.1), words = String(m.2), target = String(m.3)
+                return isFilePath(clean(target)) ? lead + words : String(m.0)
+            }
+            line = line.replacing(/(^|[^!])\[([^\]]*)\]\(([^)\s<]+)\)/) { m in
+                let lead = String(m.1), words = String(m.2), target = String(m.3)
+                return isFilePath(clean(target)) ? lead + words : String(m.0)
+            }
             let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             // A path with a full stop or a bracket after it is still that path.
-            if (t.hasPrefix("/") || t.hasPrefix("~/")), !t.contains(" "), MediaRef.isImage(clean(t)) { continue }
+            if (t.hasPrefix("/") || t.hasPrefix("~/")), !t.contains(" "), MediaRef.isImage(clean(t)) || isFilePath(clean(t)) { continue }
             if t.isEmpty, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             lines.append(line)
         }
@@ -116,6 +125,65 @@ public enum MediaScan {
         return MediaRef(candidates: candidates, name: name)
     }
 
+    // MARK: Files a reply names (#309)
+
+    /// Files a reply refers to that are not pictures: `MEDIA:/path` lines, markdown links with
+    /// a path on the gateway (`[name](/path)`, or `[name](</a path with spaces.csv>)`), and bare
+    /// absolute paths on their own line. A path counts only with a file name and an extension
+    /// (a bare folder, or a word that merely starts with a slash, does not); the same file
+    /// named twice is one card. Pictures are left to `images(in:)`.
+    public static func files(in text: String) -> [MediaRef] {
+        let text = lineFeeds(text)
+        var out: [MediaRef] = []
+        var seen = Set<String>()
+        func add(_ raw: String, name: String? = nil) {
+            let path = clean(raw)
+            guard isFilePath(path), !MediaRef.isImage(path), !seen.contains(path) else { return }
+            seen.insert(path)
+            out.append(MediaRef(candidates: [path], name: name?.isEmpty == false ? name : nil))
+        }
+        for m in text.matches(of: /MEDIA:(\S+)/) { add(String(m.1)) }
+        // A link's target in angle brackets may hold spaces; a plain one stops at a space.
+        // Not an image's "![": the character before the bracket is matched and left alone.
+        for m in text.matches(of: /(?:^|[^!])\[([^\]]*)\]\(<([^>]+)>\)/) { add(String(m.2)) }
+        for m in text.matches(of: /(?:^|[^!])\[([^\]]*)\]\(([^)\s<]+)\)/) {
+            let target = String(m.2)
+            add(target.removingPercentEncoding ?? target)
+        }
+        for line in text.split(separator: "\n") {
+            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.hasPrefix("/") || t.hasPrefix("~/"), !t.contains(" ") { add(t) }
+        }
+        return out
+    }
+
+    /// An absolute path on the gateway to a named file: starts at the root or the home, ends in
+    /// a name with an extension of one to six letters or digits, and is not a web address.
+    public static func isFilePath(_ path: String) -> Bool {
+        guard path.hasPrefix("/") || path.hasPrefix("~/"), !path.hasSuffix("/"), !path.contains("://") else { return false }
+        let name = (path as NSString).lastPathComponent
+        let ext = (name as NSString).pathExtension
+        guard !ext.isEmpty, ext.count <= 6, ext.allSatisfy({ $0.isLetter || $0.isNumber }), name.count > ext.count + 1 else { return false }
+        return true
+    }
+
+    /// The kind a file card shows, by extension.
+    public enum FileKind: String, Sendable {
+        case pdf, table, archive, audio, video, text, code, other
+        public static func of(_ name: String) -> FileKind {
+            switch ((name as NSString).pathExtension).lowercased() {
+            case "pdf": return .pdf
+            case "csv", "tsv", "xls", "xlsx", "numbers": return .table
+            case "zip", "gz", "tgz", "tar", "7z", "bz2", "xz", "dmg": return .archive
+            case "mp3", "m4a", "wav", "aac", "flac", "ogg", "opus", "aiff": return .audio
+            case "mp4", "mov", "m4v", "webm", "mkv", "avi": return .video
+            case "txt", "md", "markdown", "log", "rtf", "json", "yaml", "yml", "toml", "xml", "html", "htm": return .text
+            case "swift", "py", "js", "ts", "rb", "go", "rs", "c", "h", "cpp", "java", "kt", "sh", "sql", "css": return .code
+            default: return .other
+            }
+        }
+    }
+
     static func clean(_ raw: String) -> String {
         var s = raw.trimmingCharacters(in: .whitespaces)
         while let last = s.last, ".,;:)]}>\"'`".contains(last) { s.removeLast() }
@@ -132,7 +200,7 @@ public struct GatewayMediaAPI: Sendable {
     public var profile: String?
     public init(api: HermesAPI, profile: String? = nil) { self.api = api; self.profile = profile }
 
-    struct DataURLReply: Decodable { var data_url: String? ; var dataUrl: String? }
+    struct DataURLReply: Decodable { var data_url: String? ; var dataUrl: String?; var size: Int?; var mime_type: String? }
 
     /// The bytes of one picture, by the first candidate path the gateway can serve.
     public func fetch(_ ref: MediaRef) async throws -> (Data, String) {
