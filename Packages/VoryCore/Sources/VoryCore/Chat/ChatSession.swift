@@ -1084,6 +1084,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
         Self.markRenamedByPerson(storedID)
+        // The chat list draws the gateway's stored rows, read again on this notice: without it
+        // the row kept the old name until the next open or close (seen at once on the Mac,
+        // where the list sits beside the chat).
+        NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
     }
 
     /// Chats the person named themselves (by stored id): a name given by the person always
