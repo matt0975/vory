@@ -2205,6 +2205,12 @@ class Gateway:
             s = self.sessions.get(p.get("session_id", ""))
             if s and p.get("title"):
                 s.title = p["title"]
+                # The stored row the chat list reads, and the event every client gets: a rename
+                # shows in the list at once on the app's re-read (the real gateway does both).
+                for row in STORED_SESSIONS:
+                    if row.get("id") == s.stored:
+                        row["title"] = s.title
+                await self.event("session.title", s.sid, {"session_id": s.stored, "title": s.title})
             return ok({"title": s.title if s else ""})
         if method == "commands.catalog":
             # Shaped like the real one (tui_gateway/methods_tools.py): the commands, then the skill

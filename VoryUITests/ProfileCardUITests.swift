@@ -58,6 +58,14 @@ final class ProfileCardUITests: XCTestCase {
         XCTAssertTrue(newChat.waitForExistence(timeout: 40))
         wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: newChat)], timeout: 60)
         newChat.tap()
+        // One message first: the gateway writes a chat's stored row on its first prompt, and
+        // the list row the rename check reads needs one.
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30))
+        composer.tap()
+        composer.typeText("mention hi")
+        if let send = app.buttons.matching(identifier: "composer.send").allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { send.tap() }
+        _ = text("Over to").firstMatch.waitForExistence(timeout: 30)
         let pill = app.buttons["chat.titlePill"].firstMatch
         XCTAssertTrue(pill.waitForExistence(timeout: 30), "no title pill")
         pill.tap()
@@ -135,8 +143,15 @@ final class ProfileCardUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "a long press on the pill offers no Rename chat")
         shot("rename-from-pill")
         app.buttons["Rename chat"].firstMatch.tap()
-        XCTAssertTrue(app.textFields["rename.name"].firstMatch.waitForExistence(timeout: 5), "Rename chat from the pill opened no dialog")
-        app.buttons["Cancel"].firstMatch.tap()
+        let field = app.textFields["rename.name"].firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "Rename chat from the pill opened no dialog")
+        // A real rename: the name is selected as the field opens, so typing replaces it; Return
+        // saves; the header and, back in the list, the row show the new name at once.
+        field.typeText("Named by the test\n")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'Named by the test'")).firstMatch.waitForExistence(timeout: 10), "the header does not show the new name")
+        app.buttons["chat.back"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'Named by the test'")).firstMatch.waitForExistence(timeout: 10), "the list row does not show the new name")
+        shot("rename-in-list")
 
         // Dark.
         app.terminate()
