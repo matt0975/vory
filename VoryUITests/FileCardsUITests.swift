@@ -83,8 +83,11 @@ final class FileCardsUITests: XCTestCase {
         // A tap fetches the PDF and opens the preview, which names the file.
         let pdf = try XCTUnwrap(cards.allElementsBoundByIndex.first { $0.label.contains("report.pdf") })
         pdf.tap()
-        let previewTitle = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'report.pdf'")).firstMatch
+        // The preview names the file, not the cache's hash.
+        let previewTitle = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS 'report.pdf' AND NOT label CONTAINS 'Tap'")).firstMatch
         XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 20) || previewTitle.waitForExistence(timeout: 5), "the preview did not open")
+        XCTAssertTrue(app.navigationBars.matching(NSPredicate(format: "identifier CONTAINS 'report.pdf' OR label CONTAINS 'report.pdf'")).firstMatch.waitForExistence(timeout: 5)
+                      || app.staticTexts["report.pdf"].firstMatch.waitForExistence(timeout: 2), "the preview is not titled with the file's name")
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         shot("file-preview")
         if let done = hittable(app.buttons.matching(NSPredicate(format: "label == 'Done'")), timeout: 5) { done.tap() }

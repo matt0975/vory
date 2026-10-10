@@ -105,7 +105,7 @@ struct FileCard: View {
         #endif
         .task(id: ref.id) {
             guard let rt = model.runtime else { return }
-            local = await MediaStore.shared.cached(ref, gateway: rt.connection.id.uuidString)
+            if let cached = await MediaStore.shared.cached(ref, gateway: rt.connection.id.uuidString) { local = Self.named(cached, as: ref.name) }
         }
     }
 
@@ -122,6 +122,19 @@ struct FileCard: View {
         if let local { onOpen(local) }
     }
 
+    /// The cache keeps a file under a hash; the preview, Share and Save show the file's own
+    /// name, so a copy lives under it (once; the same bytes).
+    static func named(_ cached: URL, as name: String) -> URL {
+        let dir = cached.deletingLastPathComponent().appendingPathComponent("named", isDirectory: true)
+            .appendingPathComponent(cached.deletingPathExtension().lastPathComponent, isDirectory: true)
+        let url = dir.appendingPathComponent(name)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? FileManager.default.copyItem(at: cached, to: url)
+        }
+        return FileManager.default.fileExists(atPath: url.path) ? url : cached
+    }
+
     /// Through the gateway, into the media cache; a refusal is said in plain words.
     private func fetch() async {
         guard !fetching else { return }
@@ -129,7 +142,8 @@ struct FileCard: View {
         fetching = true; failure = nil
         defer { fetching = false }
         do {
-            local = try await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            let cached = try await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            local = Self.named(cached, as: ref.name)
         } catch {
             failure = FileFetchFailure.describe(error, name: ref.name)
         }
