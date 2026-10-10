@@ -90,10 +90,20 @@ final class ChatSummarizer {
 
     var enabled: Bool { Self.titlesOn || Self.previewsOn }
 
-    /// What the row shows: the summary with the switched-off half replaced by the gateway's own text.
-    func shown(_ s: Summary?, title: String, preview: String) -> Summary? {
+    /// What the row shows: the summary with the switched-off half replaced by the gateway's own
+    /// text. A chat the person named keeps that name whatever the device made (#303).
+    func shown(_ s: Summary?, title: String, preview: String, renamed: Bool = false) -> Summary? {
         guard let s, enabled else { return nil }
-        return Summary(title: Self.titlesOn ? Self.plain(s.title) : title, summary: Self.previewsOn ? Self.plain(s.summary) : preview, stamp: s.stamp)
+        return Summary(title: Self.titlesOn && !renamed ? Self.plain(s.title) : title, summary: Self.previewsOn ? Self.plain(s.summary) : preview, stamp: s.stamp)
+    }
+
+    /// The title to store for a chat: the one made before, if there is one, so a chat's title is
+    /// made once and stays while its preview keeps up with the chat (#303); else the model's,
+    /// else the gateway's own.
+    static func storedTitle(previous: Summary?, draft: String, fallback: String) -> String {
+        if let p = previous?.title.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty { return p }
+        let d = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return d.isEmpty ? fallback : d
     }
 
     /// The model likes to mark code with backticks and words with asterisks; a list row shows
@@ -186,7 +196,7 @@ final class ChatSummarizer {
             let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ".\"'"))
             let text = draft.summary.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty || !text.isEmpty else { return }
-            summaries[Self.roomKey(room)] = Summary(title: title.isEmpty ? room.name : title, summary: text, stamp: Self.roomStamp(events))
+            summaries[Self.roomKey(room)] = Summary(title: Self.storedTitle(previous: summaries[Self.roomKey(room)], draft: title, fallback: room.name), summary: text, stamp: Self.roomStamp(events))
             save()
         } catch {
             // The model can refuse or time out; the row keeps the room's own text.
@@ -198,7 +208,7 @@ final class ChatSummarizer {
             try? await Task.sleep(for: .seconds(2))
             // The chat's own words, so a simulator's list reads like a real one.
             let own = (session.preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            summaries[session.id] = Summary(title: session.displayTitle, summary: own.isEmpty ? "Nothing said yet." : own, stamp: session.lastActive ?? 0)
+            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: "", fallback: session.displayTitle), summary: own.isEmpty ? "Nothing said yet." : own, stamp: session.lastActive ?? 0)
             save()
             return
         }
@@ -211,7 +221,7 @@ final class ChatSummarizer {
             let title = draft.title.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: ".\"'"))
             let text = draft.summary.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !title.isEmpty || !text.isEmpty else { return }
-            summaries[session.id] = Summary(title: title.isEmpty ? session.displayTitle : title, summary: text, stamp: session.lastActive ?? 0)
+            summaries[session.id] = Summary(title: Self.storedTitle(previous: summaries[session.id], draft: title, fallback: session.displayTitle), summary: text, stamp: session.lastActive ?? 0)
             save()
         } catch {
             // The model can refuse or time out; the row keeps the gateway's own text.

@@ -1083,6 +1083,22 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
+        Self.markRenamedByPerson(storedID)
+    }
+
+    /// Chats the person named themselves (by stored id): a name given by the person always
+    /// wins over a title made on the device (#303).
+    public static let renamedByPersonKey = "chats.renamedByPerson"
+    public static func renamedByPerson(_ storedID: String) -> Bool {
+        (UserDefaults.standard.stringArray(forKey: renamedByPersonKey) ?? []).contains(storedID)
+    }
+    public static func markRenamedByPerson(_ storedID: String) {
+        guard !storedID.isEmpty else { return }
+        var ids = UserDefaults.standard.stringArray(forKey: renamedByPersonKey) ?? []
+        guard !ids.contains(storedID) else { return }
+        ids.append(storedID)
+        if ids.count > 500 { ids.removeFirst(ids.count - 500) }
+        UserDefaults.standard.set(ids, forKey: renamedByPersonKey)
     }
 
     // MARK: Server → client requests
