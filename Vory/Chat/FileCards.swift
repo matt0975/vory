@@ -59,7 +59,7 @@ struct FileCard: View {
         if let local, let size = try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int {
             return ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
         }
-        return "Tap to download"
+        return "\(DeviceWords.Tap) to download"
     }
 
     var body: some View {
@@ -101,7 +101,9 @@ struct FileCard: View {
         .background { FilesExporter(url: $exporting) }
         #endif
         #if os(macOS)
-        .onDrag { local.map { NSItemProvider(contentsOf: $0) ?? NSItemProvider() } ?? NSItemProvider() }
+        // Drag the file out: the named copy once it is here; before that, as the pictures go,
+        // fetched on the drop under its own name (an empty provider dropped nothing).
+        .onDrag { local.flatMap { NSItemProvider(contentsOf: $0) } ?? MediaSave.dragProvider(for: ref, profile: profile) }
         #endif
         .task(id: ref.id) {
             guard let rt = model.runtime else { return }
