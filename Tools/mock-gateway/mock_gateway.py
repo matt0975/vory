@@ -483,6 +483,30 @@ def _png_data_url(seed: int, width: int = 320, height: int = 200) -> str:
     return "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
 
 
+def _pdf_bytes(title: str, line: str) -> bytes:
+    """A small, valid one-page PDF (objects, xref with real offsets, a font), so a viewer
+    draws it rather than a blank page."""
+    content = f"BT /F1 20 Tf 24 100 Td ({title}) Tj ET\nBT /F1 12 Tf 24 72 Td ({line}) Tj ET\n".encode()
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 320 160]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+        b"<</Length " + str(len(content)).encode() + b">>stream\n" + content + b"endstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for o in offsets:
+        out += f"{o:010d} 00000 n \n".encode()
+    out += f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -504,9 +528,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
                 if "huge" in p:
                     return 413, {"detail": "File too large"}
                 if ext == "pdf":
-                    body = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-                            b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]/Contents 4 0 R>>endobj\n"
-                            b"4 0 obj<</Length 44>>stream\nBT /F1 18 Tf 24 80 Td (Mock report) Tj ET\nendstream\nendobj\ntrailer<</Root 1 0 R>>\n%%EOF\n")
+                    body = _pdf_bytes("Mock report", "Three shards checked, ten errors in all.")
                     mime = "application/pdf"
                 else:
                     body = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n"
