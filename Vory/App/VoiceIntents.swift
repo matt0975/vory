@@ -20,13 +20,107 @@ struct AskVoryIntent: AppIntent {
 
     @Parameter(title: "Question", requestValueDialog: "What do you want to ask?")
     var question: String
+    /// Which bot: the default one when none is named (#310).
+    @Parameter(title: "Bot")
+    var bot: BotEntity?
 
-    static var parameterSummary: some ParameterSummary { Summary("Ask \(\.$question)") }
+    static var parameterSummary: some ParameterSummary {
+        Summary("Ask \(\.$question)") { \.$bot }
+    }
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let answer = await SiriAsk.ask(question)
+        let answer = await SiriAsk.ask(question, bot: bot)
         return .result(dialog: IntentDialog(stringLiteral: answer))
+    }
+}
+
+/// Opens one of the recent chats by its title (Siri, Shortcuts, Spotlight).
+struct OpenChatIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Chat"
+    static let description = IntentDescription("Opens one of your recent chats in Vory.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Chat")
+    var chat: ChatEntity
+
+    static var parameterSummary: some ParameterSummary { Summary("Open \(\.$chat)") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        #if os(macOS)
+        MacWindow.bringMainForward()
+        #endif
+        AppModel.shared.openStoredChat(id: chat.id, profile: chat.bot)
+        return .result()
+    }
+}
+
+/// A new chat, with the named bot or the default one.
+struct NewChatIntent: AppIntent {
+    static let title: LocalizedStringResource = "New Chat"
+    static let description = IntentDescription("Starts a new chat in Vory, with the bot you name or the default one.")
+    static let openAppWhenRun = true
+
+    @Parameter(title: "Bot")
+    var bot: BotEntity?
+
+    static var parameterSummary: some ParameterSummary { Summary("New chat with \(\.$bot)") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        #if os(macOS)
+        MacWindow.bringMainForward()
+        #endif
+        AppModel.shared.requestNewChat(profile: bot?.id)
+        return .result()
+    }
+}
+
+/// "What's my bot doing?": what is running and how many approvals wait, in a sentence or two.
+struct BotStatusIntent: AppIntent {
+    static let title: LocalizedStringResource = "Bot Status"
+    static let description = IntentDescription("Says what your bot is working on and whether anything waits for you.")
+    static let openAppWhenRun = false
+
+    @Parameter(title: "Bot")
+    var bot: BotEntity?
+
+    static var parameterSummary: some ParameterSummary { Summary("What is \(\.$bot) doing") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let line = await SiriAsk.status(bot: bot)
+        return .result(dialog: IntentDialog(stringLiteral: line))
+    }
+}
+
+/// Answers the one waiting approval, by voice, only with the switch on, on an unlocked device,
+/// and after a confirmation that names the bot and what it wants to do (#311). Voice mode
+/// keeps the standing rule and never answers approvals.
+struct AnswerApprovalIntent: AppIntent {
+    static let title: LocalizedStringResource = "Answer Approval"
+    static let description = IntentDescription("Approves or denies the approval waiting in Vory, after reading it to you.")
+    static let openAppWhenRun = false
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
+
+    @Parameter(title: "Answer", default: .approve)
+    var answer: ApprovalAnswer
+
+    static var parameterSummary: some ParameterSummary { Summary("\(\.$answer) the waiting approval") }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard SiriCatalog.answersApprovals else {
+            return .result(dialog: "Siri does not answer approvals. Turn on Let Siri answer approvals in Settings, under Siri, if you want that.")
+        }
+        guard let found = await SiriAsk.waitingApproval() else {
+            return .result(dialog: IntentDialog(stringLiteral: await SiriAsk.noApprovalLine()))
+        }
+        let question = SiriWords.approvalQuestion(bot: found.bot, request: found.request, answer: answer)
+        try await requestConfirmation(result: .result(dialog: IntentDialog(stringLiteral: question)))
+        await found.chat.respond(card: found.card, result: ["choice": .string(answer == .approve ? "once" : "deny")])
+        return .result(dialog: answer == .approve ? "Approved." : "Denied.")
     }
 }
 
@@ -37,6 +131,12 @@ struct StartVoiceModeIntent: AppIntent {
     static let description = IntentDescription("Opens Vory and starts a voice conversation with your bot.")
     static let openAppWhenRun = true
 
+    /// Which bot: the default one when none is named (#310).
+    @Parameter(title: "Bot")
+    var bot: BotEntity?
+
+    static var parameterSummary: some ParameterSummary { Summary("Start voice mode with \(\.$bot)") }
+
     @MainActor
     func perform() async throws -> some IntentResult {
         #if os(macOS)
@@ -44,7 +144,7 @@ struct StartVoiceModeIntent: AppIntent {
         // window comes back first, or the new chat the request opens has no list to open in.
         MacWindow.bringMainForward()
         #endif
-        AppModel.shared.requestVoiceMode()
+        AppModel.shared.requestVoiceMode(profile: bot?.id)
         return .result()
     }
 }
@@ -52,11 +152,25 @@ struct StartVoiceModeIntent: AppIntent {
 struct VoryShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: AskVoryIntent(),
-                    phrases: ["Ask \(.applicationName)", "Ask \(.applicationName) a question", "Ask \(.applicationName) something"],
+                    phrases: ["Ask \(.applicationName)", "Ask \(.applicationName) a question", "Ask \(.applicationName) something",
+                              "Ask \(\.$bot) in \(.applicationName)", "Ask \(\.$bot) something in \(.applicationName)"],
                     shortTitle: "Ask Vory", systemImageName: "bubble.left.and.text.bubble.right")
         AppShortcut(intent: StartVoiceModeIntent(),
-                    phrases: ["Start voice mode in \(.applicationName)", "Talk to \(.applicationName)", "\(.applicationName) voice mode"],
+                    phrases: ["Start voice mode in \(.applicationName)", "Talk to \(.applicationName)", "\(.applicationName) voice mode",
+                              "Talk to \(\.$bot) in \(.applicationName)"],
                     shortTitle: "Voice Mode", systemImageName: "waveform.badge.mic")
+        AppShortcut(intent: OpenChatIntent(),
+                    phrases: ["Open my \(\.$chat) chat in \(.applicationName)", "Open \(\.$chat) in \(.applicationName)"],
+                    shortTitle: "Open Chat", systemImageName: "bubble.left")
+        AppShortcut(intent: NewChatIntent(),
+                    phrases: ["New chat in \(.applicationName)", "Start a new chat in \(.applicationName)", "New chat with \(\.$bot) in \(.applicationName)"],
+                    shortTitle: "New Chat", systemImageName: "square.and.pencil")
+        AppShortcut(intent: BotStatusIntent(),
+                    phrases: ["What is my bot doing in \(.applicationName)", "\(.applicationName) status", "What is \(\.$bot) doing in \(.applicationName)"],
+                    shortTitle: "Bot Status", systemImageName: "waveform.path.ecg")
+        AppShortcut(intent: AnswerApprovalIntent(),
+                    phrases: ["Answer the approval in \(.applicationName)", "\(.applicationName) approval"],
+                    shortTitle: "Answer Approval", systemImageName: "checkmark.shield")
     }
 }
 
@@ -72,21 +186,62 @@ enum SiriAsk {
     static let waitLimit: TimeInterval = 22
     static let answerLimit = 700
 
-    static func ask(_ question: String) async -> String {
+    /// The gateway brought up and its socket open, or the line Siri says instead.
+    enum Connected { case ready(GatewayRuntime), failed(String) }
+    static func connectedRuntime() async -> Connected {
+        let model = AppModel.shared
+        guard model.hasConnections else { return .failed("Set up a gateway in Vory first.") }
+        if model.runtime == nil { await model.activateSavedConnection() }
+        guard let rt = model.runtime else { return .failed("Vory could not reach your gateway.") }
+        let deadline = Date().addingTimeInterval(10)
+        while !rt.socketState.isOpen, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
+        guard rt.socketState.isOpen else { return .failed("Your gateway isn't answering right now.") }
+        return .ready(rt)
+    }
+
+    /// What is running and what waits, as Siri says it (#310).
+    static func status(bot: BotEntity?) async -> String {
+        #if os(iOS)
+        let time = BackgroundTime("vory.siri.status")
+        defer { time.end() }
+        #endif
+        let rt: GatewayRuntime
+        switch await connectedRuntime() {
+        case .failed(let why): return why
+        case .ready(let r): rt = r
+        }
+        let running = rt.chats.filter(\.isRunning).map { (bot: $0.profileName, title: $0.title.isEmpty ? "a chat" : $0.title) }
+        let waiting = Set(rt.chats.filter(\.needsAttention).map(\.storedID)).union(rt.needsAttention).count
+        return SiriWords.status(running: running, waiting: waiting, bot: bot?.label)
+    }
+
+    /// The one approval waiting across the open chats, with its chat and bot; nil when none
+    /// or several wait (then the screen is the place to choose).
+    static func waitingApproval() async -> (chat: ChatSession, card: PendingCard, request: ApprovalRequest, bot: String)? {
+        guard case .ready(let rt) = await connectedRuntime() else { return nil }
+        let found = rt.chats.flatMap { chat in chat.cards.compactMap { card in card.approval.map { (chat: chat, card: card, request: $0, bot: chat.profileName) } } }
+        return found.count == 1 ? found.first : nil
+    }
+
+    static func noApprovalLine() async -> String {
+        guard case .ready(let rt) = await connectedRuntime() else { return "Vory could not reach your gateway." }
+        let n = rt.chats.flatMap { $0.cards.filter { $0.approval != nil } }.count
+        return n > 1 ? "\(n) approvals are waiting; open Vory to pick one." : "No approval is waiting."
+    }
+
+    static func ask(_ question: String, bot: BotEntity? = nil) async -> String {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return "I didn't catch a question." }
-        let model = AppModel.shared
-        guard model.hasConnections else { return "Set up a gateway in Vory first." }
         #if os(iOS)
         let time = BackgroundTime("vory.siri.ask")
         defer { time.end() }
         #endif
-        if model.runtime == nil { await model.activateSavedConnection() }
-        guard let rt = model.runtime else { return "Vory could not reach your gateway." }
-        let deadline = Date().addingTimeInterval(10)
-        while !rt.socketState.isOpen, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-        guard rt.socketState.isOpen else { return "Your gateway isn't answering right now." }
-        guard let chat = await siriChat(on: rt) else { return "Vory could not open a chat on your gateway." }
+        let rt: GatewayRuntime
+        switch await connectedRuntime() {
+        case .failed(let why): return why
+        case .ready(let r): rt = r
+        }
+        guard let chat = await siriChat(on: rt, bot: bot) else { return "Vory could not open a chat on your gateway." }
         // A spoken answer within Siri's time: quick answers for this question, put back after.
         await chat.beginQuickAnswers()
         defer { Task { await chat.endQuickAnswers() } }
@@ -100,15 +255,18 @@ enum SiriAsk {
         return "I'm on it. I'll let you know when it's done; the answer will be in the Siri chat."
     }
 
-    /// The one chat Siri talks in, reopened each time; a new one when it is gone.
-    private static func siriChat(on rt: GatewayRuntime) async -> ChatSession? {
-        let profile = rt.defaultProfile ?? rt.selectedProfile
-        if let id = UserDefaults.standard.string(forKey: chatKey), !id.isEmpty,
+    /// The one chat Siri talks in with a bot, reopened each time; a new one when it is gone.
+    /// The default bot keeps the "Siri" chat from before; each other bot has its own.
+    private static func siriChat(on rt: GatewayRuntime, bot: BotEntity?) async -> ChatSession? {
+        let profile = SiriCatalog.profile(for: bot, on: rt)
+        let key = bot == nil ? chatKey : chatKey + "." + (bot?.id ?? "")
+        if let id = UserDefaults.standard.string(forKey: key), !id.isEmpty,
            let chat = try? await rt.openChat(storedID: id, title: chatTitle, profile: profile, waitForResume: true), chat.resumeError == nil {
             return chat
         }
+        if let p = profile, rt.selectedProfile != p { rt.selectedProfile = p }
         guard let chat = try? await rt.newChat() else { return nil }
-        if !chat.storedID.isEmpty { UserDefaults.standard.set(chat.storedID, forKey: chatKey) }
+        if !chat.storedID.isEmpty { UserDefaults.standard.set(chat.storedID, forKey: key) }
         await chat.rename(chatTitle)
         return chat
     }

@@ -483,6 +483,30 @@ def _png_data_url(seed: int, width: int = 320, height: int = 200) -> str:
     return "data:image/png;base64," + _b64.b64encode(png).decode("ascii")
 
 
+def _pdf_bytes(title: str, line: str) -> bytes:
+    """A small, valid one-page PDF (objects, xref with real offsets, a font), so a viewer
+    draws it rather than a blank page."""
+    content = f"BT /F1 20 Tf 24 100 Td ({title}) Tj ET\nBT /F1 12 Tf 24 72 Td ({line}) Tj ET\n".encode()
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 320 160]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+        b"<</Length " + str(len(content)).encode() + b">>stream\n" + content + b"endstream",
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    for o in offsets:
+        out += f"{o:010d} 00000 n \n".encode()
+    out += f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -492,6 +516,25 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         p = unquote(query.get("path", ""))
         ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
         if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
+            # The files route reads other files the gateway allows (#309): a small PDF and a CSV
+            # here, a refusal for a path under /etc, "gone" for one that says so, too large for
+            # one that says so.
+            if base == "/api/files/read" and ext in ("pdf", "csv"):
+                import base64
+                if p.startswith("/etc/"):
+                    return 403, {"detail": "Access denied"}
+                if "gone" in p:
+                    return 404, {"detail": "File not found"}
+                if "huge" in p:
+                    return 413, {"detail": "File too large"}
+                if ext == "pdf":
+                    body = _pdf_bytes("Mock report", "Three shards checked, ten errors in all.")
+                    mime = "application/pdf"
+                else:
+                    body = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n"
+                    mime = "text/csv"
+                return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": len(body), "mime_type": mime,
+                             "data_url": f"data:{mime};base64," + base64.b64encode(body).decode()}
             return (415, {"detail": "Unsupported media type"}) if base == "/api/media" else (404, {"detail": "File not found"})
         seed = sum(ord(c) for c in p)
         if base == "/api/media":
@@ -1751,6 +1794,29 @@ class Gateway:
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("files"):
+            # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
+            # its name as a markdown link, and a path that only looks like one.
+            await self.event("message.start", s.sid)
+            text = ("The report is ready.\n\nMEDIA:/home/hermes/out/report.pdf\n\n"
+                    "The numbers behind it: [raw numbers](</home/hermes/out/raw numbers.csv>). "
+                    "Nothing was written under /var/log this time.\n")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if prompt.strip().lower().startswith("mention"):
+            # Hand-offs between bots, as a group chat reads: "@work" and "@default" are bots the
+            # mock lists, "@you" is the person, the code span and block stay plain (#302).
+            await self.event("message.start", s.sid)
+            text = ("Handing the deploy to @work; @default keeps the log and @Ops is not a bot here. "
+                    "Over to @you for the go. In code it stays plain: `@work` and\n\n```\nping @default\n```\n")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
             # subscription plugin): the gateway cannot start the turn.
@@ -2139,6 +2205,12 @@ class Gateway:
             s = self.sessions.get(p.get("session_id", ""))
             if s and p.get("title"):
                 s.title = p["title"]
+                # The stored row the chat list reads, and the event every client gets: a rename
+                # shows in the list at once on the app's re-read (the real gateway does both).
+                for row in STORED_SESSIONS:
+                    if row.get("id") == s.stored:
+                        row["title"] = s.title
+                await self.event("session.title", s.sid, {"session_id": s.stored, "title": s.title})
             return ok({"title": s.title if s else ""})
         if method == "commands.catalog":
             # Shaped like the real one (tui_gateway/methods_tools.py): the commands, then the skill

@@ -234,13 +234,13 @@ struct VoiceTranscriptView: View {
 
     @ViewBuilder private func row(_ line: VoiceLine) -> some View {
         if line.isPerson {
-            Text(line.text).font(.body).foregroundStyle(.secondary)
+            Text(Mentions.attributed(line.text, names: Mentions.names)).font(.body).foregroundStyle(.secondary)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 36)
                 .accessibilityLabel("You said: \(line.text)")
         } else {
-            Text(line.text).font(.body).foregroundStyle(.primary)
+            Text(Mentions.attributed(line.text, names: Mentions.names)).font(.body).foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 16)
                 .accessibilityLabel("Bot said: \(line.text)")

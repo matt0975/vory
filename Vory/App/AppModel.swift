@@ -155,10 +155,10 @@ final class AppModel {
     /// The request stands for a moment only: asked with no chat list to answer it (the Mac's
     /// window closed), it must not start voice mode on whatever chat opens an hour later.
     var voiceModeWanted: Bool { voiceModeRequested && Date().timeIntervalSince(voiceModeRequestedAt ?? .distantPast) < 20 }
-    func requestVoiceMode() {
+    func requestVoiceMode(profile: String? = nil) {
         voiceModeRequested = true
         voiceModeRequestedAt = Date()
-        composeProfile = nil
+        composeProfile = profile
         selectedTab = .chats
         // Launched for the intent, the chat list may still be mounting: a moment before it is asked.
         Task { @MainActor in
@@ -166,6 +166,22 @@ final class AppModel {
             newChatRequest = UUID()
         }
     }
+    /// A new chat from Siri or a Shortcut, with the bot named or the default one (#310).
+    func requestNewChat(profile: String?) {
+        composeProfile = profile
+        selectedTab = .chats
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            newChatRequest = UUID()
+        }
+    }
+
+    /// One of the recent chats, from Siri, a Shortcut or Spotlight (#310).
+    func openStoredChat(id: String, profile: String?) {
+        selectedTab = .chats
+        pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
+    }
+
     /// Next (+1) or previous (−1) chat in the list, from the Mac's Chat menu.
     struct ChatStepRequest { let direction: Int; let id = UUID() }
     var chatStepRequest: ChatStepRequest?

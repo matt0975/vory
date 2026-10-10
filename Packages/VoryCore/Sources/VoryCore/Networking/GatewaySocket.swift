@@ -186,10 +186,35 @@ public actor GatewaySocket {
                 log.warning("connect failed: \(error.localizedDescription, privacy: .public)")
             }
             guard wantConnected else { return }
-            let delay = min(30.0, pow(2.0, Double(min(attempt, 5)))) * Double.random(in: 0.8...1.2)
+            // No usable path: nothing to try against, so the next attempt waits for the path to
+            // change (a route coming up on first open), not for a growing delay (#305).
+            let watch = NetworkWatch.shared
+            if !watch.isUsable {
+                setState(.reconnecting(attempt: attempt, delay: 0))
+                let mark = watch.mark
+                await watch.waitForChange(since: mark, upTo: 30)
+                if Task.isCancelled { return }
+                continue
+            }
+            let delay = Self.retryDelay(attempt: attempt) * Double.random(in: 0.8...1.2)
             setState(.reconnecting(attempt: attempt, delay: delay))
-            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            // The wait is cut short by a path change: the route came up, so the attempt goes now.
+            let mark = watch.mark
+            let deadline = Date().addingTimeInterval(delay)
+            while Date() < deadline {
+                if Task.isCancelled { return }
+                if watch.mark != mark { break }
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+            }
         }
+    }
+
+    /// How long after a failed attempt the next goes out: the first three a second apart,
+    /// quiet and quick (a route still coming up on first open), then doubling to half a
+    /// minute. Attempt 1 is the one that just failed.
+    nonisolated static func retryDelay(attempt: Int) -> Double {
+        if attempt <= 3 { return 1 }
+        return min(30.0, pow(2.0, Double(min(attempt - 3, 5))))
     }
 
     private func open(url: URL, headers: [String: String]) async throws {

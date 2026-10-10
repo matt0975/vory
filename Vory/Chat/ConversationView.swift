@@ -11,7 +11,8 @@ struct ConversationView: View {
     @State private var showProfile = false
     /// Rename chat, from the header's menu or a long press on the title pill (#286).
     @State private var renaming = false
-    @State private var renameText = ""
+    /// A bot whose "@name" was tapped in the thread: its card opens (#302).
+    @State private var mentionedBot: String?
     @State private var composerText = ""
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
@@ -71,15 +72,15 @@ struct ConversationView: View {
                         model.runtime?.returnToDefaultProfile()
                     }
                     .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
-                    .alert("Rename chat", isPresented: $renaming) {
-                        TextField("Name", text: $renameText)
-                        Button("Save") {
-                            let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !name.isEmpty else { return }
-                            Task { await chat.rename(name) }
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    } message: { Text("The new name shows in the chat list and the header.") }
+                    .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
+                    // A tapped "@bot" opens that bot's card; every other link goes its usual way.
+                    .environment(\.openURL, OpenURLAction { url in
+                        if let b = Mentions.bot(from: url) { mentionedBot = b; return .handled }
+                        return .systemAction
+                    })
+                    .sheet(isPresented: Binding(get: { mentionedBot != nil }, set: { if !$0 { mentionedBot = nil } })) {
+                        if let b = mentionedBot { ProfileInfoSheet(chat: nil, profileName: b).sheetFrame().withAppModel() }
+                    }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
@@ -148,7 +149,7 @@ struct ConversationView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
+                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                     } label: { Label("Chat options", systemImage: "ellipsis") }
                     .menuIndicator(.hidden)
@@ -266,7 +267,7 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
+        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
             // One group for VoiceOver, placed after the thread and the dock in the accessibility
@@ -577,6 +578,7 @@ struct ChatMenuItems: View {
         Menu {
             ModelMenuContent(chat: chat)
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
+        ReasoningEffortMenu(chat: chat)
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
         Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }

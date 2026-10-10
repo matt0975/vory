@@ -790,6 +790,9 @@ struct ChatListView: View {
                                          messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
             }
             sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
+            SiriCatalog.rememberBots(runtime.profiles)
+            SiriCatalog.rememberChats(sessions)
             SessionCache.save(sessions, connection: runtime.connection.id, profile: cacheProfile)
             errorText = nil
             // Group chats live on the gateway's room driver; none when it has no rooms.
@@ -913,7 +916,7 @@ struct ChatListView: View {
                                thinking: runtime.chatForStored(s.id).map { $0.isRunning && ($0.statusLine ?? "Thinking…") == "Thinking…" } ?? false,
                                project: showProject && projectFilter.isEmpty ? runtime.projects.project(forSession: s.id) : nil,
                                step: runtime.needsAttention.contains(s.id) ? nil : runtime.chatForStored(s.id)?.statusLine,
-                               summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? ""))
+                               summary: summarizer.shown(summarizer.summary(for: s), title: s.displayTitle, preview: s.preview ?? "", renamed: ChatSession.renamedByPerson(s.id)))
                         .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: allBots ? s.profile : nil) } }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))

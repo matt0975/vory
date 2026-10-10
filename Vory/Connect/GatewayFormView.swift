@@ -45,6 +45,19 @@ struct GatewayFormView: View {
             case .other: return "https://hermes.example.com"
             }
         }
+        /// The type the address fits when the chosen one does not (#307): a public https
+        /// address under Local network or Tailscale is "Other"; a private or Tailscale address
+        /// under Other is the matching one. Nil when the choice fits or nothing fits better.
+        static func suggested(for url: GatewayURL, chosen: ConnectionKind) -> ConnectionKind? {
+            let fits: ConnectionKind = url.isTailscaleHost ? .tailscale : url.isPrivateHost ? .local : .other
+            switch chosen {
+            case .local: return url.isPrivateHost || url.isTailscaleHost ? nil : fits
+            case .tailscale: return url.isTailscaleHost ? nil : fits
+            case .cloudflare: return nil
+            case .other: return (url.isPrivateHost || url.isTailscaleHost) ? fits : nil
+            }
+        }
+
         var help: String {
             switch self {
             case .local: return "Same Wi‑Fi as the gateway machine. Use its LAN address and the port hermes serve prints (9119 by default). Plain http is fine here; it only works at home."
@@ -139,6 +152,13 @@ struct GatewayFormView: View {
                         if kind == .tailscale && !u.isTailscaleHost { Text("This does not look like a Tailscale address (a *.ts.net name or 100.x.x.x).").foregroundStyle(.orange) }
                         if kind == .local && !u.isPrivateHost && !u.isTailscaleHost { Text("This is not a local address; pick another connection type if the gateway is elsewhere.").foregroundStyle(.orange) }
                         if kind == .cloudflare && !u.isTLS { Text("Cloudflare Access needs https.").foregroundStyle(.orange) }
+                        // One tap to the type the address fits (a tester was stuck with a public
+                        // address under Local network and a greyed Save, #307).
+                        if let fits = ConnectionKind.suggested(for: u, chosen: kind) {
+                            Button("Use \(fits.title) instead") { kind = fits }
+                                .font(.footnote.weight(.semibold))
+                                .accessibilityIdentifier("gateway.useSuggested")
+                        }
                         if u.isTailscaleHost { Text("Tailscale must be connected on \(Self.thisDevice) for the test to pass.").foregroundStyle(.secondary) }
                     }
                 }
@@ -236,7 +256,11 @@ struct GatewayFormView: View {
                 }
                 if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.footnote) }
             } footer: {
-                Text("Checks that /api/status returns JSON (not an HTML login page), that your credentials are accepted, and that the WebSocket at /api/ws opens.")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Checks that /api/status returns JSON (not an HTML login page), that your credentials are accepted, and that the WebSocket at /api/ws opens.")
+                    // Why Save is off, rather than a greyed button and no word (#307).
+                    if let why = saveBlocker { Text(why).foregroundStyle(.secondary).accessibilityIdentifier("gateway.saveBlocker") }
+                }
             }
         }
         // Grouped on both: on the Mac this is the System Settings look the other pages have
@@ -296,6 +320,20 @@ struct GatewayFormView: View {
         case .passed: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
         }
+    }
+
+    /// What stands between the form and Save, in a line under the test; nil when it can save.
+    private var saveBlocker: String? {
+        Self.saveBlocker(named: !name.trimmingCharacters(in: .whitespaces).isEmpty, urlOK: normalizedURL != nil, canTest: canTest, testPassed: testPassed)
+    }
+    static func saveBlocker(named: Bool, urlOK: Bool, canTest: Bool, testPassed: Bool) -> String? {
+        if testPassed && named { return nil }
+        var parts: [String] = []
+        if !urlOK { parts.append("enter the gateway's address") }
+        else if !canTest { parts.append("fill in the sign-in") }
+        else if !testPassed { parts.append("run Test Connection and let it pass") }
+        if !named { parts.append("give the gateway a name") }
+        return "To save: " + parts.joined(separator: ", and ") + "."
     }
 
     private var canTest: Bool {
