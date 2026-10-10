@@ -577,6 +577,7 @@ struct ChatMenuItems: View {
         Menu {
             ModelMenuContent(chat: chat)
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
+        ReasoningEffortMenu(chat: chat)
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
         Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }

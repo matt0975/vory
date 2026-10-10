@@ -59,8 +59,6 @@ struct ModelMenuContent: View {
     @State private var loading = false
     @State private var error: String?
 
-    private let efforts = ["minimal", "low", "medium", "high", "xhigh", "max"]
-
     var body: some View {
         Group {
             if let options {
@@ -85,15 +83,7 @@ struct ModelMenuContent: View {
                 Text(RestartRequiredCallout.matches(error) ? "Hermes needs a restart — see Settings › System" : error)
             }
             Divider()
-            if currentCapabilities?.reasoning != false {
-                Menu("Reasoning effort") {
-                    ForEach(efforts, id: \.self) { e in
-                        Button { Task { try? await chat.setReasoning(e) } } label: {
-                            if chat.info?.reasoningEffort == e { Label(e, systemImage: "checkmark") } else { Text(e) }
-                        }
-                    }
-                }
-            }
+            // Reasoning effort is its own item in the chat's menu (ReasoningEffortMenu, #301).
             if currentCapabilities?.fast == true {
                 Toggle("Fast mode", isOn: Binding(get: { chat.info?.fast ?? false }, set: { v in Task { try? await chat.setFast(v) } }))
             }
@@ -121,6 +111,74 @@ struct ModelMenuContent: View {
         Task {
             do { try await chat.setModel(provider: provider, model: model) }
             catch { chat.banner = error.localizedDescription }
+        }
+    }
+}
+
+/// Reasoning effort as its own item in the chat's … menu, next to Model (#301): the level
+/// now, and a short list to pick from. Hidden once the model is known to have no reasoning
+/// setting; until the model list has loaded it is offered as is.
+enum ReasoningEffort {
+    /// The levels every model is offered.
+    static let standard = ["low", "medium", "high"]
+
+    /// The levels to list: the standard three, then whatever else the gateway's own config
+    /// schema offers for `agent.reasoning_effort` (minimal, xhigh, max on some gateways), in
+    /// the gateway's order, without repeats or the empty "unset" choice.
+    static func levels(offered: [String]?) -> [String] {
+        var out = standard
+        for o in offered ?? [] {
+            let t = o.trimmingCharacters(in: .whitespaces)
+            if !t.isEmpty, !out.contains(t) { out.append(t) }
+        }
+        return out
+    }
+
+    /// The item's title: the level the chat runs at, or that none is set.
+    static func title(current: String?) -> String {
+        let c = (current ?? "").trimmingCharacters(in: .whitespaces)
+        return c.isEmpty ? "Reasoning: not set" : "Reasoning: \(c)"
+    }
+
+    /// The schema's offered levels, from `/api/config/schema`.
+    static func offered(in schema: JSONValue) -> [String]? {
+        schema["fields"]?["agent.reasoning_effort"]?["options"]?.arrayValue?.compactMap(\.stringValue)
+    }
+}
+
+struct ReasoningEffortMenu: View {
+    @Bindable var chat: ChatSession
+    @State private var capabilities: ModelCapabilities?
+    @State private var offered: [String]?
+    @State private var loaded = false
+
+    var body: some View {
+        if capabilities?.reasoning != false {
+            Menu {
+                ForEach(ReasoningEffort.levels(offered: offered), id: \.self) { level in
+                    Button {
+                        Task {
+                            do { try await chat.setReasoning(level) } catch { chat.banner = error.localizedDescription }
+                        }
+                    } label: {
+                        if chat.info?.reasoningEffort == level { Label(level, systemImage: "checkmark") } else { Text(level) }
+                    }
+                }
+            } label: {
+                Label(ReasoningEffort.title(current: chat.info?.reasoningEffort), systemImage: "brain")
+            }
+            .accessibilityIdentifier("chat.reasoning")
+            .task {
+                guard !loaded else { return }
+                loaded = true
+                if let o = try? await chat.modelOptions() {
+                    capabilities = o.providers.first { $0.slug == chat.info?.provider }?.capabilities?[chat.modelName]
+                }
+                let profile = ChatSession.modelOptionsProfile(chat: chat.profile, selected: chat.runtime.selectedProfile)
+                if let schema: JSONValue = try? await chat.runtime.api.get("/api/config/schema", profile: profile) {
+                    offered = ReasoningEffort.offered(in: schema)
+                }
+            }
         }
     }
 }
