@@ -1751,6 +1751,17 @@ class Gateway:
         if prompt.strip().lower().startswith("marathon"):
             await self._marathon_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("mention"):
+            # Hand-offs between bots, as a group chat reads: "@work" and "@default" are bots the
+            # mock lists, "@you" is the person, the code span and block stay plain (#302).
+            await self.event("message.start", s.sid)
+            text = ("Handing the deploy to @work; @default keeps the log and @Ops is not a bot here. "
+                    "Over to @you for the go. In code it stays plain: `@work` and\n\n```\nping @default\n```\n")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if prompt.strip().lower().startswith("fail"):
             # The bot's provider needs a CLI the gateway does not have (a tester's Claude
             # subscription plugin): the gateway cannot start the turn.

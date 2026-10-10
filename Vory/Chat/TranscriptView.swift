@@ -360,7 +360,9 @@ struct TranscriptView: View {
             .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
-            .onAppear { openedAt = Date() }
+            .onAppear { openedAt = Date(); refreshMentionNames() }
+            // The names "@" can mean: the gateway's bots (name and label) and the person's own.
+            .onChange(of: chat.runtime.profiles.map(\.name)) { _, _ in refreshMentionNames() }
             // Once the history is in and laid out, make sure the end is really on screen.
             .task(id: chat.isResuming) { await landAfterResume() }
             .onChange(of: chat.statusLine) { _, _ in
@@ -495,6 +497,16 @@ extension TranscriptView {
             guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
             if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { scrollPosition.scrollTo(edge: .bottom) }
         }
+    }
+
+    private func refreshMentionNames() {
+        var bots: [String] = []
+        for p in chat.runtime.profiles {
+            bots.append(p.name)
+            if p.label != p.name { bots.append(p.label) }
+        }
+        let person = UserDefaults.standard.string(forKey: "user.name")
+        Mentions.names = Mentions.Names(bots: bots, person: person)
     }
 
     /// Whether a change at the end of the thread may scroll the thread to it: locked, no finger
@@ -1525,7 +1537,11 @@ struct MarkdownView: View, Equatable {
         blockCache.setObject(BlocksBox(b), forKey: key, cost: text.utf8.count)
         return b
     }
-    static func inline(_ text: String) -> AttributedString {
+    @MainActor static func inline(_ text: String) -> AttributedString {
+        // Mentions are marked after the cache: they depend on the bots known now, not on the text.
+        Mentions.mark(inlineCached(text), names: Mentions.names)
+    }
+    static func inlineCached(_ text: String) -> AttributedString {
         let key = text as NSString
         if let hit = inlineCache.object(forKey: key) { return hit.text }
         let a = MarkdownParser.inline(text)
