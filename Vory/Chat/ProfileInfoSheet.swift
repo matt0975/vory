@@ -56,7 +56,6 @@ struct ProfileCardView: View {
     @State private var status: String?
     @State private var loaded = false
     @State private var renaming = false
-    @State private var renameText = ""
     @AppStorage(ChatStyle.showToolCalls) private var showToolCalls = true
     @AppStorage(ChatStyle.showReasoning) private var showReasoning = true
     @AppStorage(ChatStyle.showTurnStats) private var showTurnStats = true
@@ -108,15 +107,9 @@ struct ProfileCardView: View {
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrolled = y }
         // On the card, not its Name row: the … menu over the header asks for it before the
         // list has built that row.
-        .alert("Rename chat", isPresented: $renaming) {
-            TextField("Name", text: $renameText)
-            Button("Save") {
-                let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty, let chat else { return }
-                Task { await chat.rename(name) }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { Text("The new name shows in the chat list and the header.") }
+        .sheet(isPresented: $renaming) {
+            if let chat { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
+        }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .overlay(alignment: .top) { if floatingControls { controlsBand } }
@@ -176,7 +169,7 @@ struct ProfileCardView: View {
     @ViewBuilder private var thisChatSections: some View {
         if let chat {
             Section {
-                Button { renameText = chat.title; renaming = true } label: {
+                Button { renaming = true } label: {
                     LabeledContent("Name") {
                         HStack(spacing: 6) {
                             Text(chat.title.isEmpty ? "Untitled" : chat.title).foregroundStyle(.secondary)
@@ -276,7 +269,7 @@ struct ProfileCardView: View {
             Spacer()
             if let chat {
                 Menu {
-                    Button { renameText = chat.title; renaming = true } label: { Label("Rename chat", systemImage: "pencil") }
+                    Button { renaming = true } label: { Label("Rename chat", systemImage: "pencil") }
                 } label: { circle("ellipsis") }
                 .accessibilityLabel("More")
                 .accessibilityIdentifier("profile.more")

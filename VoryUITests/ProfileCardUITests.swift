@@ -104,15 +104,15 @@ final class ProfileCardUITests: XCTestCase {
         let nameRow = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Name'")).firstMatch
         XCTAssertTrue(nameRow.waitForExistence(timeout: 5), "no Name row")
         nameRow.tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "the Name row opened no dialog")
-        app.alerts.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["rename.name"].firstMatch.waitForExistence(timeout: 5), "the Name row opened no dialog")
+        app.buttons["Cancel"].firstMatch.tap()
         // The … menu's Rename reaches the same dialog.
         more.tap()
         XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "the … menu has no Rename chat")
         shot("profile-card-light-menu")
         app.buttons["Rename chat"].firstMatch.tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat opened no dialog")
-        app.alerts.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["rename.name"].firstMatch.waitForExistence(timeout: 5), "Rename chat opened no dialog")
+        app.buttons["Cancel"].firstMatch.tap()
         // Each tab shows its own section.
         show("look", expecting: "Reset to default")
         shot("profile-card-light-look")
@@ -129,14 +129,14 @@ final class ProfileCardUITests: XCTestCase {
         app.buttons["chat.more"].firstMatch.tap()
         XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "the chat's menu has no Rename chat")
         app.buttons["Rename chat"].firstMatch.tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat from the menu opened no dialog")
-        app.alerts.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["rename.name"].firstMatch.waitForExistence(timeout: 5), "Rename chat from the menu opened no dialog")
+        app.buttons["Cancel"].firstMatch.tap()
         app.buttons["chat.titlePill"].firstMatch.press(forDuration: 0.8)
         XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 5), "a long press on the pill offers no Rename chat")
         shot("rename-from-pill")
         app.buttons["Rename chat"].firstMatch.tap()
-        XCTAssertTrue(app.alerts.firstMatch.waitForExistence(timeout: 5), "Rename chat from the pill opened no dialog")
-        app.alerts.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(app.textFields["rename.name"].firstMatch.waitForExistence(timeout: 5), "Rename chat from the pill opened no dialog")
+        app.buttons["Cancel"].firstMatch.tap()
 
         // Dark.
         app.terminate()
