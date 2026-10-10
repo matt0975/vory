@@ -41,6 +41,9 @@ struct ProfileCardView: View {
     var onClose: (() -> Void)? = nil
     /// The section on show. This chat from a chat; Look from the Bots page or anywhere else.
     @State private var tab: ProfileTab
+    /// How far the card has scrolled up: the band behind the round buttons shows only once
+    /// rows have run under them, as the system's scroll edge does; at rest the face is clear.
+    @State private var scrolled: CGFloat = 0
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -102,6 +105,7 @@ struct ProfileCardView: View {
             if let status { Section { Text(status).font(.footnote).foregroundStyle(status.hasPrefix("Saved") ? Color.secondary : Color.red) } }
         }
         .navigationTitle(floatingControls ? "" : label)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, y in scrolled = y }
         // On the card, not its Name row: the … menu over the header asks for it before the
         // list has built that row.
         .alert("Rename chat", isPresented: $renaming) {
@@ -250,12 +254,15 @@ struct ProfileCardView: View {
     /// The round buttons on a band of the system's material that fades out under them, so the
     /// card's rows do not show through the circles once it scrolls (the chat header's treatment).
     private var controlsBand: some View {
-        controls
+        // Nothing at rest; the whole band once the header's top has gone 60 pt under the buttons.
+        let reveal = min(1, max(0, (scrolled - 20) / 60))
+        return controls
             .background(alignment: .top) {
                 Rectangle().fill(.regularMaterial)
                     .frame(height: 84)
                     .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.6), .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
                     .ignoresSafeArea()
+                    .opacity(reveal)
                     .allowsHitTesting(false)
             }
     }
