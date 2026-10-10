@@ -6,11 +6,13 @@ import Testing
 /// Reasoning effort as its own item in the chat's menu (#301): which levels are listed, and
 /// what the item says.
 @Suite struct ReasoningEffortTests {
-    @Test func theStandardLevelsComeFirstThenTheGatewaysExtras() {
+    @Test func theKnownLevelsAreListedByStrengthAndUnknownOnesAfter() {
         #expect(ReasoningEffort.levels(offered: nil) == ["low", "medium", "high"])
-        #expect(ReasoningEffort.levels(offered: ["", "minimal", "low", "medium", "high", "xhigh", "max"]) == ["low", "medium", "high", "minimal", "xhigh", "max"])
-        // Repeats and blanks are dropped; the gateway's own order is kept for the extras.
-        #expect(ReasoningEffort.levels(offered: ["max", " ", "high", "xhigh", "max"]) == ["low", "medium", "high", "max", "xhigh"])
+        #expect(ReasoningEffort.levels(offered: ["", "minimal", "low", "medium", "high", "xhigh", "max"]) == ["minimal", "low", "medium", "high", "xhigh", "max"])
+        // Whatever order the gateway lists them in, the known ones go by strength; repeats and
+        // blanks are dropped; a level only the gateway knows comes last, in the gateway's order.
+        #expect(ReasoningEffort.levels(offered: ["max", " ", "high", "xhigh", "max"]) == ["low", "medium", "high", "xhigh", "max"])
+        #expect(ReasoningEffort.levels(offered: ["ultra", "max", "deep"]) == ["low", "medium", "high", "max", "ultra", "deep"])
     }
 
     @Test func theTitleSaysTheLevelOrThatNoneIsSet() {

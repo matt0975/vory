@@ -121,16 +121,18 @@ struct ModelMenuContent: View {
 enum ReasoningEffort {
     /// The levels every model is offered.
     static let standard = ["low", "medium", "high"]
+    /// The known levels, weakest first: the order the list keeps whichever of them appear.
+    static let byStrength = ["minimal", "low", "medium", "high", "xhigh", "max"]
 
-    /// The levels to list: the standard three, then whatever else the gateway's own config
-    /// schema offers for `agent.reasoning_effort` (minimal, xhigh, max on some gateways), in
-    /// the gateway's order, without repeats or the empty "unset" choice.
+    /// The levels to list: the standard three plus whatever the gateway's own config schema
+    /// offers for `agent.reasoning_effort`, the known ones by strength (minimal, low, medium,
+    /// high, xhigh, max), any the gateway alone knows after them in its order, without repeats
+    /// or the empty "unset" choice.
     static func levels(offered: [String]?) -> [String] {
-        var out = standard
-        for o in offered ?? [] {
-            let t = o.trimmingCharacters(in: .whitespaces)
-            if !t.isEmpty, !out.contains(t) { out.append(t) }
-        }
+        let given = (offered ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let wanted = Set(standard + given)
+        var out = byStrength.filter { wanted.contains($0) }
+        for g in given where !out.contains(g) { out.append(g) }
         return out
     }
 

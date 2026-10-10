@@ -55,9 +55,12 @@ final class ReasoningMenuUITests: XCTestCase {
         shot("reasoning-menu-item")
         item.tap()
         // The short list: the standard three and the gateway's extras.
-        for level in ["low", "medium", "high", "max"] {
+        for level in ["minimal", "low", "medium", "high", "xhigh", "max"] {
             XCTAssertTrue(app.buttons[level].firstMatch.waitForExistence(timeout: 5), "no \(level) in the list")
         }
+        // By strength: minimal above low, max last.
+        XCTAssertLessThan(app.buttons["minimal"].firstMatch.frame.minY, app.buttons["low"].firstMatch.frame.minY)
+        XCTAssertLessThan(app.buttons["xhigh"].firstMatch.frame.minY, app.buttons["max"].firstMatch.frame.minY)
         shot("reasoning-menu-levels")
         app.buttons["high"].firstMatch.tap()
         // The model list no longer nests it.
