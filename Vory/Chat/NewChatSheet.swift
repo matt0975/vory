@@ -96,7 +96,8 @@ struct NewChatSheet: View {
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .frame(minWidth: 90, minHeight: 28)
                         .onSubmit { if let first = candidates.first { add(first) } }
-                        .onKeyPress(.delete) { if typed.isEmpty, let last = chosen.last { remove(last); return .handled }; return .ignored }
+                        // Backspace while an input method is composing edits its text, never a chip.
+                        .onKeyPress(.delete) { if typed.isEmpty, let last = chosen.last, !InputComposition.isActive { remove(last); return .handled }; return .ignored }
                         .onChange(of: query) { old, new in
                             guard !chosen.isEmpty else { return }
                             if !new.contains(mark) {
@@ -264,12 +265,12 @@ struct NewChatSheet: View {
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in stage(data, name: name, kind: .image) }.ignoresSafeArea() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in stage(data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
-        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url) }.sheetFrame(.compact) }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url) }.sheetFrame(.compact).withAppModel() }
     }
 
     /// The + panel's rows: a chat composer's, with Message History greyed (there is no chat yet).

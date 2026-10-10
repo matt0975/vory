@@ -238,7 +238,7 @@ struct HTMLCardView: View {
             }
         }
         .animation(.snappy, value: loaded)
-        .sheet(isPresented: $full) { HTMLCardSheet(html: html).sheetFrame(.wide) }
+        .sheet(isPresented: $full) { HTMLCardSheet(html: html).sheetFrame(.wide).withAppModel() }
     }
 }
 

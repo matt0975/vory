@@ -36,6 +36,8 @@ final class TurnBoard {
 
     private func badge() {
         NSApp.dockTile.badgeLabel = attention > 0 ? "\(attention)" : nil
+        // The idle bots' eyes play only while something is working (#248).
+        if BotAmbient.shared.anyWorking != !turns.isEmpty { BotAmbient.shared.anyWorking = !turns.isEmpty }
     }
 }
 
@@ -45,6 +47,12 @@ final class TurnBoard {
 final class MenuBarTurnReporter: TurnActivityReporting {
     private var id: String?
     private var startedAt = Date()
+
+    /// A chat closed or deleted mid-turn takes its reporter with it: its row must not stay on the
+    /// board, where it kept every idle bot's eyes going (#248).
+    isolated deinit {
+        if let id { TurnBoard.shared.remove(id) }
+    }
 
     func start(for chat: ChatSession) {
         // Called again for each part of a reply and when the session's snapshot arrives: a turn

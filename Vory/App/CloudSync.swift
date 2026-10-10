@@ -341,9 +341,15 @@ protocol GatewayStoring: AnyObject {
     func connection(id: UUID) -> GatewayConnection?
     func secrets(for id: UUID) -> GatewaySecrets
     func upsert(_ connection: GatewayConnection, secrets: GatewaySecrets) throws
+    /// Forgets the sign-in this device remembers for the gateway, if any (no Face ID needed).
+    /// A merge while the device is locked cannot delete it: it is no longer offered, and is
+    /// deleted once the device is unlocked (see `RememberedSignInVault.pendingForgets`).
+    func forgetRememberedSignIn(_ id: UUID)
 }
 
-extension ConnectionStore: GatewayStoring {}
+extension ConnectionStore: GatewayStoring {
+    func forgetRememberedSignIn(_ id: UUID) { remembered.forget(id) }
+}
 
 @MainActor
 enum CloudGateways {
@@ -438,6 +444,9 @@ enum CloudGateways {
                     if (try? store.upsert(conn, secrets: secrets)) != nil {
                         out.changed.append(c.id)
                         stamps[id] = theirs.updatedAt; seen[id] = theirs.signature
+                        // A sign-in remembered here was typed for the old address and method. Of
+                        // no use now, and kept, it would still be offered behind Face ID.
+                        if conn.gateway != c.gateway || conn.authMode != c.authMode { store.forgetRememberedSignIn(c.id) }
                     }
                 }
             } else if file.deleted[id] == nil, !isLoopback(c) {

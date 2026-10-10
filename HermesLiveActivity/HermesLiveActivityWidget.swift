@@ -50,7 +50,7 @@ struct HermesTurnLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     if context.state.needsAttention, context.state.attentionKind != "input" {
-                        ApprovalButtons(attributes: context.attributes)
+                        ApprovalButtons(attributes: context.attributes, state: context.state)
                             .padding(.trailing, 2)
                     } else if context.state.needsAttention {
                         Image(systemName: "keyboard").font(.title3).foregroundStyle(.yellow).padding(.trailing, 6)
@@ -404,7 +404,7 @@ struct LockScreenTurnView: View {
                 }
                 Spacer(minLength: 4)
                 if state.needsAttention {
-                    if state.attentionKind != "input" { ApprovalButtons(attributes: attributes) }
+                    if state.attentionKind != "input" { ApprovalButtons(attributes: attributes, state: state) }
                 } else if let voice = state.voiceMode {
                     VStack(alignment: .trailing, spacing: 6) {
                         VoiceEndButton(attributes: attributes)
@@ -429,14 +429,12 @@ struct LockScreenTurnView: View {
     }
 }
 
-/// Approve / Deny, stacked: each opens the app on that chat's card and applies the choice.
+/// Approve / Deny, stacked: each opens the app on that chat's card and applies the choice to
+/// the approval shown here (`HermesTurnAttributes.approvalURL`).
 struct ApprovalButtons: View {
     var attributes: HermesTurnAttributes
-    private func url(_ choice: String) -> URL {
-        var c = URLComponents(); c.scheme = "vory"; c.host = "approval"
-        c.queryItems = [URLQueryItem(name: "session", value: attributes.storedSessionID), URLQueryItem(name: "choice", value: choice)]
-        return c.url!
-    }
+    var state: HermesTurnAttributes.ContentState
+    private func url(_ choice: String) -> URL { attributes.approvalURL(choice: choice, state: state) }
     var body: some View {
         VStack(spacing: 6) {
             Link(destination: url("once")) {

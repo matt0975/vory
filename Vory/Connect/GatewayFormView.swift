@@ -78,6 +78,13 @@ struct GatewayFormView: View {
     @State private var errorMessage: String?
     @State private var signingIn = false
     @State private var authClient = NativeAuthClient()
+    /// "Remember sign-in on this device": off unless the person turns it on (or it already is).
+    @State private var rememberSignIn = false
+    /// How the switch was when the form opened: turned off from on is the person forgetting it.
+    @State private var rememberedAtLoad = false
+    /// Whether this device can guard a remembered sign-in (it has a passcode), and with what.
+    @State private var canRemember = true
+    @State private var guardName = "Passcode"
 
     /// A bare address on a home network or tailnet means plain http (no certificate there);
     /// anywhere else, https. Typing the scheme always wins.
@@ -164,7 +171,11 @@ struct GatewayFormView: View {
                     SecureField("Password", text: $password).textContentType(.password)
                         .accessibilityIdentifier("gateway.password")
                         .focused($field, equals: .password)
-                    Text("The password is exchanged for a session and never stored.").font(.footnote).foregroundStyle(.secondary)
+                    Toggle("Remember sign-in on this device", isOn: $rememberSignIn)
+                        .disabled(!canRemember && !rememberSignIn)
+                        .accessibilityIdentifier("gateway.rememberSignIn")
+                    Text(rememberFootnote).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("gateway.rememberFootnote")
                 case .oauth:
                     providerPicker
                     Button {
@@ -247,7 +258,20 @@ struct GatewayFormView: View {
         .onChange(of: sessionToken) { _, _ in invalidate() }
         .onChange(of: cfClientId) { _, _ in invalidate() }
         .onChange(of: cfClientSecret) { _, _ in invalidate() }
-        .task { loadExisting(); await loadProviders() }
+        .task {
+            let auth = model.rememberedSignIn.authenticator
+            canRemember = auth.canAuthenticate
+            guardName = auth.methodName
+            loadExisting()
+            await loadProviders()
+        }
+    }
+
+    /// Under the switch: what remembering does, or what it needs.
+    private var rememberFootnote: String {
+        if rememberSignIn { return RememberedSignInCopy.kept(guardName) }
+        let base = "The password is exchanged for a session and not stored."
+        return canRemember ? base : base + " " + RememberedSignInCopy.needsPasscode
     }
 
     private var providerPicker: some View {
@@ -294,6 +318,10 @@ struct GatewayFormView: View {
         providerName = c.authProvider ?? ""
         let s = model.store.secrets(for: c.id)
         sessionToken = s.sessionToken ?? ""
+        // Read again if it could not be at launch (the phone was locked then).
+        if !model.store.remembered.isKnown { model.store.remembered.reload() }
+        rememberSignIn = model.store.remembered.contains(c.id)
+        rememberedAtLoad = rememberSignIn
         cfClientId = s.access.clientId
         cfClientSecret = s.access.clientSecret
         if s.bearer != nil { bearerSecrets = s }
@@ -394,6 +422,13 @@ struct GatewayFormView: View {
                 conn.lastVersion = testedVersion
                 conn.connectionKind = kind.rawValue
                 try model.store.upsert(conn, secrets: secrets)
+                do { try updateRememberedSignIn(conn.id, gateway: conn.gateway) } catch {
+                    // Saved and signed in all the same; only the remembering failed. The switch
+                    // goes off so a second Save carries on without it.
+                    rememberSignIn = false
+                    errorMessage = "The gateway is saved, but \(Self.thisDevice) could not remember the sign-in (\(error.localizedDescription)). Save again to go on without it."
+                    return
+                }
                 if model.runtime?.connection.id == conn.id { await model.deactivate() }
                 onSaved?(conn)
                 dismiss()
@@ -404,5 +439,24 @@ struct GatewayFormView: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Keeps the username and password behind Face ID, for this address, when the switch is on
+    /// and they were typed here; forgets what was remembered when the switch was turned off,
+    /// the method changed or the address did (see `RememberedSignInCoordinator.formChange`).
+    private func updateRememberedSignIn(_ id: UUID, gateway: GatewayURL) throws {
+        let typed = !username.isEmpty && !password.isEmpty
+        let moved = existing.map { $0.gateway != gateway } ?? false
+        switch RememberedSignInCoordinator.formChange(authMode: authMode, switchOn: rememberSignIn, wasOn: rememberedAtLoad, typed: typed, moved: moved) {
+        case .remember:
+            let provider = providerName.isEmpty ? "basic" : providerName
+            try model.store.remembered.remember(RememberedSignIn(provider: provider, username: username, password: password, gateway: gateway), for: id)
+        case .forget:
+            model.store.remembered.forget(id)
+        case .keep:
+            break
+        }
+        // Signed in by hand: the gateway may be signed in again by itself from now on.
+        model.rememberedSignIn.didSignIn(id)
     }
 }

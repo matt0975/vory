@@ -33,18 +33,30 @@ struct ComposerView: View {
     @State private var showHistory = false
     @State private var historyCursor: Int?
     @State private var catalog: CommandsCatalog?
+    /// The gateway's models, loaded the first time "/model " is typed in this chat.
+    @State private var modelOptions: ModelOptionsResult?
+    @State private var modelOptionsLoading = false
+    /// A chooser row marked on purpose (the arrows, or a model completed with Tab), for the text
+    /// it was marked on; otherwise SlashMenu.markedIndex decides what is marked.
+    @State private var menuMark: SlashMenu.Mark?
+    /// Escape closed the chooser for the word being typed; a new word opens it again.
+    @State private var menuDismissed = false
+    /// Why the last Return did nothing (see SlashMenu.holdNote); gone with the next edit.
+    @State private var holdNote: String?
     @State private var dictation = DictationController()
     @State private var stagedPreview: URL?
     /// Shown after a paste that dropped a lot of text into the field.
     @State private var longTextOffer = false
     @State private var showAttach = false
     @State private var attachPanelHeight: CGFloat = 356
+    @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(AppModel.self) private var model
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
     private var mentionQuery: String? {
-        guard !text.hasPrefix("/"), let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("@") else { return nil }
+        guard !text.hasPrefix("/"), !showingRecalled,
+              let last = text.split(separator: " ", omittingEmptySubsequences: false).last, last.hasPrefix("@") else { return nil }
         return String(last.dropFirst())
     }
     private var mentionSuggestions: [ProfileInfo] {
@@ -68,75 +80,152 @@ struct ComposerView: View {
         withAnimation(.snappy) { longTextOffer = false; text = "" }
     }
 
-    /// Every command the gateway lists, narrowed by what follows the "/" (a bare "/" shows all).
-    /// The word being typed, when it starts with "/": the first word, or a later one (a skill
-    /// that takes another command as its argument, say). Nil otherwise.
-    private var slashWord: Substring? {
-        guard text.hasPrefix("/") else { return nil }
-        let last = text.split(separator: " ", omittingEmptySubsequences: false).last ?? ""
-        return last.hasPrefix("/") ? last : nil
+    /// Up or Down put a history entry in the field and nothing has been typed since: no chooser
+    /// opens for it (see SlashMenu.isRecalled).
+    private var showingRecalled: Bool { SlashMenu.isRecalled(text, history: chat.composerHistory, cursor: historyCursor) }
+
+    /// The chooser above the field: the gateway's commands and skills while a "/word" is typed,
+    /// its models after "/model " (see SlashMenu).
+    private var menuContext: SlashMenu.Context? { showingRecalled ? nil : SlashMenu.context(for: text) }
+
+    /// The chooser's context while it is open (not closed with Escape).
+    private var openMenuContext: SlashMenu.Context? { menuDismissed ? nil : menuContext }
+
+    private var menuItems: [SlashMenu.Item] {
+        guard let ctx = openMenuContext else { return [] }
+        switch ctx.kind {
+        case .command: return catalog.map { SlashMenu.commandItems($0, query: ctx.query) } ?? []
+        case .model:
+            return modelOptions.map { SlashMenu.modelItems($0, current: chat.modelName, currentProvider: chat.info?.provider, query: ctx.query) } ?? []
+        }
     }
 
-    private var slashSuggestions: [(name: String, description: String)] {
-        guard let word = slashWord, let catalog else { return [] }
-        let q = word.dropFirst().lowercased()
-        // Some gateways list the names with their slash already.
-        return catalog.allPairs
-            .map { (name: $0.name.hasPrefix("/") ? String($0.name.dropFirst()) : $0.name, description: $0.description) }
-            .filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) }
-            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+    /// The row Return takes, shown marked; nil when none is (see SlashMenu.markedIndex).
+    private var markedIndex: Int? {
+        openMenuContext.flatMap { SlashMenu.markedIndex(menuItems, context: $0, mark: menuMark) }
     }
+
+    /// The model list is on its way: the chooser says so rather than staying shut.
+    private var menuLoading: Bool { openMenuContext?.kind == .model && modelOptions == nil && modelOptionsLoading }
 
     /// The command list scrolls inside a cap: about 30 % of the screen, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat { max(120, min(280, UIScreen.main.bounds.height * 0.30)) }
 
-    /// A command picked: it replaces the word being typed, not the whole line.
-    private func pickSlash(_ name: String) {
-        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        if words.isEmpty { words = [""] }
-        words[words.count - 1] = "/" + name
-        text = words.joined(separator: " ") + " "
+    /// A row tapped or taken with Return, or completed with Tab (see SlashMenu.outcome): a
+    /// command that takes nothing runs as if typed and sent, a model switches this chat the way
+    /// the model menu does (with a line in the thread), the chat's own model stays, and anything
+    /// else goes in the field.
+    private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
+        menuMark = nil
+        // With a reply quoted or files staged the text goes out as a message, not a command
+        // (ChatSession.send), so the command waits in the field instead.
+        let outcome = SlashMenu.outcome(of: item, in: text, wholeText: menuContext?.wholeText == true,
+                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty)
+        switch outcome {
+        case .run(let command):
+            text = command
+            Task { await send() }
+        case .fill(let filled):
+            text = filled
+            // A model completed with Tab stays marked, so Return then takes that row, provider and all.
+            if item.kind == .model, let ctx = SlashMenu.context(for: filled) { menuMark = SlashMenu.Mark(context: ctx, id: item.id) }
+        case .switchModel:
+            text = ""
+            Task { await chat.switchModel(provider: item.provider, model: item.name) }
+        case .keepModel:
+            text = ""
+        }
     }
 
-    /// Return with a picker open takes its first item (a bare Return would otherwise add a
-    /// line, or send, under a half-typed command). True when something was picked.
-    private func pickFirstSuggestion() -> Bool {
-        if let s = slashSuggestions.first { pickSlash(s.name); return true }
+    /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
+    /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
+    /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
+    /// as a message, so it stays in the field instead. True when Return was used here.
+    private func takeOnReturn() -> Bool {
+        let canRun = quote.isEmpty && chat.staged.isEmpty
+        switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex, canRun: canRun) {
+        case .take(let item): pick(item); return true
+        case .send: Task { await send() }; return true
+        case .hold: held(canRun: canRun); return true
+        case .keep: break
+        }
+        // The chooser closed (Escape) or never opened for the line (a provider flag typed past
+        // "/model"): a model command still does not go as a message with a quote or files.
+        if SlashMenu.holdsClosed(text, canRun: canRun) { held(canRun: canRun); return true }
         if let p = mentionSuggestions.first { pickMention(p); return true }
         return false
     }
 
+    /// Return kept the field as it is: say why under it.
+    private func held(canRun: Bool) {
+        withAnimation(.snappy(duration: 0.2)) { holdNote = SlashMenu.holdNote(text: text, canRun: canRun, loading: menuLoading) }
+    }
+
+    /// Tab completes the marked row (see SlashMenu.tabCompletion for when none is) and never
+    /// runs anything. With the list open and nothing to complete it does nothing, rather than
+    /// put a tab in the field or move the focus.
+    private func completeOnTab() -> Bool {
+        let items = menuItems
+        if let ctx = openMenuContext, !items.isEmpty {
+            if let completion = SlashMenu.tabCompletion(items, context: ctx, marked: markedIndex) {
+                pick(completion.item, completing: true)
+                if !completion.marks { menuMark = nil }
+            }
+            return true
+        }
+        if let p = mentionSuggestions.first { pickMention(p); return true }
+        return false
+    }
+
+    /// Up and Down move the chooser's mark (round the ends) while it is open; history recall
+    /// has them otherwise.
+    private func moveSelection(_ delta: Int) -> Bool {
+        let items = menuItems
+        guard let ctx = openMenuContext, let i = SlashMenu.move(markedIndex, by: delta, count: items.count) else { return false }
+        menuMark = SlashMenu.Mark(context: ctx, id: items[i].id)
+        return true
+    }
+
+    /// Escape: the chooser closes until the word changes.
+    private func dismissMenu() -> Bool {
+        guard !menuItems.isEmpty || menuLoading else { return false }
+        withAnimation(.snappy(duration: 0.2)) { menuDismissed = true }
+        return true
+    }
+
+    private func loadModelOptions() async {
+        guard modelOptions == nil, !modelOptionsLoading else { return }
+        modelOptionsLoading = true
+        defer { modelOptionsLoading = false }
+        do { modelOptions = try await chat.modelOptions() }
+        catch {
+            // Typed past "/model " before the list came: the load was called off, nothing failed.
+            guard !Task.isCancelled else { return }
+            chat.banner = RestartRequiredCallout.matches(error.localizedDescription) ? "Hermes needs a restart: see Settings › System" : error.localizedDescription
+        }
+    }
+
     var body: some View {
+        // One glass container for the composer, so the + button's glass can become the
+        // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
+        // outside a container, and the panel just scaled in.
+        GlassEffectContainer(spacing: 0) { composerStack }
+    }
+
+    private var composerStack: some View {
         VStack(spacing: 8) {
-            if !slashSuggestions.isEmpty {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(slashSuggestions, id: \.name) { s in
-                            Button { pickSlash(s.name) } label: {
-                                HStack(spacing: 10) {
-                                    Text("/" + s.name).font(.subheadline.monospaced().weight(.medium)).lineLimit(1)
-                                    Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(height: 30)
-                                .padding(.vertical, 4)
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityIdentifier("composer.command.\(s.name)")
-                            if s.name != slashSuggestions.last?.name { Divider() }
-                        }
-                    }
-                    .padding(.horizontal, 14).padding(.vertical, 4)
-                }
-                .scrollIndicators(.visible)
-                // A fixed height; the dock's keyboard handling is manual (ConversationView) so
-                // this scroll view cannot swallow the keyboard inset.
-                .frame(height: min(commandListCap, CGFloat(slashSuggestions.count) * 38 + 8))
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
-                // In place, not sliding up from under the keyboard.
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+            if !menuItems.isEmpty || menuLoading {
+                SlashMenuList(items: menuItems, selection: markedIndex, loading: menuLoading, cap: commandListCap) { pick($0) }
+                    // In place, not sliding up from under the keyboard.
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))            }
+            if let holdNote {
+                Text(holdNote)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .accessibilityIdentifier("composer.holdNote")
+                    .transition(.opacity)
             }
             if !mentionSuggestions.isEmpty {
                 ScrollView {
@@ -246,9 +335,15 @@ struct ComposerView: View {
             if showAttach {
                 attachPanel
                     .glassEffectID("attach", in: namespace)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { attachPanelHeight = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+                        attachPanelHeight = h
+                        // How long the panel took to lay out after the tap (DEBUG "perf" log).
+                        if let t = attachTappedAt { attachTappedAt = nil; Perf.note("attach panel laid out \(Int(Date().timeIntervalSince(t) * 1000)) ms after the tap") }
+                    }
                     .offset(y: -(attachPanelHeight + 10))
-                    .transition(.scale(scale: 0.2, anchor: .bottomLeading).combined(with: .opacity))
+                    // The glass grows out of the button and folds back into it; the rows fade.
+                    .glassEffectTransition(.matchedGeometry)
+                    .transition(.opacity)
                     .zIndex(2)
             }
         }
@@ -260,7 +355,7 @@ struct ComposerView: View {
                     .onTapGesture { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
             }
         }
-        .animation(.snappy(duration: 0.25), value: slashSuggestions.map(\.name))
+        .animation(.snappy(duration: 0.25), value: menuItems.map(\.id))
         .animation(.snappy(duration: 0.25), value: mentionSuggestions.map(\.name))
         .animation(.snappy(duration: 0.2), value: dictation.isListening)
         // Files dropped on the composer (the Finder on a Mac, another app on an iPad) are staged like picked ones.
@@ -286,6 +381,10 @@ struct ComposerView: View {
         #endif
         // Why the mic did nothing (no permission, no recognizer): said in the banner, not swallowed.
         .onChange(of: dictation.error) { _, e in if let e { chat.banner = e; dictation.error = nil } }
+        #if os(iOS)
+        // The camera question answered before the + panel can need it (see cameraAvailable).
+        .task { try? await Task.sleep(for: .seconds(1)); _ = Self.cameraAvailable }
+        #endif
         #if os(macOS)
         // A new chat on the Mac (⌘N, the list's button, an intent) opens with the cursor in
         // the box, ready to type, as the box is after a message goes out (#212).
@@ -295,14 +394,14 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
         #endif
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { for u in urls { importFile(u) } }
         }
-        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact) }
-        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame() }
+        .sheet(isPresented: $showRecorder) { AudioRecorderSheet { url in importFile(url, kind: .audio) }.sheetFrame(.compact).withAppModel() }
+        .sheet(isPresented: $showHistory) { HistorySheet(history: chat.composerHistory) { text = $0 }.sheetFrame().withAppModel() }
     }
 
     /// The field itself (its own view: the body's one expression grew past what the compiler
@@ -311,12 +410,22 @@ struct ComposerView: View {
         ComposerTextView(text: $text, placeholder: "Type / for commands", focused: $focused, accessibilityID: "composer.text",
                          onSend: { Task { await send() } },
                          onPasteData: { data, name, type in stagePasted(data, name: name, type: type) },
-                         onArrow: { recallHistory($0) },
-                         onReturn: { pickFirstSuggestion() },
-                         returnSends: returnSends)
+                         onArrow: { moveSelection($0) || recallHistory($0) },
+                         onReturn: { takeOnReturn() },
+                         returnSends: returnSends,
+                         menuOpen: !menuItems.isEmpty || menuLoading,
+                         onTab: { completeOnTab() },
+                         onEscape: { dismissMenu() })
             .padding(.leading, 14).padding(.vertical, 7)
             .task { catalog = await chat.commandsCatalog() }
+            // The model list loads when "/model " is first typed, and is kept for this chat.
+            .task(id: menuContext?.kind == .model) { if menuContext?.kind == .model { await loadModelOptions() } }
+            // A new word (or the model list after "/model") opens a dismissed chooser again,
+            // and a mark made by hand is let go once the list is narrowed (the usual mark is back).
+            .onChange(of: menuContext.map { "\($0.kind)-\($0.anchor)" }) { _, _ in menuDismissed = false }
+            .onChange(of: menuContext) { _, ctx in if menuMark?.context != ctx { menuMark = nil } }
             .onChange(of: text) { old, new in
+                holdNote = nil
                 // Offered once as the text gets long (a paste lands in one jump;
                 // typing crosses the line once); "Keep" holds until it shrinks again.
                 let limit = 800
@@ -365,7 +474,7 @@ struct ComposerView: View {
             // The panel takes the keyboard's place, as the + tray does in Messages: with the
             // keyboard up it grew over the thread and covered the header (a tester, on the
             // first build with Voice mode in it).
-            if !showAttach { focused = false }
+            if !showAttach { focused = false; attachTappedAt = Date() }
             withAnimation(.snappy(duration: 0.32)) { showAttach.toggle() }
         } label: {
             // Same 36pt as the single-line capsule; a glass *button* style added its own padding
@@ -380,10 +489,23 @@ struct ComposerView: View {
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")
     }
 
+    #if os(iOS)
+    /// Whether a camera is there, asked once: the system's answer takes a moment the first
+    /// time (it wakes the capture devices), and it used to be asked on the tap that opens
+    /// the panel, which is where the first open lagged (#285). Warmed when the chat opens.
+    nonisolated(unsafe) private static var cameraAvailableCache: Bool?
+    private static var cameraAvailable: Bool {
+        if let c = cameraAvailableCache { return c }
+        let c = UIImagePickerController.isSourceTypeAvailable(.camera)
+        cameraAvailableCache = c
+        return c
+    }
+    #endif
+
     private var attachPanel: some View {
         var items: [AttachItem] = []
         #if os(iOS)
-        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) { showCamera = true })
+        items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !Self.cameraAvailable) { showCamera = true })
         #endif
         items.append(AttachItem(title: "Photos", symbol: "photo.on.rectangle.angled", color: Color(red: 0.98, green: 0.45, blue: 0.3)) { showPhotos = true })
         items.append(AttachItem(title: "Files", symbol: "folder.fill", color: .blue) { showFiles = true })

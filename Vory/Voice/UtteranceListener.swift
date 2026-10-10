@@ -25,8 +25,15 @@ final class UtteranceListener {
     /// Which detector is at work, for Settings and the log.
     private(set) var method = "loudness"
     var endOfTurnPause: TimeInterval = 1.0
-    /// Speech shorter than this is noise.
+    /// Speech shorter than this is noise; while the bot speaks, a word or two over it is not
+    /// an interruption either.
     static let minimumSpeech: TimeInterval = 0.25
+    static let minimumSpeechOverPlayback: TimeInterval = 0.6
+    /// Whether the bot is speaking now (hands-free): the pipe then holds the mic to a floor
+    /// set by the echo of that speech, and an utterance has to last longer to count.
+    var guardingPlayback = false {
+        didSet { if oldValue != guardingPlayback { pipe.setGuardingPlayback(guardingPlayback) } }
+    }
     static let maximumUtterance: TimeInterval = 90
     nonisolated static let waveformSamples = 48
 
@@ -106,7 +113,7 @@ final class UtteranceListener {
             // Speech has to hold for a moment before it counts: a cough is not a turn.
             if snapshot.speechNow {
                 if speechStartedAt == nil { speechStartedAt = now; beginCapture() }
-                else if let s = speechStartedAt, now.timeIntervalSince(s) >= Self.minimumSpeech {
+                else if let s = speechStartedAt, now.timeIntervalSince(s) >= (guardingPlayback ? Self.minimumSpeechOverPlayback : Self.minimumSpeech) {
                     hearing = true
                     onSpeechStarted()
                 }
@@ -222,6 +229,23 @@ final class InputPipe: @unchecked Sendable {
     private var lastLoudAt: TimeInterval = 0
     private var detectorSpeechUntil: TimeInterval = 0
     private var detectorSeen = false
+    /// While the bot speaks: what the mic hears of its own voice (the echo cancellation's
+    /// leavings, loud on a speaker at full volume) sets a floor that rises slowly and falls
+    /// faster, and only sound well above it counts as the person (#280, the bot answering
+    /// itself). `lastAboveEchoAt` is the last buffer that cleared it.
+    private var guardingPlayback = false
+    private var echoFloor: Float = -60
+    private var lastAboveEchoAt: TimeInterval = 0
+    private var guardBuffers = 0
+    /// How far above the echo the person has to be, and how fast the floor moves per buffer
+    /// (about 40 ms each): the first buffers of the bot's speech set it outright (nobody is
+    /// interrupting a reply that has just begun), then up slowly enough that a voice over it
+    /// stays above it for the time an interruption has to last, and down faster so a pause
+    /// in the bot's speech lowers it.
+    static let echoMargin: Float = 10
+    static let echoSnapBuffers = 15
+    static let echoRise: Float = 0.5
+    static let echoFall: Float = 0.75
     private var ring: [AVAudioPCMBuffer] = []
     private var ringSeconds: Double = 0
     private var file: AVAudioFile?
@@ -240,6 +264,7 @@ final class InputPipe: @unchecked Sendable {
     func reset() {
         lock.lock(); defer { lock.unlock() }
         levels = []; noiseFloor = -60; lastLoudAt = 0; detectorSpeechUntil = 0; detectorSeen = false
+        echoFloor = -60; lastAboveEchoAt = 0; guardBuffers = 0
         ring = []; ringSeconds = 0
     }
 
@@ -247,8 +272,16 @@ final class InputPipe: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let now = Date().timeIntervalSinceReferenceDate
         // The detector decides once it has spoken at all; until then (or without it) loudness does.
-        let speech = detectorActive && detectorSeen ? now < detectorSpeechUntil : now - lastLoudAt < 0.2
+        var speech = detectorActive && detectorSeen ? now < detectorSpeechUntil : now - lastLoudAt < 0.2
+        if guardingPlayback, now - lastAboveEchoAt >= 0.2 { speech = false }
         return Snapshot(levels: levels, speechNow: speech)
+    }
+
+    /// Whether the bot is speaking now: the echo floor is kept and applied only then.
+    func setGuardingPlayback(_ on: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        if on != guardingPlayback { echoFloor = max(noiseFloor, -60); lastAboveEchoAt = 0; guardBuffers = 0 }
+        guardingPlayback = on
     }
 
     func noteDetector(speech: Bool) {
@@ -315,6 +348,12 @@ final class InputPipe: @unchecked Sendable {
         // Loudness: against a floor that follows the room slowly, and never counted below -45 dB.
         noiseFloor = min(db, noiseFloor + 0.02)
         if db > max(noiseFloor + 12, -45) { lastLoudAt = Date().timeIntervalSinceReferenceDate }
+        if guardingPlayback {
+            guardBuffers += 1
+            if guardBuffers <= Self.echoSnapBuffers { echoFloor = max(echoFloor, db) }
+            else { echoFloor += db > echoFloor ? min(Self.echoRise, db - echoFloor) : max(-Self.echoFall, db - echoFloor) }
+            if guardBuffers > Self.echoSnapBuffers, db > max(echoFloor + Self.echoMargin, -45) { lastAboveEchoAt = Date().timeIntervalSinceReferenceDate }
+        }
         levels.append(min(1, max(0, (db + 50) / 50)))
         if levels.count > UtteranceListener.waveformSamples { levels.removeFirst(levels.count - UtteranceListener.waveformSamples) }
         if let f = file {

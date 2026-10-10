@@ -40,7 +40,7 @@ struct MediaThumbStrip: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
-        .sheet(item: $viewing) { ImageViewerSheet(ref: $0, profile: profile) }
+        .sheet(item: $viewing) { ImageViewerSheet(ref: $0, profile: profile).withAppModel() }
     }
 
     private func thumb(_ ref: MediaRef) -> some View {
@@ -79,8 +79,9 @@ struct MacMediaMenu: View {
     }
 
     private func save() async {
-        guard let url = await file(), let saved = try? MediaSave.toDownloads(url, name: ref.name) else { return }
-        MediaSave.showInFinder(saved)
+        guard let url = await file() else { return }
+        do { MediaSave.showInFinder(try MediaSave.toDownloads(url, name: ref.name)) }
+        catch { MediaSave.explainFailure(name: ref.name, error: error) }
     }
 }
 #endif
@@ -149,13 +150,32 @@ struct ImageViewerSheet: View {
     @State private var saving = false
 
     #if os(iOS)
+    /// Why the last Save to Photos did not work, shown over the picture. It has its own state:
+    /// `error` is for a picture that could not be shown, and with the picture up nothing showed
+    /// it, so a refused save went from "Saving…" back to "Save to Photos" without a word.
+    @State private var saveFailure: PhotoSaveFailure?
+    @Environment(\.openURL) private var openURL
+
     private func saveToPhotos(_ url: URL) {
         saving = true
-        PHPhotoLibrary.shared().performChanges({ PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) }) { ok, err in
-            Task { @MainActor in
-                saving = false
-                if ok { saved = true } else { error = err?.localizedDescription ?? "Photos did not take the picture." }
+        Task {
+            do {
+                try await Self.addToPhotos(url)
+                saved = true
+            } catch {
+                saveFailure = PhotoSaveFailure(error, addOnly: PHPhotoLibrary.authorizationStatus(for: .addOnly))
             }
+            saving = false
+        }
+    }
+
+    /// The picture into the library, from outside the main actor. Photos runs the change block
+    /// (and answers) on its own queue: written inside the view, the block took the view's main
+    /// actor isolation, and Swift's runtime check stopped the app the moment Photos ran it, so
+    /// Save to Photos crashed every time.
+    nonisolated private static func addToPhotos(_ url: URL) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            _ = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
         }
     }
     #endif
@@ -235,6 +255,25 @@ struct ImageViewerSheet: View {
                 }
             }
             .preferredColorScheme(.dark)
+            #if os(iOS)
+            .alert("Not saved to Photos", isPresented: Binding(get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } }),
+                   presenting: saveFailure) { failure in
+                // Once refused, iOS does not ask again: the switch is in Settings.
+                if failure.accessOff {
+                    Button("Open Settings") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
+                }
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure.message)
+            }
+            #else
+            .alert("Not saved to Downloads", isPresented: Binding(get: { saveFailure != nil }, set: { if !$0 { saveFailure = nil } }),
+                   presenting: saveFailure) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { failure in
+                Text(failure)
+            }
+            #endif
         }
         .task { await load() }
     }
@@ -242,9 +281,13 @@ struct ImageViewerSheet: View {
     #if os(macOS)
     /// Where the picture was saved this time, for the Show in Finder that follows.
     @State private var savedTo: URL?
+    /// Why the last Save to Downloads did not happen, shown over the picture as the iPhone shows
+    /// a refused Save to Photos: it used to go into `error`, which only shows when the picture
+    /// itself could not load, so a full disk or a folder that refused the file said nothing.
+    @State private var saveFailure: String?
 
     private func saveToDownloads(_ url: URL) {
-        do { savedTo = try MediaSave.toDownloads(url, name: ref.name) } catch { self.error = "Could not save: \(error.localizedDescription)" }
+        do { savedTo = try MediaSave.toDownloads(url, name: ref.name) } catch { saveFailure = MediaSave.failureMessage(name: ref.name, error: error) }
     }
     #endif
 
@@ -261,3 +304,32 @@ struct ImageViewerSheet: View {
         }
     }
 }
+
+#if os(iOS)
+/// What the image viewer says when Save to Photos did not work. Photos access turned off (Don't
+/// Allow in the prompt, or off in Settings later) gets its own words and a way to Settings: iOS
+/// asks only once, so a second tap fails the same way without a prompt.
+struct PhotoSaveFailure: Equatable {
+    var message: String
+    /// Photos access is off for the app (refused, or restricted on the device).
+    var accessOff: Bool
+
+    static let accessOffMessage = "Photos access is off for Vory. Turn on Add Photos Only in Settings to save pictures."
+
+    /// `error` is what the save threw; `addOnly` is the app's add-only Photos access as it stands
+    /// after it (Photos does not always answer a refusal with its access error).
+    init(_ error: any Error, addOnly: PHAuthorizationStatus) {
+        let refused = (error as? PHPhotosError).map { $0.code == .accessUserDenied || $0.code == .accessRestricted } ?? false
+        if refused || addOnly == .denied || addOnly == .restricted {
+            self.init(message: Self.accessOffMessage, accessOff: true)
+        } else {
+            self.init(message: "Photos did not take the picture: \(error.localizedDescription)", accessOff: false)
+        }
+    }
+
+    init(message: String, accessOff: Bool) {
+        self.message = message
+        self.accessOff = accessOff
+    }
+}
+#endif

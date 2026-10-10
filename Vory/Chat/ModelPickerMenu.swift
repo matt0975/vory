@@ -1,6 +1,31 @@
 import SwiftUI
 import VoryCore
 
+extension ChatSession {
+    /// The gateway's model list (`/api/model/options`), as the model menu, the model page and the
+    /// composer's "/model " chooser all read it. `refresh` asks the gateway to look again. It is
+    /// this chat's bot's list (the gateway lists each bot's own providers and keys), not the bot
+    /// selected at the time: after a switch elsewhere, a pick sent another bot's provider to
+    /// this chat.
+    func modelOptions(refresh: Bool = false) async throws -> ModelOptionsResult {
+        let q = refresh ? [URLQueryItem(name: "refresh", value: "true")] : []
+        return try await runtime.api.get("/api/model/options", query: q, profile: Self.modelOptionsProfile(chat: profile, selected: runtime.selectedProfile))
+    }
+
+    /// The bot whose model list a chat reads: its own, or the selected one for a chat that has
+    /// none recorded.
+    nonisolated static func modelOptionsProfile(chat: String?, selected: String?) -> String? {
+        chat ?? selected
+    }
+}
+
+extension ModelOptionsResult {
+    /// Providers the gateway can use first, then by name: the order every model list shows.
+    var sortedProviders: [ModelProvider] {
+        providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }
+    }
+}
+
 /// Stock Menu listing models by provider. Mid-chat switches are session-scoped (`config.set model --session`).
 struct ModelPickerMenu: View {
     @Bindable var chat: ChatSession
@@ -39,7 +64,7 @@ struct ModelMenuContent: View {
     var body: some View {
         Group {
             if let options {
-                ForEach(options.providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }) { p in
+                ForEach(options.sortedProviders) { p in
                     Section(p.name + (p.authenticated == false ? " (no key)" : p.warning != nil ? " (needs setup)" : "")) {
                         if let w = p.warning, !w.isEmpty { Text(w) }
                         ForEach(p.featuredModels ?? p.models ?? [], id: \.self) { m in
@@ -85,9 +110,7 @@ struct ModelMenuContent: View {
     private func load(refresh: Bool) async {
         loading = true; defer { loading = false }
         do {
-            var q: [URLQueryItem] = []
-            if refresh { q.append(URLQueryItem(name: "refresh", value: "true")) }
-            options = try await chat.runtime.api.get("/api/model/options", query: q, profile: chat.runtime.selectedProfile)
+            options = try await chat.modelOptions(refresh: refresh)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -236,7 +259,7 @@ struct ModelSheet: View {
         NavigationStack {
             SettingsList {
                 if let options {
-                    ForEach(options.providers.sorted { ($0.authenticated ?? false ? 0 : 1, $0.name) < ($1.authenticated ?? false ? 0 : 1, $1.name) }) { p in
+                    ForEach(options.sortedProviders) { p in
                         Section {
                             if let w = p.warning, !w.isEmpty { Text(w).font(.footnote).foregroundStyle(.orange) }
                             ForEach(p.models ?? p.featuredModels ?? [], id: \.self) { m in
@@ -266,7 +289,7 @@ struct ModelSheet: View {
             .navigationTitle("Model for this chat").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .task {
-                do { options = try await chat.runtime.api.get("/api/model/options", profile: chat.runtime.selectedProfile) }
+                do { options = try await chat.modelOptions() }
                 catch { self.error = error.localizedDescription }
             }
         }

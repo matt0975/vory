@@ -416,7 +416,7 @@ enum LocalNotifier {
             content.body = card.valuePrompt?.prompt ?? "Hermes is asking for a value"
             content.categoryIdentifier = clarifyCategory
         }
-        content.userInfo = userInfo(chat: chat, kind: card.method, requestID: card.id)
+        content.userInfo = userInfo(chat: chat, kind: card.method, card: card)
         schedule(content, id: "card-\(card.id)")
     }
 
@@ -438,18 +438,24 @@ enum LocalNotifier {
             if case .assistant(let text, _, _)? = last?.kind { content.body = String(text.prefix(180)) } else { content.body = "Turn finished" }
             content.categoryIdentifier = turnCategory
         }
-        content.userInfo = userInfo(chat: chat, kind: "turn", requestID: nil)
+        content.userInfo = userInfo(chat: chat, kind: "turn", card: nil)
         schedule(content, id: "turn-\(chat.storedID)-\(Int(Date().timeIntervalSince1970))")
     }
 
+    /// What a notification carries back when it is tapped or answered (`PendingRoute`): the
+    /// chat, and for a card the card itself and its request (an approval's own id, as the
+    /// Companion's pushes name it), so Approve answers that approval and no other.
     @MainActor
-    private static func userInfo(chat: ChatSession, kind: String, requestID: String?) -> [String: Any] {
+    static func userInfo(chat: ChatSession, kind: String, card: PendingCard?) -> [String: Any] {
         var hermes: [String: Any] = ["connection_id": chat.runtime.connection.id.uuidString,
                                      "gateway": chat.runtime.connection.gateway.description,
                                      "session_id": chat.storedID,
                                      "profile": chat.profileName,
                                      "kind": kind]
-        if let requestID { hermes["request_id"] = requestID }
+        if let card {
+            hermes["card_id"] = card.id
+            hermes["request_id"] = card.approval?.requestId ?? card.id
+        }
         return ["hermes": hermes]
     }
 

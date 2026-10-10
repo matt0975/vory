@@ -116,6 +116,7 @@ struct OnboardingView: View {
                 }
             }
             .sheetFrame()
+            .withAppModel()
         }
     }
 

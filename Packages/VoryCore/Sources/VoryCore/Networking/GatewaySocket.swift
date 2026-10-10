@@ -42,13 +42,17 @@ public enum SocketError: LocalizedError, Sendable {
 public actor GatewaySocket {
     public typealias URLProvider = @Sendable () async throws -> (URL, [String: String])
     public typealias EventSink = @Sendable (GatewayEvent) -> Void
+    /// Handed each new batch once, when its first event arrives (see `GatewayEventBatch`).
+    public typealias EventBatchSink = @Sendable (GatewayEventBatch) -> Void
     public typealias StateSink = @Sendable (SocketState) -> Void
     public typealias RequestHandler = @Sendable (ServerRequest) async -> JSONValue?
     public typealias ReconnectHook = @Sendable () async -> Void
 
     private let log = Logger(subsystem: "Vory", category: "ws")
     private let urlProvider: URLProvider
-    private let onEvent: EventSink
+    private let onEvents: EventBatchSink
+    /// The batch being filled, until the app takes it or a reply closes it.
+    private var openBatch: GatewayEventBatch?
     private let onState: StateSink
     private let onServerRequest: RequestHandler
     private let onReconnected: ReconnectHook
@@ -60,19 +64,39 @@ public actor GatewaySocket {
     private var reconnectTask: Task<Void, Never>?
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
-    private var readyWaiters: [CheckedContinuation<Void, Error>] = []
+    /// One per pending call: fails it with `timeout` when the reply has not come by then.
+    /// A timeout used to be a sleep raced against the reply in a task group, and a task group
+    /// waits for every child before it rethrows: the reply's continuation could not be
+    /// cancelled, so no call ever timed out. On a socket that had died quietly under a
+    /// suspended app (nothing closes it; the phone's radio just forgot it) the heartbeat's
+    /// ping waited forever, the socket was never seen as lost, and every resume and send on
+    /// it hung with it: testers came back to a long turn and found the app stuck (1.4 (7)
+    /// and (8) crash reports with no log).
+    private var callTimers: [Int: Task<Void, Never>] = [:]
+    private var readyWaiters: [Int: CheckedContinuation<Void, Error>] = [:]
+    private var readyTimers: [Int: Task<Void, Never>] = [:]
+    private var nextWaiterID = 1
     public private(set) var state: SocketState = .idle
     private var wantConnected = false
     private var everConnected = false
     private var attempt = 0
 
-    public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
+    /// Events in batches: the sink is called once per batch, as it opens, and whoever takes
+    /// the batch later gets everything that arrived in the meantime.
+    public init(urlProvider: @escaping URLProvider, onEvents: @escaping EventBatchSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook) {
         self.urlProvider = urlProvider
-        self.onEvent = onEvent
+        self.onEvents = onEvents
         self.onState = onState
         self.onServerRequest = onServerRequest
         self.onReconnected = onReconnected
+    }
+
+    /// Events one at a time, each as it arrives.
+    public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
+         onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook) {
+        self.init(urlProvider: urlProvider, onEvents: { batch in for e in batch.take() { onEvent(e) } },
+                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected)
     }
 
     // MARK: Lifecycle
@@ -94,24 +118,41 @@ public actor GatewaySocket {
     /// Resolves once `gateway.ready` has been observed (or throws after `timeout`).
     public func waitUntilReady(timeout: Double = 20) async throws {
         if state == .open { return }
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask { [self] in
-                try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                    Task { await self.addReadyWaiter(c) }
-                }
+        let id = nextWaiterID; nextWaiterID += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+                Task { await self.addReadyWaiter(id: id, c, timeout: timeout) }
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw SocketError.timeout("gateway.ready")
-            }
-            try await group.next()
-            group.cancelAll()
+        } onCancel: {
+            Task { await self.failReadyWaiter(id: id, SocketError.timeout("gateway.ready (cancelled)")) }
         }
     }
 
-    private func addReadyWaiter(_ c: CheckedContinuation<Void, Error>) {
+    private func addReadyWaiter(id: Int, _ c: CheckedContinuation<Void, Error>, timeout: Double) {
         if state == .open { c.resume(); return }
-        readyWaiters.append(c)
+        readyWaiters[id] = c
+        readyTimers[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled else { return }
+            await self?.failReadyWaiter(id: id, SocketError.timeout("gateway.ready"))
+        }
+    }
+
+    /// Fails one ready waiter, if it is still waiting; the ready frame or a teardown may have
+    /// resumed it first.
+    private func failReadyWaiter(id: Int, _ error: Error) {
+        readyTimers.removeValue(forKey: id)?.cancel()
+        readyWaiters.removeValue(forKey: id)?.resume(throwing: error)
+    }
+
+    /// Every ready waiter at once: the ready frame (`nil`), or why there will be none.
+    private func settleReadyWaiters(throwing error: Error?) {
+        for t in readyTimers.values { t.cancel() }
+        readyTimers = [:]
+        let waiters = readyWaiters; readyWaiters = [:]
+        for (_, w) in waiters {
+            if let error { w.resume(throwing: error) } else { w.resume() }
+        }
     }
 
     private func runConnectLoop() async {
@@ -174,10 +215,12 @@ public actor GatewaySocket {
         task = nil
         session?.invalidateAndCancel()
         session = nil
-        let waiters = readyWaiters; readyWaiters = []
-        for w in waiters { w.resume(throwing: SocketError.notConnected) }
+        settleReadyWaiters(throwing: SocketError.notConnected)
+        for t in callTimers.values { t.cancel() }
+        callTimers = [:]
         let calls = pending; pending = [:]
         for (_, c) in calls { c.resume(throwing: SocketError.notConnected) }
+        openBatch = nil
     }
 
     private func setState(_ s: SocketState) {
@@ -188,8 +231,7 @@ public actor GatewaySocket {
     private func markOpen() {
         guard state != .open else { return }
         setState(.open)
-        let waiters = readyWaiters; readyWaiters = []
-        for w in waiters { w.resume() }
+        settleReadyWaiters(throwing: nil)
         startHeartbeat()
     }
 
@@ -205,10 +247,24 @@ public actor GatewaySocket {
         }
     }
 
+    /// Asks the gateway for a sign of life now and treats silence as the connection lost. The
+    /// app coming back to a socket that died quietly while it was suspended should not wait
+    /// for the next heartbeat to find out: every resume and send would queue on the dead
+    /// socket until then and fail together when it was finally torn down ("Reconnected, but
+    /// the chat could not be re-attached", a tester coming back after a while).
+    public func checkAlive(timeout: Double = 5) async {
+        guard task != nil, state == .open else { return }
+        do { _ = try await call("ping", params: [:], timeout: timeout) }
+        catch { connectionLost(reason: "no answer to a ping after coming back") }
+    }
+
     private func connectionLost(reason: String) {
         guard task != nil else { return }
         log.warning("connection lost: \(reason, privacy: .public)")
         teardown(reason: reason)
+        // Not open from this moment, not from the reconnect loop's first turn: a call made in
+        // between saw `.open`, skipped the ready wait and failed on the torn-down socket.
+        setState(wantConnected ? .reconnecting(attempt: attempt + 1, delay: 0) : .idle)
         if wantConnected, reconnectTask == nil {
             reconnectTask = Task { await self.runConnectLoop() }
         }
@@ -235,14 +291,12 @@ public actor GatewaySocket {
                 let reason = t.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? ""
                 if state != .open, code == 4401 || code == 4403 {
                     // Pre-ready rejection: surface to the connect loop via waiters.
-                    let waiters = readyWaiters; readyWaiters = []
-                    for w in waiters { w.resume(throwing: SocketError.closed(code: code, reason: reason)) }
+                    settleReadyWaiters(throwing: SocketError.closed(code: code, reason: reason))
                     teardown(reason: "closed \(code)")
                     return
                 }
                 if state != .open {
-                    let waiters = readyWaiters; readyWaiters = []
-                    for w in waiters { w.resume(throwing: SocketError.closed(code: code, reason: reason.isEmpty ? error.localizedDescription : reason)) }
+                    settleReadyWaiters(throwing: SocketError.closed(code: code, reason: reason.isEmpty ? error.localizedDescription : reason))
                     teardown(reason: "closed")
                     return
                 }
@@ -256,15 +310,28 @@ public actor GatewaySocket {
         switch frame {
         case .event(let ev):
             if ev.type == "gateway.ready" { markOpen() }
-            onEvent(ev)
+            deliver(ev)
         case .response(let id, let result, let error):
+            // Events after this reply reach the app after it (see `GatewayEventBatch`).
+            openBatch = nil
             guard let n = id.intValue, let c = pending.removeValue(forKey: n) else { return }
+            callTimers.removeValue(forKey: n)?.cancel()
             if let error { c.resume(throwing: error) } else { c.resume(returning: result ?? .null) }
         case .serverRequest(let req):
+            openBatch = nil
             Task { await self.answer(req) }
         case .unknown:
             break
         }
+    }
+
+    /// Into the open batch while the app has not taken it; else into a new one, handed over.
+    private func deliver(_ ev: GatewayEvent) {
+        if let b = openBatch, b.add(ev) { return }
+        let b = GatewayEventBatch()
+        _ = b.add(ev)
+        openBatch = b
+        onEvents(b)
     }
 
     private func answer(_ req: ServerRequest) async {
@@ -286,30 +353,35 @@ public actor GatewaySocket {
         guard let task else { throw SocketError.notConnected }
         let id = nextID; nextID += 1
         let text = RPCFrames.request(id: id, method: method, params: params)
-        return try await withThrowingTaskGroup(of: JSONValue.self) { group in
-            group.addTask { [self] in
-                try await withCheckedThrowingContinuation { (c: CheckedContinuation<JSONValue, Error>) in
-                    Task { await self.register(id: id, continuation: c, task: task, text: text) }
-                }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (c: CheckedContinuation<JSONValue, Error>) in
+                Task { await self.register(id: id, continuation: c, task: task, text: text, method: method, timeout: timeout) }
             }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw SocketError.timeout(method)
-            }
-            let value = try await group.next()!
-            group.cancelAll()
-            return value
+        } onCancel: {
+            Task { await self.fail(id: id, SocketError.timeout("\(method) (cancelled)")) }
         }
     }
 
-    private func register(id: Int, continuation: CheckedContinuation<JSONValue, Error>, task: URLSessionWebSocketTask, text: String) async {
+    /// Fails one pending call, if it is still pending; its reply or a teardown may have
+    /// settled it first, and only the one still registered is ours to fail.
+    private func fail(id: Int, _ error: Error) {
+        callTimers.removeValue(forKey: id)?.cancel()
+        pending.removeValue(forKey: id)?.resume(throwing: error)
+    }
+
+    private func register(id: Int, continuation: CheckedContinuation<JSONValue, Error>, task: URLSessionWebSocketTask, text: String, method: String, timeout: Double) async {
         pending[id] = continuation
+        callTimers[id] = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled else { return }
+            await self?.fail(id: id, SocketError.timeout(method))
+        }
         do { try await task.send(.string(text)) }
         catch {
             // The socket may have closed while the send was in flight, and the close path has
             // then already failed every pending call, this one included: a second resume traps
             // (a crash report on 1.1 (9)). Only the one still registered is ours to fail.
-            if pending.removeValue(forKey: id) != nil { continuation.resume(throwing: SocketError.notConnected) }
+            fail(id: id, SocketError.notConnected)
         }
     }
 

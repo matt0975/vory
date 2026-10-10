@@ -108,7 +108,7 @@ struct RootView: View {
         .onChange(of: model.lock.isLocked) { _, _ in offerCompanion() }
         .sheet(isPresented: Binding(get: { !model.signInPrompt.isEmpty && !model.lock.isLocked && !showCompanionPrompt && !showInstaller },
                                     set: { if !$0 { model.signInPrompt = [] } })) {
-            GatewaySignInSheet(connections: model.signInPrompt)
+            GatewaySignInSheet(connections: model.signInPrompt).withAppModel()
         }
         .sheet(isPresented: $showCompanionPrompt) {
             CompanionPromptSheet(found: companionFound, install: {
@@ -125,12 +125,14 @@ struct RootView: View {
                 setupCardDone = false
                 showCompanionPrompt = false
             })
+            .withAppModel()
         }
         .sheet(isPresented: $showInstaller) {
             NavigationStack {
                 SetupWizardHost()
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
+            .withAppModel()
         }
     }
 }

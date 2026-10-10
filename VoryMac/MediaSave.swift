@@ -46,6 +46,22 @@ enum MediaSave {
         return destination
     }
 
+    /// What to tell the person when a save did not happen: the file and the system's reason.
+    static func failureMessage(name: String, error: Error) -> String {
+        "\(name) was not saved to Downloads. \(error.localizedDescription)"
+    }
+
+    /// A failed save from a menu (the thumbnail's), where no view holds an alert: the window's
+    /// own alert sheet says so, or a plain alert when no window is up.
+    @MainActor
+    static func explainFailure(name: String, error: Error) {
+        let alert = NSAlert()
+        alert.messageText = "Not saved to Downloads"
+        alert.informativeText = failureMessage(name: name, error: error)
+        alert.addButton(withTitle: "OK")
+        if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) } else { alert.runModal() }
+    }
+
     static func showInFinder(_ url: URL) {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }

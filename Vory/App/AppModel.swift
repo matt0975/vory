@@ -2,6 +2,8 @@ import Foundation
 import Observation
 #if canImport(UIKit)
 import UIKit
+#elseif canImport(AppKit)
+import AppKit
 #endif
 import UserNotifications
 import WidgetKit
@@ -15,8 +17,44 @@ struct PendingRoute: Hashable, Sendable {
     var profile: String?
     var kind: String?
     var replyText: String?
+    /// The question a notification or the Live Activity is about: for an approval its request's
+    /// id (all the Companion's pushes carry), else the card's.
     var requestID: String?
     var action: String?
+    /// The card this app posted the notification for (`LocalNotifier`), beside `requestID`.
+    var cardID: String?
+
+    /// What Approve or Deny answers (`ChatSession.approvalToAnswer(named:)`): that and nothing
+    /// else, or with none the chat's approval when it has just one.
+    var cardKeys: [String] { [cardID, requestID].compactMap { $0 }.filter { !$0.isEmpty } }
+}
+
+extension PendingRoute {
+    /// The chat a notification is about (its `hermes` part), and the card when it names one;
+    /// nil when it names no chat.
+    init?(notification userInfo: [AnyHashable: Any]) {
+        guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return nil }
+        self.init(storedSessionID: sid)
+        connectionID = (hermes["connection_id"] as? String).flatMap(UUID.init(uuidString:))
+        gateway = hermes["gateway"] as? String
+        profile = hermes["profile"] as? String
+        kind = hermes["kind"] as? String
+        requestID = hermes["request_id"] as? String
+        cardID = hermes["card_id"] as? String
+    }
+
+    /// The Live Activity's Approve / Deny (`vory://approval?session=…&choice=…&request=…`): its
+    /// chat, the choice as the notification's action, and the approval the activity showed. One
+    /// without it (an activity the Companion last updated) answers the chat's approval when it
+    /// has just one; with several the chat opens on them.
+    init?(approvalURL url: URL) {
+        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let sid = items.first(where: { $0.name == "session" })?.value, !sid.isEmpty else { return nil }
+        let profile = items.first(where: { $0.name == "profile" })?.value
+        self.init(storedSessionID: sid, profile: profile?.isEmpty == false ? profile : nil)
+        action = items.first(where: { $0.name == "choice" })?.value == "deny" ? LocalNotifier.denyAction : LocalNotifier.approveOnceAction
+        requestID = items.first(where: { $0.name == "request" })?.value
+    }
 }
 
 @MainActor
@@ -25,7 +63,10 @@ final class AppModel {
     /// The one model, owned here rather than by the scene, so a notification action that launches
     /// the app in the background (no window yet) still has somewhere to go.
     static let shared = AppModel()
-    let store = ConnectionStore()
+    let store: ConnectionStore
+    /// Signing a gateway in again by itself, after Face ID, from a sign-in this device was asked
+    /// to remember, when the session runs out for good.
+    let rememberedSignIn: RememberedSignInCoordinator
     let lock = AppLock()
     let push = PushRegistrar()
     private(set) var runtime: GatewayRuntime?
@@ -157,6 +198,10 @@ final class AppModel {
     var tabBarHidden: Bool { (selectedTab == .chats && chatsPathOpen) || (tabBarHiders[selectedTab] ?? 0) > 0 || keyboardUp }
 
     init() {
+        let store = ConnectionStore()
+        self.store = store
+        rememberedSignIn = RememberedSignInCoordinator(vault: store.remembered)
+        rememberedSignIn.canPromptNow = { [weak self] in self?.canAskForSignInNow ?? false }
         // Settings, looks and gateways through the person's iCloud (it reads nothing until the
         // next turn of the run loop, when this model exists).
         #if DEBUG
@@ -169,6 +214,15 @@ final class AppModel {
                 await self.push.syncRegistration(runtime: rt)
             }
         }
+        #if os(iOS)
+        // Started while the phone was locked (a watch message, a notification, the backup task),
+        // the app could not read which gateways have a remembered sign-in, nor delete one an
+        // iCloud change forgot: it can once the phone is unlocked. Coming to the front reads
+        // them too (VoryApp).
+        NotificationCenter.default.addObserver(forName: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.store.remembered.reload() }
+        }
+        #endif
     }
 
     var hasConnections: Bool { !store.connections.isEmpty }
@@ -202,6 +256,43 @@ final class AppModel {
         if let c = store.active { await activate(c) }
     }
 
+    /// Whether Face ID may be asked for now, for a remembered sign-in: the app in front and its
+    /// own lock not up (the lock asks for Face ID itself, and two prompts would collide).
+    var canAskForSignInNow: Bool {
+        guard !lock.isLocked else { return false }
+        #if os(iOS)
+        return UIApplication.shared.applicationState == .active
+        #else
+        return NSApplication.shared.isActive
+        #endif
+    }
+
+    /// Back in front, or unlocked, with the gateway in use refusing its session because it
+    /// turned the refresh token down: the remembered sign-in gets its go now, if it could not
+    /// while the app was away or locked. A socket refused for another reason is left to the
+    /// person (see `RememberedSignInCoordinator.signInAgainOnReturn`).
+    func signInAgainIfExpired() async {
+        guard let rt = runtime, let renewed = await rememberedSignIn.signInAgainOnReturn(rt), runtime === rt else { return }
+        await rt.replaceSecrets(renewed)
+    }
+
+    /// Whether the Sign In sheet can offer Face ID for this gateway.
+    func canSignInWithRemembered(_ c: GatewayConnection) -> Bool {
+        rememberedSignIn.decision(for: c, asked: true) == .useRemembered
+    }
+
+    /// The Sign In sheet's Face ID button: the remembered sign-in, asked for by the person.
+    func signInWithRemembered(_ c: GatewayConnection) async throws {
+        let renewed = try await rememberedSignIn.signInWithRemembered(c, access: store.secrets(for: c.id).access)
+        if let rt = runtime, rt.connection.id == c.id {
+            await rt.replaceSecrets(renewed)
+        } else {
+            store.saveSecrets(renewed, for: c.id)
+            if store.activeConnectionID == c.id { await activate(c) }
+        }
+        NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
+    }
+
     func activate(_ connection: GatewayConnection) async {
         if let rt = runtime {
             if rt.connection.id == connection.id { return }
@@ -217,6 +308,9 @@ final class AppModel {
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        // A session that runs out for good signs in again by itself, after Face ID, when this
+        // device remembers the gateway's sign-in; otherwise the person is asked, as before.
+        rt.signInAgain = { [weak self] c, s in await self?.rememberedSignIn.signInAgain(c, access: s.access) }
         runtime = rt
         ChatGoals.shared.attach(rt)
         activationError = nil
@@ -253,12 +347,8 @@ final class AppModel {
             pendingRoute = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: id, profile: profile?.isEmpty == false ? profile : nil)
         }
         // From the Live Activity's Approve / Deny: open the chat on its card and apply the choice.
-        if url.host == "approval", let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-           let sid = items.first(where: { $0.name == "session" })?.value, !sid.isEmpty {
-            let choice = items.first(where: { $0.name == "choice" })?.value ?? "once"
-            let profile = items.first(where: { $0.name == "profile" })?.value
-            var r = PendingRoute(connectionID: runtime?.connection.id, storedSessionID: sid, profile: profile?.isEmpty == false ? profile : nil)
-            r.action = choice == "deny" ? LocalNotifier.denyAction : LocalNotifier.approveOnceAction
+        if url.host == "approval", var r = PendingRoute(approvalURL: url) {
+            r.connectionID = runtime?.connection.id
             pendingRoute = r
             Task { await ensureConnection(for: r) }
         }
@@ -359,13 +449,7 @@ final class AppModel {
     // MARK: Notification routing
 
     func route(from userInfo: [AnyHashable: Any], action: String?, replyText: String? = nil) {
-        guard let hermes = userInfo["hermes"] as? [String: Any], let sid = hermes["session_id"] as? String else { return }
-        var r = PendingRoute(storedSessionID: sid)
-        r.connectionID = (hermes["connection_id"] as? String).flatMap(UUID.init(uuidString:))
-        r.gateway = hermes["gateway"] as? String
-        r.profile = hermes["profile"] as? String
-        r.kind = hermes["kind"] as? String
-        r.requestID = hermes["request_id"] as? String
+        guard var r = PendingRoute(notification: userInfo) else { return }
         r.action = action
         r.replyText = replyText
         pendingRoute = r
@@ -377,8 +461,8 @@ final class AppModel {
         // Launched in the background for a notification action: keep the process alive long enough
         // to connect and send, and bring the saved gateway up first.
         #if os(iOS)
-        let assertion = UIApplication.shared.beginBackgroundTask(withName: "vory.notification.route")
-        defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+        let time = BackgroundTime("vory.notification.route")
+        defer { time.end() }
         #endif
         if runtime == nil { await activateSavedConnection() }
         let target: GatewayConnection? = r.connectionID.flatMap { store.connection(id: $0) }
@@ -404,9 +488,13 @@ final class AppModel {
             }
             if let chat = try? await rt.openChat(storedID: r.storedSessionID, title: nil, profile: r.profile) {
                 let choice = action == LocalNotifier.approveOnceAction ? "once" : "deny"
-                let deadline = Date().addingTimeInterval(8)
-                while chat.cards.isEmpty, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
-                guard let card = chat.cards.first(where: { $0.method == "approval" }) else { return }
+                guard let card = await Self.approvalCard(for: r, in: chat) else {
+                    // Gone (answered elsewhere, withdrawn, its turn over), or none named and not
+                    // just one waiting: the chat opens on its cards (`pendingRoute`), and nothing
+                    // is answered.
+                    LiveActivityController.note("\(choice) from outside the chat: \(r.cardKeys.isEmpty ? "no single approval waits" : "the approval it names is not waiting"), nothing sent")
+                    return
+                }
                 if ApprovalConfirm.shouldAsk(for: card.approval) {
                     // Settings › Security › Confirm approvals: the chat is open on its card; the
                     // conversation asks once more and only then answers.
@@ -417,6 +505,14 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// The approval an Approve or Deny from outside the chat is for: the card the notification
+    /// or the Live Activity names (`PendingRoute.cardKeys`), or with none named the chat's only
+    /// approval (`ChatSession.approvalToAnswer`), looked for while the chat opens (`wait`). Nil
+    /// when that request is gone, or none is named and the chat has no approval or several.
+    static func approvalCard(for r: PendingRoute, in chat: ChatSession, wait: TimeInterval = 8) async -> PendingCard? {
+        await chat.approvalToAnswer(named: r.cardKeys, waitingUpTo: wait)
     }
 }
 

@@ -4,6 +4,10 @@ import Foundation
 /// the live `session.resume` runs. One JSON file per session under Caches; capped at 200 rows.
 public enum TranscriptCache {
     static let cap = 200
+    /// Encoding and writing happen here, in order, off the main thread: a save came with every
+    /// finished reply and every snapshot, and a long chat's 200 rows took the main thread's time
+    /// when the app came back and re-read its chats.
+    private static let writer = DispatchQueue(label: "dev.vory.transcript-cache", qos: .utility)
 
     static func url(connection: UUID, storedID: String) -> URL? {
         guard !storedID.isEmpty, let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
@@ -31,11 +35,17 @@ public enum TranscriptCache {
             case .error, .subagent: return nil
             }
         }
-        if let data = try? JSONEncoder().encode(rows) { try? data.write(to: u, options: .atomic) }
+        writer.async {
+            if let data = try? JSONEncoder().encode(rows) { try? data.write(to: u, options: .atomic) }
+        }
     }
+
+    /// Waits for the saves already asked for (tests, and a clear that must come after them).
+    public static func flush() { writer.sync {} }
 
     public static func clearAll() {
         guard let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
-        try? FileManager.default.removeItem(at: base.appending(path: "transcripts"))
+        // After any save still on its way, which would otherwise put a file back.
+        writer.sync { try? FileManager.default.removeItem(at: base.appending(path: "transcripts")) }
     }
 }

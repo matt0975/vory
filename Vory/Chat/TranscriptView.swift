@@ -164,8 +164,12 @@ struct TranscriptView: View {
                             TypingBubble(tool: typingTool)
                             Spacer(minLength: 40)
                         }
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("thread.typing")
                         .id("typing")
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        // No transition: it hands over to the empty reply that takes its place
+                        // (that row draws the same bubble on the same spot), and a fade or a
+                        // slide there drew one bubble over the other.
                     }
                     if let s = chat.statusLine, chat.isRunning {
                         HStack(spacing: 8) {
@@ -182,6 +186,8 @@ struct TranscriptView: View {
                         }
                         // Clear of the bot column when the pinned working bot sits there.
                         .padding(.leading, showBots ? 38 : 4).padding(.trailing, 4)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityIdentifier("thread.status")
                     }
                     Color.clear.frame(height: 0).id("bottom")
                 }
@@ -194,7 +200,16 @@ struct TranscriptView: View {
                 .frame(maxWidth: .infinity)
                 #endif
                 .dynamicTypeSize(ChatStyle.stepped(phoneTypeSize, textSize))
-                .animation(.snappy(duration: 0.28), value: chat.items.count)
+                // No animation for the stack as a whole. One used to run whenever the row count
+                // changed, and it animated everything else that changed in the same update: when
+                // a tool card arrived, the reply above it got its last words in that update too,
+                // and while the bubble, its footer and every row under it slid from their old
+                // places, the new lines of text were drawn at once at their final ones, over
+                // the footer, the typing bubble and the card (testers' screenshots of a reply
+                // over their own bubble and of cards stacked over the reply's text). Rows now
+                // land where they belong in every frame and a new row fades in on its own
+                // (`rowView`); what moves the thread is scrolling (`followRows`), which moves
+                // every row together.
                 .background(ScrollViewProbe(metrics: metrics))
                 }
             }
@@ -268,7 +283,7 @@ struct TranscriptView: View {
             // the threshold, so without it a slightly taller dock showed the arrow at the very end.
             .onScrollGeometryChange(for: CGFloat.self) { g in
                 g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
-            } action: { _, distance in
+            } action: { was, distance in
                 metrics.distanceFromBottom = distance
                 // Past the end with no finger on it: a scroll-to-bottom that used the lazy stack's
                 // estimated height lands beyond the real content and the thread shows nothing
@@ -282,7 +297,12 @@ struct TranscriptView: View {
                 // drag had covered 24 pt, and again whenever a token landed between touches).
                 // Scrolling back to the end, finger off, locks it again.
                 if metrics.userScrolling, distance > 24 || distance > metrics.touchStartDistance + 6 { metrics.stickToBottom = false }
-                if distance < 4, !metrics.userScrolling { metrics.stickToBottom = true }
+                // Only a distance that closed smoothly, not one that fell to nothing in a step:
+                // the content shrinking for a frame (a re-read of the chat replacing its rows,
+                // a lazy row re-measured) clamps the offset to the new end, read as "at the
+                // end", locked the thread, and the next token pulled a reader who was up the
+                // thread to the bottom (#277, "you have to fight against Vory to scroll").
+                if distance < 4, !metrics.userScrolling, was < 60 { metrics.stickToBottom = true }
             }
             .onScrollPhaseChange { _, phase in
                 // A finger on the thread counts from the touch, before it has moved.
@@ -295,14 +315,19 @@ struct TranscriptView: View {
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
             // beside whichever row was live and hopped between them as the turn went on.
             .overlay(alignment: .bottomLeading) {
-                if showBots, chat.isRunning {
-                    BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(state: chat.botState))
-                        .padding(.leading, 16).padding(.bottom, dockReach + 12)
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        .allowsHitTesting(false)
+                ZStack {
+                    if showBots, chat.isRunning {
+                        BotAvatar(profile: chat.profileName, size: 28, active: true, mood: BotFaceView.Mood(state: chat.botState))
+                            .padding(.leading, 16).padding(.bottom, dockReach + 12)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                            .allowsHitTesting(false)
+                    }
                 }
+                // Only the pinned bot animates with the turn. On the whole thread this animated
+                // the turn's last words too (they land in the same update as the end of the
+                // turn), and the reply's text was drawn over the rows sliding under it.
+                .animation(.snappy, value: chat.isRunning)
             }
-            .animation(.snappy, value: chat.isRunning)
             .overlay(alignment: .topLeading) {
                 // The readout names UIScrollView's insets, which the Mac's scroll view does not have.
                 #if DEBUG && os(iOS)
@@ -316,9 +341,9 @@ struct TranscriptView: View {
                 JumpToBottomButton(visible: awayFromBottom) { jumpToBottom() }
                 .padding(.trailing, 16).padding(.bottom, dockReach + 12)
             }
-            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide) }
-            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame() }
-            .sheet(isPresented: $showAwayGrace) { AwayGraceSheet(runtime: chat.runtime).sheetFrame(.compact) }
+            .sheet(item: Binding(get: { selectText.map { SelectTextItem(text: $0) } }, set: { selectText = $0?.text })) { SelectTextSheet(text: $0.text).sheetFrame(.wide).withAppModel() }
+            .sheet(isPresented: $showModelSheet) { ModelSheet(chat: chat).sheetFrame().withAppModel() }
+            .sheet(isPresented: $showAwayGrace) { AwayGraceSheet(runtime: chat.runtime).sheetFrame(.compact).withAppModel() }
             #if os(iOS)
             // Under the status bar, behind the floating header. The Mac's toolbar is not a place to run under.
             .ignoresSafeArea(.container, edges: .top)
@@ -328,23 +353,24 @@ struct TranscriptView: View {
             // Whole item, not just `.kind`: the tokens/sec footer lands after the text does and
             // must pull the bottom back into view too.
             // Streaming text follows unanimated (tokens arrive faster than an animated scroll
-            // settles); a new message glides: the bubble slides in and the thread eases up with it.
+            // settles); a new message fades in where it belongs and the thread eases up to it.
             .onChange(of: chat.items.last) { _, _ in
-                if metrics.stickToBottom, !metrics.userScrolling { scrollPosition.scrollTo(edge: .bottom) }
+                if mayFollow() { scrollPosition.scrollTo(edge: .bottom) }
             }
             .onChange(of: visibleItems.count) { old, new in followRows(from: old, to: new) }
-            .task(id: visibleItems.count) { await settleTail() }
+            // Again when the turn ends: rows cross into the lazy stack between turns only.
+            .task(id: [visibleItems.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear { openedAt = Date() }
             // Once the history is in and laid out, make sure the end is really on screen.
             .task(id: chat.isResuming) { await landAfterResume() }
             .onChange(of: chat.statusLine) { _, _ in
-                if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The turn ending takes the typing bubble and status line out from under the last
             // reply; a locked thread follows so no blank band is left there.
             .onChange(of: chat.isRunning) { _, running in
                 if !running, collapseAfterTurn { withAnimation(.snappy) { openReasoning = []; openTools = [] } }
-                if metrics.stickToBottom, !metrics.userScrolling { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
+                if mayFollow() { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
             }
             // The dock changing height (an approval card arriving or leaving) moves the bottom
             // margin; a locked thread follows, so no blank band opens under the last row. Once
@@ -378,7 +404,7 @@ extension TranscriptView {
         // to the end re-laid out the stack, which moved the end, which scrolled again, and
         // the app sat at full CPU until it was force-quit (a tester's "beachball on send").
         // Rows the lazy stack takes over start out undrawn too, so their height changes as
-        // they cross: that happens between messages (`settleTail`), not as one arrives.
+        // they cross: that happens between turns (`settleTail`), not while one streams.
         let all = rows
         let split = TranscriptRowModel.split(count: all.count, tailFrom: tailFrom)
         let ctx = rowContext
@@ -389,7 +415,21 @@ extension TranscriptView {
             // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
             OlderRows(rows: Array(all[..<split]), context: ctx).equatable()
         }
-        ForEach(Array(all[split...])) { row in ctx.rowView(row) }
+        let entering = Self.enteringRowID(all, opening: settling || chat.isResuming)
+        ForEach(Array(all[split...])) { row in ctx.rowView(row, entering: row.id == entering) }
+    }
+
+    /// The row that fades in if it is new: the last one, once the chat has opened and synced
+    /// (`opening` false). Not an empty reply: it takes the place of the standalone typing bubble
+    /// and draws the same bubble on the same spot, so a fade there was a blink. Rows that move
+    /// between the lazy part and the tail, and a history arriving, appear as they are.
+    static func enteringRowID(_ rows: [TranscriptRowModel], opening: Bool) -> String? {
+        guard let last = rows.last, !opening, !isEmptyStreaming(last.item) else { return nil }
+        return last.id
+    }
+    static func isEmptyStreaming(_ item: TranscriptItem) -> Bool {
+        if case .assistant(let t, _, true) = item.kind { return t.isEmpty }
+        return false
     }
 
     /// Everything the rows are drawn with, apart from the rows themselves. The actions live in
@@ -457,9 +497,21 @@ extension TranscriptView {
         }
     }
 
+    /// Whether a change at the end of the thread may scroll the thread to it: locked, no finger
+    /// on it, and within reach. A token adds a line or two between frames; a thread that is a
+    /// screen and a half or more from its end has a reader up it, and a lock that says
+    /// otherwise is stale (set by a frame in which the content shrank, see the geometry
+    /// handler). The lock goes then, not the reader's place (#277).
+    private func mayFollow() -> Bool {
+        guard metrics.stickToBottom, !metrics.userScrolling else { return false }
+        let reach = max(900, metrics.containerHeight * 1.5)
+        if metrics.distanceFromBottom > reach { metrics.stickToBottom = false; return false }
+        return true
+    }
+
     /// A row came or went under a locked thread: the thread eases to its end with it.
     private func followRows(from old: Int, to new: Int) {
-        guard metrics.stickToBottom, !metrics.userScrolling else { return }
+        guard mayFollow() else { return }
         // Rows crossing into the lazy stack change the height above the screen: the thread
         // lands at its end at once then, with nothing to glide through.
         let crossed = TranscriptRowModel.split(count: old, tailFrom: tailFrom) != TranscriptRowModel.split(count: new, tailFrom: tailFrom)
@@ -470,13 +522,18 @@ extension TranscriptView {
     /// Hands the older rows of the thread's end to the lazy stack once the thread has been
     /// still for a moment, and only while it rests at its end: the rows that cross are above
     /// the screen then, and the thread is put back on its end in the same pass, so nothing
-    /// shows. Not while the reader is up the thread, where the rows on screen would shift.
+    /// shows. Not while the reader is up the thread, where the rows on screen would shift, and
+    /// not while a turn runs: a tool call taking a moment looked like rest, and the rows that
+    /// crossed then were laid out from the lazy stack's guesses for a frame, over their
+    /// neighbours, and the thread lost its end mid-reply. During a turn only a boundary not yet
+    /// set is set, where the rows already split.
     private func settleTail() async {
         try? await Task.sleep(for: .milliseconds(400))
         let count = visibleItems.count
         let wanted = TranscriptRowModel.tailStart(count)
         guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling, tailFrom != wanted else { return }
         let moves = TranscriptRowModel.split(count: count, tailFrom: tailFrom) != wanted
+        if moves, chat.isRunning { return }
         tailFrom = wanted
         if moves { scrollPosition.scrollTo(edge: .bottom) }
     }
@@ -548,6 +605,15 @@ private struct OlderRows: View, Equatable {
     }
 }
 
+/// How a new row comes into a chat thread: a short fade where it belongs, and nothing else. It
+/// carries its own animation, so nothing around it is animated with it. It never slides (a row
+/// moving in from below was drawn over the rows under it) and never fades out (a row fading where
+/// it was while its neighbours took its place was drawn over them).
+@MainActor
+enum ChatRowTransition {
+    static let fadeIn = AnyTransition.asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.2)), removal: .identity)
+}
+
 /// What a row does when tapped: one object for the thread's life, so the context that carries
 /// it compares equal from one update to the next (closures never do).
 final class RowActions {
@@ -593,8 +659,9 @@ struct RowContext: Equatable {
     }
 
     /// One row of the thread: the time separator before it when there is one, and the message
-    /// with the time waiting past its right edge.
-    @ViewBuilder func rowView(_ row: TranscriptRowModel) -> some View {
+    /// with the time waiting past its right edge. `entering`: the row fades in if it is new
+    /// (see `TranscriptView.enteringRowID`); every other row appears and goes as it is.
+    @ViewBuilder func rowView(_ row: TranscriptRowModel, entering: Bool = false) -> some View {
         if let sep = row.separator {
             Text(sep).font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity).padding(.vertical, 6)
@@ -615,7 +682,11 @@ struct RowContext: Equatable {
             // rebuilt when the thread re-evaluates for a scroll or a token.
             .equatable()
             .id(id)
-            .transition(.asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity), removal: .opacity))
+            // One element per message, by kind: a group for VoiceOver, and what the UI tests
+            // compare frame by frame to check that no row is ever drawn over another.
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("thread.row." + row.kindTag)
+            .transition(entering ? ChatRowTransition.fadeIn : .identity)
             #if os(macOS)
             // The Mac has no slide for times: hovering a message says when it arrived. The
             // words are made once per minute of the day, not once per row per token.
@@ -865,6 +936,18 @@ struct TranscriptRowModel: Identifiable, Equatable {
     /// The last reply before something that is not a reply (the bot sits beside this one).
     var lastOfRun = true
     var id: String { item.id }
+    /// The row's kind in one word, for its accessibility identifier.
+    var kindTag: String {
+        switch item.kind {
+        case .user: return "user"
+        case .assistant: return "reply"
+        case .tool: return "tool"
+        case .system: return "note"
+        case .error: return "error"
+        case .subagent: return "helper"
+        case .steer: return "steer"
+        }
+    }
 
     static let gap: TimeInterval = 15 * 60
 
@@ -872,7 +955,9 @@ struct TranscriptRowModel: Identifiable, Equatable {
     /// screen, so a thread at its end shows no lazy row.
     static let tailBlock = 16
     /// The most rows the end of the thread holds before the lazy stack takes some regardless.
-    static let tailCap = 48
+    /// Room for a long turn of tool calls (one can add dozens of rows), whose rows would
+    /// otherwise cross while it streams (see `settleTail`).
+    static let tailCap = 96
     /// Where the rows that are not lazy would start if nothing held them: whole blocks, so
     /// the boundary moves once in a block of rows.
     static func tailStart(_ count: Int) -> Int {
@@ -890,7 +975,12 @@ struct TranscriptRowModel: Identifiable, Equatable {
     static func build(_ items: [TranscriptItem], now: Date = Date()) -> [TranscriptRowModel] {
         var out: [TranscriptRowModel] = []
         var last: Date?
-        for item in items {
+        var seen = Set<String>()
+        for (i, original) in items.enumerated() {
+            var item = original
+            // Never two rows with one id: SwiftUI cannot tell such rows apart and may lay one
+            // out where the other belongs. (A gateway that sends the same tool call twice, say.)
+            if !seen.insert(item.id).inserted { item.id += "~\(i)"; seen.insert(item.id) }
             var sep: String?
             if last == nil || item.timestamp.timeIntervalSince(last!) > gap {
                 sep = label(for: item.timestamp, now: now)
@@ -1083,15 +1173,28 @@ struct TranscriptRow: View, Equatable {
                 }
                 .padding(.horizontal, bubbleStyle == "plain" ? 4 : 14).padding(.vertical, bubbleStyle == "plain" ? 4 : 9)
                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: botShown && bubbleStyle == "tailed"))
+                #if os(macOS)
+                // The whole bubble takes the right-click, padding and gaps too: on the words the
+                // Mac's selectable text gives its own menu, which has no Copy for the reply (#255).
+                .contentShape(.rect)
+                #endif
                 .contextMenu {
                     Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                     Button { VoiceCoordinator.shared.toggleSpeaking(text) } label: {
                         Label(VoiceCoordinator.shared.isSpeaking(text) ? "Stop Speaking" : "Speak", systemImage: VoiceCoordinator.shared.isSpeaking(text) ? "speaker.slash" : "speaker.wave.2")
                     }
+                    #if os(macOS)
+                    Button { UIPasteboard.general.string = TranscriptMedia.copyText(text) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    #else
                     Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    #endif
                     Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                     ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                 }
+                #if os(macOS)
+                // Copy on hover, past the bubble's trailing edge (#255); not while it streams.
+                .modifier(ReplyCopyHover(text: text, enabled: !streaming))
+                #endif
                 Spacer(minLength: wide ? 0 : 24)
                 }
             }
@@ -1233,7 +1336,9 @@ struct SubagentRow: View {
         .glassEffect(.regular, in: .rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
-        .animation(.snappy, value: activity.detailLine)
+        // The detail line changes as the helper reports in, without an animation of its own: one
+        // here resized the card on its own while the rows around it jumped, so a card whose line
+        // got shorter was drawn over the row under it until it caught up.
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Subagent: \(activity.goal). \(activity.detailLine ?? "")")
     }
@@ -1401,9 +1506,15 @@ struct MarkdownView: View, Equatable {
     /// off and back (the lazy stack rebuilds it) does not parse its markdown again, and a
     /// finished reply is parsed once for as long as it is in the cache.
     // Bounded: a streaming reply makes a new entry per token, and a long day of chats made
-    // thousands that nothing ever read again.
-    private static let blockCache: NSCache<NSString, BlocksBox> = { let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; return c }()
-    private static let inlineCache: NSCache<NSString, InlineBox> = { let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; return c }()
+    // thousands that nothing ever read again. By size too (the cost is the text's length): a
+    // long report streaming for minutes made hundreds of entries, each the whole reply so far
+    // twice over (the key and its blocks), and 400 of those ran to tens of megabytes.
+    private static let blockCache: NSCache<NSString, BlocksBox> = {
+        let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; c.totalCostLimit = 4_000_000; return c
+    }()
+    private static let inlineCache: NSCache<NSString, InlineBox> = {
+        let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; c.totalCostLimit = 2_000_000; return c
+    }()
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     final class InlineBox { let text: AttributedString; init(_ t: AttributedString) { text = t } }
 
@@ -1586,7 +1697,7 @@ struct MarkdownTableView: View {
         // No menu of its own: a long press keeps the reply's (Reply, Speak, Copy, Share). The
         // corner button opens the table, and its sheet copies it as Markdown.
         // Local, as the html card's is: the row stays alive under its sheet in the lazy thread.
-        .sheet(isPresented: $full) { MarkdownTableSheet(table: table).sheetFrame(.wide) }
+        .sheet(isPresented: $full) { MarkdownTableSheet(table: table).sheetFrame(.wide).withAppModel() }
     }
 
     private var grid: some View {
@@ -1808,7 +1919,7 @@ struct ToolCardView: View {
                 .padding(.top, 2)
             }
         }
-        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall).sheetFrame(.wide) }
+        .sheet(isPresented: $showFull) { ToolCallSheet(activity: activity, fullCall: fullCall).sheetFrame(.wide).withAppModel() }
         .padding(compact ? 8 : 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass

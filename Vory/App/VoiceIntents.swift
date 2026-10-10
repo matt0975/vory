@@ -78,8 +78,8 @@ enum SiriAsk {
         let model = AppModel.shared
         guard model.hasConnections else { return "Set up a gateway in Vory first." }
         #if os(iOS)
-        let assertion = UIApplication.shared.beginBackgroundTask(withName: "vory.siri.ask")
-        defer { if assertion != .invalid { UIApplication.shared.endBackgroundTask(assertion) } }
+        let time = BackgroundTime("vory.siri.ask")
+        defer { time.end() }
         #endif
         if model.runtime == nil { await model.activateSavedConnection() }
         guard let rt = model.runtime else { return "Vory could not reach your gateway." }

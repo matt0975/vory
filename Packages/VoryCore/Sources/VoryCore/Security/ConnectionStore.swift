@@ -9,6 +9,10 @@ public final class ConnectionStore {
     private static let activeKey = "activeConnectionID"
 
     public private(set) var connections: [GatewayConnection] = []
+    /// Sign-ins the person asked this device to remember, behind Face ID or the passcode. Apart
+    /// from `secrets(for:)`, so nothing that copies those (iCloud, the watch) ever sees them.
+    /// Opened on first use, so a process that never asks (the extensions) never reads it.
+    @ObservationIgnored public lazy var remembered: RememberedSignInVault = .standard()
     public var activeConnectionID: UUID? {
         didSet { UserDefaults.standard.set(activeConnectionID?.uuidString, forKey: Self.activeKey) }
     }
@@ -60,6 +64,8 @@ public final class ConnectionStore {
     public func delete(id: UUID) {
         connections.removeAll { $0.id == id }
         Keychain.delete(account: secretsAccount(id))
+        // A sign-in remembered for it goes with it (a delete needs no Face ID).
+        remembered.forget(id)
         try? persistIndex()
         if activeConnectionID == id { activeConnectionID = connections.first?.id }
     }

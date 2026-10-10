@@ -4,21 +4,94 @@ import Foundation
 import UIKit
 import VoryCore
 
+/// The buzz and the expanded Island that go with an update when the app has the news itself.
+struct ActivityAlert: Equatable, Sendable {
+    var title: String
+    var body: String
+}
+
+/// Which update goes to the system next, one on its way at a time. Kept apart from
+/// `ActivityHandle` (which holds it under its lock) so the order can be tested.
+struct ActivityUpdateOrder {
+    struct Update: Equatable {
+        var state: HermesTurnAttributes.ContentState
+        var alert: ActivityAlert?
+    }
+    private(set) var sending = false
+    /// The newest state, kept while an update is on its way; sent after it, the ones it replaced never.
+    private var queued: Update?
+    private var ended = false
+
+    /// A new state, with or without an alert: what to send now, or nil when one is on its way
+    /// and this waits behind it. An alert that went out by itself ahead of the queue was then
+    /// overtaken by the state waiting there: a "Running Clarify" sent before the question came
+    /// landed after it, and the card said the bot was working while it waited for an answer.
+    mutating func offer(_ state: HermesTurnAttributes.ContentState, alert: ActivityAlert? = nil) -> Update? {
+        guard !ended else { return nil }
+        guard !sending else {
+            // An alert not yet out stays with the newest state while the bot still waits for
+            // the person; once it no longer does (the card answered), the buzz is not raised.
+            let keep = alert ?? (state.needsAttention ? queued?.alert : nil)
+            queued = Update(state: state, alert: keep)
+            return nil
+        }
+        sending = true
+        return Update(state: state, alert: alert)
+    }
+
+    /// The update on its way went out: what to send next, if anything.
+    mutating func sent() -> Update? {
+        let next = ended ? nil : queued
+        queued = nil
+        if next == nil { sending = false }
+        return next
+    }
+
+    /// An update still waiting to go must not follow the end.
+    mutating func end() {
+        ended = true
+        queued = nil
+    }
+}
+
 /// ActivityKit's `Activity` is not marked Sendable; Apple documents it as safe to drive from any context.
 private final class ActivityHandle: @unchecked Sendable {
     let activity: Activity<HermesTurnAttributes>
     init(_ a: Activity<HermesTurnAttributes>) { activity = a }
 
-    func update(_ state: HermesTurnAttributes.ContentState) {
-        Task.detached { await self.activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600))) }
-    }
+    private let lock = NSLock()
+    private var order = ActivityUpdateOrder()
+
+    /// One update on its way at a time, the newest state next. A long turn that ran on while
+    /// the app was away came back as hundreds of tool calls in a burst, and each one (twice:
+    /// its start and the status line after it) sent an update of its own to the system at once.
+    func update(_ state: HermesTurnAttributes.ContentState) { offer(state, alert: nil) }
 
     /// An update that also alerts: the Island expands and the phone buzzes, like a push with an
-    /// alert would. Used when the app itself has the news while it is not in front.
+    /// alert would. Used when the app itself has the news while it is not in front. It takes
+    /// its turn like any other update.
     func alert(_ state: HermesTurnAttributes.ContentState, title: String, body: String) {
-        let config = AlertConfiguration(title: LocalizedStringResource(String.LocalizationValue(title)),
-                                        body: LocalizedStringResource(String.LocalizationValue(body)), sound: .default)
-        Task.detached { await self.activity.update(.init(state: state, staleDate: Date().addingTimeInterval(3600)), alertConfiguration: config) }
+        offer(state, alert: ActivityAlert(title: title, body: body))
+    }
+
+    private func offer(_ state: HermesTurnAttributes.ContentState, alert: ActivityAlert?) {
+        guard let first = lock.withLock({ order.offer(state, alert: alert) }) else { return }
+        Task.detached { await self.send(first) }
+    }
+
+    private func send(_ first: ActivityUpdateOrder.Update) async {
+        var next: ActivityUpdateOrder.Update? = first
+        while let u = next {
+            let content = ActivityContent(state: u.state, staleDate: Date().addingTimeInterval(3600))
+            if let a = u.alert {
+                let config = AlertConfiguration(title: LocalizedStringResource(String.LocalizationValue(a.title)),
+                                                body: LocalizedStringResource(String.LocalizationValue(a.body)), sound: .default)
+                await activity.update(content, alertConfiguration: config)
+            } else {
+                await activity.update(content)
+            }
+            next = lock.withLock { order.sent() }
+        }
     }
 
     /// In front of the user the result is on screen already, so the activity goes at once; away
@@ -26,6 +99,7 @@ private final class ActivityHandle: @unchecked Sendable {
     /// notification meanwhile), then the system removes it.
     func end(_ state: HermesTurnAttributes.ContentState, linger: TimeInterval? = nil) {
         let policy: ActivityUIDismissalPolicy = linger.map { .after(Date().addingTimeInterval($0)) } ?? .immediate
+        lock.withLock { order.end() }
         Task.detached { await self.activity.end(.init(state: state, staleDate: nil), dismissalPolicy: policy) }
     }
 
@@ -164,9 +238,9 @@ final class LiveActivityController: TurnActivityReporting {
         let model = AppModel.shared
         guard model.runtime == nil else { return }
         note("connecting to publish the token (launched in the background)")
-        let task = UIApplication.shared.beginBackgroundTask(withName: "vory.live-activity.token") {}
+        let time = BackgroundTime("vory.live-activity.token")
         await model.activateSavedConnection()
-        UIApplication.shared.endBackgroundTask(task)
+        time.end()
     }
 
     /// The goal line (Vory Summaries) reaches the card the moment it is written or rewritten,
@@ -265,16 +339,40 @@ final class LiveActivityController: TurnActivityReporting {
         NotificationCenter.default.post(name: .hermesLiveActivityToken, object: nil, userInfo: ["token": "", "storedID": a.attributes.storedSessionID, "startedAt": 0.0])
     }
 
+    /// When this chat last asked the system for a card and got none, and whether the app was
+    /// away then. Each ask is a synchronous call into the system on the main thread, and a long
+    /// turn starts a new reply after every tool call: with no card up (Live Activities refused,
+    /// or the app in the background, where the system starts none) every one of them asked
+    /// again. Hundreds of calls in a row, and one of them held the main thread past the
+    /// system's ten seconds while the app was in the background (0x8badf00d, a scene update).
+    private var lastAsk: (at: Date, away: Bool)?
+    nonisolated static let askAgainAfter: TimeInterval = 30
+
+    /// Whether to ask the system now: not again within half a minute of an ask that got
+    /// nothing, unless that was while away and the app is in front now.
+    nonisolated static func shouldAsk(lastAskAt: Date?, lastAskAway: Bool, awayNow: Bool, now: Date = Date()) -> Bool {
+        guard let at = lastAskAt, now.timeIntervalSince(at) < askAgainAfter else { return true }
+        return lastAskAway && !awayNow
+    }
+
     func start(for chat: ChatSession) {
         guard Self.isEnabled, handle == nil else { return }
+        let away = UIApplication.shared.applicationState == .background
+        guard Self.shouldAsk(lastAskAt: lastAsk?.at, lastAskAway: lastAsk?.away ?? false, awayNow: away) else { return }
+        lastAsk = (Date(), away)
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { Self.lastStartError = "Live Activities are turned off for Vory in iOS Settings"; return }
         // After a relaunch the system may still show this chat's activity: adopt it instead of stacking a second one.
         if let existing = Activity<HermesTurnAttributes>.activities.first(where: {
             $0.attributes.storedSessionID == chat.storedID && $0.content.state.endedAt == nil && $0.activityState == .active && !Self.endingIDs.contains($0.id)
         }) {
+            lastAsk = nil
             startedAt = existing.content.state.startedAt
             let h = ActivityHandle(existing)
             handle = h
+            // One that says it needs you was announced with that (the Companion's push, or this
+            // app before it was relaunched): alerted again, the Island expanded and the phone
+            // buzzed for an approval it had buzzed for already.
+            alertedAttention = existing.content.state.needsAttention
             tokenTask = h.observePushTokens(storedID: chat.storedID, startedAt: startedAt)
             // `pushTokenUpdates` only reports changes; the token this activity already holds must
             // reach the gateway too, or the companion cannot end it.
@@ -285,6 +383,8 @@ final class LiveActivityController: TurnActivityReporting {
             }
             return
         }
+        // Away from the app the system starts no card; the next ask in front will.
+        if away { return }
         // A finished card from the previous turn that the app has not been opened to clear yet must
         // not sit next to the new one.
         for a in Activity<HermesTurnAttributes>.activities where a.attributes.storedSessionID == chat.storedID && a.content.state.endedAt != nil {
@@ -307,6 +407,7 @@ final class LiveActivityController: TurnActivityReporting {
             let a = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: Date().addingTimeInterval(3600)), pushType: .token)
             let h = ActivityHandle(a)
             handle = h
+            lastAsk = nil
             tokenTask = h.observePushTokens(storedID: chat.storedID, startedAt: startedAt)
             stateTask = h.observeState()
             Self.lastStartError = nil; Self.lastStartedAt = Date()
@@ -322,6 +423,28 @@ final class LiveActivityController: TurnActivityReporting {
 
     func update(for chat: ChatSession, attention: Bool, detail: String?) {
         guard let handle else { return }
+        let state = contentState(for: chat, attention: attention, detail: detail)
+        // Away from the app the alert (the Island expanding, the buzz) comes from the
+        // companion's push when one is installed; only without it does the app raise its own.
+        if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
+            alertedAttention = true
+            let botName = handle.activity.attributes.botName ?? chat.profileName
+            handle.alert(state, title: botName, body: state.attentionKind == "input" ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
+            Self.note("approval alert from the app (background)")
+            return
+        }
+        if !attention { alertedAttention = false }
+        handle.update(state)
+    }
+
+    func showCards(for chat: ChatSession) {
+        guard let handle, !chat.cards.isEmpty else { return }
+        handle.update(contentState(for: chat, attention: true, detail: nil))
+    }
+
+    /// What the card shows for the chat now: its first card when `attention`, else the step the
+    /// turn is on (`detail`, or the chat's status line).
+    private func contentState(for chat: ChatSession, attention: Bool, detail: String?) -> HermesTurnAttributes.ContentState {
         let card = chat.firstCard
         let inputKind = attention && card != nil && card?.method != "approval"
         let text = detail ?? (attention ? (card?.method == "sudo" ? "sudo password needed" : (card?.approval?.description ?? (inputKind ? "Your input is needed" : "Needs your answer"))) : (chat.statusLine ?? "Thinking…"))
@@ -336,19 +459,11 @@ final class LiveActivityController: TurnActivityReporting {
                                                        outputTokens: chat.usage?.output ?? 0, contextPercent: chat.usage?.contextPercent, needsAttention: attention,
                                                        startedAt: startedAt, contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
         state.attentionKind = attention ? (inputKind ? "input" : "approval") : nil
+        // The approval Approve / Deny here answer, and no other (`AppModel.approvalCard`).
+        state.attentionRequest = attention && !inputKind ? (card?.approval?.requestId ?? card?.id) : nil
         state.goal = idleVoice ? nil : ChatGoals.shared.goal(for: chat.storedID)
         state.voiceMode = voiceLine
-        // Away from the app the alert (the Island expanding, the buzz) comes from the
-        // companion's push when one is installed; only without it does the app raise its own.
-        if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
-            alertedAttention = true
-            let botName = handle.activity.attributes.botName ?? chat.profileName
-            handle.alert(state, title: botName, body: inputKind ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
-            Self.note("approval alert from the app (background)")
-            return
-        }
-        if !attention { alertedAttention = false }
-        handle.update(state)
+        return state
     }
 
     /// Voice mode's state line, while it is on for this chat.

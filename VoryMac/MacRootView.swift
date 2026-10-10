@@ -60,7 +60,7 @@ struct MacRootView: View {
         .onChange(of: model.lock.isLocked) { _, _ in offerCompanion() }
         .sheet(isPresented: Binding(get: { !model.signInPrompt.isEmpty && !model.lock.isLocked && !showCompanionPrompt && !showInstaller },
                                     set: { if !$0 { model.signInPrompt = [] } })) {
-            GatewaySignInSheet(connections: model.signInPrompt)
+            GatewaySignInSheet(connections: model.signInPrompt).withAppModel()
         }
         .sheet(isPresented: $showCompanionPrompt) {
             CompanionPromptSheet(found: companionFound, install: {
@@ -75,6 +75,7 @@ struct MacRootView: View {
                 setupCardDone = false
                 showCompanionPrompt = false
             })
+            .withAppModel()
         }
         .sheet(isPresented: $showInstaller) {
             NavigationStack {
@@ -82,6 +83,7 @@ struct MacRootView: View {
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showInstaller = false } } }
             }
             .frame(minWidth: 560, minHeight: 680)
+            .withAppModel()
         }
     }
 }
@@ -385,6 +387,7 @@ private struct RailMore: View {
             }
             .padding(16)
             .frame(width: 240)
+            .withAppModel()
         }
     }
 }
@@ -393,7 +396,8 @@ private struct RailMore: View {
 private struct NoChatView: View {
     var body: some View {
         VStack(spacing: 12) {
-            BotFaceView(spec: liveVory, size: 72, active: true, mood: BotFaceView.Mood(profile: "vory-mac-empty", state: .guide))
+            // The guide plays only while something is working; idle, it holds still (#248).
+            BotFaceView(spec: liveVory, size: 72, mood: BotFaceView.Mood(profile: "vory-mac-empty", state: BotAmbient.shared.decorativeActive ? .guide : .idle))
             Text("No chat selected").font(.title3.weight(.semibold))
             Text("Pick one from the list, or press ⌘N for a new one.").font(.callout).foregroundStyle(.secondary)
         }
@@ -430,7 +434,7 @@ private struct GatewayFooter: View {
     var body: some View {
         Button { editing = true } label: {
             VStack(spacing: 4) {
-                BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
+                BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil && BotAmbient.shared.decorativeActive, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
                     .overlay(alignment: .bottomTrailing) {
                         Circle().fill(dot).frame(width: 8, height: 8)
                             .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
@@ -451,6 +455,7 @@ private struct GatewayFooter: View {
         .sheet(isPresented: $editing) {
             NavigationStack { GatewayFormView(existing: model.store.active) }
                 .frame(minWidth: 520, minHeight: 640)
+                .withAppModel()
         }
     }
 }

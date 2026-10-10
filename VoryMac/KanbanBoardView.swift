@@ -47,9 +47,9 @@ struct MacBoardView: View {
         .onChange(of: commands.newTaskRequest) { _, _ in if active, store?.isPresent == true { showNew = true } }
         .onChange(of: commands.moveRequest) { _, r in if let r, active { Task { await moveSelected(by: r.direction) } } }
         .onChange(of: commands.openRequest) { _, _ in if active, let id = selectedID { openTaskID = id } }
-        .sheet(isPresented: $showNew) { KanbanNewTaskSheet { warning in if let warning { notice = warning } }.sheetFrame() }
+        .sheet(isPresented: $showNew) { KanbanNewTaskSheet { warning in if let warning { notice = warning } }.sheetFrame().withAppModel() }
         .sheet(item: Binding(get: { openTaskID.map { OpenTask(id: $0) } }, set: { openTaskID = $0?.id })) { t in
-            KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in openTaskID = nil; openChat(sid, profile: profile) }).sheetFrame(.wide)
+            KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in openTaskID = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }
         .kanbanAsks(ask: $ask, answer: $answer, notice: $notice) { a in await answerAsk(a) }
     }

@@ -209,11 +209,11 @@ struct ChatListView: View {
             }
             // The mic circle beside it: a fresh chat, straight into voice mode (#237).
             .onChange(of: model.voiceChatRequest?.id) { _, id in if id != nil, let r = model.voiceChatRequest { openVoiceChat(r) } }
-            .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame() } }
-            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame() }
+            .sheet(isPresented: $showNewBot) { if let runtime { NewBotSheet(runtime: runtime).sheetFrame().withAppModel() } }
+            .sheet(isPresented: $showProjects) { NavigationStack { ProjectsView().toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { showProjects = false } } } }.sheetFrame().withAppModel() }
             .sheet(isPresented: $movingSelection) {
                 if let runtime {
-                    MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact)
+                    MoveToProjectSheet(sessions: picked, runtime: runtime) { endSelecting() }.sheetFrame(.compact).withAppModel()
                 }
             }
             // Cancelled from another tab's compose circle: straight back to that tab.
@@ -228,6 +228,7 @@ struct ChatListView: View {
                         }
                     }
                     .sheetFrame()
+                    .withAppModel()
                 }
             }
             #if os(iOS)
@@ -920,7 +921,7 @@ struct ChatListView: View {
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
                 .onForceClick { peeking = s }
                 .popover(isPresented: Binding(get: { peeking?.id == s.id }, set: { if !$0 { peeking = nil } })) {
-                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil)
+                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil).withAppModel()
                 }
                 #endif
                 .contextMenu {
@@ -936,7 +937,7 @@ struct ChatListView: View {
                     Divider()
                     Button(role: .destructive) { pendingDelete = s } label: { Label("Delete", systemImage: "trash") }
                 } preview: {
-                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil)
+                    SessionPreview(session: s, runtime: runtime, profile: allBots ? s.profile : nil).withAppModel()
                 }
                 // Delete alone on the trailing edge; Archive lives with Pin on the leading edge so
                 // the two are never a thumb-width apart.
@@ -987,7 +988,7 @@ struct ChatListView: View {
                     Divider()
                     Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }
                 } preview: {
-                    RoomPreview(room: room, runtime: runtime)
+                    RoomPreview(room: room, runtime: runtime).withAppModel()
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(role: .destructive) { pendingRoomDelete = room } label: { Label("Delete", systemImage: "trash") }

@@ -26,7 +26,9 @@ final class AwayWatch {
 
     private var leftRunning: Set<String> = []
     private var leftAt: Date?
-    private var background: UIBackgroundTaskIdentifier = .invalid
+    /// Signalled to let the background time go: by the turn's end, the app's return, or the
+    /// system saying the time is up.
+    private var held: DispatchSemaphore?
     private var hold: Task<Void, Never>?
     private var check: Task<Void, Never>?
 
@@ -35,10 +37,16 @@ final class AwayWatch {
         let running = runtime?.chats.filter { $0.isRunning && !$0.storedID.isEmpty } ?? []
         leftRunning = Set(running.map(\.storedID))
         leftAt = Date()
-        guard !running.isEmpty, background == .invalid else { return }
-        background = UIApplication.shared.beginBackgroundTask(withName: "vory.turn.finishing") { [weak self] in
-            // Called on the main thread just before the time runs out.
-            MainActor.assumeIsolated { self?.release() }
+        guard !running.isEmpty, held == nil else { return }
+        // The background time is held by a block on a queue of its own, and given back from
+        // there when the system says the time is up. With beginBackgroundTask that call came
+        // on the main thread, and a main thread still busy with a long turn's events could not
+        // answer it in the seconds allowed: the system ended the app ("App crashed in
+        // background", testers on 1.3 with a long turn running).
+        let release = DispatchSemaphore(value: 0)
+        held = release
+        ProcessInfo.processInfo.performExpiringActivity(withReason: "vory.turn.finishing") { expired in
+            if expired { release.signal() } else { _ = release.wait(timeout: .now() + 600) }
         }
         LiveActivityController.note("left with \(running.count) turn(s) running: holding the connection")
         hold = Task { [weak self, weak runtime] in
@@ -52,9 +60,8 @@ final class AwayWatch {
 
     private func release() {
         hold?.cancel(); hold = nil
-        guard background != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(background)
-        background = .invalid
+        held?.signal()
+        held = nil
     }
 
     func returned(runtime: GatewayRuntime?) {

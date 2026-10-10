@@ -12,6 +12,8 @@ struct MacVoiceHUD: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var session = HandsFreeSession.shared
+    @Environment(\.botsLive) private var botsLive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let size = CGSize(width: 340, height: 220)
 
@@ -53,12 +55,14 @@ struct MacVoiceHUD: View {
             VStack(spacing: 10) {
                 HStack(alignment: .top, spacing: 14) {
                     ZStack {
-                        Circle()
-                            .stroke(tint.opacity(0.6), lineWidth: 2.5)
-                            .frame(width: 78, height: 78)
-                            .scaleEffect(p.pulses ? 1.1 : 0.98)
-                            .opacity(p.pulses ? 1 : 0.25)
-                            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: p.pulses)
+                        // The ring pulses only while it should and the window can be seen: a
+                        // repeating animation kept running after its value went false (#248).
+                        if p.pulses && botsLive && !reduceMotion {
+                            PulseRing(tint: tint)
+                        } else {
+                            Circle().stroke(tint.opacity(0.6), lineWidth: 2.5).frame(width: 78, height: 78)
+                                .scaleEffect(0.98).opacity(0.25)
+                        }
                         BotAvatar(profile: chat.profileName, size: 64, active: p.faceActive, mood: mood(p.mood, chat))
                     }
                     .frame(width: 84)
@@ -215,5 +219,17 @@ struct VoiceHUDPresentation: Equatable {
         p.pauseLabel = state.phase == .paused ? "Resume" : "Pause"
         p.pauseSymbol = state.phase == .paused ? "play.fill" : "pause.fill"
         return p
+    }
+}
+
+/// The voice window's ring while the bot hears or speaks: grows and brightens, and back.
+private struct PulseRing: View {
+    var tint: Color
+    @State private var up = false
+    var body: some View {
+        Circle().stroke(tint.opacity(0.6), lineWidth: 2.5).frame(width: 78, height: 78)
+            .scaleEffect(up ? 1.1 : 0.98)
+            .opacity(up ? 1 : 0.25)
+            .onAppear { withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { up = true } }
     }
 }

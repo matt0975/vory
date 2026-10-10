@@ -54,5 +54,40 @@ import Testing
         #expect(TranscriptRowModel.split(count: block + cap + 1, tailFrom: block) == TranscriptRowModel.tailStart(block + cap + 1))
         // A boundary past where the blocks would start is not honoured either.
         #expect(TranscriptRowModel.split(count: block * 4, tailFrom: block * 3 + 2) == TranscriptRowModel.tailStart(block * 4))
+        // A long turn of tool calls (sixty rows) streams without moving the boundary: rows that
+        // crossed mid-turn were laid out from the lazy stack's guesses, over their neighbours.
+        #expect(TranscriptRowModel.split(count: block + 60, tailFrom: block) == block)
+    }
+
+    /// Two items with one id (a tool call the gateway sent twice) are still two rows with ids of
+    /// their own: rows that share an id can be laid out one over the other.
+    @Test func rowsNeverShareAnID() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let tool = ToolActivity(id: "x", name: "terminal")
+        let items = [TranscriptItem(id: "u1", kind: .user(text: "go", attachments: []), timestamp: at),
+                     TranscriptItem(id: "tool-x", kind: .tool(tool), timestamp: at),
+                     TranscriptItem(id: "tool-x", kind: .tool(tool), timestamp: at),
+                     TranscriptItem(id: "a1", kind: .assistant(text: "done", reasoning: nil, streaming: false), timestamp: at)]
+        let rows = TranscriptRowModel.build(items, now: at)
+        #expect(rows.count == 4)
+        #expect(Set(rows.map(\.id)).count == 4, "every row has its own id")
+        #expect(rows[1].id == "tool-x", "the first keeps its id")
+        #expect(rows.map(\.kindTag) == ["user", "tool", "tool", "reply"])
+    }
+
+    /// Only the newest row fades in, and only once the chat has opened; an empty reply never
+    /// does (it takes over the typing bubble on the same spot), and nothing at all while a
+    /// history is arriving.
+    @MainActor @Test func onlyTheNewestRowFadesIn() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        func rows(_ last: TranscriptItem.Kind) -> [TranscriptRowModel] {
+            TranscriptRowModel.build([TranscriptItem(id: "u1", kind: .user(text: "go", attachments: []), timestamp: at),
+                                      TranscriptItem(id: "last", kind: last, timestamp: at)], now: at)
+        }
+        #expect(TranscriptView.enteringRowID(rows(.tool(ToolActivity(id: "t", name: "terminal"))), opening: false) == "last")
+        #expect(TranscriptView.enteringRowID(rows(.assistant(text: "Hi", reasoning: nil, streaming: true)), opening: false) == "last")
+        #expect(TranscriptView.enteringRowID(rows(.assistant(text: "", reasoning: nil, streaming: true)), opening: false) == nil)
+        #expect(TranscriptView.enteringRowID(rows(.tool(ToolActivity(id: "t", name: "terminal"))), opening: true) == nil)
+        #expect(TranscriptView.enteringRowID([], opening: false) == nil)
     }
 }

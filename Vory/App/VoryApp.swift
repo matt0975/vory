@@ -10,6 +10,8 @@ struct VoryApp: App {
         #if DEBUG
         // The demo copy (its own bundle id): credentials in memory, iCloud a dictionary.
         DemoMode.prepare()
+        // Waits of the main thread over a quarter of a second, in the "perf" log.
+        Perf.watchMainThread()
         #endif
         // Widgets and the watch app read the same Keychain group; existing items move over once.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
@@ -34,18 +36,33 @@ struct VoryApp: App {
                 // A chat handed over from the Mac (or another iPhone or iPad): open it here.
                 .continuesHandoff(model)
                 .task {
+                    // Started in the background while the phone was locked, the app could not
+                    // read which gateways have a remembered sign-in; the window opens unlocked.
+                    model.store.remembered.reload()
                     await model.activateSavedConnection()
                     await model.refreshCompanionUpdateFlag()
+                }
+                .onChange(of: model.lock.isLocked) { _, locked in
+                    if !locked { Task { await model.signInAgainIfExpired() } }
                 }
                 .onChange(of: scenePhase) { _, phase in
                     switch phase {
                     case .active:
                         LocalNotifier.isForeground = true
+                        // A reply that streamed while the app was away is drawn now, once.
+                        model.runtime?.isAway = false
                         BotMotionSource.shared.apply(active: true)
                         model.lock.willEnterForeground()
                         // "Last checked" moves every time the app comes forward, and the day's
                         // backup runs from here when it is due (the Mac does the same on activation).
-                        CloudSync.shared.syncNow()
+                        // A moment after the transition, not in it: the sync reads the synced
+                        // Keychain several times and asks iCloud to flush, synchronous calls that
+                        // can wait on the system right after an unlock, and the foreground
+                        // transition is where the watchdog counts the main thread's seconds.
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(1))
+                            CloudSync.shared.syncNow()
+                        }
                         Task { await model.push.refreshAuthorization() }
                         Task { await model.refreshCompanionUpdateFlag() }
                         // Live Activities whose turn ended while the app was away must not linger,
@@ -53,7 +70,16 @@ struct VoryApp: App {
                         LiveActivityController.settleAtForeground(runtime: model.runtime)
                         AwayWatch.shared.returned(runtime: model.runtime)
                         Task { await model.push.refreshRelayIfStale() }
+                        // Which gateways have a remembered sign-in, read again: a launch while the
+                        // phone was locked could not read them, and that process may still be
+                        // the one running.
+                        model.store.remembered.reload()
+                        // A session that ran out while the app was away: a remembered sign-in
+                        // signs it in again now (after the app's own lock, if that is up).
+                        Task { await model.signInAgainIfExpired() }
                     case .background:
+                        // Out of sight: streaming replies stop redrawing (see GatewayRuntime.isAway).
+                        model.runtime?.isAway = true
                         CloudBackupTask.schedule()
                         AwayWatch.shared.left(runtime: model.runtime)
                         BotMotionSource.shared.apply(active: false)

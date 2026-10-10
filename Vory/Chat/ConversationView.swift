@@ -9,6 +9,9 @@ struct ConversationView: View {
     @State private var loadError: String?
     @State private var showContext = false
     @State private var showProfile = false
+    /// Rename chat, from the header's menu or a long press on the title pill (#286).
+    @State private var renaming = false
+    @State private var renameText = ""
     @State private var composerText = ""
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
@@ -46,7 +49,7 @@ struct ConversationView: View {
                     .handsOff(chat)
                     .navigationTitle(chat.title)
                     .toolbar(.hidden, for: .navigationBar)
-                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame() }
+                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // Approve/Deny from the Live Activity or a notification, with "Confirm
                     // approvals" on: asked once more here, on the card it concerns.
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
@@ -67,7 +70,16 @@ struct ConversationView: View {
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
-                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame() }
+                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
+                    .alert("Rename chat", isPresented: $renaming) {
+                        TextField("Name", text: $renameText)
+                        Button("Save") {
+                            let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !name.isEmpty else { return }
+                            Task { await chat.rename(name) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { Text("The new name shows in the chat list and the header.") }
                     .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
                     .onAppear { handle(route: model.pendingRoute, chat: chat) }
                     // Whatever was typed survives leaving the chat: saved per session as it changes,
@@ -136,7 +148,7 @@ struct ConversationView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onContext: { showContext = true },
+                        ChatMenuItems(chat: chat, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
                                       onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                     } label: { Label("Chat options", systemImage: "ellipsis") }
                     .menuIndicator(.hidden)
@@ -162,7 +174,7 @@ struct ConversationView: View {
             }
             .fullScreenCover(isPresented: Binding(get: { HandsFreeSession.shared.isActive(for: chat) && !HandsFreeSession.shared.minimized },
                                                    set: { if !$0, HandsFreeSession.shared.isActive(for: chat) { HandsFreeSession.shared.minimized = true } })) {
-                HandsFreeView(chat: chat)
+                HandsFreeView(chat: chat).withAppModel()
             }
         #endif
     }
@@ -178,6 +190,14 @@ struct ConversationView: View {
             if let sid = route.storedID { chat = try await runtime.openChat(storedID: sid, title: route.title, profile: route.profile) }
             else { chat = try await runtime.newChat(cwd: route.cwd) }
             if let chat, composerText.isEmpty, let draft = ComposerDrafts.load(for: chat) { composerText = draft }
+            #if DEBUG
+            // For a UI test: `-vory-test-stage <name>.pdf` stages a small PDF of that name in
+            // the chat as it opens, where the system file picker cannot be driven.
+            if let chat, chat.staged.isEmpty, let name = UserDefaults.standard.string(forKey: "vory-test-stage"), !name.isEmpty {
+                let pdf = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+                chat.stageAttachment(data: Data(pdf.utf8), name: name, kind: .pdf)
+            }
+            #endif
             // Opened for "Start voice mode" (the intent, or the Mac's ⇧⌘V with no chat open):
             // hands-free begins as soon as the chat exists.
             if let chat, model.voiceModeRequested {
@@ -246,9 +266,20 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
-        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onContext: { showContext = true },
+        ChatHeader(chat: chat, onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renameText = chat.title; renaming = true }, onContext: { showContext = true },
                    onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 < 200 { headerHeight = $0 } }
+            // One group for VoiceOver, placed after the thread and the dock in the accessibility
+            // order. The accessibility hit test (XCUITest's isHittable, touch to explore) tries
+            // the screen's elements from the last one back, as if the last were on top, and goes
+            // into the first whose frame holds the point. The thread runs up under the header, so
+            // with the header first (where its place on the screen put it) the thread was tried
+            // first, and the last reply's group (each message is one) answered at Back's point.
+            // Last, the header is tried first; drawn on top, it is also what a finger finds.
+            // A swipe through the screen now reaches it after the composer: VoiceOver starts on
+            // Back when the chat opens, and the pill is a heading for the rotor (`ChatHeader`).
+            .accessibilityElement(children: .contain)
+            .accessibilitySortPriority(-1)
     }
     #if os(iOS)
     private func keyboardChanged(_ n: Notification) {
@@ -276,7 +307,7 @@ struct ConversationView: View {
     @ViewBuilder private func confirmButtons(chat: ChatSession) -> some View {
         let deny = confirming?.choice == "deny"
         Button(deny ? "Deny" : "Approve once", role: deny ? .destructive : nil) {
-            if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }) {
+            if let c = confirming, let card = chat.approvalCard(named: [c.cardID]) {
                 Task { await chat.respond(card: card, result: ["choice": .string(c.choice)]) }
             }
             confirming = nil; model.approvalConfirm = nil
@@ -284,7 +315,7 @@ struct ConversationView: View {
         Button("Cancel", role: .cancel) { confirming = nil; model.approvalConfirm = nil }
     }
     @ViewBuilder private func confirmMessage(chat: ChatSession) -> some View {
-        if let c = confirming, let card = chat.cards.first(where: { $0.id == c.cardID }), let a = card.approval {
+        if let c = confirming, let card = chat.approvalCard(named: [c.cardID]), let a = card.approval {
             Text([a.description, a.command].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n"))
         } else {
             Text("The request is no longer waiting.")
@@ -419,12 +450,17 @@ struct ChatHeader: View {
     @Bindable var chat: ChatSession
     var onBack: () -> Void
     var onProfile: () -> Void
+    var onRename: () -> Void
     var onContext: () -> Void
     var onNewChat: () -> Void
     var onClose: () -> Void
     @Environment(\.colorScheme) private var scheme
     /// The bot pops into the header the way a contact does in Messages.
     @State private var popped = false
+    /// VoiceOver starts on Back when the chat opens, as it did while the header came first in
+    /// the screen's order: it comes last now (see `ConversationView.header`), and the first
+    /// element would otherwise be the oldest message laid out.
+    @AccessibilityFocusState private var backFocused: Bool
     @AppStorage(ChatStyle.headerShowsTitle) private var headerShowsTitle = false
     private var botLabel: String { chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName }
     private var headline: String { headerShowsTitle ? chat.title : botLabel }
@@ -439,6 +475,7 @@ struct ChatHeader: View {
                     .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+            .accessibilityFocused($backFocused)
             Spacer(minLength: 0)
             Button {
                 // The bot on the pill turns for the tap as it does elsewhere, and the plate opens.
@@ -466,7 +503,7 @@ struct ChatHeader: View {
                             Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
                         }
                         // Shortened in code like the title: a compaction notice runs to a full
-                        // sentence and the pill (fixedSize) stretched past the screen.
+                        // sentence, and the pill would stretch to the edges for it.
                         // While it works: the goal the on-device model wrote, else the step it is on.
                         let goal = chat.isRunning ? ChatGoals.shared.goal(for: chat.storedID) : nil
                         let status = chat.isRunning ? (goal ?? chat.statusLine ?? "Thinking…") : (chat.isResuming ? "Syncing…" : idleLine)
@@ -479,18 +516,32 @@ struct ChatHeader: View {
                             .animation(.snappy, value: chat.botState == .awaitingApproval)
                     }
                     .padding(.horizontal, 14).padding(.top, 11).padding(.bottom, 6)
-                    .fixedSize()
+                    // Its full height, but never wider than the room between the circles: with
+                    // larger text the lines end in "…" (a pill that kept its width pushed the back
+                    // circle off the screen).
+                    .fixedSize(horizontal: false, vertical: true)
                     .glassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            // The pill is offered that room before the spacers beside it share what is left, so
+            // it is cut short only when its text does not fit.
+            .layoutPriority(1)
             .onAppear { withAnimation(.easeOut(duration: 0.25).delay(0.05)) { popped = true } }
+            // A long press on the pill offers the rename; a tap opens the card as before.
+            .contextMenu {
+                Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
+                Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+            }
             .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
+            // The chat's title, as a navigation bar's is: the rotor's Headings reach the header
+            // from anywhere in the thread.
+            .accessibilityAddTraits(.isHeader)
             .accessibilityIdentifier("chat.titlePill")
             Spacer(minLength: 0)
             Menu {
-                ChatMenuItems(chat: chat, onProfile: onProfile, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
+                ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
             } label: {
                 Image(systemName: "ellipsis").font(.title3.weight(.semibold))
                     .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
@@ -504,6 +555,12 @@ struct ChatHeader: View {
         // never reaches the thread scrolling underneath (a tool card would otherwise expand).
         .contentShape(.rect)
         .onTapGesture {}
+        // Once the push has settled: VoiceOver moves to the new screen's first element when the
+        // transition ends, and would take over a request made before it.
+        .task {
+            try? await Task.sleep(for: .milliseconds(600))
+            backFocused = true
+        }
     }
 }
 
@@ -511,6 +568,7 @@ struct ChatHeader: View {
 struct ChatMenuItems: View {
     @Bindable var chat: ChatSession
     var onProfile: () -> Void
+    var onRename: () -> Void
     var onContext: () -> Void
     var onNewChat: () -> Void
     var onClose: () -> Void
@@ -521,6 +579,7 @@ struct ChatMenuItems: View {
         } label: { Label("Model: \(chat.modelName.isEmpty ? "none" : (chat.modelName.split(separator: "/").last.map(String.init) ?? chat.modelName))", systemImage: "cpu") }
         Button(action: onContext) { Label("Context usage\(chat.usage?.computedContextPercent.map { " · \($0)%" } ?? "")", systemImage: "gauge.with.dots.needle.33percent") }
         Button(action: onProfile) { Label("Bot info", systemImage: "person.text.rectangle") }
+        Button(action: onRename) { Label("Rename chat", systemImage: "pencil") }
         Button { HandsFreeSession.shared.start(chat: chat) } label: { Label("Voice mode", systemImage: "waveform.badge.mic") }
         #if os(iOS)
         // The newest finished reply read aloud, as the Mac's Chat menu has it; again stops it.

@@ -127,7 +127,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
             if !chat.isRunning, chat.queue.isEmpty, case .error(let why)? = chat.items.last?.kind { return ["ok": false, "error": why] }
             return ["ok": true, "running": chat.isRunning]
         case "approval":
-            guard let rid = m["card"] as? String, let choice = m["choice"] as? String, let card = chat.cards.first(where: { $0.id == rid }) else { return ["ok": false, "error": "no such card"] }
+            // By its id or its request's (`ChatSession.approvalCard(named:)`): the approval queue's
+            // card the watch was shown gives way to the request's own when that comes.
+            guard let rid = m["card"] as? String, let choice = m["choice"] as? String, let card = chat.approvalCard(named: [rid]) else { return ["ok": false, "error": "no such card"] }
             await chat.respond(card: card, result: ["choice": .string(choice)])
             return ["ok": true]
         case "answer":
@@ -137,8 +139,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
             return ["ok": true]
         case "cards":
             let cards: [[String: Any]] = chat.cards.map { c in
-                ["id": c.id, "method": c.method,
-                 "text": c.approval?.description ?? c.approval?.command ?? c.clarify?.question ?? c.clarify?.questions?.first?.question ?? c.valuePrompt?.prompt ?? ""]
+                var card: [String: Any] = ["id": c.id, "method": c.method,
+                                           "text": c.approval?.description ?? c.approval?.command ?? c.clarify?.question ?? c.clarify?.questions?.first?.question ?? c.valuePrompt?.prompt ?? ""]
+                // An approval's request, which a notification names it by (`PendingCard.isNamed`).
+                if let rid = c.approval?.requestId { card["request"] = rid }
+                return card
             }
             // The watch shows what the bot is working on when this iPhone has written it (the
             // watch runs no model), else the step it is on.
