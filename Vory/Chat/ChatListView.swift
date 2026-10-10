@@ -790,6 +790,9 @@ struct ChatListView: View {
                                          messageCount: chat.items.count, isActive: chat.isRunning, archived: false, pinned: false, profile: chat.profileName))
             }
             sessions = all.sorted { ($0.pinned ?? false ? 1 : 0, $0.lastActive ?? 0) > ($1.pinned ?? false ? 1 : 0, $1.lastActive ?? 0) }
+            // What Siri can name without the app on screen: the bots and the recent chats' titles (#310).
+            SiriCatalog.rememberBots(runtime.profiles)
+            SiriCatalog.rememberChats(sessions)
             SessionCache.save(sessions, connection: runtime.connection.id, profile: cacheProfile)
             errorText = nil
             // Group chats live on the gateway's room driver; none when it has no rooms.

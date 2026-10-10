@@ -40,6 +40,7 @@ struct SettingsView: View {
             Row(id: "home", title: "Home", symbol: "house.fill", color: .blue, destination: AnyView(HomeSettingsView())),
             Row(id: "summaries", title: "Vory Summaries", symbol: "sparkles", color: .purple, destination: AnyView(SummariesSettingsView())),
             Row(id: "voice", title: "Voice", symbol: "waveform", color: .pink, destination: AnyView(VoiceSettingsView())),
+            Row(id: "siri", title: "Siri", symbol: "mic.circle.fill", color: .purple, destination: AnyView(SiriSettingsView())),
             Row(id: "companion", title: "Companion", symbol: "puzzlepiece.fill", color: .blue, destination: AnyView(CompanionView())),
             Row(id: "troubleshooting", title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, destination: AnyView(TroubleshootingView())),
             Row(id: "about", title: "About", symbol: "info.circle", color: .blue, destination: AnyView(AboutView())),
@@ -525,6 +526,36 @@ struct BotsSettingsView: View {
 
 /// Settings › Vory Summaries: the on-device model's titles and previews for the chat list, each
 /// on its own switch so one can be tried without the other.
+/// Siri and Shortcuts (#310, #311): what Spotlight may list, and whether Siri may answer approvals.
+struct SiriSettingsView: View {
+    @AppStorage(SiriCatalog.spotlightKey) private var spotlight = SiriCatalog.spotlightDefault
+    @AppStorage(SiriCatalog.approvalsKey) private var approvals = false
+
+    var body: some View {
+        SettingsList {
+            SettingsHeaderSection(title: "Siri", symbol: "mic.circle.fill", color: .purple, description: "Ask a bot, open a chat or hear what a bot is doing by voice, from Shortcuts, or from Spotlight.")
+            Section {
+                Toggle("Show chats in Spotlight", isOn: $spotlight)
+                    .onChange(of: spotlight) { _, _ in Task { await SiriCatalog.syncSpotlight() } }
+                    .accessibilityIdentifier("siri.spotlight")
+            } footer: {
+                Text("Chat titles only, never messages. Off, nothing from Vory shows in Spotlight.")
+            }
+            Section {
+                Toggle("Let Siri answer approvals", isOn: $approvals)
+                    .accessibilityIdentifier("siri.approvals")
+            } footer: {
+                Text("Off, Siri never answers an approval. On, Siri reads which bot wants to do what and asks you to confirm, only on an unlocked \(DeviceWords.this), and answers that one approval. Voice mode never answers approvals either way.")
+            }
+            Section {
+                Text("“Ask Vory…”, “Ask <bot> in Vory…”, “Talk to <bot> in Vory”, “Open my <chat> chat in Vory”, “New chat in Vory”, “What is my bot doing in Vory”, and, with the switch above on, “Answer the approval in Vory”.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } header: { Text("What to say") }
+        }
+        .navigationTitle("Siri")
+    }
+}
+
 struct SummariesSettingsView: View {
     @AppStorage(ChatSummarizer.titlesKey) private var titles = ChatSummarizer.titlesOn
     @AppStorage(ChatSummarizer.previewsKey) private var previews = ChatSummarizer.previewsOn
