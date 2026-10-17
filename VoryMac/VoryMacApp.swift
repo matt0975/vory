@@ -16,6 +16,11 @@ struct VoryMacApp: App {
         #endif
         // The notification service extension reads the same Keychain group; existing items move over once.
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
+        #if DEBUG
+        // A local ad-hoc build has no provisioned access-group entitlement. It can still test the
+        // complete gateway flow with process-lifetime storage; a signed build keeps the Keychain.
+        Keychain.useMemoryIfKeychainIsMissingEntitlement()
+        #endif
         Keychain.migrateToAccessGroupIfNeeded()
         BotFace.liveGlass = true
         // The 1.5 motion: painted bots run on the model (#304), the same rule as the iPhone's
