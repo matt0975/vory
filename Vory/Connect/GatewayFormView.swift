@@ -332,10 +332,21 @@ struct GatewayFormView: View {
                         }
                     }
                     .disabled(normalizedURL == nil || signingIn)
-                    Text("Opens the system browser against this gateway's /auth/native/authorize (PKCE). Tokens are stored in the Keychain.")
+                    Text(browserSignInFootnote)
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
+
+            #if DEBUG
+            if Keychain.memoryOnly {
+                Section {
+                    Label("Temporary sign-in", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("This ad-hoc build cannot use Vory's shared Keychain. The gateway and its sign-in work while Vory stays open, but they are removed when the app quits.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            #endif
 
             if kind == .cloudflare || kind == .other || access.isPartiallyConfigured || !cfClientId.isEmpty {
                 Section {
@@ -394,6 +405,14 @@ struct GatewayFormView: View {
         if rememberSignIn { return RememberedSignInCopy.kept(guardName) }
         let base = "The password is exchanged for a session and not stored."
         return canRemember ? base : base + " " + RememberedSignInCopy.needsPasscode
+    }
+
+    private var browserSignInFootnote: String {
+        let flow = "Opens the system browser against this gateway's /auth/native/authorize (PKCE)."
+        #if DEBUG
+        if Keychain.memoryOnly { return flow + " Tokens are kept only while Vory stays open." }
+        #endif
+        return flow + " Tokens are stored in the Keychain."
     }
 
     private var providerPicker: some View {
