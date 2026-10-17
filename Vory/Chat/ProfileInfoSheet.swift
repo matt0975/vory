@@ -285,7 +285,7 @@ struct ProfileCardView: View {
         if reduceTransparency {
             glyph.background(Circle().fill(Self.cardFill).overlay(Circle().strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)))
         } else {
-            glyph.glassEffect(.regular.interactive(), in: .circle)
+            glyph.voryGlassEffect(.regular.interactive(), in: .circle)
         }
     }
     #endif

@@ -210,7 +210,7 @@ struct ComposerView: View {
         // One glass container for the composer, so the + button's glass can become the
         // panel's and fold back into it (#285): the matching glassEffectIDs below did nothing
         // outside a container, and the panel just scaled in.
-        GlassEffectContainer(spacing: 0) { composerStack }
+        VoryGlassEffectContainer(spacing: 0) { composerStack }
     }
 
     private var composerStack: some View {
@@ -249,7 +249,7 @@ struct ComposerView: View {
                     .padding(.horizontal, 14).padding(.vertical, 4)
                 }
                 .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
                 .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
             }
             if longTextOffer {
@@ -259,10 +259,10 @@ struct ComposerView: View {
                     Text("That's a lot of text.").font(.subheadline)
                     Spacer(minLength: 0)
                     Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
-                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
+                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).voryGlassButtonStyle(prominent: true)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 8)
-                .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             if !chat.staged.isEmpty {
@@ -295,7 +295,7 @@ struct ComposerView: View {
                 // The bar beside the words is flexible in height; without this the strip took
                 // the whole screen.
                 .fixedSize(horizontal: false, vertical: true)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 14))
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             // Same shape as the Messages app: a round attach button outside the field, and one
@@ -317,8 +317,8 @@ struct ComposerView: View {
                 .frame(minHeight: 36)
                 // Plain glass, not interactive: an interactive capsule answers touches itself,
                 // and on the phone that swallowed the taps meant for the text field's Paste menu.
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
-                .glassEffectID("dock", in: namespace)
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 18))
+                .voryGlassEffectID("dock", in: namespace)
             }
             if chat.isRunning, !text.isEmpty {
                 HStack {
@@ -334,7 +334,7 @@ struct ComposerView: View {
         .overlay(alignment: .topLeading) {
             if showAttach {
                 attachPanel
-                    .glassEffectID("attach", in: namespace)
+                    .voryGlassEffectID("attach", in: namespace)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
                         attachPanelHeight = h
                         // How long the panel took to lay out after the tap (DEBUG "perf" log).
@@ -342,7 +342,7 @@ struct ComposerView: View {
                     }
                     .offset(y: -(attachPanelHeight + 10))
                     // The glass grows out of the button and folds back into it; the rows fade.
-                    .glassEffectTransition(.matchedGeometry)
+                    .voryGlassEffectTransition(.matchedGeometry)
                     .transition(.opacity)
                     .zIndex(2)
             }
@@ -482,8 +482,8 @@ struct ComposerView: View {
             Image(systemName: "plus").font(.body.weight(.semibold))
                 .rotationEffect(.degrees(showAttach ? 45 : 0))
                 .frame(width: 36, height: 36)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .glassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
+                .voryGlassEffect(.regular.interactive(), in: .circle)
+                .voryGlassEffectID(showAttach ? "attach-open" : "attach", in: namespace)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(showAttach ? "Close attach panel" : "Attach")

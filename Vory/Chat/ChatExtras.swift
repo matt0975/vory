@@ -84,7 +84,7 @@ struct JumpToBottomButton: View {
             Button(action: action) {
                 Image(systemName: "chevron.down").font(.body.weight(.semibold))
                     .frame(width: 38, height: 38)
-                    .glassEffect(.regular.interactive(), in: .circle)
+                    .voryGlassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Jump to latest")

@@ -142,8 +142,7 @@ struct TranscriptView: View {
 
     var body: some View {
         let _ = Perf.tick("transcript")
-        return Group {
-            ScrollView {
+        return ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
                     if chat.items.isEmpty, chat.resumeError == nil {
@@ -388,7 +387,6 @@ struct TranscriptView: View {
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
             }
-        }
     }
 }
 
@@ -1348,7 +1346,7 @@ struct SubagentRow: View {
         }
         .font(.footnote)
         .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
         // The detail line changes as the helper reports in, without an animation of its own: one
@@ -1372,7 +1370,7 @@ struct InjectedNoteRow: View {
                 }
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .voryGlassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(note.title). \(open ? "Hides" : "Shows") the details")
@@ -1438,7 +1436,7 @@ struct BotMessageNotice: View {
                     if pending { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .voryGlassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(headline). Opens \(label)'s chat")
@@ -2011,7 +2009,7 @@ struct AttachmentStrip: View {
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
                             .font(.caption).lineLimit(1)
-                            .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 10))
+                            .padding(8).voryGlassEffect(.regular, in: .rect(cornerRadius: 10))
                     }
                 }
                 .buttonStyle(.plain)

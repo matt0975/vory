@@ -163,7 +163,7 @@ struct LockScreenView: View {
                 Text("Vory is locked").font(.title2.weight(.semibold))
                 if let e = model.lock.lastError { Text(e).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center) }
                 Button("Unlock with \(model.lock.biometryName)") { Task { await model.lock.unlock() } }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
             }
             .padding()
         }

@@ -73,7 +73,7 @@ struct SummaryProgressStrip: View {
         HStack(spacing: 8) { content() }
             .font(.caption.weight(.medium))
             .padding(.horizontal, 12).padding(.vertical, 6)
-            .glassEffect(.regular, in: .capsule)
+            .voryGlassEffect(.regular, in: .capsule)
             .padding(.top, 4).padding(.bottom, 10)
     }
 }

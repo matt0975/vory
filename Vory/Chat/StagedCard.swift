@@ -65,7 +65,7 @@ struct StagedCard: View {
                     Text(label)
                         .font(.caption.weight(.semibold))
                         .padding(.horizontal, 12).padding(.vertical, 5)
-                        .glassEffect(.regular, in: .capsule)
+                        .voryGlassEffect(.regular, in: .capsule)
                         .offset(y: 6)
                 }
             }

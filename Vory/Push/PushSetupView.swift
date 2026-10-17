@@ -105,7 +105,7 @@ struct PushSetupView: View {
                 Button { go(to: p) } label: {
                     Image(systemName: "chevron.left").font(.body.weight(.semibold)).frame(width: 40, height: 40)
                 }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
+                .voryGlassButtonStyle().buttonBorderShape(.circle)
                 .disabled(locked)
                 .padding(.leading, 16).padding(.top, 10)
                 .accessibilityLabel("Back")
@@ -209,7 +209,7 @@ struct PushSetupView: View {
                 Button { if let rt { setup.markCompleted(for: rt) }; dismiss() } label: {
                     Text("Done").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
-                .buttonStyle(.glassProminent)
+                .voryGlassButtonStyle(prominent: true)
                 .disabled(locked || !isDone(.overview) || !doneSettled)
                 .accessibilityIdentifier("setup.done")
             } else {
@@ -220,7 +220,7 @@ struct PushSetupView: View {
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
-                .buttonStyle(.glassProminent)
+                .voryGlassButtonStyle(prominent: true)
                 .disabled(!isDone(step) || locked)
                 .accessibilityIdentifier("setup.continue")
             }

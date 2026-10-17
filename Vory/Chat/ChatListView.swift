@@ -155,14 +155,16 @@ struct ChatListView: View {
         #endif
     }
 
-    private var content: some View {
-            Group {
-                if let runtime {
-                    list(runtime)
-                } else {
-                    ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
-                }
-            }
+    @ViewBuilder private var contentBase: some View {
+        if let runtime {
+            list(runtime)
+        } else {
+            ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
+        }
+    }
+
+    private var contentChrome: some View {
+            contentBase
             .navigationTitle(selecting ? (selection.isEmpty ? "Select Chats" : "\(selection.count) Selected") : "Chats")
             .navigationBarTitleDisplayMode(.inline)
             .background(InteractivePopEnabler())
@@ -198,6 +200,10 @@ struct ChatListView: View {
                 #endif
                 }
             }
+    }
+
+    private var contentPresented: some View {
+            contentChrome
             // Compose: one tap is a fresh chat with the current bot, straight in (a tester:
             // "I shouldn't have to name it or choose appearance"); a long press is the
             // Messages-style sheet (To: bots, project, first message, files).
@@ -236,6 +242,10 @@ struct ChatListView: View {
             .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route) }
             .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText) }
             #endif
+    }
+
+    private var content: some View {
+            contentPresented
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             .refreshable { await load() }
             .task(id: runtime?.connection.id) { await load() }
@@ -515,7 +525,7 @@ struct ChatListView: View {
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
         #else
         .padding(.horizontal, 14).padding(.vertical, 9)
-        .glassEffect(.regular, in: .capsule)
+        .voryGlassEffect(.regular, in: .capsule)
         .padding(.horizontal, 16).padding(.top, 2).padding(.bottom, 6)
         #endif
     }
@@ -601,13 +611,8 @@ struct ChatListView: View {
             SummaryProgressStrip().padding(.bottom, model.tabBarHidden ? 0 : VoryTabBar.reservedHeight + 6)
         }
         #endif
-        #if os(macOS)
-        // A bar, not a plain inset: the rows fade out under it the way they do under the
-        // toolbar, instead of showing through behind the search field.
-        .safeAreaBar(edge: .top, spacing: 0) { topBars(runtime) }
-        #else
-        .safeAreaInset(edge: .top, spacing: 0) { topBars(runtime) }
-        #endif
+        // A native bar on Tahoe; an inset on Sequoia, where `safeAreaBar` does not exist.
+        .vorySafeAreaTopBar(spacing: 0) { topBars(runtime) }
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in

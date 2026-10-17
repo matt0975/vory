@@ -62,7 +62,7 @@ struct VoryTabBar: View {
     static var reservedHeight: CGFloat { 56 - overhang + max(0, 13 - safeBottom) }
 
     var body: some View {
-        GlassEffectContainer(spacing: circleGap) {
+        VoryGlassEffectContainer(spacing: circleGap) {
             HStack(spacing: circleGap) {
                 capsule
                 // Voice: one tap is a fresh chat with the current bot, straight into voice mode;
@@ -77,7 +77,7 @@ struct VoryTabBar: View {
                     } label: {
                         Image(systemName: "mic.fill").font(.system(size: 22, weight: .medium))
                             .frame(width: barHeight, height: barHeight)
-                            .glassEffect(.regular.interactive(), in: .circle)
+                            .voryGlassEffect(.regular.interactive(), in: .circle)
                     } primaryAction: {
                         voice(nil)
                     }
@@ -95,7 +95,7 @@ struct VoryTabBar: View {
                     Image(systemName: "square.and.pencil").font(.system(size: 23, weight: .medium))
                         .offset(x: 0, y: -2.5)
                         .frame(width: barHeight, height: barHeight)
-                        .glassEffect(.regular.interactive(), in: .circle)
+                        .voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain)
                 .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in
@@ -131,10 +131,10 @@ struct VoryTabBar: View {
                 // The lens: clear glass under the selected slot, or wherever the finger holds it
                 // (grown a little while lifted). Under the icons at rest so the selected one stays
                 // crisp; over them while dragged so it refracts them as it passes, like the system's.
-                GlassEffectContainer {
+                VoryGlassEffectContainer {
                     Capsule().fill(.clear)
                         .frame(width: slotWidth, height: slotHeight)
-                        .glassEffect(.clear.interactive(), in: .capsule)
+                        .voryGlassEffect(.clear.interactive(), in: .capsule)
                 }
                 .scaleEffect(dragging ? 1.12 : 1)
                 .offset(x: lensX, y: inset)
@@ -164,7 +164,7 @@ struct VoryTabBar: View {
             .gesture(barGesture(slotWidth: slotWidth))
         }
         .frame(height: barHeight)
-        .glassEffect(.regular, in: .capsule)
+        .voryGlassEffect(.regular, in: .capsule)
     }
 
     private func iconRow(slotWidth: CGFloat, slotHeight: CGFloat, dragging: Bool) -> some View {

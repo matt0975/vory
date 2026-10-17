@@ -19,7 +19,7 @@ struct PendingCardView: View {
             else { Text("Unsupported request \(card.method)").font(.footnote) }
         }
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 }
 
@@ -105,11 +105,11 @@ struct ApprovalChoiceButton: View {
 
     var body: some View {
         if choice == "once" {
-            Button(action: action) { label }.buttonStyle(.glassProminent)
+            Button(action: action) { label }.voryGlassButtonStyle(prominent: true)
         } else if choice == "deny" {
-            Button(role: .destructive, action: action) { label }.buttonStyle(.glass)
+            Button(role: .destructive, action: action) { label }.voryGlassButtonStyle()
         } else {
-            Button(action: action) { label }.buttonStyle(.glass)
+            Button(action: action) { label }.voryGlassButtonStyle()
         }
     }
 }
@@ -141,8 +141,8 @@ struct ClarifyCardView: View {
                     }
                 }
                 HStack {
-                    Button("Skip", role: .cancel) { onAnswer(["answers": .object([:])]) }.buttonStyle(.glass)
-                    Button("Answer") { onAnswer(["answers": .object(batch.mapValues { .string($0) })]) }.buttonStyle(.glassProminent)
+                    Button("Skip", role: .cancel) { onAnswer(["answers": .object([:])]) }.voryGlassButtonStyle()
+                    Button("Answer") { onAnswer(["answers": .object(batch.mapValues { .string($0) })]) }.voryGlassButtonStyle(prominent: true)
                 }
             } else {
                 Text(request.question ?? "").font(.subheadline)
@@ -157,15 +157,15 @@ struct ClarifyCardView: View {
                                 Text(c).frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                     }
                     if request.multiSelect == true {
-                        Button("Answer") { onAnswer(["answer": .string(picked.sorted().joined(separator: ", "))]) }.buttonStyle(.glassProminent)
+                        Button("Answer") { onAnswer(["answer": .string(picked.sorted().joined(separator: ", "))]) }.voryGlassButtonStyle(prominent: true)
                     }
                 } else {
                     HStack {
                         TextField("Your answer", text: $text, axis: .vertical).lineLimit(1...4).textFieldStyle(.roundedBorder)
-                        Button { onAnswer(["answer": .string(text)]) } label: { Image(systemName: "arrow.up") }.buttonStyle(.glassProminent)
+                        Button { onAnswer(["answer": .string(text)]) } label: { Image(systemName: "arrow.up") }.voryGlassButtonStyle(prominent: true)
                     }
                 }
                 Button("Skip") { onAnswer(["answer": ""]) }.font(.caption)
@@ -214,14 +214,14 @@ struct ValuePromptCardView: View {
                 .focused($focused)
                 .onSubmit { if !value.isEmpty { submit(value) } }
             HStack {
-                Button("Skip", role: .cancel) { submit("") }.buttonStyle(.glass)
+                Button("Skip", role: .cancel) { submit("") }.voryGlassButtonStyle()
                 Button("Submit") {
                     if method == "vault.save_login" {
                         let json = RPCFrames.encode(["identifier": .string(identifier), "password": .string(value)])
                         submit(json)
                     } else { submit(value) }
                 }
-                .buttonStyle(.glassProminent).disabled(value.isEmpty)
+                .voryGlassButtonStyle(prominent: true).disabled(value.isEmpty)
             }
             Text("Sent directly to your gateway; never logged by the app.").font(.caption2).foregroundStyle(.secondary)
         }

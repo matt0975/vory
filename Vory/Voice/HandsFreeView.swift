@@ -45,7 +45,7 @@ struct HandsFreeView: View {
         HStack {
             Button { session.minimized = true } label: {
                 Image(systemName: "chevron.down").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                    .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Hide voice mode")
@@ -217,7 +217,7 @@ struct VoiceTranscriptView: View {
                         withAnimation(.snappy) { proxy.scrollTo(bottomID, anchor: .bottom) }
                     } label: {
                         Image(systemName: "arrow.down").font(.subheadline.weight(.bold))
-                            .frame(width: 36, height: 36).glassEffect(.regular.interactive(), in: .circle)
+                            .frame(width: 36, height: 36).voryGlassEffect(.regular.interactive(), in: .circle)
                     }
                     .buttonStyle(.plain)
                     .padding(.trailing, 20).padding(.bottom, 8)
@@ -287,7 +287,7 @@ struct HandsFreePill: View {
                 Image(systemName: "chevron.up").font(.caption.weight(.bold)).foregroundStyle(.secondary)
             }
             .padding(.horizontal, 14).padding(.vertical, 9)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .voryGlassEffect(.regular.interactive(), in: .capsule)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Voice mode is on, \(session.state.title). Show it")

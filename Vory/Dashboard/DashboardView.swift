@@ -197,6 +197,7 @@ struct DashboardView: View {
     private func freshenGreeting() async {
         let key = "\(dayPart)|\(userName)|\(Calendar.current.component(.day, from: Date()))"
         guard cachedGreetingKey != key, aiOn, ChatSummarizer.isAvailable else { return }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         let who = userName.trimmingCharacters(in: .whitespaces)
         do {
             let ai = LanguageModelSession(instructions: "You write one short, warm greeting for the home screen of an app. At most eight words. No emoji, no exclamation marks, no quotes. Use the person's name if given.")
@@ -443,6 +444,7 @@ struct DashboardView: View {
     private func summarizeSince(force: Bool) async {
         let changed = changedSinceVisit
         guard !changed.isEmpty, aiOn, ChatSummarizer.isAvailable, !summarizing else { if changed.isEmpty { sinceSummary = nil }; return }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         if !force, sinceSummary != nil { return }
         summarizing = true; defer { summarizing = false }
         let lines = changed.prefix(8).map { "- \($0.displayTitle) (\($0.profile ?? "bot")): \(($0.preview ?? "").prefix(200))" }
@@ -588,7 +590,7 @@ struct GlassSegments<T: Hashable>: View {
     @Namespace private var lens
 
     var body: some View {
-        GlassEffectContainer(spacing: 6) {
+        VoryGlassEffectContainer(spacing: 6) {
             HStack(spacing: 0) {
                 ForEach(options, id: \.0) { option in
                     Text(option.1).font(.caption.weight(.semibold))
@@ -598,8 +600,8 @@ struct GlassSegments<T: Hashable>: View {
                         .background {
                             if selection == option.0 {
                                 Capsule().fill(.clear)
-                                    .glassEffect(.clear.interactive(), in: .capsule)
-                                    .glassEffectID("lens", in: lens)
+                                    .voryGlassEffect(.clear.interactive(), in: .capsule)
+                                    .voryGlassEffectID("lens", in: lens)
                             }
                         }
                         .onTapGesture { withAnimation(.snappy(duration: 0.3)) { selection = option.0 } }
@@ -607,7 +609,7 @@ struct GlassSegments<T: Hashable>: View {
                 }
             }
             .padding(3)
-            .glassEffect(.regular, in: .capsule)
+            .voryGlassEffect(.regular, in: .capsule)
         }
     }
 }

@@ -64,7 +64,7 @@ struct NewChatSheet: View {
                     Spacer()
                     Button { dismiss() } label: {
                         Image(systemName: "xmark").font(.body.weight(.semibold))
-                            .frame(width: 40, height: 40).glassEffect(.regular.interactive(), in: .circle)
+                            .frame(width: 40, height: 40).voryGlassEffect(.regular.interactive(), in: .circle)
                     }
                     .buttonStyle(.plain).accessibilityLabel("Close")
                 }
@@ -112,12 +112,12 @@ struct NewChatSheet: View {
                 }
                 Button { messageFocused = false; focus = .to } label: {
                     Image(systemName: "plus").font(.body.weight(.semibold))
-                        .frame(width: 32, height: 32).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 32, height: 32).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Add a bot")
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: 22))
             .padding(.horizontal, 16)
 
             // The bots that match, as cards; a tap adds one to To:.
@@ -203,7 +203,7 @@ struct NewChatSheet: View {
                     Image(systemName: "plus").font(.body.weight(.semibold))
                         .rotationEffect(.degrees(showAttach ? 45 : 0))
                         .frame(width: 36, height: 36)
-                        .glassEffect(.regular.interactive(), in: .circle)
+                        .voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain)
                 .disabled(chosen.count != 1)
@@ -237,7 +237,7 @@ struct NewChatSheet: View {
                 }
                 .frame(minHeight: 36)
                 // Plain glass: an interactive capsule answered touches meant for the field's Paste menu.
-                .glassEffect(.regular, in: .rect(cornerRadius: 18))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 18))
             }
             // The panel grows out of the + button and sits above the field.
             .overlay(alignment: .topLeading) {

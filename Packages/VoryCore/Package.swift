@@ -7,7 +7,7 @@ import PackageDescription
 // hook protocols in Runtime/Hooks.swift.
 let package = Package(
     name: "VoryCore",
-    platforms: [.iOS("26.0"), .macOS("26.0"), .watchOS("26.0")],
+    platforms: [.iOS("26.0"), .macOS("15.0"), .watchOS("26.0")],
     products: [.library(name: "VoryCore", targets: ["VoryCore"])],
     targets: [
         .target(name: "VoryCore", path: "Sources/VoryCore", swiftSettings: [.swiftLanguageMode(.v6)]),
