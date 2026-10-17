@@ -32,6 +32,31 @@ public enum Keychain {
         if let write { memory[key] = write }
         return memory[key]
     }
+
+    /// An ad-hoc Mac build cannot write to the data-protection Keychain. Probe the exact operation
+    /// `ConnectionStore` needs before it is created, then keep its gateway and session in memory
+    /// when signing is the only blocker. Other Keychain failures (for example, a locked device)
+    /// stay failures rather than silently becoming temporary storage.
+    @discardableResult
+    public static func useMemoryIfKeychainIsMissingEntitlement() -> Bool {
+        guard !memoryOnly else { return true }
+        let account = "keychain.write-probe." + UUID().uuidString
+        let query = base(account)
+        let attrs: [String: Any] = [kSecValueData as String: Data([0]),
+                                    kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let status = SecItemAdd(query.merging(attrs) { $1 } as CFDictionary, nil)
+        if status == errSecSuccess {
+            SecItemDelete(query as CFDictionary)
+            return false
+        }
+        guard needsMemoryFallback(status: status) else { return false }
+        memoryOnly = true
+        return true
+    }
+
+    static func needsMemoryFallback(status: OSStatus) -> Bool {
+        status == errSecMissingEntitlement
+    }
     #endif
 
     private static func base(_ account: String) -> [String: Any] {
