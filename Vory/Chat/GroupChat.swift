@@ -266,7 +266,7 @@ struct GroupChatHeader: View {
         HStack(alignment: .top, spacing: 12) {
             Button(action: onBack) {
                 Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                    .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("group.back")
             Spacer(minLength: 0)
@@ -289,7 +289,7 @@ struct GroupChatHeader: View {
                     // larger text or long names the lines end in "…" (a plate that kept its
                     // width pushed the back circle off the screen).
                     .fixedSize(horizontal: false, vertical: true)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .voryGlassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }

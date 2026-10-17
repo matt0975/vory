@@ -178,7 +178,7 @@ struct JumpToBottomButton: View {
                     // The whole circle takes the tap: a frame adds no hit area, and on iOS 26 a tap on the arrow went
                     // to the thread under it (#614).
                     .contentShape(Circle())
-                    .glassEffect(.regular.interactive(), in: .circle)
+                    .voryGlassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Jump to latest")

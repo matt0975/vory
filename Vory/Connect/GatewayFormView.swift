@@ -1,3 +1,4 @@
+import Security
 import SwiftUI
 import VoryCore
 
@@ -594,7 +595,15 @@ struct GatewayFormView: View {
                 dismiss()
                 await model.activate(conn)
             } catch let e as KeychainError {
-                errorMessage = "Could not save to the Keychain (\(e.localizedDescription)). On a simulator this usually means the build is unsigned."
+                if e.status == errSecMissingEntitlement {
+                    #if os(macOS)
+                    errorMessage = "Could not save to the Keychain (\(e.localizedDescription)). This copy is missing the required code-signing entitlements and provisioning profile."
+                    #else
+                    errorMessage = "Could not save to the Keychain (\(e.localizedDescription)). On a simulator this usually means the build is unsigned."
+                    #endif
+                } else {
+                    errorMessage = "Could not save to the Keychain (\(e.localizedDescription))."
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

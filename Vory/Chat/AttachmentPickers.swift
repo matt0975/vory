@@ -56,8 +56,8 @@ struct AudioRecorderSheet: View {
                 Text(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond))).font(.largeTitle.monospacedDigit())
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 HStack(spacing: 16) {
-                    Button(recording ? "Stop" : "Record") { recording ? stop() : start() }.buttonStyle(.glassProminent).tint(recording ? .red : .accentColor)
-                    if let url, !recording { Button("Attach") { onFinished(url); dismiss() }.buttonStyle(.glass) }
+                    Button(recording ? "Stop" : "Record") { recording ? stop() : start() }.voryGlassButtonStyle(prominent: true).tint(recording ? .red : .accentColor)
+                    if let url, !recording { Button("Attach") { onFinished(url); dismiss() }.voryGlassButtonStyle() }
                 }
             }
             .padding()
