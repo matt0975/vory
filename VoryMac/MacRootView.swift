@@ -481,8 +481,12 @@ private struct NoChatView: View {
         // when a chat was opened.
         .toolbar {
             if shown {
-                ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
-                    .sharedBackgroundVisibility(.hidden)
+                if #available(macOS 26.0, *) {
+                    ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1).accessibilityHidden(true) }
+                }
             }
         }
         // The placeholder must not bring a toolbar strip with it: in dark mode it showed as a
@@ -556,7 +560,7 @@ private struct MacLockView: View {
             Text("Vory is locked").font(.headline)
             if let e = model.lock.lastError { Text(e).font(.footnote).foregroundStyle(.secondary) }
             Button("Unlock with \(model.lock.biometryName)") { Task { await model.lock.unlock() } }
-                .buttonStyle(.glassProminent)
+                .voryGlassButtonStyle(prominent: true)
                 .keyboardShortcut(.defaultAction)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

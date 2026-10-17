@@ -81,7 +81,7 @@ struct GatewaySignInSheet: View {
                                 }
                                 .frame(maxWidth: .infinity).padding(.vertical, 6)
                             }
-                            .buttonStyle(.glassProminent)
+                            .voryGlassButtonStyle(prominent: true)
                             .disabled(busy)
                             .accessibilityIdentifier("signin.browser")
                         } else if model.canSignInWithRemembered(c) {
@@ -93,20 +93,20 @@ struct GatewaySignInSheet: View {
                                 }
                                 .frame(maxWidth: .infinity).padding(.vertical, 6)
                             }
-                            .buttonStyle(.glassProminent)
+                            .voryGlassButtonStyle(prominent: true)
                             .disabled(busy)
                             .accessibilityIdentifier("signin.remembered")
                             Button { showForm = true } label: {
                                 Text("Enter Sign-In…").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                             }
-                            .buttonStyle(.glass)
+                            .voryGlassButtonStyle()
                             .disabled(busy)
                             .accessibilityIdentifier("signin.form")
                         } else {
                             Button { showForm = true } label: {
                                 Text("Enter Sign-In…").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                             }
-                            .buttonStyle(.glassProminent)
+                            .voryGlassButtonStyle(prominent: true)
                             .accessibilityIdentifier("signin.form")
                         }
                         Button(connections.count > 1 && index < connections.count - 1 ? "Skip this one" : "Later") { next() }

@@ -38,7 +38,10 @@ struct E2EConfig {
         let v = merged()
         let missing = ["HERMES_E2E_URL"].filter { v[$0] == nil }
             + ((v["HERMES_E2E_TOKEN"] != nil || (v["HERMES_E2E_USER"] != nil && v["HERMES_E2E_PASSWORD"] != nil)) ? [] : ["HERMES_E2E_TOKEN or HERMES_E2E_USER+HERMES_E2E_PASSWORD"])
-        return "tried " + parts.joined(separator: ", ") + "; keys found: " + v.keys.sorted().joined(separator: ",") + "; missing: " + (missing.isEmpty ? "none" : missing.joined(separator: ", "))
+        let tried = parts.joined(separator: ", ")
+        let found = v.keys.sorted().joined(separator: ",")
+        let absent = missing.isEmpty ? "none" : missing.joined(separator: ", ")
+        return "tried \(tried); keys found: \(found); missing: \(absent)"
     }
 
     /// True when HERMES_E2E_REQUIRED is set (scheme/environment, or a line in the settings file): the run then

@@ -156,6 +156,7 @@ public struct AudioChunk: Sendable {
 
 #if os(iOS) || os(macOS)
 /// Speech to text on this device, from a recording.
+@available(iOS 26.0, macOS 26.0, *)
 public enum DeviceTranscriber {
     public enum Failure: LocalizedError {
         case unsupportedLocale(Locale)

@@ -716,7 +716,7 @@ struct ChatListView: View {
         // the system's search drawer sat exactly where the pull-to-refresh spinner draws, so
         // the spinner turned inside the field; our field is pinned above the list and the
         // spinner turns below it.
-        .safeAreaBar(edge: .top, spacing: 0) { topBars(runtime) }
+        .vorySafeAreaTopBar(spacing: 0) { topBars(runtime) }
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in

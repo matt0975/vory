@@ -1342,11 +1342,11 @@ public struct BotFaceView: View {
             // The error's dimming goes under the glass, so the plate darkens as one piece and its
             // rim dies with it, rather than a dark shape sitting inside a lit one.
             if m.dim > 0.01 { plate.fill(.black.opacity(0.30 * m.dim)) }
-            GlassEffectContainer {
+            VoryGlassEffectContainer {
                 Color.clear
-                    .glassEffect(.regular.tint(tint.opacity((colorScheme == .light ? 0.45 : 0.72) * (1 - 0.5 * m.dim))), in: plate)
+                    .voryGlassEffect(.regular.tint(tint.opacity((colorScheme == .light ? 0.45 : 0.72) * (1 - 0.5 * m.dim))), in: plate)
                     // No materialize bloom when a glass bot appears or changes look.
-                    .glassEffectTransition(.identity)
+                    .voryGlassEffectTransition(.identity)
             }
             // A light bot: a hairline inside the edge, and a cool crown so it reads on white.
             if pale {
@@ -1376,10 +1376,10 @@ public struct BotFaceView: View {
                         BotFace.draw(spec, in: &ctx, size: sz, time: t, active: wobble, gaze: g, part: .eyes, breathe: false, idleEyes: eyeLife, move: false, glanceFree: glanceFree, motion: lids)
                     }
                 } else {
-                    GlassEffectContainer {
+                    VoryGlassEffectContainer {
                         Color.clear
-                            .glassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: t, active: eyeLife, gaze: g, glanceFree: glanceFree, motion: m))
-                            .glassEffectTransition(.identity)
+                            .voryGlassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: t, active: eyeLife, gaze: g, glanceFree: glanceFree, motion: m))
+                            .voryGlassEffectTransition(.identity)
                     }
                 }
             }
@@ -1405,10 +1405,10 @@ public struct BotFaceView: View {
         ZStack {
             plate.fill(tint.opacity(colorScheme == .light ? 0.62 : 0.28))
             if f.dim > 0.01 { plate.fill(.black.opacity(0.30 * f.dim)) }
-            GlassEffectContainer {
+            VoryGlassEffectContainer {
                 Color.clear
-                    .glassEffect(.regular.tint(tint.opacity((colorScheme == .light ? 0.45 : 0.72) * (1 - 0.5 * f.dim))), in: plate)
-                    .glassEffectTransition(.identity)
+                    .voryGlassEffect(.regular.tint(tint.opacity((colorScheme == .light ? 0.45 : 0.72) * (1 - 0.5 * f.dim))), in: plate)
+                    .voryGlassEffectTransition(.identity)
             }
             if pale {
                 plate.fill(Color(red: 0.816, green: 0.816, blue: 0.835).opacity(0.4))
@@ -1432,10 +1432,10 @@ public struct BotFaceView: View {
                             BotFace.draw(spec, in: &ctx, size: sz, time: 0, active: false, gaze: .zero, part: .eyes, breathe: false, idleEyes: false, move: false, glanceFree: false, motion: eyeMotion)
                         }
                     } else {
-                        GlassEffectContainer {
+                        VoryGlassEffectContainer {
                             Color.clear
-                                .glassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: 0, active: false, gaze: .zero, glanceFree: false, motion: eyeMotion, seat: seat))
-                                .glassEffectTransition(.identity)
+                                .voryGlassEffect(.clear.tint(BotFace.ink.opacity(0.92)), in: BotEyesShape(spec: spec, time: 0, active: false, gaze: .zero, glanceFree: false, motion: eyeMotion, seat: seat))
+                                .voryGlassEffectTransition(.identity)
                         }
                     }
                 }

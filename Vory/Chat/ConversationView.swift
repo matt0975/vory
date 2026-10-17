@@ -534,7 +534,7 @@ struct BottomDock: View {
         // The container is what lets the composer morph into a card; menus presented from
         // inside it (the + button) did not take taps on the phone, so the container only wraps
         // what morphs, and the composer draws its own glass.
-        GlassEffectContainer(spacing: 12) {
+        VoryGlassEffectContainer(spacing: 12) {
             VStack(spacing: 10) {
                 if let banner = chat.banner {
                     HStack {
@@ -550,7 +550,7 @@ struct BottomDock: View {
                     // The words keep their padding; the button's square sets the banner's height where it's taller, its
                     // glyph where it was.
                     .padding(.leading, 12)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                    .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if !chat.queue.isEmpty { QueueStrip(chat: chat) }
@@ -560,8 +560,8 @@ struct BottomDock: View {
                     Label("Read-only", systemImage: "lock")
                         .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                         .padding(.horizontal, 16).padding(.vertical, 10)
-                        .glassEffect(.regular, in: .capsule)
-                        .glassEffectID("dock", in: namespace)
+                        .voryGlassEffect(.regular, in: .capsule)
+                        .voryGlassEffectID("dock", in: namespace)
                         .accessibilityLabel("Read-only: this is another bot's chat")
                 } else if let card = chat.firstCard {
                     // No long-press menu on any card: an approval is answered on its own buttons,
@@ -569,7 +569,7 @@ struct BottomDock: View {
                     // approval card had (all four choices, Always without a question) never opened
                     // inside this glass container anyway (26).
                     PendingCardView(chat: chat, card: card)
-                        .glassEffectID("dock", in: namespace)
+                        .voryGlassEffectID("dock", in: namespace)
                 } else {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
@@ -609,7 +609,7 @@ struct QueueStrip: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
         .alert("Edit queued message", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             TextField("Message", text: $draft)
             Button("Save") { if let e = editing { chat.updateQueued(e.id, text: draft) }; editing = nil }
@@ -702,7 +702,7 @@ struct ChatHeader: View {
             if back {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
                 .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
@@ -792,7 +792,7 @@ struct ChatHeader: View {
             ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
         } label: {
             Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
         }
         .menuStyle(.button).buttonStyle(.plain)
         .accessibilityLabel("Chat options")
@@ -810,7 +810,7 @@ struct ChatHeader: View {
             if showBack {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
                 .accessibilityFocused($backFocused)
@@ -865,7 +865,7 @@ struct ChatHeader: View {
                     // larger text the lines end in "…" (a pill that kept its width pushed the back
                     // circle off the screen).
                     .fixedSize(horizontal: false, vertical: true)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .voryGlassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }
@@ -890,7 +890,7 @@ struct ChatHeader: View {
                     ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
                 } label: {
                     Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .menuStyle(.button).buttonStyle(.plain)
                 .accessibilityIdentifier("chat.more")

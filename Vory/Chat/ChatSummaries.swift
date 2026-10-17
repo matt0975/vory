@@ -45,6 +45,7 @@ final class ChatSummarizer {
         s.stamp == (session.lastActive ?? 0) || (s.count != nil && s.count == session.messageCount)
     }
 
+    @available(iOS 26.0, macOS 26.0, *)
     @Generable
     struct Draft {
         @Guide(description: "A title for the conversation in at most six words, no quotes, no trailing period.")
@@ -82,11 +83,15 @@ final class ChatSummarizer {
     /// Whether the on-device model can run here (Apple Intelligence on, model downloaded).
     static var isAvailable: Bool {
         if pretend { return true }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return false }
         if case .available = SystemLanguageModel.default.availability { return true }
         return false
     }
     static var unavailableReason: String? {
         if pretend { return nil }
+        guard #available(iOS 26.0, macOS 26.0, *) else {
+            return "Vory Summaries require macOS Tahoe 26 or later."
+        }
         switch SystemLanguageModel.default.availability {
         case .available: return nil
         case .unavailable(.deviceNotEligible): return "This device does not support Apple Intelligence."
@@ -191,6 +196,7 @@ final class ChatSummarizer {
     }
 
     private func generateRoom(_ room: Room, events: [RoomEvent]) async {
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         let lines: [String] = events.compactMap { ev in
             guard ev.kind.hasPrefix("message.") else { return nil }
             let text = ev.payload["text"]?.stringValue ?? ev.payload["content"]?.stringValue ?? ""
@@ -223,6 +229,7 @@ final class ChatSummarizer {
             save()
             return
         }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         do {
             let messages = await recentMessages(session, runtime: runtime, profile: profile)
             guard !messages.isEmpty else { return }

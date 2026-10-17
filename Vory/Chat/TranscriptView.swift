@@ -1944,7 +1944,7 @@ struct SubagentRow: View {
         }
         .font(.footnote)
         .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
         // The detail line changes as the helper reports in, without an animation of its own: one
@@ -2007,7 +2007,7 @@ struct InjectedNoteRow: View {
             .clipShape(.rect(cornerRadius: open ? 14 : 20))
             // Plain glass, not interactive: the button inside takes the tap, and interactive glass
             // on the wrapper hid that button from accessibility (and the UI test).
-            .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
             .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 2)
@@ -2310,7 +2310,7 @@ struct BotMessageNotice: View {
                     if pending { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .voryGlassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(headline). Opens \(label)'s chat")
@@ -2978,7 +2978,7 @@ struct AttachmentStrip: View {
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
                             .font(.caption).lineLimit(1)
-                            .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 10))
+                            .padding(8).voryGlassEffect(.regular, in: .rect(cornerRadius: 10))
                     }
                 }
                 .buttonStyle(.plain)
