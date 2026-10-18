@@ -32,6 +32,8 @@ public final class GatewayRuntime {
     public var isAway = false {
         didSet {
             guard oldValue, !isAway else { return }
+            // Suspension can miss sessions.changed even without a socket-state change.
+            owedListRefresh = true
             // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
             // held until then, so a live change meanwhile does not have them catch up early.
             for chat in registry.all { chat.beginCatchUp() }

@@ -509,6 +509,20 @@ private final class StubChat: ChatIdentity {
         reg.remove(b)
         #expect(reg.all.isEmpty)
     }
+
+    /// A session-less refresh must not be swallowed by a chat awaiting attach.
+    @Test func anEmptyRuntimeIDMatchesNoChat() {
+        var reg = ChatRegistry<StubChat>()
+        let inFront = StubChat(runtimeID: "rt-1", storedID: "stored-A")
+        let attaching = StubChat(runtimeID: "", storedID: "stored-B")
+        reg.add(inFront); reg.add(attaching)
+        #expect(reg.byRuntime("") == nil, "a session-less event was handed to the chat that is still attaching")
+        // A real id still finds its chat, and the attaching one is found once it has one.
+        #expect(reg.byRuntime("rt-1") === inFront)
+        attaching.runtimeID = "rt-2"
+        #expect(reg.byRuntime("rt-2") === attaching)
+        #expect(reg.byRuntime("") == nil)
+    }
 }
 
 // MARK: Log grouping
