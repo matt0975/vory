@@ -28,7 +28,13 @@ enum TranscriptMedia {
         return text.withUTF8 { b in
             let n = b.count
             let slash: UInt8 = 0x2F, tilde: UInt8 = 0x7E
-            var path = n > 0 && (b[0] == slash || (n > 1 && b[0] == tilde && b[1] == slash))
+            /// The byte after a line's leading backticks and spaces: a path in inline code starts there.
+            func startsPath(_ j: Int) -> Bool {
+                var k = j
+                while k < n, b[k] == 0x60 || b[k] == 0x20 || b[k] == 0x09 { k += 1 }
+                return k < n && (b[k] == slash || (b[k] == tilde && k + 1 < n && b[k + 1] == slash))
+            }
+            var path = startsPath(0)
             var image = false, link = false
             var i = 0
             while i + 1 < n, !(path && image && link) {
@@ -36,7 +42,7 @@ enum TranscriptMedia {
                 switch c {
                 case 0x21 where d == 0x5B: image = true                                    // ![
                 case 0x5D where d == 0x28: link = true                                     // ](
-                case 0x0A where d == slash || (d == tilde && i + 2 < n && b[i + 2] == slash): path = true   // \n/ \n~/
+                case 0x0A where startsPath(i + 1): path = true                             // \n/ \n~/ \n`/
                 case 0x4D where i + 5 < n && d == 0x45 && b[i + 2] == 0x44 && b[i + 3] == 0x49 && b[i + 4] == 0x41 && b[i + 5] == 0x3A: path = true  // MEDIA:
                 default: break
                 }

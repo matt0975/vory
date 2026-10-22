@@ -24,6 +24,13 @@ import VoryCore
         #expect(!TranscriptMedia.marks(in: "a / b and c ~ d").mediaOrPath)
     }
 
+    @Test func aPathInInlineCodeEnablesTheScan() {
+        let note = "Done.\n\n`/home/hermes/out/a.wav`\n\nThat is all."
+        #expect(TranscriptMedia.marks(in: note).mediaOrPath)
+        #expect(TranscriptMedia.files(in: note).map(\.name) == ["a.wav"])
+        #expect(TranscriptMedia.files(in: "Done.\n\n`a.wav` and more words here\n").isEmpty)
+    }
+
     @Test func imagesAndLinks() {
         let both = TranscriptMedia.marks(in: "Here: ![chart](/tmp/chart.png)")
         #expect(both.image && both.link)

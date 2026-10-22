@@ -20,7 +20,11 @@ struct FileCardStrip: View {
     var body: some View {
         VStack(alignment: alignment, spacing: 8) {
             ForEach(Array(refs.prefix(12))) { ref in
-                FileCard(ref: ref, profile: profile) { preview = $0 }
+                if MediaScan.FileKind.of(ref.name) == .audio {
+                    AudioCard(ref: ref, profile: profile)
+                } else {
+                    FileCard(ref: ref, profile: profile) { preview = $0 }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: alignment == .trailing ? .trailing : .leading)
@@ -107,11 +111,11 @@ struct FileCard: View {
         #endif
         .task(id: ref.id) {
             guard let rt = model.runtime else { return }
-            if let cached = await MediaStore.shared.cached(ref, gateway: rt.connection.id.uuidString) { local = Self.named(cached, as: ref.name) }
+            if let cached = await MediaStore.shared.cached(ref, gateway: rt.connection.id.uuidString) { local = FileSource.named(cached, as: ref.name) }
         }
     }
 
-    private static var cardFill: Color {
+    static var cardFill: Color {
         #if os(iOS)
         Color(.secondarySystemBackground)
         #else
@@ -123,6 +127,63 @@ struct FileCard: View {
         if local == nil { await fetch() }
         if let local { onOpen(local) }
     }
+
+    /// Through the gateway, into the media cache; a refusal is said in plain words.
+    private func fetch() async {
+        guard !fetching else { return }
+        guard let rt = model.runtime else { failure = "Vory is not connected to a gateway."; return }
+        fetching = true; failure = nil
+        defer { fetching = false }
+        do {
+            let cached = try await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            local = FileSource.named(cached, as: ref.name)
+        } catch {
+            failure = FileFetchFailure.describe(error, name: ref.name)
+        }
+    }
+
+    #if os(macOS)
+    private func save(_ url: URL) {
+        do { MediaSave.showInFinder(try MediaSave.toDownloads(url, name: ref.name)) }
+        catch { MediaSave.explainFailure(name: ref.name, error: error) }
+    }
+    #endif
+}
+
+/// One file's way here: the cache's copy, or one fetch through the gateway. The audio card's
+/// state, so its button, its menu and its label read the same answer.
+@MainActor @Observable
+final class FileSource {
+    let ref: MediaRef
+    let profile: String?
+    private(set) var local: URL?
+    private(set) var fetching = false
+    private(set) var failure: String?
+
+    init(ref: MediaRef, profile: String?) {
+        self.ref = ref
+        self.profile = profile
+    }
+
+    /// Already fetched? Then there is nothing to wait for and nothing to say.
+    func loadCached(gateway: String) async {
+        if let cached = await MediaStore.shared.cached(ref, gateway: gateway) { local = Self.named(cached, as: ref.name) }
+    }
+
+    /// Through the gateway, into the media cache; a refusal is said in plain words.
+    func ensure(runtime: GatewayRuntime) async {
+        guard !fetching else { return }
+        fetching = true; failure = nil
+        defer { fetching = false }
+        do {
+            let cached = try await MediaStore.shared.localURL(for: ref, gateway: runtime.connection.id.uuidString, api: GatewayMediaAPI(api: runtime.api, profile: profile))
+            local = Self.named(cached, as: ref.name)
+        } catch {
+            failure = FileFetchFailure.describe(error, name: ref.name)
+        }
+    }
+
+    func setFailure(_ text: String) { failure = text }
 
     /// The cache keeps a file under a hash; the preview, Share and Save show the file's own
     /// name, so a copy lives under it (once; the same bytes).
@@ -136,27 +197,6 @@ struct FileCard: View {
         }
         return FileManager.default.fileExists(atPath: url.path) ? url : cached
     }
-
-    /// Through the gateway, into the media cache; a refusal is said in plain words.
-    private func fetch() async {
-        guard !fetching else { return }
-        guard let rt = model.runtime else { failure = "Vory is not connected to a gateway."; return }
-        fetching = true; failure = nil
-        defer { fetching = false }
-        do {
-            let cached = try await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
-            local = Self.named(cached, as: ref.name)
-        } catch {
-            failure = FileFetchFailure.describe(error, name: ref.name)
-        }
-    }
-
-    #if os(macOS)
-    private func save(_ url: URL) {
-        do { MediaSave.showInFinder(try MediaSave.toDownloads(url, name: ref.name)) }
-        catch { MediaSave.explainFailure(name: ref.name, error: error) }
-    }
-    #endif
 }
 
 /// Why a file did not come, in plain words (the style of the attachment refusals, #284).
