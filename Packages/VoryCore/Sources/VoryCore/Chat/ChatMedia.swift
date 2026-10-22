@@ -136,7 +136,8 @@ public enum MediaScan {
             }
             let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
             // A path with a full stop or a bracket after it is still that path.
-            if (t.hasPrefix("/") || t.hasPrefix("~/")), !t.contains(" "), MediaRef.isImage(clean(t)) || isFilePath(clean(t)) { continue }
+            let p = clean(t)
+            if (p.hasPrefix("/") || p.hasPrefix("~/")), !p.contains(" "), MediaRef.isImage(p) || isFilePath(p) { continue }
             if t.isEmpty, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             lines.append(line)
         }
@@ -192,8 +193,8 @@ public enum MediaScan {
             add(target.removingPercentEncoding ?? target)
         }
         for line in text.split(separator: "\n") {
-            let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if t.hasPrefix("/") || t.hasPrefix("~/"), !t.contains(" ") { add(t) }
+            let t = clean(line.trimmingCharacters(in: .whitespacesAndNewlines))
+            if t.hasPrefix("/") || t.hasPrefix("~/"), !t.contains(" "), isFilePath(t) { add(t) }
         }
         return out
     }

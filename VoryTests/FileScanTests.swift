@@ -40,4 +40,10 @@ import Testing
         let words = MediaScan.textWithoutMedia(text)
         #expect(words == "The report is ready.\n\nThe numbers: raw numbers.\nThat is all.")
     }
+
+    @Test func aPathInInlineCodeIsAFile() {
+        let text = "Ready.\n\n`/home/hermes/out/call.m4a`\n\nThat is all."
+        #expect(MediaScan.files(in: text).map(\.name) == ["call.m4a"])
+        #expect(!MediaScan.textWithoutMedia(text).contains("call.m4a"))
+    }
 }

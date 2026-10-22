@@ -596,6 +596,15 @@ def _pdf_bytes(title: str, line: str) -> bytes:
     return bytes(out)
 
 
+def _wav_bytes(seconds: float) -> bytes:
+    """PCM16 mono at 16 kHz: a 440 Hz sine at 0.2 amplitude, as a plain RIFF/WAVE file."""
+    import math, struct
+    rate, frames = 16000, int(16000 * seconds)
+    samples = b"".join(struct.pack("<h", int(32767 * 0.2 * math.sin(2 * math.pi * 440 * n / rate))) for n in range(frames))
+    header = b"RIFF" + struct.pack("<I", 36 + len(samples)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16) + b"data" + struct.pack("<I", len(samples))
+    return header + samples
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -608,7 +617,7 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             # The files route reads other files the gateway allows (#309): a small PDF and a CSV
             # here, a refusal for a path under /etc, "gone" for one that says so, too large for
             # one that says so.
-            if base == "/api/files/read" and ext in ("pdf", "csv"):
+            if base == "/api/files/read" and ext in ("pdf", "csv", "wav"):
                 import base64
                 if p.startswith("/etc/"):
                     return 403, {"detail": "Access denied"}
@@ -619,6 +628,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
                 if ext == "pdf":
                     body = _pdf_bytes("Mock report", "Three shards checked, ten errors in all.")
                     mime = "application/pdf"
+                elif ext == "wav":
+                    body = _wav_bytes(3.0)
+                    mime = "audio/wav"
                 else:
                     body = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n"
                     mime = "text/csv"
@@ -2437,6 +2449,16 @@ class Gateway:
                 n += 1
                 text += f"**Step {n}.** {para}" + ("\n\n" if n % 3 == 0 else "")
             text += "\n\nThat is the end of the export notes."   # a last line a test can wait for
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if prompt.strip().lower().startswith("voice"):
+            # A voice note handed back in inline code, the shape that used to be missed.
+            await self.event("message.start", s.sid)
+            text = ("Here is the voice note, 3 seconds.\n\n`/home/hermes/out/voice-note.wav`\n\n"
+                    "It walks through the screenshot from the forecast strip to the sunrise line.\n")
             await self.stream_words(s, text)
             self.store_turn(s, prompt, [text])
             s.inflight = None

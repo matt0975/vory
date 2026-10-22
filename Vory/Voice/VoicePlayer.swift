@@ -39,6 +39,7 @@ final class VoicePlayer {
     /// Plays every chunk of the stream in order and returns once the last one has sounded
     /// (or the stream failed, or `stop()` was called).
     func play(_ chunks: AsyncThrowingStream<AudioChunk, Error>) async throws {
+        ClipPlayer.shared.stop()
         // One at a time: a second play while the first still drained threw its queue away and
         // took over its finish (Live's next turn could start over the end of the last).
         while busy { try await Task.sleep(for: .milliseconds(20)) }
