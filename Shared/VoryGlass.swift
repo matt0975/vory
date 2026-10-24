@@ -4,7 +4,7 @@ import SwiftUI
 /// native Liquid Glass APIs. Keeping the compatibility boundary here lets the
 /// rest of the shared UI remain one implementation on iOS, macOS and watchOS.
 struct VoryGlass: Sendable {
-    enum Kind: Sendable { case regular, clear }
+    enum Kind: Sendable { case regular, clear, identity }
 
     var kind: Kind
     var color: Color?
@@ -12,6 +12,7 @@ struct VoryGlass: Sendable {
 
     static let regular = VoryGlass(kind: .regular, color: nil)
     static let clear = VoryGlass(kind: .clear, color: nil)
+    static let identity = VoryGlass(kind: .identity, color: nil)
 
     func tint(_ color: Color?) -> VoryGlass {
         var copy = self
@@ -27,7 +28,12 @@ struct VoryGlass: Sendable {
 
     @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, *)
     fileprivate var native: Glass {
-        var value: Glass = kind == .clear ? .clear : .regular
+        var value: Glass
+        switch kind {
+        case .regular: value = .regular
+        case .clear: value = .clear
+        case .identity: value = .identity
+        }
         value = value.tint(color)
         return respondsToInput ? value.interactive() : value
     }
@@ -62,13 +68,18 @@ private struct VoryGlassFallback<S: Shape>: ViewModifier {
     let glass: VoryGlass
     let shape: S
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.background {
-            shape
-                .fill(glass.kind == .clear ? .thinMaterial : .regularMaterial)
-                .overlay {
-                    if let color = glass.color { shape.fill(color.opacity(0.32)) }
-                }
+        if glass.kind == .identity {
+            content
+        } else {
+            content.background {
+                shape
+                    .fill(glass.kind == .clear ? .thinMaterial : .regularMaterial)
+                    .overlay {
+                        if let color = glass.color { shape.fill(color.opacity(0.32)) }
+                    }
+            }
         }
     }
 }

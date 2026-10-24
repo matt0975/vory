@@ -199,7 +199,10 @@ struct TranscriptView: View {
 
     var body: some View {
         let _ = Perf.tick("transcript")
-        return Group {
+        return transcriptLifecycle
+    }
+
+    @ViewBuilder private var transcriptBase: some View {
             ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
@@ -281,6 +284,10 @@ struct TranscriptView: View {
                 .background(ScrollViewProbe(metrics: metrics, dockTop: dockTop, headerBottom: headerBottom))
                 }
             }
+    }
+
+    private var transcriptObserved: some View {
+            transcriptBase
             .scrollPosition($scrollPosition)
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
@@ -379,6 +386,10 @@ struct TranscriptView: View {
                 BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
+    }
+
+    private var transcriptPresented: some View {
+            transcriptObserved
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
             // beside whichever row was live and hopped between them as the turn went on.
@@ -435,6 +446,10 @@ struct TranscriptView: View {
             // that write ran the transcript's body a second time on every token. A new message
             // fades in where it belongs and the thread eases up to it (`followRows`).
             .onChange(of: rows.count) { old, new in historyLanding(from: old, to: new); followRows(from: old, to: new) }
+    }
+
+    private var transcriptLifecycle: some View {
+            transcriptPresented
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [rows.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear {
@@ -482,7 +497,6 @@ struct TranscriptView: View {
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
             }
-        }
     }
 }
 

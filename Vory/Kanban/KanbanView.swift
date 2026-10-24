@@ -37,12 +37,18 @@ struct KanbanView: View {
     /// With several boards the page keeps its own bar (its board picker), and its items with it.
     private var pushedUnderBar: Bool { MorphTopBar.active(model) && barTab != .kanban && !(embedded && (store?.boards.count ?? 0) > 1) }
 
-    var body: some View {
+    var body: some View { presented }
+
+    @ViewBuilder private var base: some View {
         Group {
             if let store { content(store) } else {
                 ContentUnavailableView("No gateway", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text("Connect a gateway in Settings to see its board."))
             }
         }
+    }
+
+    private var chrome: some View {
+        base
         .navigationTitle(store?.selectedBoardMeta?.displayName ?? "Board")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -68,6 +74,10 @@ struct KanbanView: View {
             ]),
             MorphPageAction(id: "board.new", symbol: "plus", label: "Add task", enabled: store?.isPresent == true) { showNew = true },
         ], on: pushedUnderBar)
+    }
+
+    private var presented: some View {
+        chrome
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
         }

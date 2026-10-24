@@ -199,14 +199,16 @@ struct ChatListView: View {
         }
     }
 
-    private var content: some View {
-            Group {
-                if let runtime {
-                    list(runtime)
-                } else {
-                    ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
-                }
-            }
+    @ViewBuilder private var contentBase: some View {
+        if let runtime {
+            list(runtime)
+        } else {
+            ContentUnavailableView("No gateway selected", systemImage: "antenna.radiowaves.left.and.right.slash", description: Text(model.activationError ?? "Choose a gateway in Settings."))
+        }
+    }
+
+    private var contentChrome: some View {
+            contentBase
             .navigationTitle(windowTitle)
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
@@ -308,6 +310,10 @@ struct ChatListView: View {
                 #endif
                 }
             }
+    }
+
+    private var contentPresented: some View {
+            contentChrome
             // Compose: one tap is a fresh chat with the current bot, straight in (a tester:
             // "I shouldn't have to name it or choose appearance"); a long press is the
             // Messages-style sheet (To: bots, project, first message, files).
@@ -360,6 +366,10 @@ struct ChatListView: View {
                     .withAppModel()
                 }
             }
+    }
+
+    private var content: some View {
+            contentPresented
             .onChange(of: searchText) { _, q in Task { await search(q) } }
             #if os(macOS)
             .refreshable { await refresh() }
