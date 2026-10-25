@@ -32,6 +32,10 @@ bring-your-own-APNs-key flow.
 
 ## Live Activities and complications
 
-Live Activity updates cannot be decrypted by an extension, so in relay mode the gateway sends only
-generic content-state text ("Working…", "Waiting for you"); titles and details stay in the app.
+In relay mode the gateway sends Live Activity updates with generic words for the step ("Working…",
+"Waiting for you"). The goal line, and a push-started activity's chat title, bot name, colour and
+avatar, travel sealed with the install's key, and the phone's Live Activity opens them; an
+approval's alert, which the system draws, says "Vory". The relay forwards them untouched and sees
+only the step's words, token counts, times and the random ids that open the chat. Apps from before
+this change get the names plain until they update.
 Watch complications get content-available pushes (no content at all).

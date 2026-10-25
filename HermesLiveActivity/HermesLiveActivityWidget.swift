@@ -27,43 +27,47 @@ extension HermesTurnAttributes {
 /// Lock Screen banner + Dynamic Island for a running agent turn.
 struct HermesTurnLiveActivity: Widget {
     var body: some WidgetConfiguration {
+        // Each view draws the activity with its sealed names and goal line opened (`unsealed`, #497): a relay-mode push
+        // carries them sealed with this install's key. Where they can't be opened it shows "Chat" and the default look.
         ActivityConfiguration(for: HermesTurnAttributes.self) { context in
-            LockScreenTurnView(attributes: context.attributes, state: context.state)
-                .widgetURL(context.attributes.chatURL)
+            let attributes = context.attributes.unsealed(), state = context.state.unsealed()
+            LockScreenTurnView(attributes: attributes, state: state)
+                .widgetURL(attributes.chatURL)
                 // Translucent over the wallpaper rather than a flat black slab; the system
                 // still guarantees legibility with its own material underneath.
                 .activityBackgroundTint(Color.black.opacity(0.35))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
+            let attributes = context.attributes.unsealed(), state = context.state.unsealed()
             // No centre region: the leading and trailing regions sit beside the sensor cut-out and
             // a third column there only leaves the title a few letters. Everything wide goes below.
-            DynamicIsland {
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    IslandExpandedLeading(attributes: context.attributes, state: context.state)
+                    IslandExpandedLeading(attributes: attributes, state: state)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    IslandExpandedTrailing(attributes: context.attributes, state: context.state)
+                    IslandExpandedTrailing(attributes: attributes, state: state)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    IslandExpandedBottom(attributes: context.attributes, state: context.state)
-                        .widgetURL(context.attributes.chatURL)
+                    IslandExpandedBottom(attributes: attributes, state: state)
+                        .widgetURL(attributes.chatURL)
                 }
             } compactLeading: {
                 // The island on iPhone 18 Pro is smaller and holds three activities at once, so
                 // the compact view is the bot alone with its phase in a corner badge: one glyph
                 // per side, nothing that needs width.
-                IslandBot(attributes: context.attributes, state: context.state, size: 24)
+                IslandBot(attributes: attributes, state: state, size: 24)
                     .padding(.leading, 2)
-                    .widgetURL(context.attributes.chatURL)
+                    .widgetURL(attributes.chatURL)
             } compactTrailing: {
-                IslandCompactTrailing(state: context.state)
+                IslandCompactTrailing(state: state)
             } minimal: {
                 // Minimal is what each activity gets when several share the island: the bot's
                 // face, ringed yellow when it needs you, so three bots read as three bots.
-                IslandBot(attributes: context.attributes, state: context.state, size: 22)
-                    .widgetURL(context.attributes.chatURL)
+                IslandBot(attributes: attributes, state: state, size: 22)
+                    .widgetURL(attributes.chatURL)
             }
-            .keylineTint(context.state.needsAttention ? .yellow : PhaseStyle.tint(context.state.phase, bot: context.attributes.tintHex))
+            .keylineTint(state.needsAttention ? .yellow : PhaseStyle.tint(state.phase, bot: attributes.tintHex))
         }
     }
 }

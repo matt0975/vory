@@ -435,7 +435,8 @@ final class LiveActivityController: TurnActivityReporting {
         // companion's push when one is installed; only without it does the app raise its own.
         if attention, !alertedAttention, UIApplication.shared.applicationState != .active, !LocalNotifier.companionDelivers {
             alertedAttention = true
-            let botName = handle.activity.attributes.botName ?? chat.profileName
+            // A push-started activity's names arrive sealed and empty (#497): the chat's own bot name, then.
+            let botName = handle.activity.attributes.botName.flatMap { $0.isEmpty ? nil : $0 } ?? chat.profileName
             handle.alert(state, title: botName, body: state.attentionKind == "input" ? "Your input is needed — tap to answer. It waits for you." : "Approval needed — tap to answer. It waits for you.")
             Self.note("approval alert from the app (background)")
             return

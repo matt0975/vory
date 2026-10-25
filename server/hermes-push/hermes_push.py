@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.39"
+VERSION = "1.0.40"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -125,6 +125,25 @@ def encrypt_for_device(device: dict, obj: dict) -> str | None:
     return base64.b64encode(nonce + ct).decode()
 
 
+def seal_live_activity(device: dict, state: dict, attributes: dict | None) -> tuple[dict, dict | None]:
+    """Relay mode, for an app that opens sealed fields (`la_sealed` in its device file): the turn's goal line, and a
+    push-to-start's chat title, bot name, profile, colour and avatar, travel encrypted with the install's key, as the
+    notifications do; the plain ones go empty. The relay and Apple then see the phase, its fixed words, numbers and
+    times, and the random ids that open the chat, but no names and no free text. The phone's Live Activity opens them."""
+    state = dict(state)
+    goal = state.pop("goal", None)
+    if goal and (sealed := encrypt_for_device(device, {"goal": goal})):
+        state["sealed"] = sealed
+    if attributes:
+        names = {"title": attributes.get("sessionTitle") or "", "bot": attributes.get("botName") or "",
+                 "profile": attributes.get("profile") or "", "hex": attributes.get("tintHex") or "",
+                 "avatar": attributes.get("avatar") or ""}
+        attributes = {**attributes, "sessionTitle": "", "botName": "", "profile": "", "tintHex": "", "avatar": ""}
+        if sealed := encrypt_for_device(device, names):
+            attributes["sealed"] = sealed
+    return state, attributes
+
+
 class APNs:
     """Delivery: through the developer's relay when the device registered with one (no APNs key
     needed here), otherwise straight to APNs over HTTP/2 via curl with your own key."""
@@ -167,7 +186,7 @@ class APNs:
             if attributes:
                 body["attributes"] = attributes   # a push-to-start: the activity's fixed fields
             if la_alert:
-                body["alert"] = la_alert   # plain words only: no extension can decrypt a Live Activity push
+                body["alert"] = la_alert   # plain words only: the system draws it and can't open a sealed name
             if dismissal_date:
                 body["dismissal_date"] = dismissal_date
         if self.dry_run:
@@ -208,12 +227,20 @@ class APNs:
             if push_type == "sound":
                 return self.send_via_relay(device, push_type="sound", alert={"thread_id": aps.get("thread-id", "")}, collapse_id=collapse_id)
             if push_type == "liveactivity":
-                # No extension can decrypt a Live Activity update, so only generic words travel.
+                # The detail becomes the phase's fixed words; for an app that opens sealed fields the goal line and the
+                # names go sealed too, so no free text travels plain.
                 state = dict(aps.get("content-state") or {})
                 state["detail"] = {"waiting": "Waiting for you", "done": "Turn finished", "error": "The turn failed", "thinking": "Thinking…",
                                    "streaming": "Writing…", "tool": "Running a tool…"}.get(state.get("phase"), "Working…")
+                attributes, la_alert = aps.get("attributes"), aps.get("alert")
+                if device.get("la_sealed") == 1 and device.get("payload_key"):
+                    # The goal line and the names go sealed; an app without `la_sealed` can't open them and keeps
+                    # today's plain payload. The system draws the alert and can't open a name: it says "Vory".
+                    state, attributes = seal_live_activity(device, state, attributes)
+                    if la_alert:
+                        la_alert = {**la_alert, "title": "Vory"}
                 return self.send_via_relay(device, push_type="liveactivity", token_override=token_override, content_state=state, event=aps.get("event"),
-                                           la_alert=aps.get("alert"), dismissal_date=aps.get("dismissal-date"), attributes=aps.get("attributes"))
+                                           la_alert=la_alert, dismissal_date=aps.get("dismissal-date"), attributes=attributes)
             return self.send_via_relay(device, push_type=push_type)
         if not self.direct:
             return False
