@@ -6,7 +6,8 @@ import Foundation
 /// first (`GET /api/sessions/{id}/mutation-snapshot`), then the edit with a request id of its own and that revision
 /// (and generation, when the snapshot has one): on a DELETE in the query, on a PATCH in the body. A Hermes from before
 /// the fence has no snapshot route (404) and gets the request it always got. Renames go over the socket
-/// (`session.title`), which is not fenced.
+/// (`session.title`), which is not fenced. A move to another folder (Move to Project) has no REST route: it is the
+/// socket's `session.mutate`, with the same revision and generation.
 public enum SessionMutation {
     /// What the gateway answered for the chat's revision (`runtime_revision`, `runtime_generation`: the API's decoder
     /// takes snake case to these names). Never 404 for an absent chat (`exists` false); a 404 is a Hermes without the
@@ -48,6 +49,11 @@ public enum SessionMutation {
             if let generation { f["expected_generation"] = .number(Double(generation)) }
             return f
         }
+
+        /// The params of a socket `session.mutate`.
+        public func mutation(session id: String, operation: String, payload: [String: JSONValue]) -> [String: JSONValue] {
+            adding(to: ["session_id": .string(id), "operation": .string(operation), "payload": .object(payload)])
+        }
     }
 
     /// The gateway's refusals of a fenced edit, by the `detail` it sends.
@@ -67,6 +73,8 @@ public enum SessionMutation {
     }
 
     public static func refusal(_ error: Error) -> Refusal? {
+        // Over the socket the reason is the error's `data.reason` (and its message).
+        if let e = error as? RPCError { return Refusal(rawValue: e.data?["reason"]?.stringValue ?? e.message) }
         guard let e = error as? HermesAPIError, case .http(_, let detail) = e else { return nil }
         if let r = Refusal(rawValue: detail) { return r }
         // The upgrade refusal carries a sentence after its code.
@@ -122,6 +130,24 @@ public enum SessionMutation {
         try await fenced(api, id: id, profile: profile) { identity in
             let sent = identity?.adding(to: base) ?? base
             let _: JSONValue? = try await api.send("PATCH", "/api/sessions/\(id)", json: .object(sent))
+        } absent: { _ in false }
+    }
+
+    /// Moves the chat's working folder to `cwd`. A Hermes whose session authority owns its chats (about 2026-10-20 on)
+    /// answers the old `session.workspace.move` with -32601 and takes the move only as the fenced `session.mutate`
+    /// operation `workspace`, as its Desktop sends it; Vory read that -32601 as a Hermes that cannot move chats, and
+    /// Move to Project did nothing. A Hermes without the fence (no snapshot) or without `session.mutate` on the socket
+    /// gets `session.workspace.move` as before. `rpc` is the socket call for the chat's bot.
+    public static func moveWorkspace(_ api: HermesAPI, id: String, profile: String?, cwd: String,
+                                     rpc: @Sendable (String, [String: JSONValue]) async throws -> JSONValue) async throws {
+        let legacy: [String: JSONValue] = ["session_key": .string(id), "cwd": .string(cwd)]
+        try await fenced(api, id: id, profile: profile) { identity in
+            guard let identity else { _ = try await rpc("session.workspace.move", legacy); return }
+            do {
+                _ = try await rpc("session.mutate", identity.mutation(session: id, operation: "workspace", payload: ["cwd": .string(cwd)]))
+            } catch let e as RPCError where e.code == RPCError.methodNotFound {
+                _ = try await rpc("session.workspace.move", legacy)
+            }
         } absent: { _ in false }
     }
 

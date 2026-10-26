@@ -1140,7 +1140,9 @@ struct ChatListView: View {
                     Button { Task { await patch(s, ["archived": .bool(!(s.archived ?? false))], afterClose: true) } } label: { Label(s.archived == true ? "Unarchive" : "Archive", systemImage: "archivebox") }
                     if runtime.projects.available == true, runtime.projects.canMove {
                         Menu {
-                            ProjectMoveMenu(sessions: [s], runtime: runtime) { errorText = $0 }
+                            // An alert, not the red line at the top: that was off screen below the first rows and
+                            // the next reload cleared it, so a refused move read as one that did nothing.
+                            ProjectMoveMenu(sessions: [s], runtime: runtime) { actionFailure = ActionFailure(title: "Could not move \u{201C}\(s.displayTitle)\u{201D}", message: $0) }
                         } label: { Label("Move to Project", systemImage: "folder") }
                     }
                     Button { withAnimation(selectMotion) { selecting = true; selection = [s.id] } } label: { Label("Select", systemImage: "checkmark.circle") }

@@ -117,7 +117,7 @@ enum ProjectMover {
             NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             return nil
         } catch {
-            return error.localizedDescription
+            return SessionMutation.message(for: error) ?? error.localizedDescription
         }
     }
 

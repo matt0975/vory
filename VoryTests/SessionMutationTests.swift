@@ -175,4 +175,55 @@ final class FakeFenceGateway: @unchecked Sendable {
         // A PATCH of one is the gateway's 404, which the list reads as a stale row.
         await #expect(throws: HermesAPIError.self) { try await SessionMutation.patch(try api(gw), id: "c1", profile: nil, fields: ["pinned": .bool(true)]) }
     }
+
+    /// Move to Project: the socket's fenced `session.mutate` where the gateway has the fence, the old verb elsewhere.
+    final class SocketCalls: @unchecked Sendable {
+        var sent: [(method: String, params: [String: JSONValue])] = []
+        /// Errors for the next calls, in order; nil answers.
+        var errors: [Error?] = []
+        func call(_ method: String, _ params: [String: JSONValue]) throws -> JSONValue {
+            sent.append((method, params))
+            if !errors.isEmpty, let e = errors.removeFirst() { throw e }
+            return .object([:])
+        }
+    }
+
+    @Test func aFencedMoveIsTheSocketsSessionMutate() async throws {
+        let gw = FakeFenceGateway(fenced: true); gw.generation = 2
+        let calls = SocketCalls()
+        try await SessionMutation.moveWorkspace(try api(gw), id: "c1", profile: "work", cwd: "/srv/app") { try calls.call($0, $1) }
+        let m = try #require(calls.sent.first)
+        #expect(calls.sent.count == 1 && m.method == "session.mutate")
+        #expect(m.params["session_id"] == .string("c1") && m.params["operation"] == .string("workspace"))
+        #expect(m.params["payload"] == .object(["cwd": .string("/srv/app")]))
+        #expect(m.params["expected_revision"] == .number(3) && m.params["expected_generation"] == .number(2))
+        #expect(m.params["request_id"]?.stringValue?.isEmpty == false)
+    }
+
+    @Test func aMoveWithoutTheFenceIsTheOldVerb() async throws {
+        let calls = SocketCalls()
+        try await SessionMutation.moveWorkspace(try api(FakeFenceGateway(fenced: false)), id: "c1", profile: nil, cwd: "/srv/app") { try calls.call($0, $1) }
+        #expect(calls.sent.map(\.method) == ["session.workspace.move"])
+        #expect(calls.sent.first?.params == ["session_key": .string("c1"), "cwd": .string("/srv/app")])
+        // A fenced gateway whose socket has no session.mutate gets the old verb too.
+        let gw = FakeFenceGateway(fenced: true), again = SocketCalls()
+        again.errors = [RPCError(code: RPCError.methodNotFound, message: "unknown method: session.mutate")]
+        try await SessionMutation.moveWorkspace(try api(gw), id: "c1", profile: nil, cwd: "/srv/app") { try again.call($0, $1) }
+        #expect(again.sent.map(\.method) == ["session.mutate", "session.workspace.move"])
+    }
+
+    @Test func aRefusedMoveIsSaidAndAStaleOneTriedOnceMore() async throws {
+        let busy = SocketCalls()
+        busy.errors = [RPCError(code: 4001, message: "session_busy", data: .object(["reason": .string("session_busy")]))]
+        do {
+            try await SessionMutation.moveWorkspace(try api(FakeFenceGateway(fenced: true)), id: "c1", profile: nil, cwd: "/srv/app") { try busy.call($0, $1) }
+            Issue.record("a busy chat's move must throw")
+        } catch {
+            #expect(SessionMutation.message(for: error) == "A turn is running in this chat. Try again once it has finished.")
+        }
+        let stale = SocketCalls()
+        stale.errors = [RPCError(code: 4001, message: "revision_conflict", data: .object(["reason": .string("revision_conflict")]))]
+        try await SessionMutation.moveWorkspace(try api(FakeFenceGateway(fenced: true)), id: "c1", profile: nil, cwd: "/srv/app") { try stale.call($0, $1) }
+        #expect(stale.sent.count == 2 && stale.sent[0].params["request_id"] != stale.sent[1].params["request_id"])
+    }
 }

@@ -106,9 +106,10 @@ public final class ProjectsStore {
     }
 
     public enum MoveError: LocalizedError {
-        case unsupported, noFolder(String), stillInProject(String, String)
+        case unsupported, noFolder(String), missingFolder(String), stillInProject(String, String)
         public var errorDescription: String? {
             switch self {
+            case .missingFolder(let folder): return "The folder \(folder) does not exist on the gateway."
             case .unsupported: return "This gateway's Hermes cannot move a chat yet. Update Hermes on the gateway and try again."
             case .noFolder(let name): return "\(name) has no folder on the gateway to move the chat into."
             case .stillInProject(let folder, let name): return "The bot's own folder (\(folder)) is part of \(name), so there is nowhere outside a project to put the chat."
@@ -118,7 +119,7 @@ public final class ProjectsStore {
 
     /// Files stored chats under `project`, or under none. On the gateway a chat is in a
     /// project because it works in that project's folder, so this moves the chat's working
-    /// folder (`session.workspace.move`): to the project's primary folder, or to the bot's own
+    /// folder (`SessionMutation.moveWorkspace`): to the project's primary folder, or to the bot's own
     /// default folder for "no project". A chat that is running follows at once.
     /// `profile`: the bot the chats belong to. Returns how many moved.
     @discardableResult
@@ -137,10 +138,16 @@ public final class ProjectsStore {
         let own = profile == nil || profile == runtime.selectedProfile
         for id in sessionIDs {
             do {
-                _ = try await runtime.rpc("session.workspace.move", ["session_key": .string(id), "cwd": .string(folder)], profile: profile)
+                try await SessionMutation.moveWorkspace(runtime.api, id: id, profile: profile ?? runtime.selectedProfile, cwd: folder) { method, params in
+                    try await runtime.rpc(method, params, profile: profile)
+                }
             } catch let e as RPCError where e.code == RPCError.methodNotFound {
                 canMove = false
                 throw MoveError.unsupported
+            } catch let e as RPCError where (e.data?["reason"]?.stringValue ?? e.message) == "invalid_params" {
+                // The fenced move's only refusal of a well-formed request: the folder is not a directory there.
+                if moved > 0 { await refreshAfterMove(profile: profile) }
+                throw MoveError.missingFolder(folder)
             } catch {
                 // Some went and one did not: the list still has to show the ones that did.
                 if moved > 0 { await refreshAfterMove(profile: profile) }
