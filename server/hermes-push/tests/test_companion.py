@@ -200,5 +200,53 @@ class SingleInstanceTests(unittest.TestCase):
             self.assertTrue(self.plugin._try_lock(h))
 
 
+class UnpromptedChatTests(unittest.IsolatedAsyncioTestCase):
+    """A chat created and never prompted has no stored row; resuming its key makes the gateway
+    write an empty one (Hermes #96793), which every list then shows. The relay leaves it alone
+    until it has a message, and mirrors everything else as before."""
+
+    def relay(self, live: list, stored_rows: list):
+        relay = hermes_push.Relay.__new__(hermes_push.Relay)
+        relay.attached, relay.labels, relay.notified = {}, {}, set()
+        relay.last_test, relay.last_la = {}, {}
+        relay.session_profile, relay._session_profile_at = {}, 0.0
+        relay.bot_chats, relay._touched_profiles = {}, set()
+        relay.apns = types.SimpleNamespace(last_response="")
+        resumed: list[str] = []
+
+        async def call(method, params=None):
+            if method == "profiles.list":
+                return {"profiles": [{"name": "default"}]}
+            if method == "session.active_list":
+                return {"sessions": live}
+            if method == "session.resume":
+                resumed.append(params["session_id"])
+            return {}
+
+        def http(verb, path):
+            if path.startswith("/api/profiles/sessions"):
+                return {"sessions": [{"id": i, "profile": "default"} for i in stored_rows]}
+            raise RuntimeError("not found")
+
+        relay.gw = types.SimpleNamespace(call=call, _http=http)
+        return relay, resumed
+
+    async def test_an_unprompted_chat_is_not_resumed(self) -> None:
+        live = [{"id": "rt1", "session_key": "20261025_213336_d22bb4", "status": "idle", "message_count": 0, "title": "Hermes"}]
+        relay, resumed = self.relay(live, stored_rows=[])
+        await relay.discover()
+        self.assertEqual(resumed, [])
+        self.assertNotIn("rt1", relay.attached)
+
+    async def test_chats_with_a_row_or_a_turn_are_mirrored(self) -> None:
+        live = [{"id": "rt1", "session_key": "20261025_110000_aaaaaa", "status": "idle", "message_count": 0, "title": "Stored"},
+                {"id": "rt2", "session_key": "20261025_120000_bbbbbb", "status": "running", "message_count": 0, "title": "First turn"},
+                {"id": "rt3", "session_key": "20261025_130000_cccccc", "status": "idle", "message_count": 4, "title": "Talked"},
+                {"id": "rt4", "session_key": "20261025_140000_dddddd", "status": "idle", "title": "Older gateway"}]
+        relay, resumed = self.relay(live, stored_rows=["20261025_110000_aaaaaa"])
+        await relay.discover()
+        self.assertEqual(sorted(resumed), sorted(s["session_key"] for s in live))
+
+
 if __name__ == "__main__":
     unittest.main()

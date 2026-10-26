@@ -495,7 +495,28 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         info = try? r["info"]?.decode(SessionLiveInfo.self)
         title = info?.title?.isEmpty == false ? info!.title! : "New chat"
         items = []
+        createdCwd = cwd
+        unprompted = true
+        needsCreate = false
         await loadUsage()
+    }
+
+    /// Created here and not prompted yet: the gateway writes no row for it until its first
+    /// message, and a resume of its key after a restart writes an empty one (Hermes #96793),
+    /// listed as a chat of its own. A reconnect drops it instead; it is created again when used.
+    private var unprompted = false
+    private var needsCreate = false
+    private var createdCwd: String?
+
+    /// The chat a reconnect dropped (`unprompted`), created afresh with the model and reasoning
+    /// level it had; what it shows is kept.
+    private func createIfDropped() async throws {
+        guard needsCreate else { return }
+        let (model, provider, effort, shown) = (info?.model, info?.provider, info?.reasoningEffort, items)
+        try await create(cwd: createdCwd)
+        items = shown
+        if let model, !model.isEmpty, model != info?.model { try? await setModel(provider: provider, model: model) }
+        if let effort, !effort.isEmpty, effort != info?.reasoningEffort { try? await setReasoning(effort) }
     }
 
     public func resume() async throws {
@@ -516,6 +537,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func reattachAfterReconnect(retrying: Bool = true) async {
+        if unprompted {
+            needsCreate = true
+            stale = false
+            if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
+            return
+        }
         do {
             try await resumeFromGateway()
             stale = false
@@ -990,6 +1017,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard !text.isEmpty || !staged.isEmpty else { return nil }
         await awaitResume()
         if let e = resumeError { return "This chat could not be opened on the gateway: \(e)" }
+        do { try await createIfDropped() } catch { return "This chat could not be started on the gateway: \(error.localizedDescription)" }
         if !text.isEmpty { composerHistory.append(text) }
         if text.hasPrefix("/"), staged.isEmpty { return await dispatchSlash(text) }
         if isRunning {
@@ -1022,6 +1050,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             if queued { params["queued"] = true }
             voice?.apply(to: &params)
             let r = try await rpc("prompt.submit", params)
+            unprompted = false
             lastSubmitStatus = r["status"]?.stringValue
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
             activity.start(for: self)
@@ -1276,6 +1305,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func setModel(provider: String?, model: String) async throws {
         if isDraft { pendingModel = ModelPick(provider: provider, model: model); return }
+        try await createIfDropped()
         var value = model
         if let provider, !provider.isEmpty { value += " --provider \(provider)" }
         value += " --session"
@@ -1291,6 +1321,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func setReasoning(_ effort: String) async throws {
         if isDraft { pendingReasoning = effort; return }
+        try await createIfDropped()
         _ = try await rpc("config.set", ["key": "reasoning", "value": .string(effort), "session_id": .string(runtimeID), "scope": "session"])
     }
 

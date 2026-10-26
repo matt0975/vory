@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.38"
+VERSION = "1.0.39"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -1132,6 +1132,13 @@ class Relay:
                 # guess: resuming with the wrong profile moves the chat into that store.
                 if stored not in self.session_profile:
                     self._refresh_session_profiles(profiles, force=True)
+                # A chat created and never prompted has no stored row until its first message, and
+                # resuming its key makes the gateway write one: an empty chat in every list. Nothing
+                # to mirror yet; a later poll picks it up once it has a message.
+                if stored not in self.session_profile and s.get("message_count") == 0 \
+                        and (s.get("status") or "idle") in ("idle", "", "done", "finished"):
+                    log.debug("not mirroring %s: no message yet", stored[:12])
+                    continue
                 pname = self.session_profile.get(stored) or self._profile_by_probe(stored, profiles)
                 if pname is None:
                     if len([p for p in profiles if p]) <= 1:
