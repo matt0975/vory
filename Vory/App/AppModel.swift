@@ -489,7 +489,7 @@ final class AppModel {
             }
             if storedID == nil {
                 let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
-                let own = r.sessions.filter { ($0.profile ?? profile.name) == profile.name }
+                let own = r.chats.filter { ($0.profile ?? profile.name) == profile.name }
                 storedID = (own.first { $0.title == "Bot Chat" } ?? own.first { ($0.title ?? "").localizedCaseInsensitiveContains("bot chat") })?.id
             }
             if storedID == nil, let r: SessionListResponse = try? await rt.api.get("/api/sessions/search", query: [URLQueryItem(name: "q", value: "Bot Chat")], profile: profile.name) {

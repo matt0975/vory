@@ -186,6 +186,7 @@ final class WatchModel {
                 out = r.sessions
             }
             hasMore = out.count >= limit
+            out.removeAll(where: \.isSkippedCronRun)
             // Pinned chats first, as on the phone; the gateway's order within each group.
             sessions = out.filter { $0.pinned == true } + out.filter { $0.pinned != true }
             if let d = try? JSONEncoder().encode(Array(out.prefix(30))) { UserDefaults.standard.set(d, forKey: cacheKey) }

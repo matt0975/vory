@@ -528,7 +528,7 @@ struct BotDetailView: View {
         guard let rt = model.runtime else { return }
         do {
             let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
-            sessions = r.sessions
+            sessions = r.chats
             error = nil
         } catch { self.error = error.localizedDescription }
     }

@@ -699,7 +699,7 @@ public final class GatewayRuntime {
         Task {
             if refreshSessions || recentSessions.isEmpty {
                 if let r: SessionListResponse = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8")], profile: selectedProfile) {
-                    recentSessions = r.sessions
+                    recentSessions = r.chats
                     lastListAnswered = true
                 } else {
                     lastListAnswered = false

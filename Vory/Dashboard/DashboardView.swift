@@ -532,13 +532,13 @@ struct DashboardView: View {
         let query = [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: allBots ? "50" : "100")]
         guard allBots, rt.profiles.count > 1 else {
             let r: SessionListResponse = try await rt.api.get("/api/sessions", query: query, profile: rt.selectedProfile)
-            return r.sessions
+            return r.chats
         }
         return try await withThrowingTaskGroup(of: [StoredSession].self) { group in
             for p in rt.profiles.map(\.name) {
                 group.addTask {
                     let r: SessionListResponse = try await rt.api.get("/api/sessions", query: query, profile: p)
-                    return r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
+                    return r.chats.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s }
                 }
             }
             var all: [StoredSession] = []

@@ -914,7 +914,7 @@ struct ChatListView: View {
                     for p in profiles {
                         group.addTask {
                             let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "50")], profile: p)
-                            return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
+                            return (p, r.chats.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
                     for try await (p, part) in group { byProfile[p] = part }
@@ -929,7 +929,7 @@ struct ChatListView: View {
                 // on which bot is selected by then.
                 let listed = runtime.selectedProfile
                 let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: listed)
-                all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
+                all = r.chats.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
             pinsKept = PinSupport.kept(rows: all, connection: runtime.connection.id)
             // Chats open in the app that the gateway does not list yet: a new chat gets its

@@ -222,6 +222,11 @@ public struct StoredSession: Codable, Hashable, Identifiable, Sendable {
         return p.isEmpty ? "New chat" : String(p.prefix(80))
     }
     public var lastDate: Date? { (lastActive ?? startedAt).map { Date(timeIntervalSince1970: $0) } }
+    /// A scheduled task's fire that never ran: Hermes stores the cron session before the job's
+    /// wake-gate script decides, and a gate that skips the agent leaves that row behind with no
+    /// messages and no title. Listed, each one was an untitled "New chat" (hourly, for an inbox
+    /// job). A cron run that did say something stays a chat like any other.
+    public var isSkippedCronRun: Bool { source == "cron" && messageCount == 0 }
 
     public init(id: String, title: String? = nil, preview: String? = nil, source: String? = nil, model: String? = nil, startedAt: Double? = nil, endedAt: Double? = nil, lastActive: Double? = nil, messageCount: Int? = nil, isActive: Bool? = nil, archived: Bool? = nil, pinned: Bool? = nil, profile: String? = nil, cwd: String? = nil) {
         self.id = id
@@ -244,6 +249,8 @@ public struct StoredSession: Codable, Hashable, Identifiable, Sendable {
 public struct SessionListResponse: Codable, Sendable {
     public var sessions: [StoredSession]
     public var total: Int?
+    /// The rows that are chats to the person: everything but the cron fires that never ran.
+    public var chats: [StoredSession] { sessions.filter { !$0.isSkippedCronRun } }
 
     public init(sessions: [StoredSession], total: Int? = nil) {
         self.sessions = sessions

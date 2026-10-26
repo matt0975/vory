@@ -60,7 +60,7 @@ struct SnapshotProvider: TimelineProvider {
         let api = HermesAPI(gateway: conn.gateway, signer: RequestSigner(authMode: conn.authMode, secrets: secrets))
         if let r: SessionListResponse = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8")], profile: snap.profile) {
             let needs = Set(snap.chats.filter(\.needsYou).map(\.id))
-            snap.chats = r.sessions.map { s in
+            snap.chats = r.chats.map { s in
                 WidgetSnapshot.Chat(id: s.id, title: s.displayTitle, profile: s.profile ?? snap.profile, lastActive: s.lastActive, running: s.isActive ?? false, needsYou: needs.contains(s.id))
             }
             snap.updatedAt = Date()
@@ -79,7 +79,7 @@ struct SnapshotProvider: TimelineProvider {
         if snap.usage.map({ Date().timeIntervalSince($0.updatedAt) > 1800 }) ?? true,
            let a: UsageAnalytics = try? await api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "91")], profile: snap.profile) {
             let list: SessionListResponse? = try? await api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: snap.profile)
-            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list?.sessions, previous: snap.usage)
+            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list?.chats, previous: snap.usage)
             snap.save()
         }
         return snap
