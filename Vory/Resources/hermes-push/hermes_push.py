@@ -624,8 +624,8 @@ class Gateway:
                 ticket = self._http("POST", "/api/auth/ws-ticket", {})["ticket"]
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", "replace")[:300].lower()
-                hint = " (Cloudflare refused it — the companion needs the Access service token, or use a loopback URL)" if "cloudflare" in body or "cf-" in body \
-                    else " (sign-in rejected — sign in for the companion again)" if exc.code in (401, 403) else ""
+                hint = " (Cloudflare refused it: the companion needs the Access service token, or use a loopback URL)" if "cloudflare" in body or "cf-" in body \
+                    else " (sign-in rejected: sign in for the companion again)" if exc.code in (401, 403) else ""
                 raise RuntimeError(f"HTTP {exc.code} {exc.reason}{hint}") from None
             except urllib.error.URLError as exc:
                 raise RuntimeError(describe_error(exc)) from None
@@ -901,7 +901,7 @@ class Relay:
                      "startedAtUnix": float(d.get("live_activity_started_at") or now), "endedAtUnix": float(now)}
             aps = {"timestamp": now, "event": "update", "content-state": state}
             if env("HERMES_PUSH_FINISH_EXPAND") in {"1", "true", "yes"}:
-                aps["alert"] = {"title": bot, "body": "Finished — tap to read the reply" if phase == "done" else "The turn failed — tap to see why", "sound": "default"}
+                aps["alert"] = {"title": bot, "body": "Finished. Tap to read the reply." if phase == "done" else "The turn failed. Tap to see why.", "sound": "default"}
             ok = self.apns.send(d, {"aps": aps}, push_type="liveactivity", token_override=d["live_activity_token"])
             self._note_la(f"finish update ({phase})", ok)
             if ok:
@@ -1383,7 +1383,7 @@ class Relay:
         if method == "approval":
             body = params.get("description") or params.get("command") or "A command is waiting for your decision"
             via_la = self.update_live_activities(a.get("stored", sid), {**self.la_usage.get(sid, {}), "phase": "waiting", "detail": str(body)[:80], "needsAttention": True},
-                                                 alert={"title": bot, "body": "Approval needed — tap to answer. It waits for you."}, runtime_id=sid)
+                                                 alert={"title": bot, "body": "Approval needed. Tap to answer. It waits for you."}, runtime_id=sid)
             banner: set = set()
             self.push_all("approval", f"{bot} · approval needed", f"{title}: {str(body)[:180]}", {**self.meta(sid), "request_id": params.get("request_id", rid)}, collapse=rid, skip=via_la, reached=banner)
             self.open_approvals[rid] = {"sid": sid, "stored": a.get("stored", sid), "req": str(params.get("request_id") or rid), "at": time.time(),
@@ -1672,7 +1672,7 @@ def main() -> None:
         gw = env("HERMES_PUSH_GATEWAY_URL").rstrip("/")
         devs = load_devices(gw)
         if not devs:
-            sys.exit(f"no devices registered in {devices_dir()} — open Vory › Settings › Notifications › Register now first")
+            sys.exit(f"no devices registered in {devices_dir()}: open Vory › Settings › Notifications › Register now first")
         if not apns.direct and not any(d.get("relay") for d in devs):
             sys.exit("no APNs key configured and no device registered with a relay")
         ok = 0

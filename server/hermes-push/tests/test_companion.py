@@ -409,13 +409,13 @@ class SealedLiveActivityTests(unittest.TestCase):
         self.assert_no_names(body)
 
     def test_an_approvals_alert_is_titled_vory(self) -> None:
-        alert = {"title": "Archivist", "body": "Approval needed — tap to answer. It waits for you.", "sound": "default"}
+        alert = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you.", "sound": "default"}
         body = self.send(self.device(), self.update(alert=alert))
         self.assertEqual(body["alert"], {**alert, "title": "Vory"})
         self.assert_no_names(body)
 
     def test_an_app_that_does_not_open_sealed_fields_gets_todays_payload(self) -> None:
-        alert = {"title": "Archivist", "body": "Approval needed — tap to answer. It waits for you."}
+        alert = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you."}
         body = self.send(self.device(sealed=False), {**self.start(), "alert": alert})
         self.assertEqual(body["content_state"]["goal"], self.GOAL)
         self.assertNotIn("sealed", body["content_state"])
@@ -440,7 +440,7 @@ class SealedLiveActivityTests(unittest.TestCase):
         aps = self.start()
         aps["content-state"]["goal"] = "😀" * 160
         aps["attributes"]["sessionTitle"] = "T" * 300
-        aps["alert"] = {"title": "Archivist", "body": "Approval needed — tap to answer. It waits for you.", "sound": "default"}
+        aps["alert"] = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you.", "sound": "default"}
         body = self.send(self.device(), aps)
         # What the relay hands Apple: the aps dictionary rebuilt from the posted fields.
         forwarded = {"aps": {"timestamp": aps["timestamp"], "event": body["event"], "content-state": body["content_state"],
