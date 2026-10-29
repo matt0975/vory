@@ -689,11 +689,17 @@ struct ComposerView: View {
                 Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
             }
+            .padding(.vertical, 4)
             Spacer(minLength: 0)
-            Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            // A 44 pt square to hit, the glyph its usual size: the audit's smallest target, as Cancel editing's.
+            Button { withAnimation(.snappy) { quote = "" } } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+            }
                 .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+                .accessibilityIdentifier("composer.cancelReply")
         }
-        .padding(.horizontal, 6).padding(.vertical, 4)
+        // The words keep their padding; the button's square sets the strip's height where it's taller.
+        .padding(.leading, 6)
         // The bar beside the words is flexible in height; without this the strip took the whole screen.
         .fixedSize(horizontal: false, vertical: true)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
