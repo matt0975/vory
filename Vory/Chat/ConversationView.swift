@@ -539,10 +539,17 @@ struct BottomDock: View {
                 if let banner = chat.banner {
                     HStack {
                         Text(banner).font(.footnote).lineLimit(3)
+                            .padding(.vertical, 12)
                         Spacer()
-                        Button { chat.banner = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                        // A 44 pt square to hit, the glyph its usual size: the audit's smallest target, as Cancel editing's.
+                        Button { chat.banner = nil } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(12)
+                    // The words keep their padding; the button's square sets the banner's height where it's taller, its
+                    // glyph where it was.
+                    .padding(.leading, 12)
                     .glassEffect(.regular, in: .rect(cornerRadius: 16))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
