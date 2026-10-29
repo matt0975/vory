@@ -1403,6 +1403,17 @@ enum ChatStyle {
     /// Reply bubbles take a wash of the bot's own colour instead of grey.
     static let botTint = "chat.botTint"
 
+    /// The hex a reply bubble is washed with, or nil for the plain grey bubble.
+    ///
+    /// `bot` is the chat's bot, drawn beside the bubble or not (`RowContext.bot`: the same field the
+    /// pictures use, and always there), and `scopeHex` the colour a demo's own look gives it
+    /// (`BotLookScope`). Never the drawn face: "Bot beside replies" is off by default, and reading the
+    /// wash off it made this setting do nothing for most people.
+    static func replyTintHex(on: Bool, bot: String?, scopeHex: String?) -> String? {
+        guard on, let bot else { return nil }
+        return scopeHex ?? BotColors.hex(for: bot)
+    }
+
     /// The thread's type size for a `textSize` choice, relative to the phone's own setting.
     static func stepped(_ base: DynamicTypeSize, _ choice: String) -> DynamicTypeSize {
         let all = DynamicTypeSize.allCases
@@ -1594,13 +1605,14 @@ struct TranscriptRow: View, Equatable {
     @AppStorage(ChatStyle.botTint) private var botTint = false
     /// The looks of the chat this row is in, where it has its own (`BotLookScope`: the tour's demo over a gateway in use).
     @Environment(\.botLookScope) private var lookScope
-    /// The reply bubble's fill: grey, or the bot's colour at a wash.
+    /// The reply bubble's fill: grey, or the bot's colour at a wash. The bot's identity here is the
+    /// chat's bot, not the face beside the bubble: with bots hidden a tinted reply is the only sign of
+    /// whose words they are, so the setting has to work there too.
     private var replyFill: Color {
-        if botTint, let profile {
-            let color = lookScope?.color(for: profile).flatMap { Color(hex: $0) } ?? BotColors.color(for: profile)
-            return color.opacity(scheme == .dark ? 0.22 : 0.16)
-        }
-        return Color(.systemGray5)
+        let owner = bot ?? profile
+        guard let hex = ChatStyle.replyTintHex(on: botTint, bot: owner, scopeHex: owner.flatMap { lookScope?.color(for: $0) }),
+              let color = Color(hex: hex) else { return Color(.systemGray5) }
+        return color.opacity(scheme == .dark ? 0.22 : 0.16)
     }
     /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
     /// a new value every evaluation, and SwiftUI re-ran every visible row for it on each frame
