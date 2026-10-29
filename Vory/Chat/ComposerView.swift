@@ -665,12 +665,16 @@ struct ComposerView: View {
             RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
             Label("Editing your message", systemImage: "pencil").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
-            Button { withAnimation(.snappy) { chat.cancelEdit(); text = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            // A 44 pt square to hit, the glyph its usual size: the audit's smallest target.
+            Button { withAnimation(.snappy) { chat.cancelEdit(); text = "" } } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+            }
                 .buttonStyle(.plain).disabled(chat.resending)
                 .accessibilityLabel("Cancel editing")
                 .accessibilityIdentifier("composer.cancelEdit")
         }
-        .padding(.horizontal, 6).padding(.vertical, 4)
+        // No padding above and below: the button's square sets the strip's height.
+        .padding(.leading, 6)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("composer.editing")
