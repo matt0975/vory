@@ -19,13 +19,35 @@ final class EditResendUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", fragment))
     }
 
-    private func hittable(_ query: XCUIElementQuery, timeout: TimeInterval) -> XCUIElement? {
+    /// With `tapCentreIfMissed`, a miss also taps the first match's frame centre and keeps the screen again: whether a finger
+    /// reaches it where the runner's hit test didn't. Only for Send: a bubble above the screen has its centre off it.
+    private func hittable(_ query: XCUIElementQuery, timeout: TimeInterval, tapCentreIfMissed: Bool = false) -> XCUIElement? {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if let e = query.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { return e }
             pause(0.2)
         } while Date() < deadline
+        keep("not hittable", query)
+        if tapCentreIfMissed, let first = query.allElementsBoundByIndex.first {
+            first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            pause(3)
+            keep("after a tap at its centre", query)
+        }
         return nil
+    }
+
+    /// Each match as the runner saw it, the app's tree and the screen, kept in the result.
+    private func keep(_ name: String, _ query: XCUIElementQuery) {
+        let seen = query.allElementsBoundByIndex.map { "'\($0.identifier)' '\($0.label)' frame \($0.frame) enabled \($0.isEnabled) hittable \($0.isHittable)" }
+        let tree = XCTAttachment(string: (seen.isEmpty ? "no match" : seen.joined(separator: "\n")) + "\n\n" + app.debugDescription)
+        tree.name = name; tree.lifetime = .keepAlways; add(tree)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name; shot.lifetime = .keepAlways; add(shot)
+    }
+
+    /// A line in the run's log: the runner's own print isn't kept there, an activity's name is.
+    private static func note(_ line: String) {
+        XCTContext.runActivity(named: line) { _ in }
     }
 
     /// The reply has ended: no Stop in the composer.
@@ -61,16 +83,17 @@ final class EditResendUITests: XCTestCase {
     private func audit(_ when: String) throws {
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
             let label = issue.element?.label ?? "", frame = issue.element?.frame ?? .zero
-            print("EDIT-AUDIT \(when) '\(issue.compactDescription)' label '\(label)' id '\(issue.element?.identifier ?? "")' frame \(frame)")
+            Self.note("EDIT-AUDIT \(when) '\(issue.compactDescription)' label '\(label)' id '\(issue.element?.identifier ?? "")' frame \(frame)")
             // The composer audit's two known findings, by their exact descriptions, each logged.
             if issue.auditType == .hitRegion, issue.compactDescription == "Hit area is too small", ["Show reasoning", "Hide reasoning"].contains(label) {
-                print("EDIT-AUDIT \(when) ignored: #482's hit region on '\(label)'"); return true
+                Self.note("EDIT-AUDIT \(when) ignored: #482's hit region on '\(label)'"); return true
             }
             if issue.compactDescription == "Potentially inaccessible text", frame == .zero, label.isEmpty {
-                print("EDIT-AUDIT \(when) ignored: the known 0x0 'Potentially inaccessible text'"); return true
+                Self.note("EDIT-AUDIT \(when) ignored: the known 0x0 'Potentially inaccessible text'"); return true
             }
             return false
         }
+        Self.note("EDIT-AUDIT \(when) done")
     }
 
     /// Long-presses the bubble with exactly these words and returns the menu's buttons.
@@ -111,7 +134,7 @@ final class EditResendUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 30))
         composer.tap()
         composer.typeText("short link for the export")
-        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
+        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
         waitForIdle()
 
         // The reply strip's Cancel reply passes the audit too (the same 44 pt square as Cancel editing), then goes.
@@ -137,7 +160,7 @@ final class EditResendUITests: XCTestCase {
         // Sent in its place: the old turn leaves, the new words stand once, and the gateway took one turn back as a retry.
         composer.tap()
         composer.typeText(" please")
-        let send = try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10))
+        let send = try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true))
         XCTAssertEqual(send.label, "Send edited message")
         send.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "short link for the export please")).firstMatch.waitForExistence(timeout: 20))
@@ -157,14 +180,14 @@ final class EditResendUITests: XCTestCase {
         fault("undo-busy")
         composer.tap()
         composer.typeText(" now")
-        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
+        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
         XCTAssertTrue(text("A reply is running").firstMatch.waitForExistence(timeout: 10), "the busy gateway wasn't said")
         XCTAssertTrue(editing.exists, "the edit ended on a busy gateway")
         XCTAssertEqual(composer.value as? String, "short link for the export please now")
 
         // A gateway without the method: the words kept, the edit ended, Copy to message only from then on.
         fault("undo-unknown")
-        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
+        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
         XCTAssertTrue(text("can't take back a sent message").firstMatch.waitForExistence(timeout: 10), "the missing method wasn't said")
         XCTAssertFalse(editing.exists, "the edit didn't end on a gateway without undo")
         XCTAssertEqual(composer.value as? String, "short link for the export please now")
