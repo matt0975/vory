@@ -5,8 +5,8 @@ import XCTest
 /// mock's faults: a busy gateway (undo-busy) keeps the words and the edit, and a gateway without the method (undo-unknown)
 /// keeps the words, ends the edit and offers Copy to message from then on. The bubble menu and the edit strip pass the
 /// audit, with the composer audit's two known findings logged (#482's reasoning row, the 0x0 text). Run with predictive text
-/// off on the simulator, as the composer audit is. The messages start "table", the mock's quick turn with no approval
-/// to wait on. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are
+/// off on the simulator, as the composer audit is. The messages start "short link", the mock's short reply with no approval
+/// to wait on, which keeps the person's message in view with the keyboard up (a tall reply pushed it off the top). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are
 /// set (the demo copy, pointed at the mock by launch argument).
 final class EditResendUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -74,7 +74,13 @@ final class EditResendUITests: XCTestCase {
 
     /// Long-presses the bubble with exactly these words and returns the menu's buttons.
     private func openMenu(on words: String) throws {
-        let bubble = try XCTUnwrap(hittable(app.staticTexts.matching(NSPredicate(format: "label == %@", words)), timeout: 15), "no bubble '\(words)'")
+        let query = app.staticTexts.matching(NSPredicate(format: "label == %@", words))
+        // There but out of view (above the screen): the thread is drawn down to it once.
+        if hittable(query, timeout: 5) == nil, query.firstMatch.exists {
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+                .press(forDuration: 0.05, thenDragTo: app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7)))
+        }
+        let bubble = try XCTUnwrap(hittable(query, timeout: 10), "no bubble '\(words)' in view")
         bubble.press(forDuration: 1.2)
         XCTAssertTrue(app.buttons["Copy to message"].waitForExistence(timeout: 5), "the bubble's menu didn't open")
     }
@@ -103,39 +109,39 @@ final class EditResendUITests: XCTestCase {
         let composer = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30))
         composer.tap()
-        composer.typeText("table of the cache folders")
+        composer.typeText("short link for the export")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
         waitForIdle()
 
         // The last message offers Edit & resend, and Copy to message too.
-        try openMenu(on: "table of the cache folders")
+        try openMenu(on: "short link for the export")
         XCTAssertTrue(app.buttons["Edit & resend"].exists, "the last message doesn't offer Edit & resend")
         try audit("bubble menu")
         app.buttons["Edit & resend"].tap()
         let editing = app.descendants(matching: .any)["composer.editing"]
         XCTAssertTrue(editing.waitForExistence(timeout: 5), "no 'Editing your message'")
-        XCTAssertEqual(composer.value as? String, "table of the cache folders")
+        XCTAssertEqual(composer.value as? String, "short link for the export")
         XCTAssertTrue(app.buttons["Cancel editing"].exists)
         try audit("edit strip")
 
         // Sent in its place: the old turn leaves, the new words stand once, and the gateway took one turn back as a retry.
         composer.tap()
-        composer.typeText(" by size")
+        composer.typeText(" please")
         let send = try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10))
         XCTAssertEqual(send.label, "Send edited message")
         send.tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "table of the cache folders by size")).firstMatch.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", "short link for the export please")).firstMatch.waitForExistence(timeout: 20))
         waitForIdle()
         XCTAssertFalse(editing.exists, "the edit didn't end")
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "table of the cache folders")).count, 0, "the old message is still in the thread")
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "table of the cache folders by size")).count, 1)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "short link for the export")).count, 0, "the old message is still in the thread")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "short link for the export please")).count, 1)
         let taken = try undos().dropFirst(before)
         XCTAssertEqual(taken.count, 1, "not exactly one undo")
         XCTAssertEqual(taken.first?["intent"] as? String, "retry")
         XCTAssertGreaterThan(taken.first?["removed"] as? Int ?? 0, 0)
 
         // A busy gateway: nothing sent, the words and the edit kept, the reason said.
-        try openMenu(on: "table of the cache folders by size")
+        try openMenu(on: "short link for the export please")
         app.buttons["Edit & resend"].tap()
         XCTAssertTrue(editing.waitForExistence(timeout: 5))
         fault("undo-busy")
@@ -144,16 +150,16 @@ final class EditResendUITests: XCTestCase {
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
         XCTAssertTrue(text("A reply is running").firstMatch.waitForExistence(timeout: 10), "the busy gateway wasn't said")
         XCTAssertTrue(editing.exists, "the edit ended on a busy gateway")
-        XCTAssertEqual(composer.value as? String, "table of the cache folders by size now")
+        XCTAssertEqual(composer.value as? String, "short link for the export please now")
 
         // A gateway without the method: the words kept, the edit ended, Copy to message only from then on.
         fault("undo-unknown")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
         XCTAssertTrue(text("can't take back a sent message").firstMatch.waitForExistence(timeout: 10), "the missing method wasn't said")
         XCTAssertFalse(editing.exists, "the edit didn't end on a gateway without undo")
-        XCTAssertEqual(composer.value as? String, "table of the cache folders by size now")
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "table of the cache folders by size")).count, 1, "something was sent")
-        try openMenu(on: "table of the cache folders by size")
+        XCTAssertEqual(composer.value as? String, "short link for the export please now")
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label == %@", "short link for the export please")).count, 1, "something was sent")
+        try openMenu(on: "short link for the export please")
         XCTAssertFalse(app.buttons["Edit & resend"].exists, "Edit & resend still offered on a gateway without undo")
         XCTAssertEqual(try undos().dropFirst(before).count, 1, "an undo the faults should have refused was counted")
     }
