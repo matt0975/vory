@@ -1220,6 +1220,20 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
+    /// A queued message sent into the running turn (#546), as the composer's Steer now sends one. It leaves the queue
+    /// first, so the turn's end (`drainQueue`) can't send it as well. A steer that fails puts it back where it was: still
+    /// queued, said, while the turn runs; sent as the next message if the turn ended while the steer was out.
+    public func steerQueued(_ id: UUID) async {
+        guard isRunning, let i = queue.firstIndex(where: { $0.id == id }) else { return }
+        let message = queue.remove(at: i)
+        do {
+            _ = try await steerSending(message.text)
+        } catch {
+            queue.insert(message, at: min(i, queue.count))
+            if isRunning { banner = error.localizedDescription } else { drainQueue() }
+        }
+    }
+
     /// session.steer, and the gateway's answer: "queued" when the running turn takes the words (they go in after its
     /// current tool calls), "rejected" when no turn takes them, for the client to send as its next prompt. A steer row
     /// only for words a turn took.

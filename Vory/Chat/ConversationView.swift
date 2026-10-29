@@ -600,11 +600,26 @@ struct QueueStrip: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Queued (\(chat.queue.count))").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(chat.queue) { q in
-                HStack {
+                HStack(spacing: 0) {
                     Text(q.text).font(.subheadline).lineLimit(2)
                     Spacer()
-                    Button { editing = q; draft = q.text } label: { Image(systemName: "pencil") }.buttonStyle(.plain)
-                    Button(role: .destructive) { chat.removeQueued(q.id) } label: { Image(systemName: "trash") }.buttonStyle(.plain)
+                    // Into the running turn now (#546), as the composer's Steer now: only while a turn runs.
+                    if chat.isRunning {
+                        Button { Task { await chat.steerQueued(q.id) } } label: {
+                            Text("Steer").font(.subheadline.weight(.semibold)).frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                        .accessibilityHint("Sends it into the reply now")
+                        .accessibilityIdentifier("queue.steer")
+                    }
+                    Button { editing = q; draft = q.text } label: {
+                        Image(systemName: "pencil").frame(width: 44, height: 44).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Edit").accessibilityIdentifier("queue.edit")
+                    Button(role: .destructive) { chat.removeQueued(q.id) } label: {
+                        Image(systemName: "trash").frame(width: 44, height: 44).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Delete").accessibilityIdentifier("queue.delete")
                 }
             }
         }
