@@ -3,11 +3,12 @@ import XCTest
 /// Edit & resend on the mock gateway (#556): the last message is edited under "Editing your message" and sent in its own
 /// place, the old turn gone from the thread and taken back once on the gateway (`/api/_mock/undos`, a retry); then the
 /// mock's faults: a busy gateway (undo-busy) keeps the words and the edit, and a gateway without the method (undo-unknown)
-/// keeps the words, ends the edit and offers Copy to message from then on. The bubble menu and the edit strip pass the
-/// audit, with the composer audit's two known findings logged (#482's reasoning row, the 0x0 text). Run with predictive text
-/// off on the simulator, as the composer audit is. The messages start "short link", the mock's short reply with no approval
-/// to wait on, which keeps the person's message in view with the keyboard up (a tall reply pushed it off the top). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are
-/// set (the demo copy, pointed at the mock by launch argument).
+/// keeps the words, ends the edit and offers Copy to message from then on. The bubble menu, the reply strip and the edit
+/// strip pass the audit, with the composer audit's two known findings logged (#482's reasoning row, the 0x0 text). Run with
+/// predictive text off on the simulator, as the composer audit is. The messages start "short link", the mock's short reply
+/// with no approval to wait on, which keeps the person's message in view with the keyboard up (a tall reply pushed it off
+/// the top). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are set (the demo copy, pointed at the
+/// mock by launch argument).
 final class EditResendUITests: XCTestCase {
     private var app: XCUIApplication!
     private var base = ""
@@ -112,6 +113,15 @@ final class EditResendUITests: XCTestCase {
         composer.typeText("short link for the export")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10)).tap()
         waitForIdle()
+
+        // The reply strip's Cancel reply passes the audit too (the same 44 pt square as Cancel editing), then goes.
+        try openMenu(on: "short link for the export")
+        app.buttons["Reply"].tap()
+        let cancelReply = app.buttons["composer.cancelReply"]
+        XCTAssertTrue(cancelReply.waitForExistence(timeout: 5), "no reply strip")
+        try audit("quote strip")
+        cancelReply.tap()
+        XCTAssertFalse(cancelReply.waitForExistence(timeout: 2), "the reply strip didn't go")
 
         // The last message offers Edit & resend, and Copy to message too.
         try openMenu(on: "short link for the export")
