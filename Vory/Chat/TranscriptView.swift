@@ -2528,9 +2528,8 @@ struct MarkdownView: View, Equatable {
                     Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
                 }
         case .code(let lang, let code, let closed):
-            // Wrapped, not side-scrolling: code is read down the page and copied whole, so long
-            // lines wrap rather than hide past the edge (tables are what scroll sideways, and the
-            // time reveal stands aside for them). A copy button sits in the corner.
+            // Horizontally scrollable code block so wide lines, ASCII art, and diagrams preserve alignment
+            // without wrapping. A copy button sits in the corner.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
@@ -2547,8 +2546,10 @@ struct MarkdownView: View, Equatable {
                 // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
                 // megabytes; the rest is a Show all away (#361).
                 let shown = TextPieces.capped(code)
-                LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true).padding(10)
+                ScrollView(.horizontal) {
+                    LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
+                        .fixedSize(horizontal: true, vertical: true).padding(10)
+                }
                 if shown.more > 0 {
                     MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(Self.codeTitle(lang), code) } })
                         .padding(.horizontal, 10).padding(.bottom, 8)
@@ -2985,8 +2986,10 @@ struct CodeBlock: View {
         let lines = TextPieces.lines(text, cap: lineCap)
         let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : String(lines.head))
         VStack(alignment: .leading, spacing: 4) {
-            LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true).padding(10).padding(.trailing, 24)
+            ScrollView(.horizontal) {
+                LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true).padding(10).padding(.trailing, 24)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
             .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
