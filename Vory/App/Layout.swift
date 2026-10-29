@@ -97,8 +97,10 @@ struct VerticalBarEdge<Content: View>: View {
 /// the bar's top padding and a gap (`TopBarRoomProbe`, as the stack's own additional safe area, so the system's search
 /// drawer moves with the page); anywhere else, 0.
 enum TopBarRoom {
-    /// The bar's padding over its row (MorphTopBar's `.padding(.top, 4)`).
-    static let barPadding: CGFloat = 4
+    /// The bar's padding over its row (MorphTopBar's top padding): 4, and 11 on the closed Duo, where the row's face then
+    /// has 11 over it and 11 under it to the band's opaque bottom, even, as the open Duo upright reads (#558: it sat 4 over
+    /// and 11 under). The whole closed row moves with it, the list's and a chat's alike, and the pages' room under it.
+    static func barPadding(closed: Bool) -> CGFloat { closed ? 11 : 4 }
     /// The gap between the row's bottom and the page.
     static let gap: CGFloat = 8
     /// The row's room (stage 1's: the row's bottom, in the bar's space, plus the bar's padding and a gap) where nothing
@@ -111,7 +113,7 @@ enum TopBarRoom {
     /// keeps no band of its own under the row.
     static func inset(barsVertical: Bool, statusInCorner: Bool, barOn: Bool, rowBottom: CGFloat) -> CGFloat {
         guard barOn, rowBottom > 0 else { return 0 }
-        if barsVertical { return (rowBottom + barPadding + gap).rounded() }
+        if barsVertical { return (rowBottom + barPadding(closed: true) + gap).rounded() }
         return statusInCorner ? cornerRoom : 0
     }
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
@@ -152,15 +154,19 @@ enum TopBarRoom {
     /// its widest in Matt's two 38 readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
     /// Focus) and an 8 pt gap. The row ends at 443 on the 669 pt window.
     static let statusReserve: CGFloat = 226
-    /// The Duo's status column (closed, and on its side): where a chat's controls stand under the time and Wi-Fi, in
-    /// window points, as UIKit's own navigation items do there in Messages (#542, Matt's Duo, 2026-10-28): the column's
-    /// centre `VoryTabBar.stripCentreFromEdge` from the window's edge, 44 pt items with their tops at these. Closed: Back
-    /// then More. On its side: More (no Back beside the list). ASSUMPTION until the DEBUG probe reads UIKit's own items.
-    static func statusColumnTops(closed: Bool) -> [CGFloat] { closed ? [176, 236] : [126, 186] }
+    /// How far a row of the bar ends short of its trailing end, for its last control to end where UIKit ends its own
+    /// trailing navigation item (`SystemBarItems`, window space): beside the status up in the band, and moved with it when
+    /// another app's Live Activity widens it (#554); beside the strip closed (#555). Negative where that is past the bar's
+    /// side inset (closed: 4 pt short of the strip, where the inset left 16). `fallback` until the item has been read.
+    static func rowTrailingClear(windowWidth: CGFloat, safeTrailing: CGFloat, sideInset: CGFloat, systemItemMaxX: CGFloat?,
+                                 fallback: CGFloat) -> CGFloat {
+        guard let x = systemItemMaxX else { return fallback }
+        return windowWidth - safeTrailing - sideInset - x
+    }
 
     /// How far the bar moves up from its place under the safe area's top to stand in the band; 0 where it doesn't.
     static func lift(barUp: Bool, safeTop: CGFloat) -> CGFloat {
-        barUp ? max(0, safeTop + barPadding - bandRowTop) : 0
+        barUp ? max(0, safeTop + barPadding(closed: false) - bandRowTop) : 0
     }
 
     /// The room the probe last applied, for the readouts (the DEBUG geometry probe, and Screen layout on a test build),

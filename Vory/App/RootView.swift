@@ -76,6 +76,10 @@ struct RootView: View {
         }
         #endif
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        #if os(iOS)
+        // Where UIKit stands its own navigation items, for the top bar's row on the Duo (#554, #555).
+        .background { SystemBarItemsHost().ignoresSafeArea() }
+        #endif
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
         // Whether the status stands in a top corner, for the top bar's room on every tab (#516), read here once.

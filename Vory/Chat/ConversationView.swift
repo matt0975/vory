@@ -45,7 +45,9 @@ struct ConversationView: View {
     private var chatHeaderBottom: CGFloat {
         if MorphTopBar.active(model) {
             let row = MorphState.shared.chatRowBottom
-            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding - barLift + row : 0
+            // The closed Duo's row stands lower (#558: `TopBarRoom.barPadding`), as MorphTopBar's `stripClosed` reads it.
+            let closed = model.tabBarVertical && VoryTabBar.statusStrip(windowGeometry.safeArea) != nil && barLift == 0
+            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding(closed: closed) - barLift + row : 0
         }
         return headerBottom
     }
@@ -710,17 +712,19 @@ struct ChatHeader: View {
 
     #if os(iOS)
     /// The Duo on its side, like Messages there (Matt, 2026-10-28, #542): the face (no glass behind it) and the name at the
-    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; More in the status column
-    /// under the time and Wi-Fi; Messages' band behind the row (`ChatBand`). Back only while the list isn't beside the chat
-    /// (its column hidden), at the top left. VoiceOver: Back, Chat info, More, the group after the thread as everywhere
-    /// (`ConversationView.header`).
+    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; More in the row, where UIKit
+    /// stands its own trailing item beside the strip (`SystemBarItems`, #555: never in the strip under the time and Wi-Fi,
+    /// which another app's Live Activity pushes down); Messages' band behind the row (`ChatBand`). Back only while the list
+    /// isn't beside the chat (its column hidden), at the top left. VoiceOver: Back, Chat info, More, the group after the
+    /// thread as everywhere (`ConversationView.header`).
     private var messagesSide: some View {
         // Once the pane's place is known, so Back never shows for a frame beside the list.
         let back = showBack && sideFrame.width > 0 && !listBeside
         let g = windowGeometry
-        // The status column's middle and More's top, in window points (`TopBarRoom.statusColumnTops`).
-        let columnX = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
-        let moreTop = TopBarRoom.statusColumnTops(closed: false)[0]
+        // More's leading edge, window space: UIKit's trailing item's; before that has ever been read for this shape, 4 pt
+        // short of the strip, as UIKit leaves it (the probe, 2026-10-29: 819 to 863 on the 951 pt window, the strip from 867).
+        let item = SystemBarItems.shared.trailing(for: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing))
+        let moreX = item?.minX ?? g.bounds.width - g.safeArea.trailing - 4 - 44
         return HStack(spacing: 0) {
             if back {
                 Button(action: onBack) {
@@ -744,7 +748,7 @@ struct ChatHeader: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { sideFrame = $0 }
         .background(alignment: .topLeading) {
             // From the window's top, out to its trailing edge and a quarter of the face under the row (the header's own
-            // bottom, less the band's soft foot); not down the column, where More stands on its own glass. It waits for
+            // bottom, less the band's soft foot); not down the column, where nothing of the chat's stands. It waits for
             // the header's place in the window.
             if sideFrame.width > 0 {
                 ChatBand(width: g.bounds.width - sideFrame.minX, bottom: sideFrame.maxY - ChatBand.foot)
@@ -757,7 +761,7 @@ struct ChatHeader: View {
         .overlay(alignment: .topLeading) {
             if showsActions, sideFrame.width > 0 {
                 moreMenu.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                    .offset(x: columnX - 22 - sideFrame.minX, y: moreTop - sideFrame.minY)
+                    .offset(x: moreX - sideFrame.minX, y: TopBarRoom.bandRowTop)
             }
         }
         // Once the pane's place is known: before it, Back isn't shown yet, and the focus went to Chat info with the list

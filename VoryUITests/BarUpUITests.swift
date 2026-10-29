@@ -3,10 +3,11 @@ import XCTest
 /// #516: on the open iPhone Duo upright (flat, or half open like a laptop) the floating top bar stands up in the status
 /// band, clear of the status (`TopBarRoom.barUp`). Checked by the capsules as drawn (`-vory-morph-frames`):
 /// - on every root tab and on a pushed Settings page, every capsule inside the band's row (y 26 to 70, 1 pt either way)
-///   and ending at x 443 or before; a search field starts under the row; each tab's first content top is printed against
-///   the safe area's top, for the record;
+///   and ending where UIKit ends its own trailing navigation item (the readout's "system", #554), or by 443 before that
+///   has been read; a search field starts under the row; each tab's first content top is printed against the safe
+///   area's top, for the record;
 /// - at the bar's largest type (XXXL) the title capsule grows to 50 pt, downward from the same top: the row's top still
-///   at 26, every capsule's bottom inside the band (78: the band's 82 less 4), none overlapping, all ending by 443, each
+///   at 26, every capsule's bottom inside the band (78: the band's 82 less 4), none overlapping, all ending by the same, each
 ///   title inside its capsule (the 26 to 70 row is the default size's);
 /// - the controls in the band take taps: with the page scrolled down from its top, Sort and Filters open their menus,
 ///   New bot opens its page, Back pops, and the page keeps its scroll (a tap the status bar took would scroll it to the
@@ -44,17 +45,30 @@ final class BarUpUITests: XCTestCase {
         pause(2)
     }
 
-    /// The bar's capsules as drawn ("lead x y w h;mid …;trail …").
+    /// The bar's capsules as drawn ("lead x y w h;mid …;trail …"), without UIKit's own item (`system`).
     private func caps() -> [String: CGRect] {
+        var c = readout()
+        c.removeValue(forKey: "system")
+        return c
+    }
+    private func readout() -> [String: CGRect] {
         let r = element("debug.morphframes")
         return r.exists ? Duo516UITests.capsules(in: (r.value as? String) ?? "") : [:]
     }
+    /// Where UIKit ends its own trailing navigation item, window space (`SystemBarItems`, the readout's "system"): where the
+    /// row's last control ends (#554, #555); nil before it has been read.
+    private func systemItem() -> CGRect? { readout()["system"] }
 
-    /// Every capsule in the band's row and ending by the trailing limit; the row's bottom. At the bar's largest type
-    /// (`largest`) the row's top stays at 26 and every capsule's bottom is inside the band (78) instead.
+    /// Every capsule in the band's row and ending by UIKit's own trailing item, the trailing capsule at it; the row's
+    /// bottom. At the bar's largest type (`largest`) the row's top stays at 26 and every capsule's bottom is inside the band
+    /// (78) instead.
     @discardableResult private func checkRow(_ what: String, largest: Bool = false) -> CGFloat {
-        let c = caps()
-        print("BARUP \(what) capsules \(c.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
+        let c = caps(), system = systemItem()
+        let limit = system?.maxX ?? Self.trailingLimit
+        print("BARUP \(what) capsules \(c.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", ")) system \(system.map { "\($0)" } ?? "none")")
+        if let system, let trail = c["trail"] {
+            XCTAssertEqual(trail.maxX, system.maxX, accuracy: Self.slack, "\(what): the trailing capsule \(trail) doesn't end at UIKit's item \(system)")
+        }
         XCTAssertFalse(c.isEmpty, "\(what): no capsules")
         if largest, let top = c.values.map(\.minY).min() {
             XCTAssertEqual(top, Self.rowTop, accuracy: Self.slack, "\(what): the row's top \(top), not \(Self.rowTop)")
@@ -63,7 +77,7 @@ final class BarUpUITests: XCTestCase {
             XCTAssertGreaterThanOrEqual(f.minY, Self.rowTop - Self.slack, "\(what): \(slot) \(f) above the band's row")
             XCTAssertLessThanOrEqual(f.maxY, largest ? Self.bandBottom : Self.rowBottom + Self.slack,
                                      "\(what): \(slot) \(f) below the \(largest ? "band" : "band's row")")
-            XCTAssertLessThanOrEqual(f.maxX, Self.trailingLimit + Self.slack, "\(what): \(slot) \(f) reaches the status")
+            XCTAssertLessThanOrEqual(f.maxX, limit + Self.slack, "\(what): \(slot) \(f) reaches the status")
         }
         return c.values.map(\.maxY).max() ?? 0
     }
@@ -315,12 +329,12 @@ final class BarUpUITests: XCTestCase {
     // MARK: A chat's bar on the Duo, like Messages (#542)
 
     /// The Duo's pose for the chat tests (HERMES_E2E_POSE): upright and laptop (the bar up in the band), closed (the status
-    /// column at the window's side), side and book (the split, the status column at its side).
+    /// strip at the window's side), side and book (the split, the status strip at its side).
     private enum Pose: String { case upright, laptop, closed, side, book }
-    /// The status column (`TopBarRoom.statusColumnTops`, `VoryTabBar.stripCentreFromEdge`): 44 pt items centred 48 pt from
-    /// the window's edge, their tops at these.
-    static let columnTops: [String: [CGFloat]] = ["closed": [176, 236], "side": [126], "book": [126]]
-    static let columnCentreFromEdge: CGFloat = 48
+    /// The status strip's width, closed and on its side (the safe area's 84 at the window's side): nothing of a chat's in it.
+    static let stripWidth: CGFloat = 84
+    /// The closed row's top (#558: `TopBarRoom.barPadding`, 11 over the face as the band reaches 11 under it).
+    static let closedRowTop: CGFloat = 11
     /// On its side, the name and the face centred on the status's middle.
     static let sideRowMiddle: CGFloat = 48
     /// Like Messages (Matt, 2026-10-28): the gap between the face and the name, and how far the band's opaque part reaches
@@ -377,11 +391,13 @@ final class BarUpUITests: XCTestCase {
     /// - VoiceOver's order Back, Chat info, More, wherever each is;
     /// - the thread, scrolled to its start, beginning under the band (its soft foot included).
     /// Up in the band (upright, laptop): Back, the face's slot and More in the band's row (26 to 70, 1 pt either way; at
-    /// XXXL bottoms by 78), ending by 443; Chat info between Back and More, 4 pt clear of each.
-    /// Closed: Chat info at the top left; Back and More in the status column (their middles 48 pt from the window's edge,
-    /// their tops at 176 and 236). On its side and as a book: Chat info at the pane's top left, centred on y 48; More in the
-    /// column (top 126); no Back while the list is beside the chat, and with the list hidden Back at the top left, which
-    /// pops the chat. Elsewhere it only prints. Always printed: the frames (CHATFRAMES) and the stops (CHATAX); with
+    /// XXXL bottoms by 78), More ending where UIKit ends its own trailing item (the readout's "system", #554); Chat info
+    /// between Back and More, 4 pt clear of each.
+    /// Closed: the same row (#555: nothing of the chat's in the strip), 11 pt from the window's top (#558: Back, the face's
+    /// slot, More and the face from 11 to 55), More ending at UIKit's item, beside the strip; Chat info between Back and
+    /// More. On its side and as a book: Chat info at the pane's top left, centred on y 48; More in the row, centred on y 48
+    /// and ending at UIKit's item, clear of the strip; no Back while the list is beside the chat, and with the list hidden
+    /// Back at the top left, which pops the chat. Elsewhere it only prints. Always printed: the frames (CHATFRAMES) and the stops (CHATAX); with
     /// HERMES_E2E_AUDIT=1 the chat screen's audit (AUDIT lines); a hold for a still (BARUP HOLD chat).
     func testTheChatsBarIsLikeMessages() throws {
         let e = ProcessInfo.processInfo.environment
@@ -394,12 +410,12 @@ final class BarUpUITests: XCTestCase {
             pause(2)
         }
         let window = app.windows.firstMatch.frame
-        let c = caps()
+        let c = caps(), system = systemItem()
         let back = element("chat.back"), more = element("chat.more"), info = element("chat.titlePill")
         let frame = { (el: XCUIElement) in el.exists ? el.frame : .zero }
         print("CHATFRAMES \(pose?.rawValue ?? "elsewhere")\(listHidden ? " list hidden" : "") window \(window) capsules "
               + c.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))
-        print("CHATFRAMES elements back \(frame(back)) info \(frame(info)) more \(frame(more))")
+        print("CHATFRAMES elements back \(frame(back)) info \(frame(info)) more \(frame(more)) system \(system.map { "\($0)" } ?? "none")")
         if let pose {
             XCTAssertEqual(info.frame.height, 44, accuracy: 1, "Chat info \(info.frame) isn't one 44 pt row")
             XCTAssertGreaterThanOrEqual(info.frame.width, 44, "Chat info \(info.frame) under 44 pt")
@@ -417,7 +433,13 @@ final class BarUpUITests: XCTestCase {
             for (name, el) in [("Back", back), ("More", more)] where el.exists {
                 XCTAssertGreaterThanOrEqual(side(el.frame), 44, "\(name) \(el.frame) under 44 pt")
             }
-            let fromEdge = { (f: CGRect) in min(abs(window.maxX - f.midX), abs(f.midX - window.minX)) }
+            let atSystem = { (name: String, f: CGRect) in
+                if let system { XCTAssertEqual(f.maxX, system.maxX, accuracy: Self.slack, "\(name) \(f) doesn't end at UIKit's item \(system)") }
+                else { XCTFail("VOID: UIKit's item not in the readout") }
+            }
+            let clearOfStrip = { (name: String, f: CGRect) in
+                XCTAssertLessThanOrEqual(f.maxX, window.maxX - Self.stripWidth + Self.slack, "\(name) \(f) in the strip")
+            }
             switch pose {
             case .upright, .laptop:
                 guard let lead = c["lead"], let mid = c["mid"], let trail = c["trail"], let face = c["face"] else {
@@ -426,20 +448,32 @@ final class BarUpUITests: XCTestCase {
                 for (name, f) in [("Back", lead), ("the face's slot", mid), ("More", trail), ("the face", face)] {
                     XCTAssertGreaterThanOrEqual(f.minY, Self.rowTop - Self.slack, "\(name) \(f) above the band's row")
                     XCTAssertLessThanOrEqual(f.maxY, largest ? Self.bandBottom : Self.rowBottom + Self.slack, "\(name) \(f) below the row")
-                    XCTAssertLessThanOrEqual(f.maxX, Self.trailingLimit + Self.slack, "\(name) \(f) reaches the status")
+                    XCTAssertLessThanOrEqual(f.maxX, (system?.maxX ?? Self.trailingLimit) + Self.slack, "\(name) \(f) reaches the status")
                 }
+                atSystem("More", trail)
                 XCTAssertTrue(back.exists, "no Back")
                 XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
                 XCTAssertGreaterThanOrEqual(more.frame.minX - info.frame.maxX, 4, "More \(more.frame) within 4 pt of Chat info \(info.frame)")
-            case .closed, .side, .book:
-                let tops = Self.columnTops[pose.rawValue] ?? []
-                let column = pose == .closed ? [("Back", back), ("More", more)] : [("More", more)]
-                for ((name, el), top) in zip(column, tops) {
-                    XCTAssertTrue(el.exists, "no \(name) in the status column")
-                    XCTAssertEqual(fromEdge(el.frame), Self.columnCentreFromEdge, accuracy: 1, "\(name) \(el.frame) not in the status column")
-                    XCTAssertEqual(el.frame.minY, top, accuracy: 1, "\(name) \(el.frame) not under the status at \(top)")
+            case .closed:
+                guard let lead = c["lead"], let mid = c["mid"], let trail = c["trail"], let face = c["face"] else {
+                    XCTFail("capsules or the face missing: \(c.keys.sorted())"); break
                 }
-                // Chat info stays clear of the column.
+                // #558: 11 over the face, as the band reaches 11 under it (checked above).
+                XCTAssertEqual(face.minY, Self.closedRowTop, accuracy: Self.slack, "the face \(face) isn't \(Self.closedRowTop) pt from the top")
+                for (name, f) in [("Back", lead), ("the face's slot", mid), ("More", trail), ("the face", face)] {
+                    XCTAssertGreaterThanOrEqual(f.minY, Self.closedRowTop - Self.slack, "\(name) \(f) above the row")
+                    XCTAssertLessThanOrEqual(f.maxY, Self.closedRowTop + 44 + Self.slack, "\(name) \(f) below the row")
+                    clearOfStrip(name, f)
+                }
+                atSystem("More", trail)
+                XCTAssertTrue(back.exists, "no Back")
+                XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
+                XCTAssertGreaterThanOrEqual(more.frame.minX - info.frame.maxX, 4, "More \(more.frame) within 4 pt of Chat info \(info.frame)")
+            case .side, .book:
+                // #555: More in the row, beside the strip, never under the status in it.
+                XCTAssertEqual(more.frame.midY, Self.sideRowMiddle, accuracy: 1, "More \(more.frame) not on the row")
+                atSystem("More", more.frame)
+                clearOfStrip("More", more.frame)
                 XCTAssertFalse(info.frame.intersects(more.frame), "Chat info \(info.frame) runs into More \(more.frame)")
                 // #549: nothing of the band hangs below More in the column. Its column part, where there is one, ends by
                 // More's own bottom, its soft foot and all (the readout's bandColumn).
@@ -448,7 +482,7 @@ final class BarUpUITests: XCTestCase {
                 if let bandColumn {
                     XCTAssertLessThanOrEqual(bandColumn.maxY, more.frame.maxY + 0.5, "the column's band \(bandColumn) hangs below More \(more.frame)")
                 }
-                if pose != .closed {
+                do {
                     XCTAssertEqual(info.frame.midY, Self.sideRowMiddle, accuracy: 1, "Chat info \(info.frame) not on the status's middle")
                     XCTAssertEqual(back.exists, listHidden, listHidden ? "no Back with the list hidden" : "Back beside the list")
                     if listHidden, back.exists {
@@ -535,12 +569,10 @@ final class BarUpUITests: XCTestCase {
 
     /// NO TRAVEL between the list and a chat, in the app's own frame log (`-vory-morph-log`: every drawn change of each
     /// capsule and of the face between this test's wall marks, a zero frame where one goes): a chat opened, then Back.
-    /// - Up in the band (HERMES_E2E_POSE upright or laptop), strict: Back's circle, the face's slot, More and the face
-    ///   keep their vertical middle within 1 pt in every frame.
-    /// - Closed: a slot in both states keeps its vertical middle within 1 pt; a slot in one state (it logs a zero frame
-    ///   as it goes or before it comes) may appear or go, but never moves: its middle within 1 pt both ways.
-    /// Fewer than 10 frames of the slot that changes on every push and pop (the title capsule's up in the band; Back's
-    /// in the status column, closed, where the title capsule only goes) didn't sample the motion: VOID, not a pass.
+    /// - Up in the band (HERMES_E2E_POSE upright or laptop) and closed (#555: the same row there): Back's circle, the
+    ///   face's slot, More and the face keep their vertical middle within 1 pt in every frame.
+    /// Fewer than 10 frames of the slot that changes on every push and pop (the title capsule's) didn't sample the motion:
+    /// VOID, not a pass.
     /// Printed per slot: frames, the middle's least and most (NOTRAVEL); for a slot that moves, its every frame logged
     /// (NOTRAVEL RAW, seconds from the tap). On its side and as a book the list stays beside the chat and nothing morphs
     /// between them: skipped.
@@ -548,7 +580,6 @@ final class BarUpUITests: XCTestCase {
         let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
         guard let pose else { throw XCTSkip("no Duo pose (HERMES_E2E_POSE)") }
         if pose == .side || pose == .book { throw XCTSkip("the split: the list stays beside the chat") }
-        let strict = pose == .upright || pose == .laptop
         let t0 = try openChat(["-vory-morph-log"])
         let back = element("chat.back")
         XCTAssertTrue(back.exists, "no Back")
@@ -564,18 +595,16 @@ final class BarUpUITests: XCTestCase {
             frames[String(f[1]), default: []].append(CGRect(x: x, y: y, width: w, height: h))
             times[String(f[1]), default: []].append(t - t0)
         }
-        let sampled = strict ? "mid" : "columnBack"
-        let slots = strict ? ["lead", "mid", "trail", "face"] : frames.keys.sorted()
+        let sampled = "mid"
+        let slots = ["lead", "mid", "trail", "face"]
         for slot in slots {
             let all = frames[slot] ?? [], drawn = all.filter { $0.width > 0 }
             let ys = drawn.map(\.midY), xs = drawn.map(\.midX)
-            let oneState = all.count > drawn.count
             print("NOTRAVEL \(slot): \(all.count) frames (\(all.count - drawn.count) gone), middle y \(ys.min().map { String(format: "%.1f", $0) } ?? "-") to \(ys.max().map { String(format: "%.1f", $0) } ?? "-"), x \(xs.min().map { String(format: "%.1f", $0) } ?? "-") to \(xs.max().map { String(format: "%.1f", $0) } ?? "-")")
             if slot == sampled && all.count < 10 { print("NOTRAVEL VOID \(slot): \(all.count) frames"); XCTFail("VOID: \(slot): only \(all.count) frames logged") }
-            let travel = (ys.max() ?? 0) - (ys.min() ?? 0), sideways = !strict && oneState ? (xs.max() ?? 0) - (xs.min() ?? 0) : 0
+            let travel = (ys.max() ?? 0) - (ys.min() ?? 0)
             XCTAssertLessThanOrEqual(travel, 1, "\(slot): its middle travelled \(ys.min() ?? 0) to \(ys.max() ?? 0)")
-            XCTAssertLessThanOrEqual(sideways, 1, "\(slot): a slot in one state moved sideways \(xs.min() ?? 0) to \(xs.max() ?? 0)")
-            if travel > 1 || sideways > 1 {
+            if travel > 1 {
                 for (t, f) in zip(times[slot] ?? [], all).prefix(40) {
                     print(String(format: "NOTRAVEL RAW %@ %.3f %.1f %.1f %.1f %.1f", slot, t, f.minX, f.minY, f.width, f.height))
                 }

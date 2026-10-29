@@ -1,0 +1,135 @@
+#if os(iOS)
+import SwiftUI
+import UIKit
+
+/// Where UIKit stands its own navigation bar items in the window (#554, #555), read off a navigation bar that is laid out
+/// but never seen. On the Duo our top bar's last control ends where UIKit's trailing item ends: beside the status up in
+/// the band, where UIKit moves it 92 pt clear when another app's Live Activity widens the status, and nothing the app can
+/// read says so (the safe area, the status bar's frame and the reserved regions read the same with and without; the
+/// probe, 2026-10-29); and beside the strip closed and on its side, where UIKit never puts its items in the strip. A real
+/// item would need the system's bar in each chat and lose the morph between the list and a chat (#542). Kept per window
+/// shape (`shapeKey`) and across launches, so a launch, or a turn into a shape seen before, draws the rows where the bar
+/// last stood rather than stepping sideways once it's read; nil for a shape never read. Until a fresh layout, the last
+/// place stands.
+@MainActor @Observable final class SystemBarItems {
+    static let shared = SystemBarItems()
+    /// The trailing item's frame, window space, by window shape.
+    private(set) var trailingByShape: [String: CGRect]
+    @ObservationIgnored private let defaults: UserDefaults
+    private static let storeKey = "vory.systemBarItems.trailing"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let stored = defaults.dictionary(forKey: Self.storeKey) as? [String: [Double]] ?? [:]
+        trailingByShape = stored.compactMapValues { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
+    }
+
+    /// A window shape: its size, and the safe area's top and trailing, which tell the Duo's postures apart.
+    nonisolated static func shapeKey(size: CGSize, safeTop: CGFloat, safeTrailing: CGFloat) -> String {
+        String(format: "%.0fx%.0f t%.0f r%.0f", size.width, size.height, safeTop, safeTrailing)
+    }
+
+    func trailing(for shape: String) -> CGRect? { trailingByShape[shape] }
+
+    /// A fresh read for a shape, kept for the next launch.
+    func read(_ frame: CGRect, for shape: String) {
+        guard trailingByShape[shape] != frame else { return }
+        trailingByShape[shape] = frame
+        defaults.set(trailingByShape.mapValues { [$0.minX, $0.minY, $0.width, $0.height] }, forKey: Self.storeKey)
+    }
+}
+
+/// The bar the items are read off, from the first time the window is one of the Duo's (the bar up in the status band,
+/// or the side strip) and from then on, so a turn never waits for it. Never on an iPhone or an iPad, where nothing reads
+/// it and the bars stand where they did.
+struct SystemBarItemsHost: View {
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.reservedRegions) private var regions
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var duo = false
+
+    var body: some View {
+        let g = windowGeometry
+        let now = VoryTabBar.statusStrip(g.safeArea) != nil || TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        ZStack {
+            if duo || now {
+                SystemBarItemsSensor(geometry: g, size: g.bounds.size, safeArea: g.safeArea, active: scenePhase == .active, holding: g.holding)
+                    .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            }
+        }
+        .onChange(of: now, initial: true) { _, d in if d { duo = true } }
+    }
+}
+
+/// A UINavigationController with a 44 pt item at each end, the window's size, never seen, hit or read by VoiceOver. Its
+/// bar reads the trailing item's frame after each of its layouts; a change of the window, the scene coming back, or a
+/// turn's hold ending lays it out again. Only a bar laid out in the window as the app has it settled is read: none while
+/// the window's reader holds back a turn's passing window (`WindowGeometry.holding`), and none whose window isn't the
+/// size the reader has published. The rows then hold their place with the window, the bar's edge and everything else
+/// read from it (#548), and take the settled place when the hold ends.
+private struct SystemBarItemsSensor: UIViewControllerRepresentable {
+    var geometry: WindowGeometry
+    var size: CGSize
+    var safeArea: EdgeInsets
+    var active: Bool
+    var holding: Bool
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        let nav = UINavigationController(navigationBarClass: Bar.self, toolbarClass: nil)
+        nav.viewControllers = [Root()]
+        nav.view.isUserInteractionEnabled = false
+        nav.view.accessibilityElementsHidden = true
+        return nav
+    }
+
+    func updateUIViewController(_ nav: UINavigationController, context: Context) {
+        (nav.navigationBar as? Bar)?.geometry = geometry
+        nav.navigationBar.setNeedsLayout()
+        (nav.navigationBar as? Bar)?.readSoon()
+    }
+
+    private final class Root: UIViewController {
+        override func viewDidLoad() {
+            super.viewDidLoad()
+            view.backgroundColor = .clear
+            navigationItem.largeTitleDisplayMode = .never
+            navigationItem.leftBarButtonItem = UIBarButtonItem(customView: Self.item())
+            navigationItem.rightBarButtonItem = UIBarButtonItem(customView: Self.item())
+        }
+
+        static func item() -> UIView {
+            let v = UIView()
+            v.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([v.widthAnchor.constraint(equalToConstant: 44), v.heightAnchor.constraint(equalToConstant: 44)])
+            return v
+        }
+    }
+
+    /// The items are placed by the bar's own content views after its layoutSubviews, so they're read on the next turn.
+    private final class Bar: UINavigationBar {
+        weak var geometry: WindowGeometry?
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            readSoon()
+        }
+
+        func readSoon() {
+            Task { @MainActor [weak self] in self?.read() }
+        }
+
+        private func read() {
+            guard let geometry, !geometry.holding, let window, window.bounds.size == geometry.bounds.size,
+                  let view = topItem?.rightBarButtonItem?.customView, view.window != nil else { return }
+            let frame = view.convert(view.bounds, to: nil)
+            guard frame.width > 0 else { return }
+            SystemBarItems.shared.read(frame, for: SystemBarItems.shapeKey(size: geometry.bounds.size, safeTop: geometry.safeArea.top,
+                                                                          safeTrailing: geometry.safeArea.trailing))
+            #if DEBUG
+            // For the bar's checks: where our row's last control must end (the frames readout's "system").
+            if MorphFramesProbe.isOn { MorphFramesProbe.marks["system"] = frame }
+            #endif
+        }
+    }
+}
+#endif
