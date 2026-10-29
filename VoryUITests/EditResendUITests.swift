@@ -3,12 +3,14 @@ import XCTest
 /// Edit & resend on the mock gateway (#556): the last message is edited under "Editing your message" and sent in its own
 /// place, the old turn gone from the thread and taken back once on the gateway (`/api/_mock/undos`, a retry); then the
 /// mock's faults: a busy gateway (undo-busy) keeps the words and the edit, and a gateway without the method (undo-unknown)
-/// keeps the words, ends the edit and offers Copy to message from then on. The bubble menu, the reply strip and the edit
-/// strip pass the audit, with the composer audit's two known findings logged (#482's reasoning row, the 0x0 text). Run with
-/// predictive text off on the simulator, as the composer audit is. The messages start "short link", the mock's short reply
-/// with no approval to wait on, which keeps the person's message in view with the keyboard up (a tall reply pushed it off
-/// the top). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are set (the demo copy, pointed at the
-/// mock by launch argument).
+/// keeps the words, ends the edit and offers Copy to message from then on. With the busy banner up the dock still holds
+/// Send and the box. The bubble menu, the reply strip, the edit strip and the banner pass the audit, with the composer
+/// audit's two known findings logged (#482's reasoning row, the 0x0 text). First a message is queued behind a running reply
+/// (the mock's `long`); the dock's frame and Send's go to the log as DOCK lines at each state (empty, queue, draft, reply
+/// strip, edit strip, after resend, banner), to set one build's against another's. Run with predictive text off on the
+/// simulator, as the composer audit is. The messages start "short link", the mock's short reply with no approval to wait
+/// on, which keeps the person's message in view with the keyboard up (a tall reply pushed it off the top). Skipped unless
+/// HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are set (the demo copy, pointed at the mock by launch argument).
 final class EditResendUITests: XCTestCase {
     private var app: XCUIApplication!
     private var base = ""
@@ -48,6 +50,21 @@ final class EditResendUITests: XCTestCase {
     /// A line in the run's log: the runner's own print isn't kept there, an activity's name is.
     private static func note(_ line: String) {
         XCTContext.runActivity(named: line) { _ in }
+    }
+
+    /// The dock's frame and Send's in the log, once the dock has settled, to set one build's against another's.
+    private func dockReading(_ state: String) {
+        pause(1)
+        let dock = app.otherElements["chat.dock"].firstMatch, send = app.buttons["composer.send"].firstMatch
+        Self.note("DOCK \(state) dock \(dock.exists ? "\(dock.frame)" : "none") send \(send.exists ? "\(send.frame)" : "none")")
+    }
+
+    /// Types into the box, then checks it holds all it should: a keyboard that went down partway fails here, by name,
+    /// instead of sending part of the words (2026-10-29: the box took "lo" of "long 15", and the mock answered that).
+    private func type(_ words: String, into box: XCUIElement, expecting whole: String) {
+        box.typeText(words)
+        let value = box.value as? String ?? ""
+        XCTAssertEqual(value, whole, "the box took only '\(value)' of '\(whole)'")
     }
 
     /// The reply has ended: no Stop in the composer.
@@ -132,8 +149,34 @@ final class EditResendUITests: XCTestCase {
         newChat.tap()
         let composer = app.textViews["composer.text"].firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30))
+        dockReading("empty")
+        // A new chat dropped the keyboard about 5 s after it opened, two letters into the typing: the first tap comes after
+        // that, so the keyboard it brings up stays.
+        pause(6)
         composer.tap()
-        composer.typeText("short link for the export")
+
+        // A message queued behind a running reply (the mock's `long`, about 15 s): the queue strip stands over the composer.
+        type("long 15", into: composer, expecting: "long 15")
+        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
+        XCTAssertTrue(app.buttons["Stop"].waitForExistence(timeout: 10), "the long reply didn't start")
+        composer.tap()
+        type("short link while it runs", into: composer, expecting: "short link while it runs")
+        try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
+        let queued = text("Queued (").firstMatch
+        XCTAssertTrue(queued.waitForExistence(timeout: 5), "nothing queued")
+        // The reading is the strip over the box: not an approval card in the box's place.
+        XCTAssertTrue(composer.exists, "no box under the queue")
+        XCTAssertFalse(text("Approval needed").firstMatch.exists, "an approval stands in the box's place")
+        dockReading("queue")
+        // The long reply ends, the queued message goes, and its short reply ends.
+        let gone = Date().addingTimeInterval(60)
+        while Date() < gone, queued.exists { pause(0.5) }
+        XCTAssertFalse(queued.exists, "the queued message didn't go")
+        waitForIdle()
+
+        composer.tap()
+        type("short link for the export", into: composer, expecting: "short link for the export")
+        dockReading("draft")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
         waitForIdle()
 
@@ -142,6 +185,7 @@ final class EditResendUITests: XCTestCase {
         app.buttons["Reply"].tap()
         let cancelReply = app.buttons["composer.cancelReply"]
         XCTAssertTrue(cancelReply.waitForExistence(timeout: 5), "no reply strip")
+        dockReading("reply strip")
         try audit("quote strip")
         cancelReply.tap()
         XCTAssertFalse(cancelReply.waitForExistence(timeout: 2), "the reply strip didn't go")
@@ -155,11 +199,12 @@ final class EditResendUITests: XCTestCase {
         XCTAssertTrue(editing.waitForExistence(timeout: 5), "no 'Editing your message'")
         XCTAssertEqual(composer.value as? String, "short link for the export")
         XCTAssertTrue(app.buttons["Cancel editing"].exists)
+        dockReading("edit strip")
         try audit("edit strip")
 
         // Sent in its place: the old turn leaves, the new words stand once, and the gateway took one turn back as a retry.
         composer.tap()
-        composer.typeText(" please")
+        type(" please", into: composer, expecting: "short link for the export please")
         let send = try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true))
         XCTAssertEqual(send.label, "Send edited message")
         send.tap()
@@ -172,6 +217,7 @@ final class EditResendUITests: XCTestCase {
         XCTAssertEqual(taken.count, 1, "not exactly one undo")
         XCTAssertEqual(taken.first?["intent"] as? String, "retry")
         XCTAssertGreaterThan(taken.first?["removed"] as? Int ?? 0, 0)
+        dockReading("after resend")
 
         // A busy gateway: nothing sent, the words and the edit kept, the reason said.
         try openMenu(on: "short link for the export please")
@@ -179,11 +225,19 @@ final class EditResendUITests: XCTestCase {
         XCTAssertTrue(editing.waitForExistence(timeout: 5))
         fault("undo-busy")
         composer.tap()
-        composer.typeText(" now")
+        type(" now", into: composer, expecting: "short link for the export please now")
         try XCTUnwrap(hittable(app.buttons.matching(identifier: "composer.send"), timeout: 10, tapCentreIfMissed: true)).tap()
         XCTAssertTrue(text("A reply is running").firstMatch.waitForExistence(timeout: 10), "the busy gateway wasn't said")
         XCTAssertTrue(editing.exists, "the edit ended on a busy gateway")
         XCTAssertEqual(composer.value as? String, "short link for the export please now")
+        // With the banner up the dock still holds the composer (its frame was the banner's alone, Send and the box outside
+        // it, where the hit test missed them), and the banner passes the audit, its Close too.
+        dockReading("banner")
+        let dock = app.otherElements["chat.dock"].firstMatch.frame
+        Self.note("DOCK banner box \(composer.frame)")
+        XCTAssertTrue(dock.insetBy(dx: -1, dy: -1).contains(app.buttons["composer.send"].firstMatch.frame), "the dock doesn't hold Send with the banner up")
+        XCTAssertTrue(dock.insetBy(dx: -1, dy: -1).contains(composer.frame), "the dock doesn't hold the box with the banner up")
+        try audit("banner")
 
         // A gateway without the method: the words kept, the edit ended, Copy to message only from then on.
         fault("undo-unknown")
