@@ -2542,11 +2542,11 @@ struct MarkdownView: View, Equatable {
                         .buttonStyle(.plain).foregroundStyle(.tint).padding(.trailing, 6)
                     }
                     if closed {
-                        CodeWrapToggle().padding(.trailing, 10)
+                        CodeWrapToggle().padding(.trailing, 2)
                         CopyButton(text: code)
                     } else { ProgressView().controlSize(.mini) }
                 }
-                .padding(.horizontal, 10).padding(.top, 6)
+                .padding(.horizontal, 10).padding(.top, 2)
                 // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
                 // megabytes; the rest is a Show all away (#361).
                 let shown = TextPieces.capped(code)
@@ -2988,11 +2988,14 @@ struct CodeBlock: View {
         let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : String(lines.head))
         VStack(alignment: .leading, spacing: 4) {
             // Room past the last line for the two corner buttons, so the widest line ends clear of them.
-            CodeBody(text: shown.text, font: .system(.caption, design: .monospaced), trailingInset: 56)
+            CodeBody(text: shown.text, font: .system(.caption, design: .monospaced), trailingInset: 52)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
                 .overlay(alignment: .topTrailing) {
-                    HStack(spacing: 10) { CodeWrapToggle(); CopyButton(text: text) }.padding(6)
+                    // Stacked, not side by side: the wrap button's 44 pt square would otherwise claim a
+                    // wide gutter from every line of the output.
+                    VStack(spacing: 0) { CopyButton(text: text); CodeWrapToggle() }
+                        .padding(.top, 4).padding(.trailing, 4)
                 }
             if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll) }
             if lines.count > lineCap {
@@ -3062,7 +3065,9 @@ struct CodeBody: View {
     var trailingInset: CGFloat = 0
 
     static let wrapKey = "code.wrap"
-    @AppStorage(CodeBody.wrapKey) private var wrap = false
+    /// Wrapping is the default: a line that fits the bubble needs no dragging, and the reader who
+    /// wants a column's alignment back turns it off and scrolls instead.
+    @AppStorage(CodeBody.wrapKey) private var wrap = true
 
     var body: some View {
         if wrap {
@@ -3085,18 +3090,20 @@ struct CodeBody: View {
 /// The wrap/unwrap switch in a code block's corner. The glyph is the change it will make:
 /// lines that scroll offer "wrap", wrapped lines offer "unroll".
 struct CodeWrapToggle: View {
-    @AppStorage(CodeBody.wrapKey) private var wrap = false
+    @AppStorage(CodeBody.wrapKey) private var wrap = true
 
     var body: some View {
         Button { withAnimation(.snappy) { wrap.toggle() } } label: {
             Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 32, height: 28)
+                // 44 pt square laid out as such — not a small box with a hit area hanging outside
+                // it, which a clip or a neighbour would eat: the smallest target a finger hits
+                // without aiming, while the glyph stays caption-sized.
+                .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .padding(-4)
         .accessibilityLabel(wrap ? "Unwrap long lines" : "Wrap long lines")
         .help(wrap ? "Unwrap Lines" : "Wrap Lines")
     }
