@@ -2528,8 +2528,9 @@ struct MarkdownView: View, Equatable {
                     Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
                 }
         case .code(let lang, let code, let closed):
-            // Horizontally scrollable code block so wide lines, ASCII art, and diagrams preserve alignment
-            // without wrapping. A copy button sits in the corner.
+            // Wide lines scroll sideways so a column of output or a diagram keeps its alignment;
+            // the corner switch wraps them instead, for a reader who wants the whole line in the
+            // bubble. A copy button sits beside it.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
@@ -2540,16 +2541,16 @@ struct MarkdownView: View, Equatable {
                         }
                         .buttonStyle(.plain).foregroundStyle(.tint).padding(.trailing, 6)
                     }
-                    if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
+                    if closed {
+                        CodeWrapToggle().padding(.trailing, 10)
+                        CopyButton(text: code)
+                    } else { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.top, 6)
                 // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
                 // megabytes; the rest is a Show all away (#361).
                 let shown = TextPieces.capped(code)
-                ScrollView(.horizontal) {
-                    LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
-                        .fixedSize(horizontal: true, vertical: true).padding(10)
-                }
+                CodeBody(text: shown.text, font: style.codeFont)
                 if shown.more > 0 {
                     MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(Self.codeTitle(lang), code) } })
                         .padding(.horizontal, 10).padding(.bottom, 8)
@@ -2986,13 +2987,13 @@ struct CodeBlock: View {
         let lines = TextPieces.lines(text, cap: lineCap)
         let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : String(lines.head))
         VStack(alignment: .leading, spacing: 4) {
-            ScrollView(.horizontal) {
-                LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: true).padding(10).padding(.trailing, 24)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
+            // Room past the last line for the two corner buttons, so the widest line ends clear of them.
+            CodeBody(text: shown.text, font: .system(.caption, design: .monospaced), trailingInset: 56)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 10) { CodeWrapToggle(); CopyButton(text: text) }.padding(6)
+                }
             if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll) }
             if lines.count > lineCap {
                 Button(showAll ? "Show less" : "Show \(lines.count - lineCap) more lines") { withAnimation(.snappy) { showAll.toggle() } }
@@ -3047,6 +3048,57 @@ struct CopyButton: View {
         // Laid out at 24 x 20 as before: the code header and the overlays place it by that frame.
         .padding(-4)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
+    }
+}
+
+/// A code block's lines. Wide ones scroll sideways — a column of output, a table drawn in
+/// characters and a diagram all keep their alignment that way — or they wrap, when the reader
+/// would rather have the whole line inside the bubble than drag it. One preference drives every
+/// block, so wrapping one wraps them all: two switches on one screen that disagree read as a bug.
+struct CodeBody: View {
+    var text: String
+    var font: Font
+    /// Space kept past the last line for whatever is drawn in the block's corner.
+    var trailingInset: CGFloat = 0
+
+    static let wrapKey = "code.wrap"
+    @AppStorage(CodeBody.wrapKey) private var wrap = false
+
+    var body: some View {
+        if wrap {
+            LongText(text, code: true).font(font).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(10).padding(.trailing, trailingInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            // Each piece is drawn whole inside the scroll view: squeezed to the bubble's width it
+            // would wrap, which is the thing this mode is for avoiding.
+            ScrollView(.horizontal) {
+                LongText(text, code: true).font(font).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(10).padding(.trailing, trailingInset)
+            }
+        }
+    }
+}
+
+/// The wrap/unwrap switch in a code block's corner. The glyph is the change it will make:
+/// lines that scroll offer "wrap", wrapped lines offer "unroll".
+struct CodeWrapToggle: View {
+    @AppStorage(CodeBody.wrapKey) private var wrap = false
+
+    var body: some View {
+        Button { withAnimation(.snappy) { wrap.toggle() } } label: {
+            Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 28)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .padding(-4)
+        .accessibilityLabel(wrap ? "Unwrap long lines" : "Wrap long lines")
+        .help(wrap ? "Unwrap Lines" : "Wrap Lines")
     }
 }
 
