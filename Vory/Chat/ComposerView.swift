@@ -235,10 +235,10 @@ struct ComposerView: View {
     private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
         Perf.stamp("slash: pick \(item.name)")
         menuMark = nil
-        // With a reply quoted or files staged the text goes out as a message, not a command
-        // (ChatSession.send), so the command waits in the field instead.
+        // With a reply quoted, files staged or a message being edited the text goes out as a message, not a command
+        // (ChatSession.send, `resend`), so the command waits in the field instead.
         let outcome = SlashMenu.outcome(of: item, in: text, wholeText: menuContext?.wholeText == true,
-                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty)
+                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty && chat.editingID == nil)
         switch outcome {
         case .run(let command):
             text = command
@@ -257,10 +257,10 @@ struct ComposerView: View {
 
     /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
     /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
-    /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
+    /// SlashMenu.returnAction). With a reply quoted, files staged or a message being edited that text would go to the bot
     /// as a message, so it stays in the field instead. True when Return was used here.
     private func takeOnReturn() -> Bool {
-        let canRun = quote.isEmpty && chat.staged.isEmpty
+        let canRun = quote.isEmpty && chat.staged.isEmpty && chat.editingID == nil
         switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex, canRun: canRun) {
         case .take(let item): pick(item); return true
         case .send: Task { await send() }; return true
@@ -560,6 +560,7 @@ struct ComposerView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !chat.staged.isEmpty { thumbnails }
+            if chat.editingID != nil { editStrip }
             if !quote.isEmpty { quoteStrip }
             #if os(macOS)
             if !menuItems.isEmpty || menuLoading {
@@ -655,6 +656,25 @@ struct ComposerView: View {
             .padding(.leading, 2).padding(.vertical, 2)
         }
         .quickLookPreview($stagedPreview)
+    }
+
+    /// Edit & resend: the words in the box replace the chat's last message when sent (#556). Cancel ends the edit and
+    /// empties the box, as cancelling an edit in Messages does; nothing was taken back yet.
+    private var editStrip: some View {
+        HStack(alignment: .center, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+            Label("Editing your message", systemImage: "pencil").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button { withAnimation(.snappy) { chat.cancelEdit(); text = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain).disabled(chat.resending)
+                .accessibilityLabel("Cancel editing")
+                .accessibilityIdentifier("composer.cancelEdit")
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("composer.editing")
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
     }
 
     /// What the reply answers: the first lines of the bubble, with a way out.
@@ -826,15 +846,16 @@ struct ComposerView: View {
             // the whole conversation by voice on this chat (the Mac's mic is a click; it keeps it).
             TalkButton(dictation: dictation, engine: chat.runtime.voice, onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else {
-            let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
+            // An edit on its way is sent once (#556).
+            let disabled = (text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty) || chat.resending
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
                     .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.vory), in: .circle)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
-            .accessibilityLabel(chat.isRunning ? "Queue message" : "Send")
-            .accessibilityShowsLargeContentViewer { Label(chat.isRunning ? "Queue message" : "Send", systemImage: "arrow.up") }
+            .accessibilityLabel(chat.editingID != nil ? "Send edited message" : chat.isRunning ? "Queue message" : "Send")
+            .accessibilityShowsLargeContentViewer { Label(chat.editingID != nil ? "Send edited message" : chat.isRunning ? "Queue message" : "Send", systemImage: "arrow.up") }
             .accessibilityIdentifier("composer.send")
         }
     }
@@ -946,6 +967,7 @@ struct ComposerView: View {
     private func send() async {
         // The New Message sheet starts the chat with the words; the draft holds the rest.
         if let newMessage { newMessage.send(text); return }
+        if chat.editingID != nil { await resendEdited(); return }
         var t = text
         Perf.stamp("slash: send \(t.prefix(30))")
         if !quote.isEmpty {
@@ -962,6 +984,18 @@ struct ComposerView: View {
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
+    }
+
+    /// Send while editing (#556): the gateway takes the old message and what followed it back, and these words go in its
+    /// place. Until it's sent the words stay in the box, so anything that stops it (a reply running, a gateway that can't
+    /// take messages back) keeps them, with the reason in the banner; nothing is sent then.
+    private func resendEdited() async {
+        let outcome = await chat.resend(text)
+        guard outcome == .sent else { chat.banner = outcome.message; return }
+        text = ""
+        focused = ComposerFocusRule.afterSend(placeKeepsFocus: focusesAfterSend, closeAfterSending: closeKeyboardAfterSend)
+        historyCursor = nil
+        NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
     }
 
     private func recallHistory(_ delta: Int) -> Bool {
