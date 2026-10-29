@@ -398,10 +398,6 @@ struct ConversationView: View {
             // rebuild for it (TranscriptRow takes its open states as values), so the thread
             // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
-            // The dock's frame for the UI tests (its own container: an identifier on a plain
-            // view goes to every child, and the composer lost its name).
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat.dock")
     }
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
@@ -571,6 +567,15 @@ struct BottomDock: View {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
             }
+            // The dock's frame for the UI tests and the accessibility hit test (its own container: an identifier on a
+            // plain view goes to every child, and the composer lost its name). Without the shape the container's frame
+            // was its top glass element's alone, wherever the modifier sat: the banner, else the queued strip, else the
+            // composer from 10 pt above where it's drawn. With a banner up the composer's controls lay outside the
+            // dock, where the hit test missed Send and the box (#564). The accessibility kind of content shape gives it
+            // the stack's whole rect.
+            .accessibilityElement(children: .contain)
+            .contentShape(.accessibility, Rectangle())
+            .accessibilityIdentifier("chat.dock")
             .padding(.horizontal, 12)
             .padding(.bottom, Self.bottomPadding)
         }
