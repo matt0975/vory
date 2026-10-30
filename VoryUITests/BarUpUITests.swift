@@ -567,6 +567,50 @@ final class BarUpUITests: XCTestCase {
         app.terminate()
     }
 
+    /// #554: the Chats list's trailing capsule from the first frame drawn at launch, in the app's own frame log
+    /// (`-vory-morph-log`), in the pose the script names (HERMES_E2E_POSE, the bar up in the band or closed): it stands where
+    /// it ends, at UIKit's own trailing item (the readout's "system"), remembered from the last launch in the same window
+    /// shape, so it never steps sideways once the bar is read. A launch in a shape never read may step (nothing remembered
+    /// yet): with HERMES_E2E_LAUNCH_STRICT=1 (the second launch of a pair) the right edge holds within 1 pt in every frame
+    /// and ends at UIKit's item. Printed: the frames (LAUNCH, and LAUNCH RAW for every one when it steps); a hold for a still.
+    func testTheRowHoldsStillFromLaunch() throws {
+        let e = ProcessInfo.processInfo.environment
+        guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
+            throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set")
+        }
+        guard let pose = Pose(rawValue: e["HERMES_E2E_POSE"] ?? ""), pose == .upright || pose == .laptop || pose == .closed else {
+            throw XCTSkip("no pose with the bar in the band or closed (HERMES_E2E_POSE)")
+        }
+        app = XCUIApplication(bundleIdentifier: e["HERMES_E2E_BUNDLE"].flatMap { $0.isEmpty ? nil : $0 } ?? "com.vorantx.vory.demo")
+        app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats",
+                               "-colorSchemePreference", "light", "-vory-morph-frames", "-vory-morph-log"]
+        let t0 = Date().timeIntervalSince1970
+        app.launch()
+        XCTAssertTrue(element("tab.chats").waitForExistence(timeout: 40), "no tab bar")
+        pause(3)
+        let log = element("debug.morphlog")
+        XCTAssertTrue(log.waitForExistence(timeout: 5), "no frame log")
+        var trail: [(t: Double, f: CGRect)] = []
+        for line in ((log.value as? String) ?? "").split(separator: "\n") {
+            let f = line.split(separator: " ")
+            guard f.count == 6, f[1] == "trail", let t = Double(f[0]), t >= t0, let x = Double(f[2]), let y = Double(f[3]),
+                  let w = Double(f[4]), let h = Double(f[5]), w > 0 else { continue }
+            trail.append((t - t0, CGRect(x: x, y: y, width: w, height: h)))
+        }
+        let edges = trail.map(\.f.maxX), system = systemItem()
+        let step = (edges.max() ?? 0) - (edges.min() ?? 0)
+        print("LAUNCH \(pose.rawValue) trail \(trail.count) frames, right edge \(edges.min().map { String(format: "%.1f", $0) } ?? "-") to \(edges.max().map { String(format: "%.1f", $0) } ?? "-"), last \(edges.last.map { String(format: "%.1f", $0) } ?? "-"), system \(system.map { "\($0)" } ?? "none")")
+        if step > 1 { for (t, f) in trail.prefix(40) { print(String(format: "LAUNCH RAW trail %.3f %.1f %.1f %.1f %.1f", t, f.minX, f.minY, f.width, f.height)) } }
+        if e["HERMES_E2E_LAUNCH_STRICT"] == "1" {
+            XCTAssertFalse(trail.isEmpty, "VOID: no trailing capsule logged from launch")
+            XCTAssertLessThanOrEqual(step, 1, "the trailing capsule stepped sideways at launch: right edge \(edges.min() ?? 0) to \(edges.max() ?? 0)")
+            if let system, let last = edges.last { XCTAssertEqual(last, system.maxX, accuracy: Self.slack, "the trailing capsule ends at \(last), not at UIKit's item \(system)") }
+            else { XCTFail("VOID: UIKit's item not in the readout") }
+        }
+        print("BARUP HOLD launch"); pause(3)
+        app.terminate()
+    }
+
     /// NO TRAVEL between the list and a chat, in the app's own frame log (`-vory-morph-log`: every drawn change of each
     /// capsule and of the face between this test's wall marks, a zero frame where one goes): a chat opened, then Back.
     /// - Up in the band (HERMES_E2E_POSE upright or laptop) and closed (#555: the same row there): Back's circle, the
