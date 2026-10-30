@@ -2519,6 +2519,8 @@ struct MarkdownView: View, Equatable {
             Self.inlineText(t).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
             Self.inlineText(t).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
+        case .math(let equation, let closed):
+            MathCardView(equation: equation, closed: closed)
         case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.

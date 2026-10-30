@@ -24,6 +24,8 @@ public enum SpokenText {
         private var held = ""
         private var inFence: String? = nil
         private var fenceLang = ""
+        private var inMathFence: String? = nil
+        private var mathBuffer: [String] = []
         private var tableRows = 0
         /// A line with a pipe but no outer pipes may be a table's header (the app renders tables
         /// written that way too); the delimiter row that decides comes next, so it is held.
@@ -45,7 +47,7 @@ public enum SpokenText {
                 out += consume(line: line)
             }
             // A long paragraph: its finished sentences go out before the line ends.
-            if inFence == nil, !held.contains("|"), let cut = Self.sentenceCut(held) {
+            if inFence == nil, inMathFence == nil, !held.contains("|"), let cut = Self.sentenceCut(held) {
                 let head = String(held[..<cut])
                 held = String(held[cut...])
                 out += consume(line: head)
@@ -60,6 +62,13 @@ public enum SpokenText {
             // The last line had a pipe and nothing came after it: its words, not a table.
             out += releasePending()
             if inFence != nil { out.append(Self.note(forFence: fenceLang)); inFence = nil }
+            if inMathFence != nil {
+                let eq = mathBuffer.joined(separator: "\n")
+                inMathFence = nil
+                mathBuffer = []
+                let spoken = MathNotation.spoken(eq)
+                if !spoken.isEmpty { out.append(spoken) }
+            }
             out += flushTable()
             return out
         }
@@ -84,10 +93,90 @@ public enum SpokenText {
                 if trimmed.hasPrefix(fence) { inFence = nil; return [Self.note(forFence: fenceLang)] }
                 return []
             }
+            if let mathFence = inMathFence {
+                if mathFence == "$$", let closeRange = trimmed.range(of: "$$") {
+                    let before = String(trimmed[..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if !before.isEmpty { mathBuffer.append(before) }
+                    let eq = mathBuffer.joined(separator: "\n")
+                    inMathFence = nil
+                    mathBuffer = []
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return (spoken.isEmpty ? [] : [spoken]) + remWords
+                } else if mathFence == "\\[", let closeRange = trimmed.range(of: "\\]") {
+                    let before = String(trimmed[..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if !before.isEmpty { mathBuffer.append(before) }
+                    let eq = mathBuffer.joined(separator: "\n")
+                    inMathFence = nil
+                    mathBuffer = []
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return (spoken.isEmpty ? [] : [spoken]) + remWords
+                } else if mathFence.hasPrefix("\\end{"), let closeRange = trimmed.range(of: mathFence) {
+                    let before = String(trimmed[..<closeRange.upperBound])
+                    mathBuffer.append(before)
+                    let eq = mathBuffer.joined(separator: "\n")
+                    inMathFence = nil
+                    mathBuffer = []
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return (spoken.isEmpty ? [] : [spoken]) + remWords
+                } else {
+                    mathBuffer.append(line)
+                    return []
+                }
+            }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 let out = releasePending() + flushTable()
                 inFence = String(trimmed.prefix(3))
                 fenceLang = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces)
+                return out
+            }
+            if let envMatch = trimmed.firstMatch(of: /^\\begin\{(equation\*?|align\*?|alignat\*?|gather\*?|gathered|aligned|alignedat|matrix\*?|pmatrix\*?|bmatrix\*?|Bmatrix\*?|vmatrix\*?|Vmatrix\*?|cases|dcases|rcases|split|array)\}/) {
+                let env = String(envMatch.1)
+                let endTag = "\\end{\(env)}"
+                let out = releasePending() + flushTable()
+                if let closeRange = trimmed.range(of: endTag) {
+                    let eq = String(trimmed[..<closeRange.upperBound]).trimmingCharacters(in: .whitespaces)
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return out + (spoken.isEmpty ? [] : [spoken]) + remWords
+                } else {
+                    inMathFence = endTag
+                    mathBuffer = [line]
+                    return out
+                }
+            }
+            if trimmed.hasPrefix("$$") {
+                if let closeRange = trimmed.dropFirst(2).range(of: "$$") {
+                    let eq = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return releasePending() + flushTable() + (spoken.isEmpty ? [] : [spoken]) + remWords
+                }
+                let out = releasePending() + flushTable()
+                inMathFence = "$$"
+                let rem = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                mathBuffer = rem.isEmpty ? [] : [rem]
+                return out
+            }
+            if trimmed.hasPrefix("\\[") {
+                if let closeRange = trimmed.dropFirst(2).range(of: "\\]") {
+                    let eq = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    let spoken = MathNotation.spoken(eq)
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    let remWords = rem.isEmpty ? [] : [inlineForSpeech(rem)]
+                    return releasePending() + flushTable() + (spoken.isEmpty ? [] : [spoken]) + remWords
+                }
+                let out = releasePending() + flushTable()
+                inMathFence = "\\["
+                let rem = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                mathBuffer = rem.isEmpty ? [] : [rem]
                 return out
             }
             // Tables: a row with outer pipes counts at once; a header without them counts once
@@ -173,6 +262,13 @@ public enum SpokenText {
             wasHeadingOrBullet = true
         }
         if let m = s.firstMatch(of: /^>\s?/) { s.removeSubrange(m.range) }
+        // Clean display math delimiters: $$...$$ or \[...\]
+        s = s.replacing(/^\s*\$\$(.*?)\$\$\s*$/) { m in MathNotation.spoken(String(m.1)) }
+        s = s.replacing(/^\s*\\\[(.*?)\\\]\s*$/) { m in MathNotation.spoken(String(m.1)) }
+        // Clean inline math: $...$ or \(...\)
+        for span in MathNotation.findInlineMath(in: s).reversed() {
+            s.replaceSubrange(span.range, with: MathNotation.spoken(span.equation))
+        }
         s = s.replacing(/!\[([^\]]*)\]\([^)]*\)/) { m in String(m.1).isEmpty ? "an image" : String(m.1) }
         s = s.replacing(/\[([^\]]+)\]\([^)]*\)/) { m in String(m.1) }
         s = s.replacing(/`([^`]*)`/) { m in String(m.1) }
