@@ -1,11 +1,14 @@
 import XCTest
 
 /// #546: the Queued strip with three messages behind a running turn, and Steer on one of them. A chat opened from the
-/// Chats list (HERMES_E2E_CHAT, else "Disk cleanup"), the mock's "long 60" turn sent, then three short messages, each
-/// queued behind it. Checked:
+/// Chats list (HERMES_E2E_CHAT, else "Disk cleanup"), the mock's "long 180" turn sent, then three messages, each queued
+/// behind it, each starting "short link" so the turn it gets when it's sent is the mock's short reply, which asks for no
+/// approval (its usual turn ends on an approval card, which takes the composer's place). Checked:
 /// - the strip lists three, each row with Steer, Edit and Delete, every one 44 pt or more each way (frames noted);
 /// - VoiceOver's order (`-vory-ax-oracle`): each message's words before its Steer, Edit and Delete, row by row;
-/// - with HERMES_E2E_AUDIT=1, the chat screen's audit (noted, not failed here: the gate holds it against the base's);
+/// - with HERMES_E2E_AUDIT=1, the chat screen's audit (contrast, element descriptions, hit regions, element detection):
+///   any finding on the strip's own controls (queue.steer, queue.edit, queue.delete) FAILS the test; every other finding is
+///   noted (the tabs and pages behind the chat, the strip's heading and words: not #546's);
 /// - Steer on the second: it leaves the strip, the first and third keep their order, and a steer row with its words
 ///   comes in the thread.
 /// A hold for a still before the Steer (BARUP HOLD queued) and after it (BARUP HOLD steered). In the scheme and text size
@@ -19,7 +22,7 @@ final class QueueStripUITests: XCTestCase {
     /// A line in the run's log: the runner's own print isn't kept there, an activity's name is. Static, so the audit's
     /// handler calls it without taking `self` along.
     nonisolated private static func note(_ line: String) { XCTContext.runActivity(named: line) { _ in } }
-    private static let words = ["first queued", "second queued", "third queued"]
+    private static let words = ["short link first", "short link second", "short link third"]
 
     /// What VoiceOver stops on, in order (the oracle's readout, "label|x,y,w,h" a line).
     private func voiceOverStops() -> [String]? {
@@ -48,13 +51,15 @@ final class QueueStripUITests: XCTestCase {
         sendButton.tap()
     }
 
-    /// The strip's rows top to bottom: each Steer button and the words standing level with it before it.
+    /// The strip's rows top to bottom: each Steer button and the words standing level with it before it. Only the three
+    /// words' texts are asked for, and each frame is read once, so the strip is read in a moment, not a walk of the tree.
     private func stripRows() -> [(words: String, steer: XCUIElement)] {
-        let steers = app.buttons.matching(identifier: "queue.steer").allElementsBoundByIndex.filter(\.exists)
-        let texts = app.staticTexts.allElementsBoundByIndex.filter { $0.exists && Self.words.contains($0.label) }
-        return steers.sorted { $0.frame.minY < $1.frame.minY }.map { steer in
-            let row = texts.first { abs($0.frame.midY - steer.frame.midY) <= 12 && $0.frame.maxX <= steer.frame.minX + 1 }
-            return (row?.label ?? "?", steer)
+        let steers = app.buttons.matching(identifier: "queue.steer").allElementsBoundByIndex.compactMap { b in b.exists ? (b, b.frame) : nil }
+        let texts = app.staticTexts.matching(NSPredicate(format: "label IN %@", Self.words)).allElementsBoundByIndex
+            .compactMap { t in t.exists ? (t.label, t.frame) : nil }
+        return steers.sorted { $0.1.minY < $1.1.minY }.map { steer, frame in
+            let row = texts.first { abs($0.1.midY - frame.midY) <= 12 && $0.1.maxX <= frame.minX + 1 }
+            return (row?.0 ?? "?", steer)
         }
     }
 
@@ -97,8 +102,9 @@ final class QueueStripUITests: XCTestCase {
     func testThreeQueuedAndSteerOne() throws {
         let e = ProcessInfo.processInfo.environment
         try openChat()
-        // The mock's long turn: it streams for about a minute, so the three sent after it queue behind it.
-        try send("long 60")
+        // The mock's long turn: it streams for three minutes, so the three sent after it queue behind it, and it outlasts the
+        // audit and the reads (a 60 s turn ended mid-test, and the queue moved on under the read after Steer).
+        try send("long 180")
         pause(2)
         for w in Self.words { try send(w); pause(1) }
         XCTAssertTrue(app.buttons.matching(identifier: "queue.steer").firstMatch.waitForExistence(timeout: 10), "no Steer: nothing queued, or the turn ended")
@@ -132,11 +138,13 @@ final class QueueStripUITests: XCTestCase {
         Self.note("BARUP HOLD queued"); pause(3)
         if e["HERMES_E2E_AUDIT"] == "1" {
             var issues = 0
-            try app.performAccessibilityAudit { issue in
+            // The strip's own controls fail the audit (returned unhandled); anything else is noted and let go.
+            let own: Set<String> = ["queue.steer", "queue.edit", "queue.delete"]
+            try app.performAccessibilityAudit(for: [.contrast, .sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
                 issues += 1
-                let el = issue.element
-                Self.note("AUDIT queue \(issue.auditType) '\(el?.identifier ?? "")' '\(el?.label ?? "")' \(el.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)")
-                return true
+                let el = issue.element, id = el?.identifier ?? ""
+                Self.note("AUDIT queue \(own.contains(id) ? "FAIL" : "noted") \(issue.auditType) '\(id)' '\(el?.label ?? "")' \(el.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)")
+                return !own.contains(id)
             }
             Self.note("AUDIT queue done, \(issues) issues")
         }
@@ -156,7 +164,8 @@ final class QueueStripUITests: XCTestCase {
 
     /// Steer tapped as a reply ends: the gateway answers "rejected" (its turn ended a moment before the app knew; made
     /// certain by the mock's steer-rejected fault, not timed). Both ways in, the words arrive as their own message once
-    /// the turn ends, exactly once, with no "Steered" row:
+    /// the turn ends, exactly once, with no "Steered" row. They start "short link" so each gets the mock's short reply,
+    /// which ends by itself, and the second isn't held behind an approval card:
     /// - Steer on a queued message: it stays in the strip (back where it was);
     /// - the composer's Steer now: the box is empty and the words stand in the strip, queued.
     /// The mock's "long 30" turn outlasts the typing and taps, then ends on its own; its end is waited for (90 s at most)
@@ -167,32 +176,32 @@ final class QueueStripUITests: XCTestCase {
         defer { fault("none", base) }
         try send("long 30")
         pause(1.5)
-        try send("steered from the queue")
+        try send("short link from the queue")
         let steer = app.buttons.matching(identifier: "queue.steer").firstMatch
         XCTAssertTrue(steer.waitForExistence(timeout: 10), "nothing queued: the turn had ended")
         steer.tap()
         pause(1.5)
         let inStrip = { (w: String) in self.app.staticTexts.allElementsBoundByIndex.contains { $0.exists && $0.label == w } }
-        XCTAssertTrue(inStrip("steered from the queue"), "a rejected Steer left the strip")
+        XCTAssertTrue(inStrip("short link from the queue"), "a rejected Steer left the strip")
         // The composer's Steer now, rejected the same way.
         let composer = app.textViews["composer.text"].firstMatch
-        type("steered from the box", into: composer)
+        type("short link from the box", into: composer)
         let steerNow = app.buttons["Steer now"].firstMatch
         XCTAssertTrue(steerNow.waitForExistence(timeout: 5), "no Steer now")
         steerNow.tap()
         pause(1.5)
-        XCTAssertTrue(inStrip("steered from the box"), "a rejected Steer now didn't queue its words")
+        XCTAssertTrue(inStrip("short link from the box"), "a rejected Steer now didn't queue its words")
         XCTAssertEqual((composer.value as? String) ?? "", "", "the box kept words that were queued")
         XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'Steered'")).firstMatch.exists,
                        "a rejected steer showed as steered")
         Self.note("BARUP HOLD rejected"); pause(2)
         // The turn ends, the queue sends each as its own message, once.
         let end = Date().addingTimeInterval(90)
-        while Date() < end, userRows("steered from the queue") == 0 || userRows("steered from the box") == 0 { pause(1) }
+        while Date() < end, userRows("short link from the queue") == 0 || userRows("short link from the box") == 0 { pause(1) }
         pause(3)
-        Self.note("QUEUE arrived: queue \(userRows("steered from the queue")), box \(userRows("steered from the box"))")
-        XCTAssertEqual(userRows("steered from the queue"), 1, "the queued words didn't arrive once as a message")
-        XCTAssertEqual(userRows("steered from the box"), 1, "Steer now's words didn't arrive once as a message")
+        Self.note("QUEUE arrived: queue \(userRows("short link from the queue")), box \(userRows("short link from the box"))")
+        XCTAssertEqual(userRows("short link from the queue"), 1, "the queued words didn't arrive once as a message")
+        XCTAssertEqual(userRows("short link from the box"), 1, "Steer now's words didn't arrive once as a message")
         app.terminate()
     }
 }
