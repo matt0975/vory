@@ -1221,13 +1221,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     /// A queued message sent into the running turn (#546), as the composer's Steer now sends one. It leaves the queue
-    /// first, so the turn's end (`drainQueue`) can't send it as well. A steer that fails puts it back where it was: still
-    /// queued, said, while the turn runs; sent as the next message if the turn ended while the steer was out.
+    /// first, so the turn's end (`drainQueue`) can't send it as well. One the gateway doesn't take ("rejected": its turn
+    /// had ended) goes back where it was and is the next message. A steer that fails goes back too: still queued, said,
+    /// while the turn runs; sent as the next message if the turn ended while the steer was out.
     public func steerQueued(_ id: UUID) async {
         guard isRunning, let i = queue.firstIndex(where: { $0.id == id }) else { return }
         let message = queue.remove(at: i)
         do {
-            _ = try await steerSending(message.text)
+            guard try await steerSending(message.text) == "rejected" else { return }
+            queue.insert(message, at: min(i, queue.count))
+            if !isRunning { drainQueue() }
         } catch {
             queue.insert(message, at: min(i, queue.count))
             if isRunning { banner = error.localizedDescription } else { drainQueue() }
