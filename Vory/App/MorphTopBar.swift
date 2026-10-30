@@ -1048,36 +1048,6 @@ struct MorphTopBar: View {
         .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
-    /// A pushed page's own controls, live, with the footprint `trailIcons` is measured with (#435).
-    private func pageActionButtons(_ acts: [MorphPageAction]) -> some View {
-        HStack(spacing: 18) {
-            ForEach(acts) { a in
-                if a.menu.isEmpty {
-                    Button(action: a.action) { Image(systemName: a.symbol).contentShape(.rect) }
-                        .buttonStyle(MorphPressStyle(kind: .icon))
-                        .accessibilityElement(children: .ignore).accessibilityLabel(a.label).accessibilityAddTraits(.isButton)
-                        .accessibilityAction { if a.enabled { a.action() } }
-                        .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
-                        .accessibilityIdentifier(a.id)
-                        // The bar's button style does not dim a disabled button: done here.
-                        .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
-                } else {
-                    Menu {
-                        ForEach(Array(a.menu.enumerated()), id: \.offset) { _, item in
-                            Button { item.action() } label: { Label(item.label, systemImage: item.symbol) }
-                        }
-                    } label: { Image(systemName: a.symbol).contentShape(.rect) }
-                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
-                    .accessibilityLabel(a.label).accessibilityIdentifier(a.id)
-                    .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
-                    .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
-                }
-            }
-        }
-        .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
-    }
-
     /// A page's trailing icons (visual in this pass, measured and morphed like the list's).
     private func trailIcons(_ names: [String], label: String) -> some View {
         HStack(spacing: BarIcon.spacing) { ForEach(names, id: \.self) { Image(systemName: $0).barIconSlot() } }
