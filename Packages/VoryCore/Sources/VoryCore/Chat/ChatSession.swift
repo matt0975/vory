@@ -1206,13 +1206,28 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
 
-    public func steer(_ text: String) async {
+    /// The composer's Steer now: `text` into the running turn. Gives back the words for the composer to put back, as a
+    /// failed send does: the text itself when the steer failed (said in the banner), and when no turn took it (the
+    /// gateway's "rejected": the turn had ended) whatever sending it as the next message gives back.
+    @discardableResult
+    public func steer(_ text: String) async -> String? {
         do {
-            let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
-            items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: r["status"]?.stringValue ?? "queued")))
+            guard try await steerSending(text) == "rejected" else { return nil }
+            return await send(text)
         } catch {
             banner = error.localizedDescription
+            return text
         }
+    }
+
+    /// session.steer, and the gateway's answer: "queued" when the running turn takes the words (they go in after its
+    /// current tool calls), "rejected" when no turn takes them, for the client to send as its next prompt. A steer row
+    /// only for words a turn took.
+    private func steerSending(_ text: String) async throws -> String {
+        let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
+        let status = r["status"]?.stringValue ?? "queued"
+        if status != "rejected" { items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: status))) }
+        return status
     }
 
     public func removeQueued(_ id: UUID) { queue.removeAll { $0.id == id } }

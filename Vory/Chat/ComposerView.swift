@@ -437,7 +437,7 @@ struct ComposerView: View {
                 HStack {
                     Text("Agent is working. Send queues the message.").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Steer now") { let t = text; text = ""; Task { await chat.steer(t) } }.font(.caption2)
+                    Button("Steer now") { let t = text; text = ""; Task { if let back = await chat.steer(t) { text = back } } }.font(.caption2)
                 }
                 .padding(.horizontal, 8)
             }
