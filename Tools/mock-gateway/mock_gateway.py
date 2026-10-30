@@ -1539,6 +1539,8 @@ def model_options() -> dict:
 #                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
 #   resume-refused  the next N session.resume calls (default 1) answer an error, then all is well; no socket is dropped
 #                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
+#   steer-rejected  session.steer answers "rejected" even while a turn runs, as the gateway does when its turn ended a
+#                   moment before the client knew; no socket is dropped (#546: the words go as the next message)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
 
@@ -1600,7 +1602,7 @@ async def process_request(connection, request):
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
         FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown") else 0
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown", "steer-rejected") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -3081,6 +3083,23 @@ class Gateway:
             UNDOS.append({"session_id": s.sid, "intent": p.get("intent"), "removed": removed, "at": time.time()})
             print(f"[mock] session.undo {s.sid} intent={p.get('intent')!r}: removed {removed}", flush=True)
             return ok({"removed": removed})
+        if method == "session.steer":
+            # As the real gateway answers it (tui_gateway/methods_session.py, _correction_method and _apply_correction):
+            # no text, 4002; no live turn, "rejected", which the client sends as its next prompt; a live turn takes the
+            # words ("queued": the agent adds them as their own user row after its current tool calls, nothing streamed)
+            # and keeps them on the inflight turn for a resume ("corrections").
+            text = str(p.get("text") or "").strip()
+            if not text:
+                return err(4002, "text is required")
+            s = self.sessions.get(p.get("session_id", ""))
+            if s is None:
+                return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
+            if not s.running or FAULT["mode"] == "steer-rejected":
+                return ok({"status": "rejected", "text": text})
+            if s.inflight is not None:
+                s.inflight["corrections"] = [*(s.inflight.get("corrections") or []), text]
+            print(f"session.steer {text!r} session={s.sid}", flush=True)
+            return ok({"status": "queued", "text": text})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
             # Voice mode's quick answers set reasoning and fast for the session and put them back.
