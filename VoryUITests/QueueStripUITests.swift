@@ -34,12 +34,30 @@ final class QueueStripUITests: XCTestCase {
     }
 
     /// Types `words` into the box and checks it holds exactly them: a keyboard that drops while XCTest types on loses
-    /// the rest, and the part would then be sent and read as something else.
+    /// the rest, and the part would then be sent and read as something else. Then waits for the keyboard to settle.
     private func type(_ words: String, into composer: XCUIElement) {
         composer.tap()
         composer.typeText(words)
         let held = (composer.value as? String) ?? ""
         XCTAssertEqual(held, words, "the box took only '\(held)' of '\(words)'")
+        keyboardSettled()
+    }
+
+    /// For about a second after typeText the keyboard is off screen while `app.keyboards` still finds it, and then it
+    /// comes back: a control tapped by a frame read in that time meets the returning keyboard. Waits (5 s at most) for
+    /// the keyboard's frame on screen and the same twice, 0.2 s apart; noted if it never is.
+    private func keyboardSettled() {
+        let window = app.windows.firstMatch.frame, keyboard = app.keyboards.firstMatch
+        var last = CGRect.null
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            let k = keyboard.exists ? keyboard.frame : .null
+            let on = !k.isNull && k.height > 0 && k.minY < window.maxY
+            if on && k == last { return }
+            last = on ? k : .null
+            pause(0.2)
+        }
+        Self.note("QUEUE the keyboard didn't settle on screen in 5 s")
     }
 
     private func send(_ text: String) throws {
@@ -48,7 +66,24 @@ final class QueueStripUITests: XCTestCase {
         type(text, into: composer)
         let sendButton = app.buttons.matching(identifier: "composer.send").firstMatch
         XCTAssertTrue(sendButton.waitForExistence(timeout: 5), "no send")
+        // Send where it stands over the settled keyboard: its frame the same twice, 0.2 s apart, clear of the keyboard's top.
+        let keyboard = app.keyboards.firstMatch
+        var at = CGRect.null
+        for _ in 0..<15 {
+            let f = sendButton.frame, top = keyboard.exists ? keyboard.frame.minY : .greatestFiniteMagnitude
+            if f == at, f.maxY <= top + 1 { break }
+            at = f
+            pause(0.2)
+        }
         sendButton.tap()
+        // Sent or queued, the words leave the box. A tap that didn't take leaves them there: read now, with where the
+        // button and the keyboard stood, not found later as two messages run together in the box.
+        let left = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value != %@", text), object: composer)
+        if XCTWaiter().wait(for: [left], timeout: 3) != .completed {
+            let keyboard = app.keyboards.firstMatch
+            Self.note("QUEUE send of '\(text)' didn't take: send \(sendButton.frame) hittable \(sendButton.isHittable), keyboard \(keyboard.exists ? "\(keyboard.frame)" : "none")")
+            XCTFail("the send of '\(text)' didn't take: its words stayed in the box")
+        }
     }
 
     /// The strip's rows top to bottom: each Steer button and the words standing level with it before it. Only the three
@@ -150,6 +185,11 @@ final class QueueStripUITests: XCTestCase {
         }
 
         // Steer the second: it leaves the strip, the other two keep their order, and its words come as a steer row.
+        // Only with all three rows: with fewer there's no second to steer, and the run fails by name rather than crashing.
+        guard rows.count == 3 else {
+            XCTFail("missing '\(Self.words.filter { w in !rows.contains { $0.words == w } }.joined(separator: "', '"))': no second row to steer")
+            app.terminate(); return
+        }
         rows[1].steer.tap()
         pause(2)
         let after = stripRows()
