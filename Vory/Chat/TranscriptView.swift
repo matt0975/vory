@@ -2634,6 +2634,9 @@ struct MarkdownTableView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var full = false
     @State private var more = MarkdownTableMetrics.Overflow()
+    /// Wrap the columns to fit the bubble, or hold their one-line widths and scroll. One key, so
+    /// every table on screen agrees with the one just switched.
+    @AppStorage(MarkdownTableMetrics.wrapKey) private var wrap = true
 
     /// What the reply shows: a table over 16 columns or 60 rows shows that much and says how much more there is; the
     /// whole of it is on the sheet (a wide table made a grid wider than the graphics card draws, #361).
@@ -2662,38 +2665,81 @@ struct MarkdownTableView: View {
     }
 
     private var grid: some View {
-        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
+    }
+
+    /// The same table with its columns held at their longest-word floors, every line of every cell
+    /// drawn: what a reader who would rather not drag asks for.
+    private var wrappedGrid: some View {
+        MarkdownTableGrid(table: shownTable, lineLimit: nil, wraps: true,
+                          maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
+    }
+
+    /// The grid in the sideways scroll view, its edges fading where there is more to see.
+    private var scrollingGrid: some View {
+        ScrollView(.horizontal) { grid }
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: MarkdownTableMetrics.Overflow.self) { g in
+                MarkdownTableMetrics.overflow(contentWidth: g.contentSize.width, visibleMinX: g.visibleRect.minX, visibleMaxX: g.visibleRect.maxX)
+            } action: { _, now in more = now }
+            .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
+    }
+
+    private var openTableButton: some View {
+        Button { full = true } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(.thinMaterial, in: .circle)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open the table full screen")
+        .help("Open Table")
+    }
+
+    /// The card's top header strip: an anchored title on the leading edge and compact 28 pt action
+    /// discs on the trailing edge. Sitting here rather than overlaying the table cells prevents
+    /// narrow rightmost columns from having their headers squeezed by the buttons.
+    private var controls: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Image(systemName: "tablecells")
+                    .font(.caption2)
+                Text("Table")
+                    .font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, 12)
+
+            Spacer(minLength: 0)
+
+            TableWrapToggle()
+            openTableButton
+        }
     }
 
     private var card: some View {
         // The grid alone when its columns fit (it then stretches to the bubble's width), else
         // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
-        // keeps a narrow table free of a scroll view that would catch the thread's drags.
-        ViewThatFits(in: .horizontal) {
-            grid
-            ScrollView(.horizontal) { grid }
-                .scrollIndicators(.hidden)
-                .onScrollGeometryChange(for: MarkdownTableMetrics.Overflow.self) { g in
-                    MarkdownTableMetrics.overflow(contentWidth: g.contentSize.width, visibleMinX: g.visibleRect.minX, visibleMaxX: g.visibleRect.maxX)
-                } action: { _, now in more = now }
-                .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
+        // keeps a narrow table free of a scroll view that would catch the thread's drags. Wrapped,
+        // the first candidate is the word-floor grid: when the words cannot fit, it reports more
+        // than the bubble and this falls through to the scroll that keeps a wide table readable.
+        VStack(spacing: 0) {
+            controls
+            Group {
+                if wrap {
+                    ViewThatFits(in: .horizontal) { wrappedGrid; scrollingGrid }
+                } else {
+                    ViewThatFits(in: .horizontal) { grid; scrollingGrid }
+                }
+            }
         }
         .background(Color(.systemBackground).opacity(0.5))
         .clipShape(.rect(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator), lineWidth: 0.5) }
-        .overlay(alignment: .topTrailing) {
-            Button { full = true } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(5)
-                    .background(.thinMaterial, in: .circle)
-            }
-            .buttonStyle(.plain)
-            .padding(4)
-            .accessibilityLabel("Open the table full screen")
-            .help("Open Table")
-        }
         .accessibilityElement(children: .contain)
         // Not selectable in the bubble: on the Mac each selectable cell is an AppKit text view
         // with its own accessibility, and inside the sideways scroll view VoiceOver's reading of
