@@ -493,8 +493,13 @@ final class BarUpUITests: XCTestCase {
                     print("CHATFRAMES titlePill matches \(infos.count): \(infos.map { "\($0.elementType.rawValue) \($0.frame)" }.joined(separator: ", "))")
                     XCTAssertEqual(infos.count, 1, "Chat info named \(infos.count) times")
                     // The header is one surface: a tap on its empty part, short of the column, opens nothing (no Bot info,
-                    // nothing over the chat) and never reaches the thread under the band.
-                    let empty = CGVector(dx: more.frame.minX - 74, dy: Self.sideRowMiddle)
+                    // nothing over the chat) and never reaches the thread under the band. The empty part is the gap between
+                    // Chat info and More, tapped at its middle on the row: not a fixed distance short of More, which (#554)
+                    // stands at UIKit's item, nearer the pill, so a long title's pill can run past that distance. A bar
+                    // without a 44 pt gap there has no empty part to tap, and fails here by name.
+                    let gap = more.frame.minX - info.frame.maxX
+                    XCTAssertGreaterThanOrEqual(gap, 44, "no 44 pt of empty header between Chat info \(info.frame) and More \(more.frame)")
+                    let empty = CGVector(dx: (info.frame.maxX + more.frame.minX) / 2, dy: Self.sideRowMiddle)
                     // The thread's row under the tap's point (or, with none there, the topmost row on screen), read the same way
                     // before and after: a tap that reached the thread (a tool card opening) moves or resizes it. The ids repeat
                     // (every user row is "thread.row.user"), so the row is found by its place, not its id.
@@ -508,7 +513,7 @@ final class BarUpUITests: XCTestCase {
                     let rowBefore = rowAt()
                     app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(empty).tap(); pause(1.5)
                     let rowAfter = rowAt()
-                    print("CHATFRAMES header tap at \(empty): Bot info \(element("profile.header").exists ? "open" : "closed"), Chat info hittable \(info.isHittable), thread row \(rowBefore.map { "\($0.how) \($0.frame)" } ?? "none") after \(rowAfter.map { "\($0.how) \($0.frame)" } ?? "none")")
+                    print("CHATFRAMES header tap at \(empty), gap \(gap): Bot info \(element("profile.header").exists ? "open" : "closed"), Chat info hittable \(info.isHittable), thread row \(rowBefore.map { "\($0.how) \($0.frame)" } ?? "none") after \(rowAfter.map { "\($0.how) \($0.frame)" } ?? "none")")
                     XCTAssertFalse(element("profile.header").exists, "a tap on the header's empty part opened Bot info")
                     XCTAssertTrue(info.isHittable && more.isHittable, "a tap on the header's empty part covered the chat")
                     if let b = rowBefore {
