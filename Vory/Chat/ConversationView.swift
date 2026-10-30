@@ -603,12 +603,16 @@ struct QueueStrip: View {
                 HStack(spacing: 0) {
                     Text(q.text).font(.subheadline).lineLimit(2)
                     Spacer()
-                    // Into the running turn now (#546), as the composer's Steer now: only while a turn runs.
+                    // Into the running turn now (#546), as the composer's Steer now: only while a turn runs. Its word in the
+                    // primary colour on a tinted capsule: the tint's own blue as text on the strip's glass fell short of
+                    // contrast, light and dark.
                     if chat.isRunning {
                         Button { Task { await chat.steerQueued(q.id) } } label: {
-                            Text("Steer").font(.subheadline.weight(.semibold)).frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+                            Text("Steer").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                .padding(.horizontal, 12).frame(minHeight: 30).background(.tint.opacity(0.2), in: .capsule)
+                                .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
                         }
-                        .buttonStyle(.plain).foregroundStyle(.tint)
+                        .buttonStyle(.plain)
                         .accessibilityHint("Sends it into the reply now")
                         .accessibilityIdentifier("queue.steer")
                     }
