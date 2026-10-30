@@ -604,12 +604,15 @@ struct QueueStrip: View {
                     Text(q.text).font(.subheadline).lineLimit(2)
                     Spacer()
                     // Into the running turn now (#546), as the composer's Steer now: only while a turn runs. Its word in the
-                    // primary colour on a tinted capsule: the tint's own blue as text on the strip's glass fell short of
-                    // contrast, light and dark.
+                    // primary colour on a tinted capsule over the page's own background, so the capsule is opaque: the
+                    // tint's own blue as text on the strip's glass fell short of contrast, light and dark, and the tint
+                    // alone on the glass let the reply streaming under the strip through, short of it in dark. Not white
+                    // on the tint: the accent is the person's, and white on orange, green or teal reads far worse.
                     if chat.isRunning {
                         Button { Task { await chat.steerQueued(q.id) } } label: {
                             Text("Steer").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                .padding(.horizontal, 12).frame(minHeight: 30).background(.tint.opacity(0.2), in: .capsule)
+                                .padding(.horizontal, 12).frame(minHeight: 30)
+                                .background { Capsule().fill(.background).overlay(Capsule().fill(.tint.opacity(0.2))) }
                                 .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
                         }
                         .buttonStyle(.plain)
