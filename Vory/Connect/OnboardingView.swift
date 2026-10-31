@@ -125,7 +125,7 @@ struct OnboardingView: View {
                         Label("Try a demo", systemImage: "sparkles").font(.headline).foregroundStyle(Color.onboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")

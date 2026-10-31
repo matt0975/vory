@@ -106,6 +106,7 @@ import Testing
         await rt.kanban.refresh()
         let moved = rt.kanban.board?.columns.flatMap(\.tasks).first { $0.id == "t-106" }
         #expect(moved?.status == "done")
+        #expect(moved?.result == "Toner is fine.")
     }
 
     @Test func aFileTheAppSendsIsKeptForTheDemosLife() async throws {
