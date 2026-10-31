@@ -13,11 +13,22 @@ struct Acknowledgement: Decodable, Identifiable, Equatable {
     var id: String { name }
 
     /// The notice as paragraphs to read: each paragraph's hard-wrapped lines joined, so it reflows
-    /// at every text size instead of breaking where the file did.
+    /// at every text size instead of breaking where the file did. A rule of dashes is drawing, not
+    /// words, and is left out; a short line in capitals over the rest of its paragraph (PREAMBLE,
+    /// DISCLAIMER) is a heading and stands on its own.
     var paragraphs: [String] {
-        text.components(separatedBy: "\n\n")
-            .map { $0.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ") }
-            .filter { !$0.isEmpty }
+        text.components(separatedBy: "\n\n").flatMap { block -> [String] in
+            var lines = block.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty && !$0.allSatisfy { $0 == "-" } }
+            guard let first = lines.first else { return [] }
+            var out: [String] = []
+            if lines.count > 1, first.split(separator: " ").count <= 3,
+               first.contains(where: \.isLetter), !first.contains(where: \.isLowercase) {
+                out.append(first)
+                lines.removeFirst()
+            }
+            return out + [lines.joined(separator: " ")]
+        }
     }
 
     /// The bundle's list in its order; empty if the file is missing or unreadable.
