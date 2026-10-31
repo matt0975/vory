@@ -200,8 +200,10 @@ import Testing
 
     @Test func onlyTheMarkersOwnViewsAreFound() {
         // The strip as the system draws it: our markers' buttons at their frames, and things that share only a label or only
-        // a frame with them.
-        let root = UIView(frame: CGRect(x: 0, y: 0, width: 466, height: 678)), strip = UIView(frame: CGRect(x: 382, y: 0, width: 84, height: 678))
+        // a frame with them. In a window, as the app's are: the frames are read in window space.
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+        let root = UIView(frame: window.bounds), strip = UIView(frame: CGRect(x: 382, y: 0, width: 84, height: 678))
+        window.addSubview(root)
         root.addSubview(strip)
         func control(_ label: String, _ frame: CGRect, in host: UIView) -> UIControl {
             let c = UIControl(frame: frame.offsetBy(dx: -host.frame.minX, dy: -host.frame.minY))
@@ -225,6 +227,7 @@ import Testing
         #expect(StripMarkerReader.markerViews(in: root, targets: [("Back", CGRect(x: 401, y: 238, width: 38, height: 48))]).isEmpty)
         // Below the depth limit nothing is walked.
         #expect(StripMarkerReader.markerViews(in: root, targets: targets, depth: 0).isEmpty)
+        withExtendedLifetime(window) {}
     }
 
     /// The settled place (`StripMarkers.Settle`): taken once it has stood 250 ms with no change.
