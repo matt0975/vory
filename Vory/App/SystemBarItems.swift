@@ -46,6 +46,18 @@ import UIKit
 
     /// Whether the bar stood up in the status band (`TopBarRoom.barUp`), by window shape, as the fold last said.
     private(set) var upByShape: [String: Bool] = [:]
+    /// Whether the window was the closed strip (`MorphTopBar.stripClosed`: the system's bars vertical beside it), by shape.
+    private(set) var closedByShape: [String: Bool] = [:]
+    private static let closedKey = "vory.systemBarItems.closed"
+
+    func closed(for shape: String) -> Bool? { closedByShape[shape] }
+
+    /// The strip's verdict for a shape, kept for the next launch.
+    func noteClosed(_ closed: Bool, for shape: String) {
+        guard closedByShape[shape] != closed else { return }
+        closedByShape[shape] = closed
+        defaults.set(closedByShape, forKey: Self.closedKey)
+    }
     /// The Duo's window as last settled: its size and safe area.
     private(set) var lastWindow: (size: CGSize, safeArea: EdgeInsets)?
     private static let upKey = "vory.systemBarItems.up"
@@ -69,6 +81,7 @@ import UIKit
 
     private func loadLaunchState() {
         upByShape = defaults.dictionary(forKey: Self.upKey) as? [String: Bool] ?? [:]
+        closedByShape = defaults.dictionary(forKey: Self.closedKey) as? [String: Bool] ?? [:]
         if let w = defaults.array(forKey: Self.windowKey) as? [Double], w.count == 6 {
             lastWindow = (CGSize(width: w[0], height: w[1]), EdgeInsets(top: w[2], leading: w[3], bottom: w[4], trailing: w[5]))
         }
@@ -91,6 +104,7 @@ import UIKit
 /// or the side strip) and from then on, so a turn never waits for it. Never on an iPhone or an iPad, where nothing reads
 /// it and the bars stand where they did.
 struct SystemBarItemsHost: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.reservedRegions) private var regions
     @Environment(\.scenePhase) private var scenePhase
@@ -111,16 +125,22 @@ struct SystemBarItemsHost: View {
         .onChange(of: now, initial: true) { _, d in if d { duo = true } }
         // What a launch lays out in before the live window and fold come (`SystemBarItems.launchGeometry`,
         // `TopBarRoom.barUpAtLaunch`): only what was read live, settled and in front, and only on the Duo.
-        .onChange(of: Settled(key: key, safe: g.safeArea, read: read, live: live, measured: !g.seeded && !g.holding && g.bounds.width > 0,
-                              front: scenePhase == .active, duo: duo || now), initial: true) { _, s in
+        .onChange(of: Settled(key: key, safe: g.safeArea, read: read, live: live,
+                              closed: model.tabBarVertical && VoryTabBar.statusStrip(g.safeArea) != nil,
+                              measured: !g.seeded && !g.holding && g.bounds.width > 0, front: scenePhase == .active, duo: duo || now),
+                  initial: true) { _, s in
             guard s.measured, s.front, s.duo else { return }
             SystemBarItems.shared.settled(size: g.bounds.size, safeArea: g.safeArea)
-            if s.read { SystemBarItems.shared.noteUp(s.live, for: s.key) }
+            // By the time the regions are read the system has said where its bars stand (0.1 s in, against about a second).
+            if s.read {
+                SystemBarItems.shared.noteUp(s.live, for: s.key)
+                SystemBarItems.shared.noteClosed(s.closed, for: s.key)
+            }
         }
     }
 
     private struct Settled: Equatable {
-        var key: String, safe: EdgeInsets, read: Bool, live: Bool, measured: Bool, front: Bool, duo: Bool
+        var key: String, safe: EdgeInsets, read: Bool, live: Bool, closed: Bool, measured: Bool, front: Bool, duo: Bool
     }
 }
 

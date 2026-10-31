@@ -51,6 +51,15 @@ import Testing
         #expect(!TopBarRoom.barUpAtLaunch(live: false, regionsRead: false, remembered: nil))
     }
 
+    @Test func theClosedStripStandsFromTheFirstFrame() {
+        // The launch gate (2026-10-31): the system said its bars were vertical 0.1 s after the first layout, and that layout's
+        // trailing place (12 pt short) was the one kept until the regions came. Remembered, the strip stands at once.
+        #expect(TopBarRoom.stripClosedAtLaunch(live: false, regionsRead: false, remembered: true))
+        #expect(!TopBarRoom.stripClosedAtLaunch(live: false, regionsRead: false, remembered: nil))
+        #expect(!TopBarRoom.stripClosedAtLaunch(live: false, regionsRead: true, remembered: true))
+        #expect(TopBarRoom.stripClosedAtLaunch(live: true, regionsRead: true, remembered: nil))
+    }
+
     @Test func onceTheFoldIsReadTheLiveVerdictStands() {
         #expect(!TopBarRoom.barUpAtLaunch(live: false, regionsRead: true, remembered: true))
         #expect(TopBarRoom.barUpAtLaunch(live: true, regionsRead: true, remembered: false))
@@ -108,7 +117,12 @@ import Testing
             items.settled(size: CGSize(width: 466, height: 678), safeArea: EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84))
             items.noteUp(true, for: upright)
             items.noteUp(false, for: closed)
+            items.noteClosed(true, for: closed)
+            items.noteClosed(false, for: upright)
             let next = SystemBarItems(defaults: d)
+            #expect(next.closed(for: closed) == true)
+            #expect(next.closed(for: upright) == false)
+            #expect(next.closed(for: side) == nil)
             let g = next.launchGeometry()
             #expect(g.seeded)
             #expect(g.bounds == CGRect(x: 0, y: 0, width: 466, height: 678))

@@ -484,13 +484,12 @@ struct MorphTopBar: View {
         let g = windowGeometry
         let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
         let item = SystemBarItems.shared.trailing(for: key)
-        MorphFramesProbe.noteBarState(String(format: "key=%@ safe=%.0f,%.0f,%.0f,%.0f holding=%@ lift=%.0f closed=%@ vertical=%@ item=%@ clear=%.1f seeded=%@ regions=%d up=%@",
+        MorphFramesProbe.noteBarState(String(format: "key=%@ safe=%.0f,%.0f,%.0f,%.0f holding=%@ lift=%.0f closed=%@ vertical=%@ item=%@ clear=%.1f seeded=%@ regions=%d up=%@ wasclosed=%@",
             key.replacingOccurrences(of: " ", with: "_"), g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing,
             "\(g.holding)", lift, "\(stripClosed)", "\(model.tabBarVertical)", item.map { String(format: "%.0f", $0.maxX) } ?? "none", statusClear,
-            "\(g.seeded)", probeRegions.reported.count, SystemBarItems.shared.up(for: key).map { "\($0)" } ?? "none"))
+            "\(g.seeded)", regions.reported.count, SystemBarItems.shared.up(for: key).map { "\($0)" } ?? "none",
+            SystemBarItems.shared.closed(for: key).map { "\($0)" } ?? "none"))
     }
-    /// The regions as the bar sees them, for the launch probe's line only.
-    @Environment(\.reservedRegions) private var probeRegions
     #endif
     /// The bar's padding over its row: the closed Duo's even row (#558), 4 elsewhere (`TopBarRoom.barPadding`).
     private var topPadding: CGFloat { TopBarRoom.barPadding(closed: stripClosed && !inBand) }
@@ -499,10 +498,17 @@ struct MorphTopBar: View {
     /// Between Back and the face, up in the band.
     static let faceGap: CGFloat = 8
     @Environment(\.windowGeometry) private var windowGeometry
-    /// The closed Duo: the system's bars stand in a status strip at the window's side (`VoryTabBar.statusStrip`).
+    /// The closed Duo: the system's bars stand in a status strip at the window's side (`VoryTabBar.statusStrip`). Through
+    /// a launch's first second, until the regions are read, as this window's shape last was (`TopBarRoom.stripClosedAtLaunch`):
+    /// the system says its bars are vertical just after the first layout, and that layout's place is the one kept (#555).
     private var stripClosed: Bool {
-        model.tabBarVertical && VoryTabBar.statusStrip(windowGeometry.safeArea) != nil
+        let g = windowGeometry
+        guard VoryTabBar.statusStrip(g.safeArea) != nil else { return false }
+        let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
+        return TopBarRoom.stripClosedAtLaunch(live: model.tabBarVertical, regionsRead: !regions.reported.isEmpty,
+                                              remembered: SystemBarItems.shared.closed(for: key))
     }
+    @Environment(\.reservedRegions) private var regions
     /// A chat's bar like Messages' on the Duo (Matt, 2026-10-28, #542): no pill. Up in the band and closed alike: Back, the
     /// face with no glass behind it (as a contact's photo is), then the bot's name and the chat's title as plain text, and
     /// More, all in the row, where UIKit stands its own items (closed, none in the strip, #555). Elsewhere (a phone, an
@@ -1341,6 +1347,10 @@ private extension View {
     /// that goes away leaves its last frame so its capsule can fade out where it was.
     func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil) -> some View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { f in
+            #if DEBUG
+            // The launch probe (#555): every trailing frame measured, against the one drawn ("trail").
+            if slot == .trail { MorphFramesProbe.note("mtrail", f) }
+            #endif
             guard frames.wrappedValue[slot] != f else { return }
             if frames.wrappedValue[slot] != nil || last?.wrappedValue[slot] != nil {
                 withAnimation(.snappy(duration: 0.22)) { frames.wrappedValue[slot] = f }

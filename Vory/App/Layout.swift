@@ -146,6 +146,13 @@ enum TopBarRoom {
     static func barUpAtLaunch(live: Bool, regionsRead: Bool, remembered: Bool?) -> Bool {
         regionsRead ? live : (remembered ?? live)
     }
+    /// The closed Duo's strip through a launch's first second, the same way (#555): the system says its bars stand
+    /// vertical about 0.1 s after the first layout, and the row's trailing capsule kept the place it was first measured at
+    /// until the regions came, 12 pt short of UIKit's item (the launch gate, 2026-10-31). Until the regions are read, a
+    /// window shape last seen as the closed strip (`SystemBarItems.closed`) is the closed strip from the first frame.
+    static func stripClosedAtLaunch(live: Bool, regionsRead: Bool, remembered: Bool?) -> Bool {
+        barUpAtLaunch(live: live, regionsRead: regionsRead, remembered: remembered)
+    }
     /// Whether the pages get the room under a status in a top corner (`statusInCorner`): where the bar isn't up, the
     /// regions report one, and the window is taller than wide, as only the open Duo upright is with its status in a corner.
     /// A turn on its side keeps reporting the upright's corner for about 0.75 s after the window is wide, and the room

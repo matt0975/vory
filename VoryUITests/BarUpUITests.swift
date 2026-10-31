@@ -610,7 +610,7 @@ final class BarUpUITests: XCTestCase {
         // from launch.
         for line in ((log.value as? String) ?? "").split(separator: "\n") {
             let f = line.split(separator: " ", maxSplits: 2)
-            guard f.count == 3, ["barstate", "sysitem", "barhost"].contains(f[1]), let t = Double(f[0]), t >= t0 else { continue }
+            guard f.count == 3, ["barstate", "sysitem", "barhost", "mtrail"].contains(f[1]), let t = Double(f[0]), t >= t0 else { continue }
             print(String(format: "LAUNCH STATE %.3f ", t - t0) + "\(f[1]) \(f[2])")
         }
         if e["HERMES_E2E_LAUNCH_STRICT"] == "1" {
