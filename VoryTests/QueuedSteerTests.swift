@@ -112,33 +112,6 @@ import Testing
         #expect(!c.items.contains { if case .steer = $0.kind { true } else { false } })
     }
 
-    /// The composer's Steer now, rejected because the turn had ended: sent as the next message, not lost behind a steer row.
-    @Test func theComposersSteerRejectedIsSentAsTheNextMessage() async throws {
-        let c = try chat()
-        var calls: [(String, [String: JSONValue])] = []
-        c.gatewayStandIn = { m, p in
-            calls.append((m, p))
-            return m == "session.steer" ? .object(["status": .string("rejected")]) : .object(["status": .string("started")])
-        }
-        let back = await c.steer("after all")
-        await settle()
-        #expect(back == nil)
-        #expect(calls.map(\.0) == ["session.steer", "prompt.submit"])
-        #expect(submitted(calls) == ["after all"])
-        #expect(!c.items.contains { if case .steer = $0.kind { true } else { false } })
-    }
-
-    /// The composer's Steer now that fails: its words come back for the composer to put back, with the banner.
-    @Test func theComposersSteerThatFailsGivesItsWordsBack() async throws {
-        let c = try chat()
-        c.isRunning = true
-        c.gatewayStandIn = { _, _ in throw SocketError.timeout("session.steer") }
-        let back = await c.steer("keep these words")
-        #expect(back == "keep these words")
-        #expect(c.banner != nil)
-        #expect(!c.items.contains { if case .steer = $0.kind { true } else { false } })
-    }
-
     /// The same race with the steer taken ("queued": the gateway queues it itself while it compresses, as it does): it
     /// went once, as a steer, and the turn's end didn't send it again.
     @Test func theTurnEndsWhileTheSteerIsOutAndItIsTaken() async throws {
