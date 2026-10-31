@@ -121,6 +121,10 @@ final class TableCardAuditUITests: XCTestCase {
             return !inside || accepted
         }
         Self.note("AUDIT tables done, \(issues) issues")
+        // An audit that finds nothing saw nothing: this reply gives some twenty findings on a phone, the title's #575 among
+        // them. On the open Duo the audit comes back empty (it seems to read the closed cover, as XCUIScreen.main does), so
+        // an empty audit fails closed here. A screen that's truly clean will need another witness when that day comes.
+        guard issues > 0 else { XCTFail("VOID: the audit saw nothing (0 issues), so it can't pass the headers"); app.terminate(); return }
         app.terminate()
     }
 }
