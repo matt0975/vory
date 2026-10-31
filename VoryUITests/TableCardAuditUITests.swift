@@ -44,20 +44,25 @@ final class TableCardAuditUITests: XCTestCase {
         app.buttons["composer.send"].firstMatch.tap()
         let end = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Say the word")).firstMatch
         XCTAssertTrue(end.waitForExistence(timeout: 60), "the reply never finished")
+        // A point on the thread's window, as a coordinate hung on the composer: XCTest sends an element's taps and drags to
+        // the display its window is on, but the app's own coordinates to the main display, which on the open Duo is the
+        // closed cover (there they never reached the app, and the keyboard stayed up).
+        let at = { (x: CGFloat, y: CGFloat) in
+            composer.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x - composer.frame.minX, dy: y - composer.frame.minY))
+        }
         // The keyboard down, so the reply has the screen: a tap on the thread at the leading margin (clear of the cards and
-        // their own sideways scroll views), 40% down the window: under the header and above the dock, which both float over
-        // the thread and keep its tap from closing the keyboard (the open Duo's dock stands taller than a phone's, and a
-        // tap just above the composer landed on it). If it's still up, a drag from there down into it. Still up after
-        // both: no header can be audited, so the run fails here.
+        // their own sideways scroll views), 40% down the window, under the header and above the dock (both float over the
+        // thread, and a tap on them leaves the keyboard up). If it's still up, a drag from there down into it. Still up
+        // after both: no header can be audited, so the run fails here.
         // Noted for a run where it stays up: the spot, the composer, Back's bottom, and the keyboards before and after each
         // step (none to close at all, against a tap that missed).
-        let origin = app.coordinate(withNormalizedOffset: .zero)
-        let spot = origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.minY + app.windows.firstMatch.frame.height * 0.4))
+        let win = app.windows.firstMatch.frame
+        let spot = { at(win.minX + 10, win.minY + win.height * 0.4) }
         let backBottom = app.buttons["chat.back"].firstMatch.exists ? "\(app.buttons["chat.back"].firstMatch.frame.maxY)" : "-"
-        Self.note("TABLES keyboard before: \(app.keyboards.count) keyboard(s); spot \(spot.screenPoint), composer \(composer.frame), Back's bottom \(backBottom)")
-        if app.keyboards.firstMatch.exists { spot.tap(); pause(1); Self.note("TABLES keyboard after the tap: \(app.keyboards.count)") }
+        Self.note("TABLES keyboard before: \(app.keyboards.count) keyboard(s); spot \(spot().screenPoint), composer \(composer.frame), Back's bottom \(backBottom), window \(win)")
+        if app.keyboards.firstMatch.exists { spot().tap(); pause(1); Self.note("TABLES keyboard after the tap: \(app.keyboards.count)") }
         if app.keyboards.firstMatch.exists {
-            spot.press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.maxY - 4))); pause(1)
+            spot().press(forDuration: 0.05, thenDragTo: at(win.minX + 10, win.maxY - 4)); pause(1)
             Self.note("TABLES keyboard after the drag: \(app.keyboards.count)")
         }
         let keyboardUp = app.keyboards.firstMatch.exists
@@ -74,7 +79,7 @@ final class TableCardAuditUITests: XCTestCase {
         let headerTop = { firstTitle.frame.minY - 16 }, headerBottom = { firstTitle.frame.minY + 28 }
         let onScreen = { firstTitle.exists && headerTop() >= barBottom + 8 && headerBottom() <= composer.frame.minY - 8 }
         for _ in 0..<8 where !onScreen() {
-            let step = window.height * 0.3, from = origin.withOffset(CGVector(dx: 10, dy: window.height * 0.5))
+            let step = window.height * 0.3, from = at(window.minX + 10, window.minY + window.height * 0.5)
             let down = !firstTitle.exists || headerTop() < barBottom + 8
             from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: down ? step : -step))); pause(1)
         }
