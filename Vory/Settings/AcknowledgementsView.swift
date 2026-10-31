@@ -58,6 +58,10 @@ struct AcknowledgementsView: View {
                     Link(destination: item.url) {
                         LabeledContent { Text(item.licence).foregroundStyle(.secondary) }
                                label: { Label("\(item.name) \(item.version)", systemImage: "safari") }
+                            #if os(macOS)
+                            // The Mac's form draws a link row only as tall as its text (16 pt): room to hit it.
+                            .padding(.vertical, 4)
+                            #endif
                     }
                     .accessibilityLabel("\(item.name) \(item.version), \(item.licence)")
                     // One element per paragraph, so VoiceOver reads the notice a paragraph at a time.
