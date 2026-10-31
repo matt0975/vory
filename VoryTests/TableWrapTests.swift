@@ -26,7 +26,11 @@ import Vision
     @MainActor static func draw(_ view: some View) -> CGSize {
         let renderer = ImageRenderer(content: view)
         renderer.scale = 1
+        #if canImport(UIKit)
         return renderer.uiImage?.size ?? .zero
+        #else
+        return renderer.nsImage?.size ?? .zero
+        #endif
     }
 
     @MainActor private func grid(_ text: String, wraps: Bool) throws -> some View {
