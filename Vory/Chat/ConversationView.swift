@@ -71,6 +71,11 @@ struct ConversationView: View {
     /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
     /// there, whatever safe area or camera strip the header stands in, and it moves with them.
     @State private var headerBottom: CGFloat = 0
+    #if os(iOS)
+    /// Where the chat's pane starts in the window: past the window's leading safe edge, the list stands beside the chat
+    /// (on the Duo's side), and the strip's markers have no Back (`StripMarkerReader`), as the header has none.
+    @State private var paneMinX: CGFloat = 0
+    #endif
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     /// The Mac keeps the Chats page mounted behind the others (`macPageShown`, MainSplitView).
@@ -95,6 +100,13 @@ struct ConversationView: View {
         Group {
             if let chat {
                 framed(chat)
+                    #if os(iOS)
+                    // The page's own bar (below) gives the page a top inset of its own there (24 pt on its side, which
+                    // moved the header and the thread down; the window's own top is 0, the status in the strip): the
+                    // chat lays out as with the bar hidden.
+                    .ignoresSafeArea(.container, edges: model.tabBarVertical ? .top : [])
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { paneMinX = $0 }
+                    #endif
                     .handsOff(chat)
                     #if os(iOS)
                     // The Duo's side strip (#555; the system's bars vertical there, `model.tabBarVertical`): the page's own
@@ -103,7 +115,11 @@ struct ConversationView: View {
                     .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
                     .navigationBarBackButtonHidden(model.tabBarVertical)
                     .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
-                    .background { if model.tabBarVertical { StripMarkerReader().frame(width: 0, height: 0) } }
+                    .background {
+                        if model.tabBarVertical {
+                            StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1).frame(width: 0, height: 0)
+                        }
+                    }
                     #else
                     .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)

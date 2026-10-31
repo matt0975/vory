@@ -177,6 +177,27 @@ import Testing
         }
     }
 
+    /// The same objects, in the same order.
+    private func same(_ a: [AnyObject], _ b: [AnyObject]) -> Bool { a.elementsEqual(b, by: ===) }
+
+    @Test func besideTheListThePageCarriesMoreAlone() {
+        // Beside the list the page's bar carries More alone (the system then stands it in Back's place, the first slot);
+        // with the list hidden, Back and More. They're set again only when something replaced them.
+        let i = UINavigationItem(), back = UIBarButtonItem(title: "Back", image: nil), more = UIBarButtonItem(title: "Chat options", image: nil)
+        StripMarkerReader.install(on: i, back: false, backItem: back, moreItem: more)
+        #expect(i.leadingItemGroups.isEmpty)
+        #expect(same(i.trailingItemGroups.flatMap(\.barButtonItems), [more]))
+        StripMarkerReader.install(on: i, back: true, backItem: back, moreItem: more)
+        #expect(same(i.leadingItemGroups.flatMap(\.barButtonItems), [back]))
+        let groups = i.leadingItemGroups + i.trailingItemGroups
+        StripMarkerReader.install(on: i, back: true, backItem: back, moreItem: more)
+        #expect(same(i.leadingItemGroups + i.trailingItemGroups, groups))
+        // A rebuilt navigation item (a turn) has lost them: the next read sets them again.
+        i.trailingItemGroups = []
+        StripMarkerReader.install(on: i, back: true, backItem: back, moreItem: more)
+        #expect(same(i.trailingItemGroups.flatMap(\.barButtonItems), [more]))
+    }
+
     /// The settled place (`StripMarkers.Settle`): taken once it has stood 250 ms with no change.
     private let a0 = CGRect(x: 399, y: 238, width: 38, height: 48), transient = CGRect(x: 399, y: 175, width: 38, height: 48)
 

@@ -179,15 +179,34 @@ import UIKit
 /// over them and take the taps. Each is read in the window (`frame(in:)`) on the layout, safe-area and margin passes of the
 /// page, its navigation controller, its bar and the window, and on the strip's trait changes, and kept once settled.
 struct StripMarkerReader: UIViewControllerRepresentable {
+    /// Whether Back's marker is there: not while the list stands beside the chat. The chat page says so from where its
+    /// pane starts, as the header does (`ChatHeader.listBeside`): the page controller spans the window there, the list a
+    /// safe-area inset beside the pane, so its own frame can't tell.
+    var back: Bool
+
     func makeUIViewController(context: Context) -> Reader { Reader() }
 
     func updateUIViewController(_ reader: Reader, context: Context) {
         reader.geometry = context.environment.windowGeometry
+        reader.back = back
         reader.read()
+    }
+
+    /// Our items as a page's groups (Back only when asked), set again only if anything replaced them, so a read never
+    /// lays the bar out again by itself.
+    @MainActor static func install(on i: UINavigationItem, back: Bool, backItem: UIBarButtonItem, moreItem: UIBarButtonItem) {
+        let lead = back ? [backItem] : []
+        if !i.leadingItemGroups.flatMap(\.barButtonItems).elementsEqual(lead, by: ===) {
+            i.leadingItemGroups = back ? [UIBarButtonItemGroup(barButtonItems: lead, representativeItem: nil)] : []
+        }
+        if !i.trailingItemGroups.flatMap(\.barButtonItems).elementsEqual([moreItem], by: ===) {
+            i.trailingItemGroups = [UIBarButtonItemGroup(barButtonItems: [moreItem], representativeItem: nil)]
+        }
     }
 
     final class Reader: UIViewController {
         weak var geometry: WindowGeometry?
+        var back = true
         private let backItem = Reader.item("Back", "chevron.left"), moreItem = Reader.item("Chat options", "ellipsis")
         private var settles: [StripMarkers.Kind: StripMarkers.Settle] = [:]
         private var checks: [StripMarkers.Kind: Task<Void, Never>] = [:]
@@ -243,34 +262,18 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         override func viewSafeAreaInsetsDidChange() { super.viewSafeAreaInsetsDidChange(); read() }
         override func viewLayoutMarginsDidChange() { super.viewLayoutMarginsDidChange(); read() }
 
-        /// The chat page: the controller among its navigation controller's.
+        /// The page whose bar carries the markers: the controller among its navigation controller's (on its side, the
+        /// one that holds the list and the chat beside it).
         private func page() -> UIViewController? {
             var vc: UIViewController? = self
             while let c = vc, !(c.navigationController?.viewControllers.contains(c) ?? false) { vc = c.parent }
             return vc
         }
 
-        /// Whether the list stands beside the chat (on its side): the page starts past the window's leading safe edge.
-        private func listBeside(_ page: UIViewController, in window: UIWindow) -> Bool {
-            page.view.convert(page.view.bounds, to: nil).minX > window.safeAreaInsets.left + 1
-        }
-
-        /// Our items as the page's groups, set again if anything replaced them.
-        private func install(on i: UINavigationItem, back: Bool) {
-            let lead = back ? [backItem] : []
-            if !i.leadingItemGroups.flatMap(\.barButtonItems).elementsEqual(lead, by: ===) {
-                i.leadingItemGroups = back ? [UIBarButtonItemGroup(barButtonItems: lead, representativeItem: nil)] : []
-            }
-            if !i.trailingItemGroups.flatMap(\.barButtonItems).elementsEqual([moreItem], by: ===) {
-                i.trailingItemGroups = [UIBarButtonItemGroup(barButtonItems: [moreItem], representativeItem: nil)]
-            }
-        }
-
         /// On every event: our items in place, then each marker read; a changed place is read again once `delay` has passed.
         func read() {
             guard let page = page(), let window = view.window else { return }
-            let back = !listBeside(page, in: window)
-            install(on: page.navigationItem, back: back)
+            StripMarkerReader.install(on: page.navigationItem, back: back, backItem: backItem, moreItem: moreItem)
             #if DEBUG
             if !back, MorphFramesProbe.isOn { MorphFramesProbe.marks["markerBack"] = nil }
             #endif
@@ -308,9 +311,8 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             checks[kind]?.cancel()
             checks[kind] = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(StripMarkers.Settle.delay))
-                guard !Task.isCancelled, let self, let page = self.page(), let window = self.view.window else { return }
-                let back = !self.listBeside(page, in: window)
-                guard let key = self.key(back: back, in: window), key == self.lastKey else { return }
+                guard !Task.isCancelled, let self, let window = self.view.window else { return }
+                guard let key = self.key(back: self.back, in: window), key == self.lastKey else { return }
                 let now = ProcessInfo.processInfo.systemUptime
                 if self.settles[kind, default: .init()].note(self.place(kind, in: window), at: now) { self.check(kind); return }
                 guard let f = self.settles[kind]?.due(at: now) else { return }
