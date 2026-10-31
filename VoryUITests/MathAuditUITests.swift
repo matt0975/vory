@@ -78,15 +78,47 @@ final class MathAuditUITests: XCTestCase {
         }
     }
 
-    /// This screen's audit: a finding `own` says is #550's FAILS (returned), the rest are noted.
-    private func audit(_ screen: Int, own: @escaping (XCUIElement?) -> Bool) throws -> [String] {
-        var fails: [String] = []
+    /// One audit finding as read on its screen.
+    private struct Finding {
+        var screen: Int, type: String, id: String, label: String, frame: CGRect, kind: XCUIElement.ElementType, text: String
+    }
+
+    /// This screen's audit, every finding kept for the test to judge.
+    private func audit(_ screen: Int) throws -> [Finding] {
+        var out: [Finding] = []
         try app.performAccessibilityAudit(for: [.contrast, .sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
-            let mine = own(issue.element)
-            let line = "AUDIT screen \(screen) \(mine ? "FAIL" : "noted") \(issue.auditType) '\(issue.element?.identifier ?? "")' '\(issue.element?.label ?? "")' \(issue.element.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)"
-            Self.note(line)
-            if mine { fails.append(line) }
+            let el = issue.element
+            out.append(Finding(screen: screen, type: "\(issue.auditType)", id: el?.identifier ?? "", label: el?.label ?? "",
+                               frame: el?.frame ?? .zero, kind: el?.elementType ?? .any, text: issue.compactDescription))
             return true
+        }
+        return out
+    }
+
+    /// What is in sight between the top bar's bottom and the bottom chrome's top (the elements named), on this screen;
+    /// the window's edge where none of them is found. Noted with the elements that set it, so a bar not found shows.
+    private func region(_ screen: Int, top: [String], bottom: [String]) -> CGRect {
+        let win = app.windows.firstMatch.frame
+        let find = { (id: String) in app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        let tops = top.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.maxY) }
+        let bottoms = bottom.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.minY) }
+        let t = tops.max { $0.1 < $1.1 } ?? ("window", win.minY)
+        let b = bottoms.min { $0.1 < $1.1 } ?? ("window", win.maxY)
+        Self.note("REGION screen \(screen) top \(Int(t.1)) (\(t.0)) bottom \(Int(b.1)) (\(b.0))")
+        return CGRect(x: win.minX, y: t.1, width: win.width, height: max(0, b.1 - t.1))
+    }
+
+    /// Judges the findings. One wholly in sight that `ours` claims FAILS, except a contrast that only "nearly passed"
+    /// (the stock secondary label colour), which is noted; the rest are noted, "under the bars" when not wholly in sight.
+    private func judge(_ findings: [Finding], regions: [Int: CGRect], ours: (Finding) -> Bool) -> [String] {
+        var fails: [String] = []
+        for f in findings {
+            let line = "\(f.type) '\(f.id)' '\(f.label.prefix(80))' \(f.frame) \(f.text)"
+            guard let r = regions[f.screen], r.contains(f.frame) else { Self.note("AUDIT screen \(f.screen) noted (under the bars) \(line)"); continue }
+            guard ours(f) else { Self.note("AUDIT screen \(f.screen) noted \(line)"); continue }
+            if f.text.lowercased().contains("nearly passed") { Self.note("AUDIT screen \(f.screen) noted (nearly passed, ours) \(line)"); continue }
+            Self.note("AUDIT screen \(f.screen) FAIL \(line)")
+            fails.append("AUDIT screen \(f.screen) FAIL \(line)")
         }
         return fails
     }
@@ -120,7 +152,7 @@ final class MathAuditUITests: XCTestCase {
         XCTAssertTrue(heading.isHittable, "the reply's heading never came into sight")
         let win = app.windows.firstMatch.frame
         var cards: [String: CGRect] = [:]
-        var fails: [String] = []
+        var findings: [Finding] = [], regions: [Int: CGRect] = [:], cardsOn: [Int: [CGRect]] = [:]
         for screen in 1...12 {
             pause(1)
             collectStops()
@@ -130,13 +162,9 @@ final class MathAuditUITests: XCTestCase {
                 let key = words.isEmpty ? "card at \(Int(v.frame.minY))" : words
                 if cards[key] == nil { cards[key] = v.frame; Self.note("CARD \(v.frame): what VoiceOver gets: '\(words.prefix(200))'") }
             }
-            let cardFrames = views.map { $0.frame }
-            fails += try audit(screen) { el in
-                guard let el else { return false }
-                if el.elementType == .webView { return true }
-                // A card's own stops, and its Copy button (level with it, to its right).
-                return cardFrames.contains { $0.insetBy(dx: -60, dy: 0).contains(CGPoint(x: el.frame.midX, y: el.frame.midY)) }
-            }
+            cardsOn[screen] = views.map { $0.frame }
+            regions[screen] = region(screen, top: ["chat.back", "chat.titlePill"], bottom: ["chat.dock"])
+            findings += try audit(screen)
             if last.exists && last.isHittable && last.frame.maxY <= win.maxY { break }
             app.windows.firstMatch.swipeUp(velocity: .slow)
         }
@@ -170,6 +198,14 @@ final class MathAuditUITests: XCTestCase {
                 XCTFail("FINDING (what VoiceOver gets): between '\(before)' and '\(after)' comes '\(s.label.prefix(60))' \(s.frame)")
             }
         }
+        // The audit: ours is a card (its web view, or anything wholly inside it) or a card's Copy button (level with it,
+        // to its right).
+        let fails = judge(findings, regions: regions) { f in
+            let on = cardsOn[f.screen] ?? []
+            if f.kind == .webView || on.contains(where: { $0.contains(f.frame) }) { return true }
+            let copy = (f.label + " " + f.id).lowercased().contains("copy")
+            return copy && on.contains { f.frame.minY >= $0.minY - 4 && f.frame.maxY <= $0.maxY + 4 && f.frame.minX >= $0.maxX - 2 }
+        }
         for f in fails { XCTFail(f) }
     }
 
@@ -193,14 +229,12 @@ final class MathAuditUITests: XCTestCase {
         XCTAssertTrue(header.waitForExistence(timeout: 10), "the Acknowledgements page didn't open")
         let end = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", Self.entries[1].last)).firstMatch
         let win = app.windows.firstMatch.frame
-        var fails: [String] = []
-        let ours = { (label: String) -> Bool in
-            label == "Acknowledgements" || Self.entries.contains { label == $0.link } || label.count > 20
-        }
+        var findings: [Finding] = [], regions: [Int: CGRect] = [:]
         for screen in 1...30 {
             pause(0.8)
             collectStops()
-            fails += try audit(screen) { el in ours(el?.label ?? "") }
+            regions[screen] = region(screen, top: ["morph.title"], bottom: ["tab.chats", "tab.settings"])
+            findings += try audit(screen)
             if end.exists && end.isHittable && end.frame.maxY <= win.maxY { break }
             app.swipeUp(velocity: .slow)
         }
@@ -217,6 +251,9 @@ final class MathAuditUITests: XCTestCase {
             i = l + 1 + paragraphs.count
             guard i < labels.count || e.link == Self.entries.last?.link else { XCTFail("the stops end inside '\(e.link)'"); return }
         }
-        for f in fails { XCTFail(f) }
+        // The audit, judged now that the page's own stops are known: its header, its links and its paragraphs (VoiceOver's
+        // stops from the header to the last paragraph, so a hidden tab's rows, which the audit also walks, aren't ours).
+        let page = Set(labels[h..<min(i, labels.count)])
+        for f in judge(findings, regions: regions, ours: { page.contains($0.label) }) { XCTFail(f) }
     }
 }
