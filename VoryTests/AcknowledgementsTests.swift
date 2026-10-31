@@ -85,6 +85,18 @@ import Testing
             """))
     }
 
+    /// Both KaTeX entries name the KaTeX the app carries, by its script's own version, so an update of
+    /// the bundled script can't leave a stale notice behind.
+    @Test func theNoticesNameTheBundledKaTeX() throws {
+        let script = KaTeXAssets.jsString
+        let found = try #require(script.range(of: #"version:"[0-9.]+""#, options: .regularExpression))
+        let version = String(script[found].dropFirst("version:\"".count).dropLast())
+        #expect(version == "0.16.11")
+        let list = Acknowledgement.bundled()
+        try #require(list.count == 2)
+        #expect(list.allSatisfy { $0.version == version })
+    }
+
     /// Each notice reads as paragraphs that reflow at any text size, its headings on their own, and
     /// the joining loses no word; only the rules of dashes are left out.
     @Test func aNoticeReadsAsParagraphs() throws {
