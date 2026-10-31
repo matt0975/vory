@@ -59,8 +59,10 @@ struct AcknowledgementsView: View {
                         LabeledContent { Text(item.licence).foregroundStyle(.secondary) }
                                label: { Label("\(item.name) \(item.version)", systemImage: "safari") }
                             #if os(macOS)
-                            // The Mac's form draws a link row only as tall as its text (16 pt): room to hit it.
-                            .padding(.vertical, 4)
+                            // The Mac's form draws a link row only as tall as its text (16 pt): at least 28 pt,
+                            // the Mac's comfortable target, all of it a place to click.
+                            .frame(minHeight: 28)
+                            .contentShape(Rectangle())
                             #endif
                     }
                     .accessibilityLabel("\(item.name) \(item.version), \(item.licence)")
