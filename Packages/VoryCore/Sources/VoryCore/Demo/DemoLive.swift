@@ -311,7 +311,11 @@ extension DemoGateway {
                 if to == "running" { return (409, ["detail": "status 'running' is set by the dispatcher when a worker claims the task"]) }
                 let from = board[i]["status"] as? String ?? ""
                 board[i]["status"] = to
-                if to == "done" { board[i]["completed_at"] = Int(now()); board[i]["result"] = payload["result"] ?? payload["summary"] ?? board[i]["result"] }
+                if to == "done" {
+                    board[i]["completed_at"] = Int(now())
+                    if let result = payload["result"] { board[i]["result"] = result }
+                    else if let summary = payload["summary"] { board[i]["result"] = summary }
+                }
                 if to != "running" { board[i]["worker_pid"] = NSNull(); board[i]["current_run_id"] = NSNull(); board[i]["claim_lock"] = NSNull() }
                 bumpBoard(id, "status", ["from": from, "to": to])
             }

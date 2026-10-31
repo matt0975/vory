@@ -385,7 +385,8 @@ extension DemoGateway {
         case "session.close":
             return .success(["closed": true, "deleted": p["session_id"] ?? ""])
         case "approval.pending":
-            let l = live[p["session_id"] as? String ?? ""] ?? live.values.first { $0.stored == p["session_id"] as? String }
+            let sessionID = p["session_id"] as? String
+            let l = live[sessionID ?? ""] ?? live.values.first { $0.stored == sessionID }
             let frames = l.map { Array($0.openRequests.values) } ?? []
             return .success(["approvals": frames.compactMap { f -> [String: Any]? in
                 guard f["method"] as? String == "approval", let params = f["params"] as? [String: Any] else { return nil }

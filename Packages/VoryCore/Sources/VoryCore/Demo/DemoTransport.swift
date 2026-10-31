@@ -70,8 +70,8 @@ final class DemoURLProtocol: URLProtocol, @unchecked Sendable {
         let body = request.httpBody ?? request.httpBodyStream.map(Self.read) ?? Data()
         let contentType = request.value(forHTTPHeaderField: "Content-Type") ?? ""
         // URLProtocol hands its client over to whichever thread finishes the load; this one is not touched elsewhere.
-        nonisolated(unsafe) let me = self
-        work = Task {
+        let me: DemoURLProtocol = self
+        work = Task { @Sendable [me] in
             let answer = await gateway.rest(method: method, url: url, body: body, contentType: contentType)
             guard !Task.isCancelled else { return }
             var fields = ["Content-Type": answer.contentType, "Content-Length": String(answer.body.count)]

@@ -124,7 +124,7 @@ struct OnboardingView: View {
                     Button { Task { await model.startDemo() } } label: {
                         Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")
