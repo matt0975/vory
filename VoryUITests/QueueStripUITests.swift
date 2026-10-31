@@ -128,10 +128,11 @@ final class QueueStripUITests: XCTestCase {
         Self.note("QUEUE fault \(mode)")
     }
 
-    /// The user rows carrying `words` (the thread's own, never the strip's).
+    /// The user rows carrying `words` (the thread's own, never the strip's). A row is a container with no label of its own,
+    /// so its texts are read.
     private func userRows(_ words: String) -> Int {
-        app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'thread.row.user' AND label CONTAINS %@", words))
-            .allElementsBoundByIndex.filter(\.exists).count
+        app.descendants(matching: .any).matching(identifier: "thread.row.user").allElementsBoundByIndex
+            .filter { $0.exists && $0.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words)).count > 0 }.count
     }
 
     func testThreeQueuedAndSteerOne() throws {
