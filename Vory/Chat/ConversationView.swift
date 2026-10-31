@@ -115,6 +115,12 @@ struct ConversationView: View {
                     .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
                     .navigationBarBackButtonHidden(model.tabBarVertical)
                     .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
+                    // Not the split's sidebar toggle on the chat's page: with the bar shown on its side and the list hidden,
+                    // it drew over the face (the list column keeps its own; Back, or the split's edge swipe, brings the list
+                    // back, as before). Elsewhere the page's bar is hidden, so nothing else changes.
+                    .toolbar(removing: .sidebarToggle)
+                    // The bar the markers took touches from gets them back as the page goes, a pop mid-way included.
+                    .onDisappear { StripMarkerReader.releaseBars() }
                     .background {
                         if model.tabBarVertical {
                             StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1).frame(width: 0, height: 0)

@@ -198,6 +198,35 @@ import Testing
         #expect(same(i.trailingItemGroups.flatMap(\.barButtonItems), [more]))
     }
 
+    @Test func onlyTheMarkersOwnViewsAreFound() {
+        // The strip as the system draws it: our markers' buttons at their frames, and things that share only a label or only
+        // a frame with them.
+        let root = UIView(frame: CGRect(x: 0, y: 0, width: 466, height: 678)), strip = UIView(frame: CGRect(x: 382, y: 0, width: 84, height: 678))
+        root.addSubview(strip)
+        func control(_ label: String, _ frame: CGRect, in host: UIView) -> UIControl {
+            let c = UIControl(frame: frame.offsetBy(dx: -host.frame.minX, dy: -host.frame.minY))
+            c.accessibilityLabel = label
+            host.addSubview(c)
+            return c
+        }
+        let back = control("Back", CGRect(x: 399, y: 238, width: 38, height: 48), in: strip)
+        let more = control("Chat options", CGRect(x: 399, y: 308, width: 38, height: 48), in: strip)
+        _ = control("Back", CGRect(x: 16, y: 11, width: 44, height: 44), in: root)          // our own Back: elsewhere
+        _ = control("Hide Sidebar", CGRect(x: 399, y: 238, width: 38, height: 48), in: root) // the frame, not the label
+        let label = UILabel(frame: CGRect(x: 17, y: 238, width: 38, height: 48))            // the label, not a control
+        label.accessibilityLabel = "Back"
+        strip.addSubview(label)
+        let targets = [("Back", CGRect(x: 399, y: 238, width: 38, height: 48)), ("Chat options", CGRect(x: 399, y: 308, width: 38, height: 48))]
+        let found = StripMarkerReader.markerViews(in: root, targets: targets)
+        #expect(found.count == 2)
+        #expect(same(found, [back, more]))
+        // A point off is still the marker; two points off isn't.
+        #expect(StripMarkerReader.markerViews(in: root, targets: [("Back", CGRect(x: 400, y: 239, width: 38, height: 48))]).count == 1)
+        #expect(StripMarkerReader.markerViews(in: root, targets: [("Back", CGRect(x: 401, y: 238, width: 38, height: 48))]).isEmpty)
+        // Below the depth limit nothing is walked.
+        #expect(StripMarkerReader.markerViews(in: root, targets: targets, depth: 0).isEmpty)
+    }
+
     /// The settled place (`StripMarkers.Settle`): taken once it has stood 250 ms with no change.
     private let a0 = CGRect(x: 399, y: 238, width: 38, height: 48), transient = CGRect(x: 399, y: 175, width: 38, height: 48)
 

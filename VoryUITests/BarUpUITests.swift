@@ -449,6 +449,15 @@ final class BarUpUITests: XCTestCase {
                     XCTAssertEqual(f.midY, m.midY, accuracy: Self.slack, "\(name) \(f) not centred on its marker \(m)")
                 } else { XCTFail("VOID: the readout has no \(key)") }
             }
+            // #555: the markers' own views hidden and out of the hit test, every laid-out one (the readout's stripHide: found,
+            // laid out), so the taps reach our Back and More.
+            let hiddenCheck = {
+                if let h = c["stripHide"] {
+                    print("CHATFRAMES stripHide found \(Int(h.minX)) of \(Int(h.minY))")
+                    XCTAssertGreaterThan(h.minY, 0, "no marker laid out to hide")
+                    XCTAssertEqual(h.minX, h.minY, "only \(Int(h.minX)) of \(Int(h.minY)) markers' views found and hidden")
+                } else { XCTFail("VOID: the readout has no stripHide") }
+            }
             // #549: nothing of the band hangs below More in the column; its column part, where there is one, ends by More's
             // own bottom, its soft foot and all (the readout's bandColumn).
             let bandColumnCheck = {
@@ -484,18 +493,25 @@ final class BarUpUITests: XCTestCase {
                 atMarker("More", more.frame, "markerMore")
                 XCTAssertLessThanOrEqual(back.frame.maxY, more.frame.minY, "Back \(back.frame) not over More \(more.frame)")
                 bandColumnCheck()
+                hiddenCheck()
             case .side, .book:
                 // #555: More in the strip, on its marker, under the status; with the list hidden Back over it on its own
                 // marker, and beside the list no Back and no Back marker (More stands in Back's place, as the system's does).
                 atMarker("More", more.frame, "markerMore")
                 XCTAssertFalse(info.frame.intersects(more.frame), "Chat info \(info.frame) runs into More \(more.frame)")
                 bandColumnCheck()
+                hiddenCheck()
                 do {
                     XCTAssertEqual(info.frame.midY, Self.sideRowMiddle, accuracy: 1, "Chat info \(info.frame) not on the status's middle")
                     XCTAssertEqual(back.exists, listHidden, listHidden ? "no Back with the list hidden" : "Back beside the list")
                     if listHidden, back.exists {
                         atMarker("Back", back.frame, "markerBack")
                         XCTAssertLessThanOrEqual(back.frame.maxY, more.frame.minY, "Back \(back.frame) not over More \(more.frame)")
+                        if let mb = c["markerBack"], let mm = c["markerMore"] {
+                            XCTAssertLessThan(mb.minY, mm.minY, "Back's marker \(mb) not in the first slot, over More's \(mm)")
+                        }
+                        // The split's sidebar toggle isn't on the chat's page: it drew over the face there.
+                        XCTAssertFalse(app.buttons["Show Sidebar"].exists, "the split's Show Sidebar is on the chat's page")
                     } else if !listHidden {
                         XCTAssertNil(c["markerBack"], "a Back marker beside the list: \(c["markerBack"].map { "\($0)" } ?? "")")
                     }
@@ -579,6 +595,27 @@ final class BarUpUITests: XCTestCase {
             back.tap(); pause(2)
             XCTAssertTrue(element("chats.noChat").waitForExistence(timeout: 5), "Back didn't pop the chat")
             XCTAssertFalse(info.exists, "Chat info still there after Back")
+            // #555: the list's own controls answer after the pop: the empty detail's Show Sidebar brings it back.
+            let show = app.buttons["Show Sidebar"].firstMatch
+            if show.waitForExistence(timeout: 2) {
+                show.tap(); pause(1.5)
+                XCTAssertTrue(app.buttons["Hide Sidebar"].firstMatch.waitForExistence(timeout: 3), "the list didn't come back after the pop")
+            } else { print("CHATFRAMES no Show Sidebar on the empty detail") }
+        }
+        // #555: on its side beside the list, our More opens its menu (not the marker under it), and closes again.
+        if (pose == .side || pose == .book) && !listHidden, more.exists {
+            more.tap(); pause(1)
+            XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 3), "More didn't open its menu")
+            more.tap(); pause(1)
+        }
+        // #555: closed, after Back pops the chat the list's own bar takes touches again (the markers' bar gave them up while
+        // the chat showed): its search field takes the tap.
+        if pose == .closed, back.exists {
+            back.tap(); pause(2)
+            let search = app.searchFields.firstMatch
+            XCTAssertTrue(search.waitForExistence(timeout: 5), "no search field on the list after Back")
+            search.tap(); pause(1)
+            XCTAssertTrue(app.keyboards.firstMatch.exists, "the list's search field didn't take the tap after Back")
         }
         app.terminate()
     }
@@ -636,10 +673,14 @@ final class BarUpUITests: XCTestCase {
 
     /// NO TRAVEL between the list and a chat, in the app's own frame log (`-vory-morph-log`: every drawn change of each
     /// capsule and of the face between this test's wall marks, a zero frame where one goes): a chat opened, then Back.
-    /// - Up in the band (HERMES_E2E_POSE upright or laptop) and closed (#555: the same row there): Back's circle, the
-    ///   face's slot, More and the face keep their vertical middle within 1 pt in every frame.
-    /// Fewer than 10 frames of the slot that changes on every push and pop (the title capsule's) didn't sample the motion:
-    /// VOID, not a pass.
+    /// - Up in the band (HERMES_E2E_POSE upright or laptop), strict: Back's circle, the face's slot, More and the face
+    ///   keep their vertical middle within 1 pt in every frame.
+    /// - Closed (#555, as 44 stood them): a slot in both states keeps its vertical middle within 1 pt; a slot in one state
+    ///   (it logs a zero frame as it goes or before it comes: the list's title and trailing capsules, a chat's Back and More
+    ///   in the status column) may appear or go, but never moves: its middle within 1 pt both ways.
+    /// Fewer than 10 frames of the slot that changes on every push and pop (the title capsule's, up in the band) didn't
+    /// sample the motion: VOID, not a pass. Closed, Back and More grow and shrink where they stand (a scale, not a frame:
+    /// they log only as they come and go), so there the log must hold a drawn frame of both column slots, else VOID.
     /// Printed per slot: frames, the middle's least and most (NOTRAVEL); for a slot that moves, its every frame logged
     /// (NOTRAVEL RAW, seconds from the tap). On its side and as a book the list stays beside the chat and nothing morphs
     /// between them: skipped.
@@ -647,6 +688,7 @@ final class BarUpUITests: XCTestCase {
         let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
         guard let pose else { throw XCTSkip("no Duo pose (HERMES_E2E_POSE)") }
         if pose == .side || pose == .book { throw XCTSkip("the split: the list stays beside the chat") }
+        let strict = pose == .upright || pose == .laptop
         let t0 = try openChat(["-vory-morph-log"])
         let back = element("chat.back")
         XCTAssertTrue(back.exists, "no Back")
@@ -662,16 +704,24 @@ final class BarUpUITests: XCTestCase {
             frames[String(f[1]), default: []].append(CGRect(x: x, y: y, width: w, height: h))
             times[String(f[1]), default: []].append(t - t0)
         }
-        let sampled = "mid"
-        let slots = ["lead", "mid", "trail", "face"]
+        let sampled = strict ? "mid" : nil
+        // The capsules and the face only: the log also holds the bar host's frame and the strip's markers, which aren't slots.
+        let slots = strict ? ["lead", "mid", "trail", "face"] : ["lead", "mid", "trail", "face", "columnBack", "columnMore"]
+        if !strict {
+            for slot in ["columnBack", "columnMore"] where !(frames[slot] ?? []).contains(where: { $0.width > 0 }) {
+                print("NOTRAVEL VOID \(slot): never drawn"); XCTFail("VOID: \(slot): never drawn in the log")
+            }
+        }
         for slot in slots {
             let all = frames[slot] ?? [], drawn = all.filter { $0.width > 0 }
             let ys = drawn.map(\.midY), xs = drawn.map(\.midX)
+            let oneState = all.count > drawn.count
             print("NOTRAVEL \(slot): \(all.count) frames (\(all.count - drawn.count) gone), middle y \(ys.min().map { String(format: "%.1f", $0) } ?? "-") to \(ys.max().map { String(format: "%.1f", $0) } ?? "-"), x \(xs.min().map { String(format: "%.1f", $0) } ?? "-") to \(xs.max().map { String(format: "%.1f", $0) } ?? "-")")
             if slot == sampled && all.count < 10 { print("NOTRAVEL VOID \(slot): \(all.count) frames"); XCTFail("VOID: \(slot): only \(all.count) frames logged") }
-            let travel = (ys.max() ?? 0) - (ys.min() ?? 0)
+            let travel = (ys.max() ?? 0) - (ys.min() ?? 0), sideways = !strict && oneState ? (xs.max() ?? 0) - (xs.min() ?? 0) : 0
             XCTAssertLessThanOrEqual(travel, 1, "\(slot): its middle travelled \(ys.min() ?? 0) to \(ys.max() ?? 0)")
-            if travel > 1 {
+            XCTAssertLessThanOrEqual(sideways, 1, "\(slot): a slot in one state moved sideways \(xs.min() ?? 0) to \(xs.max() ?? 0)")
+            if travel > 1 || sideways > 1 {
                 for (t, f) in zip(times[slot] ?? [], all).prefix(40) {
                     print(String(format: "NOTRAVEL RAW %@ %.3f %.1f %.1f %.1f %.1f", slot, t, f.minX, f.minY, f.width, f.height))
                 }

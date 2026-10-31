@@ -175,9 +175,13 @@ import UIKit
 /// while the list stands beside the chat on its side) and Chat options, each an icon and a title, as Apple's iPhone Duo
 /// notes ask (a custom view never goes vertical, and SwiftUI's toolbar items report no window frame: the probes,
 /// 2026-10-31). They're the chat page's own item groups, put back whenever the page's navigation item is rebuilt (a turn
-/// rebuilds it). Never seen and never a control: no tint, no glass, out of VoiceOver, no action; our Back and More stand
-/// over them and take the taps. Each is read in the window (`frame(in:)`) on the layout, safe-area and margin passes of the
-/// page, its navigation controller, its bar and the window, and on the strip's trait changes, and kept once settled.
+/// rebuilds it). Never seen and never a control: no tint, no glass, out of VoiceOver, no action, and their views at alpha 0
+/// and out of the hit test (`markerViews`): on its side they stand in the split view's strip, over the page, and took the
+/// taps meant for our Back and More (the diagnosis, 2026-10-31); the bar that carries them takes no touches while it does
+/// (with the split's sidebar toggle taken off the chat's page, nothing in it is a control). Each is read in the window
+/// (`frame(in:)`) on the layout, safe-area and margin passes of the page, its navigation controller, its bar, the split
+/// view and the window, and on the strip's trait changes, and kept once settled; after the items change or Back comes or
+/// goes they're read again a moment later, as the split lays its strip out again with no event of ours (the diagnosis).
 struct StripMarkerReader: UIViewControllerRepresentable {
     /// Whether Back's marker is there: not while the list stands beside the chat. The chat page says so from where its
     /// pane starts, as the header does (`ChatHeader.listBeside`): the page controller spans the window there, the list a
@@ -192,16 +196,50 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         reader.read()
     }
 
+    static func dismantleUIViewController(_ reader: Reader, coordinator: ()) { releaseBars() }
+
     /// Our items as a page's groups (Back only when asked), set again only if anything replaced them, so a read never
-    /// lays the bar out again by itself.
-    @MainActor static func install(on i: UINavigationItem, back: Bool, backItem: UIBarButtonItem, moreItem: UIBarButtonItem) {
+    /// lays the bar out again by itself. True when it set them.
+    @discardableResult @MainActor
+    static func install(on i: UINavigationItem, back: Bool, backItem: UIBarButtonItem, moreItem: UIBarButtonItem) -> Bool {
+        var changed = false
         let lead = back ? [backItem] : []
         if !i.leadingItemGroups.flatMap(\.barButtonItems).elementsEqual(lead, by: ===) {
             i.leadingItemGroups = back ? [UIBarButtonItemGroup(barButtonItems: lead, representativeItem: nil)] : []
+            changed = true
         }
         if !i.trailingItemGroups.flatMap(\.barButtonItems).elementsEqual([moreItem], by: ===) {
             i.trailingItemGroups = [UIBarButtonItemGroup(barButtonItems: [moreItem], representativeItem: nil)]
+            changed = true
         }
+        return changed
+    }
+
+    /// The views the system draws our markers with, under `root` (at most `depth` levels down): a control with the marker's
+    /// label whose window frame is the marker's, within a point. Only our items' own views match: a label alone, or the
+    /// frame alone, never does.
+    @MainActor static func markerViews(in root: UIView, targets: [(title: String, frame: CGRect)], depth: Int = 40) -> [UIView] {
+        var found: [UIView] = []
+        func near(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) <= 1 && abs(a.minY - b.minY) <= 1 && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
+        }
+        func walk(_ v: UIView, _ level: Int) {
+            if v is UIControl, let label = v.accessibilityLabel {
+                let f = v.convert(v.bounds, to: nil)
+                if targets.contains(where: { $0.title == label && near($0.frame, f) }) { found.append(v) }
+            }
+            guard level < depth else { return }
+            v.subviews.forEach { walk($0, level + 1) }
+        }
+        walk(root, 0)
+        return found
+    }
+
+    /// The bars that carry markers and take no touches for it, given back when their page goes (`releaseBars`).
+    @MainActor private static let dimmed = NSHashTable<UINavigationBar>.weakObjects()
+    @MainActor static func releaseBars() {
+        dimmed.allObjects.forEach { $0.isUserInteractionEnabled = true }
+        dimmed.removeAllObjects()
     }
 
     final class Reader: UIViewController {
@@ -212,6 +250,8 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         private var checks: [StripMarkers.Kind: Task<Void, Never>] = [:]
         private var watchers: [Watcher] = []
         private var lastKey: String?
+        private var lastBack: Bool?
+        private var again: Task<Void, Never>?
 
         private func item(_ kind: StripMarkers.Kind) -> UIBarButtonItem { kind == .back ? backItem : moreItem }
 
@@ -235,7 +275,7 @@ struct StripMarkerReader: UIViewControllerRepresentable {
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            for host in [navigationController?.view, navigationController?.navigationBar, view.window as UIView?] {
+            for host in [navigationController?.view, navigationController?.navigationBar, splitViewController?.view, view.window as UIView?] {
                 guard let host else { continue }
                 let w = Watcher(frame: host.bounds)
                 w.onEvent = { [weak self] in self?.read() }
@@ -252,6 +292,9 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             checks.values.forEach { $0.cancel() }
             checks = [:]
             settles = [:]
+            again?.cancel()
+            again = nil
+            StripMarkerReader.releaseBars()
             if let i = page()?.navigationItem {
                 if i.leadingItemGroups.flatMap(\.barButtonItems).contains(where: { $0 === backItem }) { i.leadingItemGroups = [] }
                 if i.trailingItemGroups.flatMap(\.barButtonItems).contains(where: { $0 === moreItem }) { i.trailingItemGroups = [] }
@@ -273,10 +316,17 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         /// On every event: our items in place, then each marker read; a changed place is read again once `delay` has passed.
         func read() {
             guard let page = page(), let window = view.window else { return }
-            StripMarkerReader.install(on: page.navigationItem, back: back, backItem: backItem, moreItem: moreItem)
+            let changed = StripMarkerReader.install(on: page.navigationItem, back: back, backItem: backItem, moreItem: moreItem)
+            let flipped = lastBack.map { $0 != back } ?? false
+            lastBack = back
+            if let bar = page.navigationController?.navigationBar, bar.isUserInteractionEnabled {
+                bar.isUserInteractionEnabled = false
+                StripMarkerReader.dimmed.add(bar)
+            }
             #if DEBUG
             if !back, MorphFramesProbe.isOn { MorphFramesProbe.marks["markerBack"] = nil }
             #endif
+            if changed || flipped { readAgain() }
             guard let key = key(back: back, in: window) else { return }
             if key != lastKey {
                 lastKey = key
@@ -287,6 +337,36 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             for kind in [StripMarkers.Kind.back, .more] where kind == .more || back {
                 if settles[kind, default: .init()].note(place(kind, in: window), at: ProcessInfo.processInfo.systemUptime) { check(kind) }
             }
+        }
+
+        /// The items changed, or Back came or went: read again, and hide the markers' views, a quarter second and a second
+        /// later, whether or not an event comes (the split lays its strip out again with none of ours).
+        private func readAgain() {
+            again?.cancel()
+            again = Task { @MainActor [weak self] in
+                for wait in [StripMarkers.Settle.delay, 0.75] {
+                    try? await Task.sleep(for: .seconds(wait))
+                    guard !Task.isCancelled, let self else { return }
+                    self.read()
+                    if let window = self.view.window { self.hideViews(in: window) }
+                }
+            }
+        }
+
+        /// Our markers' views at alpha 0 and out of the hit test, found under the split view (or the navigation
+        /// controller's view) by `markerViews`. Only after the items change, Back comes or goes, or a place is kept.
+        private func hideViews(in window: UIWindow) {
+            guard let root = splitViewController?.view ?? navigationController?.view else { return }
+            let kinds: [StripMarkers.Kind] = back ? [.back, .more] : [.more]
+            let targets = kinds.compactMap { k in item(k).frame(in: window).flatMap { $0.width > 0 ? (item(k).title ?? "", $0) : nil } }
+            let views = StripMarkerReader.markerViews(in: root, targets: targets)
+            views.forEach { $0.alpha = 0; $0.isUserInteractionEnabled = false }
+            #if DEBUG
+            // For the bar's checks: how many of the laid-out markers' views were found and hidden (the readout's "stripHide":
+            // found, then laid out).
+            NSLog("STRIPHIDE found %ld of %ld", views.count, targets.count)
+            if MorphFramesProbe.isOn { MorphFramesProbe.marks["stripHide"] = CGRect(x: views.count, y: targets.count, width: 1, height: 1) }
+            #endif
         }
 
         /// The marker's key, while the window is the one the app has settled (not a launch's seeded window, nor a turn's
@@ -320,11 +400,12 @@ struct StripMarkerReader: UIViewControllerRepresentable {
                 MorphFramesProbe.note(kind == .back ? "markerBack" : "markerMore", f)
                 #endif
                 StripMarkers.shared.settled(kind, f, for: key)
+                self.hideViews(in: window)
             }
         }
     }
 
-    /// A view the size of its host (the navigation controller's view, its bar, the window), resized with it, never seen or
+    /// A view the size of its host (the navigation controller's view, its bar, the split view, the window), resized with it, never seen or
     /// touched: its layout passes and safe-area and margin changes are when the system moves its items (a turn, a Live
     /// Activity widening the status).
     final class Watcher: UIView {
