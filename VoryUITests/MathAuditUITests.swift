@@ -54,8 +54,11 @@ final class MathAuditUITests: XCTestCase {
     private var offset: CGFloat = 0
     private var stretch = 0
     private var screens = 0
-    private func collectStops() {
-        let now = voiceOverStops().filter { !$0.label.isEmpty }
+    private func collectStops(in region: CGRect) {
+        // Only the page's own stops, those reaching in between the bars: the tab bar's and the top bar's are on every
+        // screen, and first seen on the first one they would stand between the page's stops. Overlapping, not wholly
+        // inside: at the largest size one paragraph can be taller than the space between the bars.
+        let now = voiceOverStops().filter { !$0.label.isEmpty && $0.frame.maxY > region.minY && $0.frame.minY < region.maxY }
         screens += 1
         let once = Dictionary(grouping: now, by: { $0.label }).filter { $0.value.count == 1 }
         if screens > 1 {
@@ -99,7 +102,10 @@ final class MathAuditUITests: XCTestCase {
     /// the window's edge where none of them is found. Noted with the elements that set it, so a bar not found shows.
     private func region(_ screen: Int, top: [String], bottom: [String]) -> CGRect {
         let win = app.windows.firstMatch.frame
-        let find = { (id: String) in self.app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        let find = { (id: String) -> XCUIElement in
+            let byId = self.app.descendants(matching: .any).matching(identifier: id).firstMatch
+            return byId.exists ? byId : self.app.buttons[id].firstMatch
+        }
         let tops = top.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.maxY) }
         let bottoms = bottom.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.minY) }
         let t = tops.max { $0.1 < $1.1 } ?? ("window", win.minY)
@@ -179,7 +185,8 @@ final class MathAuditUITests: XCTestCase {
         var findings: [Finding] = [], regions: [Int: CGRect] = [:], cardsOn: [Int: [CGRect]] = [:]
         for screen in 1...12 {
             pause(1)
-            collectStops()
+            regions[screen] = region(screen, top: ["chat.back", "chat.titlePill"], bottom: ["chat.dock"])
+            collectStops(in: regions[screen]!)
             let views = app.webViews.allElementsBoundByIndex.filter { $0.exists && $0.frame.intersects(win) }
             for v in views {
                 let words = v.descendants(matching: .any).allElementsBoundByIndex.map { $0.label }.filter { !$0.isEmpty }.joined(separator: " ")
@@ -187,7 +194,6 @@ final class MathAuditUITests: XCTestCase {
                 if cards[key] == nil { cards[key] = v.frame; Self.note("CARD \(v.frame): what VoiceOver gets: '\(words.prefix(200))'") }
             }
             cardsOn[screen] = views.map { $0.frame }
-            regions[screen] = region(screen, top: ["chat.back", "chat.titlePill"], bottom: ["chat.dock"])
             findings += try audit(screen)
             if last.exists && last.isHittable && last.frame.maxY <= win.maxY { break }
             app.windows.firstMatch.swipeUp(velocity: .slow)
@@ -259,14 +265,18 @@ final class MathAuditUITests: XCTestCase {
         let end = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", Self.entries[1].last)).firstMatch
         let win = app.windows.firstMatch.frame
         var findings: [Finding] = [], regions: [Int: CGRect] = [:]
-        for screen in 1...30 {
+        // Up to 80 screens: at the largest size the 28 paragraphs took more than 30. A pushed page's top bar is its Back.
+        var used = 0
+        for screen in 1...80 {
+            used = screen
             pause(0.8)
-            collectStops()
-            regions[screen] = region(screen, top: ["morph.title"], bottom: ["tab.chats", "tab.settings"])
+            regions[screen] = region(screen, top: ["morph.title", "Back"], bottom: ["tab.chats", "tab.settings", "chats.voice", "chats.new"])
+            collectStops(in: regions[screen]!)
             findings += try audit(screen)
             if end.exists && end.isHittable && end.frame.maxY <= win.maxY { break }
             app.swipeUp(velocity: .slow)
         }
+        Self.note("the Acknowledgements page read in \(used) screens")
         let labels = order.map { $0.label }
         Self.note("ORDER \(labels.count) stops: \(labels.map { String($0.prefix(30)) }.joined(separator: " / "))")
         guard let h = labels.firstIndex(of: "Acknowledgements") else { return XCTFail("no 'Acknowledgements' header among the stops") }
