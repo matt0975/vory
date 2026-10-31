@@ -512,6 +512,8 @@ final class AppModel {
         store.activeConnectionID = connection.id
         // The demo's bots wear its looks while it runs, in memory only.
         DemoLooks.set(on: connection.isDemo)
+        // Bots' looks are this gateway's own from here, else the ones from before (#573).
+        BotLookGateway.current = connection.id
         ChatListPrefs.shared.inDemo = connection.isDemo
         // The demo (#392) runs on its own gateway inside the app, and registers nowhere for push.
         let rt = GatewayRuntime(connection: connection, store: store, transport: connection.isDemo ? .demo(DemoGateway()) : .network)
@@ -620,6 +622,7 @@ final class AppModel {
         await runtime?.stop()
         runtime = nil
         DemoLooks.set(on: false)
+        BotLookGateway.current = nil
         ChatListPrefs.shared.inDemo = false
         ChatGoals.shared.attach(nil)
     }

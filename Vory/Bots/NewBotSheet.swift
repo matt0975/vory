@@ -167,10 +167,7 @@ struct NewBotSheet: View {
             if !modelName.isEmpty { let _: JSONValue? = try? await runtime.api.send("PUT", "/api/profiles/\(n)/model", json: .object(["provider": .string(provider), "model": .string(modelName)])) }
             // The look chosen under the draft key belongs to the new name now.
             BotAvatarStore.set(choice, for: n)
-            var colors = BotColors.stored()
-            if let c = colors[draftKey] { colors[n] = c }
-            colors[draftKey] = nil
-            BotColors.save(colors)
+            BotColors.moveDraft(from: draftKey, to: n)
             await runtime.loadProfiles()
             NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
             dismiss()

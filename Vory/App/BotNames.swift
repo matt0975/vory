@@ -25,7 +25,8 @@ enum BotNames {
     /// The names kept for a bot, nil when none.
     static func names(for profile: String, _ defaults: UserDefaults = .standard) -> ProfileOwnNames? {
         // The demo's bots go by the demo's names while it runs (`DemoLooks`), never by those kept for this person's.
-        guard let e = DemoLooks.isOn ? DemoLooks.names(for: profile) : stored(defaults)[profile] else { return nil }
+        // A gateway's own names for its bot (#573), else the ones from before; an emptied one of its own shows the gateway's.
+        guard let e = DemoLooks.isOn ? DemoLooks.names(for: profile) : BotLookGateway.value(in: stored(defaults), for: profile) else { return nil }
         let n = e["n"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let t = e["t"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !n.isEmpty || !t.isEmpty else { return nil }
@@ -47,7 +48,9 @@ enum BotNames {
         // A name given in the demo is the demo's only.
         if DemoLooks.keep(names: entry, for: profile) { return }
         var map = stored(defaults)
-        map[profile] = entry
+        let own = BotLookGateway.key(profile)
+        // Cleared on a gateway whose bot has names from before: an empty entry of its own, so those don't come back.
+        map[own] = entry ?? (own != profile && map[profile] != nil ? [:] : nil)
         save(map, defaults)
     }
 

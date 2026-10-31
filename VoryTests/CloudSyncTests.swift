@@ -189,30 +189,35 @@ struct CloudSyncTests {
         #expect(cloud.cloudKeys.allSatisfy { !$0.hasPrefix(CloudMerge.settingPrefix) })
     }
 
+    /// One gateway's own keys (#573): a bot's look is kept per gateway, and only those travel both ways.
+    private let gateway = UUID(uuidString: "00000000-0000-4000-8000-00000000C10D")!
+    private func own(_ name: String) -> String { BotLookGateway.key(name, gateway: gateway) }
+
     @Test func botNamesTravelWithTheLookAndClearWhenEmptied() {
         let cloud = MemoryCloudStore(), clock = Clock()
         let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
         let (mac, macDefaults) = device(cloud, clock, id: "mac")
         func names(_ d: UserDefaults) -> [String: [String: String]] { CloudMerge.mapOfMaps(d.string(forKey: BotNames.storageKey)) }
+        let work = own("work")
 
         // A name given on the phone reaches the Mac, with the colour it travels beside.
-        phoneDefaults.set(CloudMerge.string(["work": "#111111"]), forKey: BotColors.storageKey)
-        phoneDefaults.set(CloudMerge.stringOfMaps(["work": ["n": "Scribe", "t": "Minutes"]]), forKey: BotNames.storageKey)
+        phoneDefaults.set(CloudMerge.string([work: "#111111"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.stringOfMaps([work: ["n": "Scribe", "t": "Minutes"]]), forKey: BotNames.storageKey)
         phone.reconcile(.merge)
         mac.reconcile(.restore)
-        #expect(names(macDefaults) == ["work": ["n": "Scribe", "t": "Minutes"]])
-        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == ["work": "#111111"])
+        #expect(names(macDefaults) == [work: ["n": "Scribe", "t": "Minutes"]])
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == [work: "#111111"])
 
         // The title changed on the Mac: the phone takes it.
-        macDefaults.set(CloudMerge.stringOfMaps(["work": ["n": "Scribe", "t": "Meeting notes"]]), forKey: BotNames.storageKey)
+        macDefaults.set(CloudMerge.stringOfMaps([work: ["n": "Scribe", "t": "Meeting notes"]]), forKey: BotNames.storageKey)
         mac.reconcile(.merge); phone.reconcile(.merge)
-        #expect(names(phoneDefaults) == ["work": ["n": "Scribe", "t": "Meeting notes"]])
+        #expect(names(phoneDefaults) == [work: ["n": "Scribe", "t": "Meeting notes"]])
 
         // Both names cleared on the phone: the Mac's entry goes too, the colour stays.
         phoneDefaults.removeObject(forKey: BotNames.storageKey)
         phone.reconcile(.merge); mac.reconcile(.merge)
         #expect(names(macDefaults).isEmpty)
-        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == ["work": "#111111"])
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == [work: "#111111"])
     }
 
     @Test func botLooksMergePerBotAndARemovedOneStaysRemoved() {
@@ -221,25 +226,27 @@ struct CloudSyncTests {
         let (mac, macDefaults) = device(cloud, clock, id: "mac")
         func colors(_ d: UserDefaults) -> [String: String] { CloudMerge.map(d.string(forKey: BotColors.storageKey)) }
 
-        phoneDefaults.set(CloudMerge.string(["alpha": "#111111", "beta": "#222222"]), forKey: BotColors.storageKey)
-        phoneDefaults.set(CloudMerge.string(["alpha": "studio:blob:classic"]), forKey: BotAvatarStore.storageKey)
+        let alpha = own("alpha"), beta = own("beta")
+
+        phoneDefaults.set(CloudMerge.string([alpha: "#111111", beta: "#222222"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.string([alpha: "studio:blob:classic"]), forKey: BotAvatarStore.storageKey)
         phone.reconcile(.merge)
         mac.reconcile(.restore)
-        #expect(colors(macDefaults) == ["alpha": "#111111", "beta": "#222222"])
-        #expect(CloudMerge.map(macDefaults.string(forKey: BotAvatarStore.storageKey)) == ["alpha": "studio:blob:classic"])
+        #expect(colors(macDefaults) == [alpha: "#111111", beta: "#222222"])
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotAvatarStore.storageKey)) == [alpha: "studio:blob:classic"])
 
         // Each device edits a different bot: both edits survive.
-        phoneDefaults.set(CloudMerge.string(["alpha": "#AAAAAA", "beta": "#222222"]), forKey: BotColors.storageKey)
-        macDefaults.set(CloudMerge.string(["alpha": "#111111", "beta": "#BBBBBB"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.string([alpha: "#AAAAAA", beta: "#222222"]), forKey: BotColors.storageKey)
+        macDefaults.set(CloudMerge.string([alpha: "#111111", beta: "#BBBBBB"]), forKey: BotColors.storageKey)
         phone.reconcile(.merge); mac.reconcile(.merge); phone.reconcile(.merge)
-        #expect(colors(phoneDefaults) == ["alpha": "#AAAAAA", "beta": "#BBBBBB"])
-        #expect(colors(macDefaults) == ["alpha": "#AAAAAA", "beta": "#BBBBBB"])
+        #expect(colors(phoneDefaults) == [alpha: "#AAAAAA", beta: "#BBBBBB"])
+        #expect(colors(macDefaults) == [alpha: "#AAAAAA", beta: "#BBBBBB"])
 
         // A colour removed on the Mac does not come back from the phone.
-        macDefaults.set(CloudMerge.string(["alpha": "#AAAAAA"]), forKey: BotColors.storageKey)
+        macDefaults.set(CloudMerge.string([alpha: "#AAAAAA"]), forKey: BotColors.storageKey)
         mac.reconcile(.merge); phone.reconcile(.merge); mac.reconcile(.merge)
-        #expect(colors(phoneDefaults) == ["alpha": "#AAAAAA"])
-        #expect(colors(macDefaults) == ["alpha": "#AAAAAA"])
+        #expect(colors(phoneDefaults) == [alpha: "#AAAAAA"])
+        #expect(colors(macDefaults) == [alpha: "#AAAAAA"])
     }
 
     @Test func theSummarySaysWhatIsThereAndWhoWroteLast() {
@@ -248,7 +255,7 @@ struct CloudSyncTests {
         let (mac, _) = device(cloud, clock, id: "mac")
         #expect(mac.summary().isEmpty)
         phoneDefaults.set("green", forKey: AppTheme.accentKey)
-        phoneDefaults.set(CloudMerge.string(["alpha": "#111111"]), forKey: BotColors.storageKey)
+        phoneDefaults.set(CloudMerge.string([own("alpha"): "#111111"]), forKey: BotColors.storageKey)
         phone.reconcile(.merge)
         let s = mac.summary()
         #expect(s.settings == 1 && s.bots == 1 && s.device == "phone")
@@ -290,6 +297,43 @@ struct CloudSyncTests {
         #expect(!CloudSync.backupDue(lastBackupAt: now - CloudSync.backupInterval + 1, now: now))
         #expect(CloudSync.backupDue(lastBackupAt: now - CloudSync.backupInterval, now: now))
         #expect(CloudSync.backupDue(lastBackupAt: now - 3 * 86_400, now: now))
+    }
+
+    /// #573, ruling (b1): a look kept by name alone, as 1.5.1 (42) and (43) still write it, is read into the looks from
+    /// before, and never written: a change here stays a gateway's own, and the old entry is left as the old device wrote it.
+    @Test func aLookFromBeforeIsReadAndNeverWritten() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        func colors(_ d: UserDefaults) -> [String: String] { CloudMerge.map(d.string(forKey: BotColors.storageKey)) }
+        // An older device's entry, as it writes it.
+        cloud.setCloudValue(["n": "default", "hex": "#123456", "t": clock.t + 1], for: CloudMerge.lookKey("default"))
+        clock.t += 2
+        phone.reconcile(.restore)
+        #expect(colors(phoneDefaults) == ["default": "#123456"])
+        // A look from before changed here (no build of this kind writes one; say a downgrade left it): never pushed.
+        phoneDefaults.set(CloudMerge.string(["default": "#654321", own("default"): "#ABCDEF"]), forKey: BotColors.storageKey)
+        phone.reconcile(.merge); phone.reconcile(.backUp)
+        #expect((cloud.cloudValue(CloudMerge.lookKey("default")) as? [String: Any])?["hex"] as? String == "#123456")
+        #expect(cloud.cloudKeys.filter { $0.hasPrefix(CloudMerge.lookPrefix) } == [CloudMerge.lookKey("default")])
+        // The gateway's own went as its own entry.
+        let mine = cloud.cloudValue(CloudMerge.gatewayLookKey(gateway, "default")) as? [String: Any]
+        #expect(mine?["hex"] as? String == "#ABCDEF" && mine?["n"] as? String == "default" && mine?["g"] as? String == gateway.uuidString)
+    }
+
+    /// #573: two gateways' bots of one name keep their own looks through iCloud, each in an entry of its own.
+    @Test func twoGatewaysBotsOfOneNameTravelApart() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        let other = UUID(uuidString: "00000000-0000-4000-8000-00000000C10E")!
+        let a = own("default"), b = BotLookGateway.key("default", gateway: other)
+        phoneDefaults.set(CloudMerge.string([a: "#AA0000", b: "#00BB00"]), forKey: BotColors.storageKey)
+        phone.reconcile(.merge)
+        mac.reconcile(.restore)
+        #expect(CloudMerge.map(macDefaults.string(forKey: BotColors.storageKey)) == [a: "#AA0000", b: "#00BB00"])
+        #expect(cloud.cloudKeys.filter { $0.hasPrefix(CloudMerge.gatewayLookPrefix) }.count == 2)
+        #expect(cloud.cloudKeys.filter { $0.hasPrefix(CloudMerge.lookPrefix) }.isEmpty)
+        #expect(CloudMerge.gatewayLookKey(gateway, "default").utf8.count <= 64)
     }
 
     @Test func aLongBotNameStillFitsACloudKey() {

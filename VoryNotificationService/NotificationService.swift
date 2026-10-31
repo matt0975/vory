@@ -66,7 +66,8 @@ final class NotificationService: UNNotificationServiceExtension {
 
     @MainActor
     private static func asMessage(_ content: UNMutableNotificationContent, profile: String, kind: String) -> UNNotificationContent {
-        var looks = BotLooks.load()
+        // The looks of the gateway the push comes from (#573), not only the one in use.
+        var looks = BotLooks.load().forGateway((content.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String)
         var profile = profile
         if kind == "test" {
             // The test notification comes from no bot in particular: Vory's own little cloud, the

@@ -283,11 +283,13 @@ final class PushRegistrar: PushRegistrationSyncing {
         ]
         #if os(iOS)
         // The bots' looks, for the activity the companion starts by push; the Mac has no Live Activity.
+        // This gateway's looks (#573), whichever gateway is in use.
+        let gateway = runtime.connection.id
         payload["bots"] = .object(Dictionary(uniqueKeysWithValues: runtime.profiles.map { p in
-            let looks = BotLooks.load()
+            let looks = BotLooks.load().forGateway(gateway.uuidString)
             let key = looks.key(profile: p.name, label: p.label) ?? p.name
-            return (p.name, JSONValue.object(["label": .string(p.label), "hex": .string(looks.colors[key] ?? BotColors.hex(for: p.name)),
-                                               "avatar": .string(looks.avatars[key] ?? BotAvatarStore.choice(for: p.name).raw)]))
+            return (p.name, JSONValue.object(["label": .string(p.label), "hex": .string(looks.colors[key] ?? BotColors.hex(for: p.name, gateway: gateway)),
+                                               "avatar": .string(looks.avatars[key] ?? BotAvatarStore.choice(for: p.name, gateway: gateway).raw)]))
         }))
         #endif
         #if os(iOS)

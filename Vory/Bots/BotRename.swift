@@ -60,18 +60,22 @@ enum BotRename {
     /// Everything Vory keeps under the old folder name moves to the new one: the bot's own name
     /// and title, its colour, its look and photo, and the default bot when it was this one.
     /// The old keys go, so the cloud's entries for the old name are retired on the next pass.
+    /// The gateway in use's (#573): its own entries move, and a look from before, which other gateways may still show,
+    /// is copied to the new name as this gateway's own and left where it was.
     @MainActor static func moveLocalState(from old: String, to new: String, defaults: UserDefaults = .standard) {
+        let oldOwn = BotLookGateway.key(old), newOwn = BotLookGateway.key(new)
         var names = BotNames.stored(defaults)
-        if let e = names[old] { names[new] = e; names[old] = nil; BotNames.save(names, defaults) }
+        if let e = BotLookGateway.value(in: names, for: old) { names[newOwn] = e; names[oldOwn] = nil; BotNames.save(names, defaults) }
         // The colour follows even when it was never chosen: the palette's pick is by name, and
         // a renamed bot should not change colour.
         var colors = BotColors.stored()
-        colors[new] = colors[old] ?? BotColors.defaultHex(for: old)
-        colors[old] = nil
+        colors[newOwn] = BotLookGateway.value(in: colors, for: old) ?? BotColors.defaultHex(for: old)
+        colors[oldOwn] = nil
         BotColors.save(colors)
         var avatars = BotAvatarStore.stored()
-        if let a = avatars[old] { avatars[new] = a; avatars[old] = nil; BotAvatarStore.save(avatars) }
-        BotAvatarStore.movePhoto(from: old, to: new)
+        let photoFrom = BotLookGateway.readKey(in: avatars, for: old)
+        if let a = BotLookGateway.value(in: avatars, for: old) { avatars[newOwn] = a; avatars[oldOwn] = nil; BotAvatarStore.save(avatars) }
+        BotAvatarStore.movePhoto(fromKey: photoFrom, toKey: newOwn, keep: photoFrom != oldOwn)
         if defaults.string(forKey: GatewayRuntime.defaultProfileKey) == old { defaults.set(new, forKey: GatewayRuntime.defaultProfileKey) }
     }
 

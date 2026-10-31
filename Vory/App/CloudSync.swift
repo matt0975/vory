@@ -111,6 +111,8 @@ struct CloudMerge {
     static let joinedKey = "cloudSync.joinedAt"
     static let settingPrefix = "set."
     static let lookPrefix = "look."
+    /// A gateway's own look (#573): never under "look.", which devices on 1.5.1 (42) and (43) read and write.
+    static let gatewayLookPrefix = "lkg."
     /// A favourite model (#401): one entry each, so adds and removals on different devices never undo each other.
     static let favouritePrefix = "mf."
     /// A gateway's favourites' order: one entry, the last order set.
@@ -210,46 +212,75 @@ struct CloudMerge {
         var ownNames = Self.mapOfMaps(defaults.string(forKey: BotNames.storageKey))
         let original = (colors, avatars, ownNames)
 
-        var names = Set(colors.keys).union(avatars.keys).union(ownNames.keys)
-        for key in cloud.cloudKeys where key.hasPrefix(Self.lookPrefix) {
-            if let n = (cloud.cloudValue(key) as? [String: Any])?["n"] as? String { names.insert(n) }
+        // Each key is a gateway's own look ("@<id>/<name>", #573) or a bot's name alone, from before.
+        var keys = Set(colors.keys).union(avatars.keys).union(ownNames.keys)
+        for key in cloud.cloudKeys {
+            guard let e = cloud.cloudValue(key) as? [String: Any], let n = e["n"] as? String else { continue }
+            if key.hasPrefix(Self.lookPrefix) { keys.insert(n) }
+            else if key.hasPrefix(Self.gatewayLookPrefix), let g = (e["g"] as? String).flatMap(UUID.init(uuidString:)) { keys.insert(BotLookGateway.key(n, gateway: g)) }
         }
 
-        for name in names.sorted() {
-            let ck = Self.lookKey(name)
+        // A gateway's own names entry counts even when emptied: it keeps the ones from before from showing there.
+        func names(_ key: String) -> (name: String?, title: String?) {
+            let e = ownNames[key]
+            return BotLookGateway.split(key) != nil ? (e.map { $0["n"] ?? "" }, e.map { $0["t"] ?? "" }) : (e?["n"], e?["t"])
+        }
+        func fingerprintHere(_ key: String) -> String? {
+            let hex = colors[key], avatar = avatars[key], (name, title) = names(key)
+            if hex == nil && avatar == nil && name == nil && title == nil { return nil }
+            return Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(key) : nil, name: name, title: title)
+        }
+        func applyEntry(_ key: String, _ entry: [String: Any]?) -> String? {
+            guard let entry, entry["gone"] as? Bool != true else { colors[key] = nil; avatars[key] = nil; ownNames[key] = nil; return nil }
+            colors[key] = entry["hex"] as? String
+            avatars[key] = entry["avatar"] as? String
+            var e: [String: String] = [:]
+            if let dn = entry["dn"] as? String, !dn.isEmpty { e["n"] = dn }
+            if let bt = entry["bt"] as? String, !bt.isEmpty { e["t"] = bt }
+            if BotLookGateway.split(key) != nil { ownNames[key] = entry["dn"] != nil || entry["bt"] != nil ? e : nil }
+            else { ownNames[key] = e.isEmpty ? nil : e }
+            if let data = entry["photo"] as? Data { savePhoto(key, data) }
+            return fingerprintHere(key)
+        }
+
+        for key in keys.sorted() {
+            let local = fingerprintHere(key)
+            guard let own = BotLookGateway.split(key) else {
+                // From before looks were per gateway: read, never written (#573). Devices on 1.5.1 (42) and (43) still
+                // write these; a change made here is a gateway's own, and never goes back into them.
+                let ck = Self.lookKey(key)
+                let entry = cloud.cloudValue(ck) as? [String: Any]
+                guard mode != .backUp, let cloudTime = entry?["t"] as? Double else { continue }
+                let cloudFP: String? = entry?["gone"] as? Bool == true ? nil
+                    : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String,
+                                           name: entry?["dn"] as? String, title: entry?["bt"] as? String)
+                guard mode == .restore || cloudTime > (stamps[ck] ?? 0) else { continue }
+                // Equal, or in the cloud before this device joined: both sides stay as they are, as for every key.
+                if cloudFP == local || (mode == .merge && stamps[ck] == nil && cloudTime <= joined) { stamps[ck] = cloudTime; seen[ck] = local; continue }
+                seen[ck] = applyEntry(key, entry); stamps[ck] = cloudTime; out.applied += 1
+                continue
+            }
+            let ck = Self.gatewayLookKey(own.gateway, own.name)
             let entry = cloud.cloudValue(ck) as? [String: Any]
             let gone = entry?["gone"] as? Bool == true
-            let hex = colors[name], avatar = avatars[name]
-            let own = ownNames[name], ownName = own?["n"], ownTitle = own?["t"]
-            let local: String? = (hex == nil && avatar == nil && ownName == nil && ownTitle == nil) ? nil
-                : Self.lookFingerprint(hex: hex, avatar: avatar, photo: avatar == "photo" ? photoStamp(name) : nil, name: ownName, title: ownTitle)
+            let hex = colors[key], avatar = avatars[key], (ownName, ownTitle) = names(key)
             let cloudFP: String? = (entry == nil || gone) ? nil
                 : Self.lookFingerprint(hex: entry?["hex"] as? String, avatar: entry?["avatar"] as? String, photo: entry?["ph"] as? String,
                                        name: entry?["dn"] as? String, title: entry?["bt"] as? String)
 
             step(ck, local: local, cloud: cloudFP, cloudTime: entry?["t"] as? Double, mode: mode, joined: joined, stamps: &stamps, seen: &seen, out: &out,
                  push: { t in
-                    guard local != nil else { cloud.setCloudValue(["n": name, "gone": true, "t": t], for: ck); return }
-                    var e: [String: Any] = ["n": name, "t": t]
+                    let g = own.gateway.uuidString
+                    guard local != nil else { cloud.setCloudValue(["g": g, "n": own.name, "gone": true, "t": t], for: ck); return }
+                    var e: [String: Any] = ["g": g, "n": own.name, "t": t]
                     e["hex"] = hex; e["avatar"] = avatar
                     e["dn"] = ownName; e["bt"] = ownTitle
-                    if avatar == "photo", let data = photoData(name), data.count <= Self.photoLimit {
+                    if avatar == "photo", let data = photoData(key), data.count <= Self.photoLimit {
                         e["photo"] = data; e["ph"] = Self.hash(data)
                     }
                     cloud.setCloudValue(e, for: ck)
                  },
-                 apply: {
-                    guard let entry, !gone else { colors[name] = nil; avatars[name] = nil; ownNames[name] = nil; return nil }
-                    colors[name] = entry["hex"] as? String
-                    avatars[name] = entry["avatar"] as? String
-                    var e: [String: String] = [:]
-                    if let dn = entry["dn"] as? String, !dn.isEmpty { e["n"] = dn }
-                    if let bt = entry["bt"] as? String, !bt.isEmpty { e["t"] = bt }
-                    ownNames[name] = e.isEmpty ? nil : e
-                    if let data = entry["photo"] as? Data { savePhoto(name, data) }
-                    return Self.lookFingerprint(hex: colors[name], avatar: avatars[name], photo: avatars[name] == "photo" ? photoStamp(name) : nil,
-                                                name: ownNames[name]?["n"], title: ownNames[name]?["t"])
-                 })
+                 apply: { applyEntry(key, entry) })
         }
 
         if colors != original.0 { defaults.set(Self.string(colors), forKey: BotColors.storageKey) }
@@ -348,7 +379,7 @@ struct CloudMerge {
                 s.settings += 1
                 if key == Self.settingPrefix + Self.nameKey, let n = ((cloud.cloudValue(key) as? [String: Any])?["v"] as? String)?.trimmingCharacters(in: .whitespaces), !n.isEmpty { s.name = n }
             }
-            else if key.hasPrefix(Self.lookPrefix) {
+            else if key.hasPrefix(Self.lookPrefix) || key.hasPrefix(Self.gatewayLookPrefix) {
                 if (cloud.cloudValue(key) as? [String: Any])?["gone"] as? Bool != true { s.bots += 1 }
             } else if key.hasPrefix(Self.devicePrefix), let d = cloud.cloudValue(key) as? [String: Any], let t = d["t"] as? Double {
                 let own = key == Self.devicePrefix + deviceID
@@ -379,6 +410,11 @@ struct CloudMerge {
     }
     static func stringOfMaps(_ m: [String: [String: String]]) -> String {
         (try? JSONEncoder().encode(m)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    /// A gateway's own look's key: its id and the bot's name, by their hash (the store's keys hold 64 bytes).
+    static func gatewayLookKey(_ gateway: UUID, _ name: String) -> String {
+        gatewayLookPrefix + hash(Data((gateway.uuidString + "|" + name).utf8))
     }
 
     /// The cloud's keys hold 64 bytes: a long bot name goes in by its hash.
@@ -788,12 +824,13 @@ final class CloudSync {
         var m = CloudMerge(cloud: cloud, defaults: .standard)
         m.deviceID = deviceID
         m.deviceName = PushRegistrar.deviceName
-        m.photoStamp = { name in
-            guard let url = BotAvatarStore.photoURL(for: name), let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
+        // By the look maps' own key: a bot's name, or a gateway's own "@<id>/<name>" (#573).
+        m.photoStamp = { key in
+            guard let url = BotAvatarStore.photoURL(forKey: key), let a = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
             return "\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)-\(a[.size] as? Int ?? 0)"
         }
-        m.photoData = { name in BotAvatarStore.photo(for: name)?.jpegData(compressionQuality: 0.6) }
-        m.savePhoto = { name, data in try? BotAvatarStore.savePhoto(data, for: name) }
+        m.photoData = { key in BotAvatarStore.photo(forKey: key)?.jpegData(compressionQuality: 0.6) }
+        m.savePhoto = { key, data in try? BotAvatarStore.savePhoto(data, forKey: key) }
         return m
     }
 
@@ -1069,7 +1106,8 @@ final class CloudSync {
     /// instead of putting their own copies straight back.
     func eraseCloud() {
         let now = Date().timeIntervalSince1970
-        for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix) || key.hasPrefix(CloudMerge.devicePrefix)
+        for key in cloud.cloudKeys where key.hasPrefix(CloudMerge.settingPrefix) || key.hasPrefix(CloudMerge.lookPrefix)
+            || key.hasPrefix(CloudMerge.gatewayLookPrefix) || key.hasPrefix(CloudMerge.devicePrefix)
             || key.hasPrefix(CloudMerge.favouritePrefix) || key.hasPrefix(CloudMerge.favouriteOrderPrefix) {
             cloud.setCloudValue(nil, for: key)
         }
