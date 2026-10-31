@@ -123,8 +123,12 @@ private struct SystemBarItemsSensor: UIViewControllerRepresentable {
                   let view = topItem?.rightBarButtonItem?.customView, view.window != nil else { return }
             let frame = view.convert(view.bounds, to: nil)
             guard frame.width > 0 else { return }
-            SystemBarItems.shared.read(frame, for: SystemBarItems.shapeKey(size: geometry.bounds.size, safeTop: geometry.safeArea.top,
-                                                                          safeTrailing: geometry.safeArea.trailing))
+            let key = SystemBarItems.shapeKey(size: geometry.bounds.size, safeTop: geometry.safeArea.top, safeTrailing: geometry.safeArea.trailing)
+            #if DEBUG
+            // The launch probe (#554): UIKit's item when it's first read for a shape, or moves.
+            if SystemBarItems.shared.trailing(for: key) != frame { MorphFramesProbe.note("sysitem", frame) }
+            #endif
+            SystemBarItems.shared.read(frame, for: key)
             #if DEBUG
             // For the bar's checks: where our row's last control must end (the frames readout's "system").
             if MorphFramesProbe.isOn { MorphFramesProbe.marks["system"] = frame }

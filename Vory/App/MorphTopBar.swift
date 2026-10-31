@@ -477,6 +477,18 @@ struct MorphTopBar: View {
         return TopBarRoom.rowTrailingClear(windowWidth: g.bounds.width, safeTrailing: g.safeArea.trailing, sideInset: Self.sideInset,
                                            systemItemMaxX: item?.maxX, fallback: inBand ? TopBarRoom.statusReserve - Self.sideInset : 0)
     }
+    #if DEBUG
+    /// The launch probe (#554, `-vory-morph-log`): what the row is placed from, as the bar reads it.
+    private func noteBarState() {
+        guard MorphFramesProbe.logs else { return }
+        let g = windowGeometry
+        let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
+        let item = SystemBarItems.shared.trailing(for: key)
+        MorphFramesProbe.noteBarState(String(format: "key=%@ safe=%.0f,%.0f,%.0f,%.0f holding=%@ lift=%.0f closed=%@ vertical=%@ item=%@ clear=%.1f",
+            key.replacingOccurrences(of: " ", with: "_"), g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing,
+            "\(g.holding)", lift, "\(stripClosed)", "\(model.tabBarVertical)", item.map { String(format: "%.0f", $0.maxX) } ?? "none", statusClear))
+    }
+    #endif
     /// The bar's padding over its row: the closed Duo's even row (#558), 4 elsewhere (`TopBarRoom.barPadding`).
     private var topPadding: CGFloat { TopBarRoom.barPadding(closed: stripClosed && !inBand) }
     /// The bar up in the status band (the open Duo upright, or half open like a laptop): a chat's row stands in it too.
@@ -554,6 +566,9 @@ struct MorphTopBar: View {
 
     var body: some View {
         let _ = Perf.tick("morphbar-body")
+        #if DEBUG
+        let _ = noteBarState()
+        #endif
         GlassEffectContainer(spacing: 10) {
             ZStack(alignment: .topLeading) {
                 // The end states, for their frames only. Up in the status band (the open Duo upright) the whole bar
@@ -1375,6 +1390,15 @@ enum MorphFramesProbe {
     @MainActor static func note(_ name: String, _ f: CGRect) {
         guard logs else { return }
         log.append(String(format: "%.3f %@ %.1f %.1f %.1f %.1f", Date().timeIntervalSince1970, name, f.minX, f.minY, f.width, f.height))
+        if log.count > 4000 { log.removeFirst(log.count - 4000) }
+    }
+    /// With `-vory-morph-log` too: the bar's state as it changes, "<wall time> barstate key=… safe=… holding=… lift=…
+    /// closed=… vertical=… item=… clear=…" (`MorphTopBar.noteBarState`), for the first frames after a launch (#554).
+    @MainActor private static var lastBarState = ""
+    @MainActor static func noteBarState(_ state: String) {
+        guard logs, state != lastBarState else { return }
+        lastBarState = state
+        log.append(String(format: "%.3f barstate ", Date().timeIntervalSince1970) + state)
         if log.count > 4000 { log.removeFirst(log.count - 4000) }
     }
     /// Other frames by name, while they're drawn: the chat's band (its opaque part, `ChatBand`) and the name beside the
