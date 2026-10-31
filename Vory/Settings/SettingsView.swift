@@ -1053,6 +1053,9 @@ struct AboutView: View {
                 }
                 .accessibilityLabel("Source code on GitHub, MIT licence")
                 .accessibilityIdentifier("about.source")
+                // The open-source code inside the app, and each licence in full.
+                NavigationLink { AcknowledgementsView().pushedPage() } label: { Label("Acknowledgements", systemImage: "doc.text") }
+                    .accessibilityIdentifier("about.acknowledgements")
             } header: { Text("Vory") } footer: {
                 Text("A public beta. In TestFlight, take a screenshot to send feedback with it attached.")
             }

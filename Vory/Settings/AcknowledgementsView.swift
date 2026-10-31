@@ -1,0 +1,66 @@
+import SwiftUI
+
+/// Open-source code that ships inside Vory, each with its licence word for word as the project
+/// ships it, read from Acknowledgements.json in the app bundle. KaTeX is first: it draws the maths
+/// in replies.
+struct Acknowledgement: Decodable, Identifiable, Equatable {
+    var name: String
+    var version: String
+    var url: URL
+    var licence: String
+    /// The notice as it came, its line breaks and all.
+    var text: String
+    var id: String { name }
+
+    /// The notice as paragraphs to read: each paragraph's hard-wrapped lines joined, so it reflows
+    /// at every text size instead of breaking where the file did.
+    var paragraphs: [String] {
+        text.components(separatedBy: "\n\n")
+            .map { $0.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: " ") }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The bundle's list in its order; empty if the file is missing or unreadable.
+    static func bundled(in bundle: Bundle = .main) -> [Acknowledgement] {
+        guard let url = bundle.url(forResource: "Acknowledgements", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let list = try? JSONDecoder().decode([Acknowledgement].self, from: data)
+        else { return [] }
+        return list
+    }
+}
+
+/// Settings › About › Acknowledgements: one section per project, its name, version and licence
+/// (a link to its site), then the notice in full.
+struct AcknowledgementsView: View {
+    private let list = Acknowledgement.bundled()
+
+    var body: some View {
+        SettingsList {
+            SettingsHeaderSection(title: "Acknowledgements", symbol: "doc.text", color: .gray,
+                                  description: "Open-source code inside Vory, and the licence each comes under.")
+            if list.isEmpty {
+                Section { Text("The licences couldn't be read.").foregroundStyle(.secondary) }
+            }
+            ForEach(list) { item in
+                Section {
+                    Link(destination: item.url) {
+                        LabeledContent { Text(item.licence).foregroundStyle(.secondary) }
+                               label: { Label("\(item.name) \(item.version)", systemImage: "safari") }
+                    }
+                    .accessibilityLabel("\(item.name) \(item.version), \(item.licence)")
+                    // One element per paragraph, so VoiceOver reads the notice a paragraph at a time.
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(item.paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                            Text(paragraph).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .font(.footnote)
+                    .textSelection(.enabled)
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .untitledPage()
+    }
+}
