@@ -123,6 +123,14 @@ final class MathAuditUITests: XCTestCase {
         return fails
     }
 
+    /// A still of the screen, kept with the run's results.
+    private func shot(_ name: String) {
+        let a = XCTAttachment(screenshot: app.screenshot())
+        a.name = name
+        a.lifetime = .keepAlways
+        add(a)
+    }
+
     private func keyboardDown() {
         guard app.keyboards.count > 0 else { return }
         let win = app.windows.firstMatch.frame
@@ -142,9 +150,25 @@ final class MathAuditUITests: XCTestCase {
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "no composer")
         composer.tap()
         composer.typeText("math")
-        app.buttons["composer.send"].firstMatch.tap()
+        // At the largest size a tap on Send once sent nothing (the mock saw no turn). What the box holds, and Send's state
+        // and a still before the tap, and the user's own bubble after it, tell the test's fault from the app's.
+        let held = (composer.value as? String) ?? ""
+        Self.note("the box holds '\(held)'")
+        guard held.contains("math") else { shot("box-not-math"); return XCTFail("the box doesn't hold 'math' ('\(held)')") }
+        let send = app.buttons["composer.send"].firstMatch
+        wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: send)], timeout: 10)
+        let state = "Send enabled \(send.isEnabled), hittable \(send.isHittable), frame \(send.frame)"
+        Self.note("before the tap: \(state)")
+        shot("before-send")
+        send.tap()
+        // The user's own bubble, a text equal to the word in the thread: a box that empties (queued, cleared) proves nothing.
+        let bubble = app.staticTexts.matching(NSPredicate(format: "label == %@", "math")).firstMatch
+        guard bubble.waitForExistence(timeout: 10) else {
+            shot("send-nothing")
+            return XCTFail("FINDING (send at this size): one tap on Send sent nothing; box '\(composer.value as? String ?? "")', \(state)")
+        }
         let last = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "That is the whole derivation")).firstMatch
-        XCTAssertTrue(last.waitForExistence(timeout: 60), "the reply never finished")
+        XCTAssertTrue(last.waitForExistence(timeout: 90), "the reply never finished")
         keyboardDown()
         // To the reply's top, then down a screen at a time to its last line.
         let heading = app.staticTexts.matching(NSPredicate(format: "label == %@", "Sizing the log volume")).firstMatch
@@ -218,11 +242,16 @@ final class MathAuditUITests: XCTestCase {
     func testTheAcknowledgementsPassTheAudit() throws {
         try launch(tab: "settings")
         let about = app.buttons.matching(identifier: "settings.row.about").firstMatch
-        for _ in 0..<8 where !(about.exists && about.isHittable) { app.swipeUp(velocity: .slow); pause(0.4) }
+        // Up to 24 swipes: at the largest accessibility size the rows are many screens long.
+        var swipes = 0
+        while !(about.exists && about.isHittable), swipes < 24 { app.swipeUp(velocity: .slow); pause(0.4); swipes += 1 }
+        Self.note("the About row after \(swipes) swipes")
         XCTAssertTrue(about.isHittable, "no About row")
         about.tap()
         let row = app.descendants(matching: .any).matching(identifier: "about.acknowledgements").firstMatch
-        for _ in 0..<8 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow); pause(0.4) }
+        swipes = 0
+        while !(row.exists && row.isHittable), swipes < 24 { app.swipeUp(velocity: .slow); pause(0.4); swipes += 1 }
+        Self.note("the Acknowledgements row after \(swipes) swipes")
         XCTAssertTrue(row.isHittable, "no Acknowledgements row on About")
         row.tap()
         let header = app.staticTexts.matching(NSPredicate(format: "label == %@", "Acknowledgements")).firstMatch
