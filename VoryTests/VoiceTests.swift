@@ -91,6 +91,28 @@ import Testing
         #expect(s == ["Yes. The index is built, and the export runs in 40 seconds now.", "Shall I set logrotate to eight?", "Done!"])
         #expect(SpokenText.sentences("no end") == ["no end"])
     }
+
+    @Test func spokenSubscriptsAndSuperscripts() {
+        let eq = "x_1 + y^4 + z^n + \\tau"
+        let spoken = MathNotation.spoken(eq)
+        #expect(spoken.contains("1") && spoken.contains("to the power of 4") && spoken.contains("to the power of n") && spoken.contains("tau"))
+        #expect(!spoken.contains("caret"))
+        #expect(!spoken.contains("⁴"))
+
+        let absVal = MathNotation.spoken("|x|")
+        #expect(absVal.contains("absolute value of x"))
+        #expect(!absVal.contains("given x given"))
+    }
+
+    @Test func incrementalVoiceMultilineDisplayMath() {
+        var incremental = SpokenText.Incremental()
+        var out = incremental.feed("$$\n")
+        out += incremental.feed("\\int_0^1 x dx\n")
+        out += incremental.feed("$$\n")
+        let joined = out.joined(separator: " ")
+        #expect(joined.contains("integral"))
+        #expect(!joined.contains("backslash"))
+    }
 }
 
 /// Where speech goes, by the Speech setting.
