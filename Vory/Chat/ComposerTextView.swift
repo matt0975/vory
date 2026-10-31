@@ -460,6 +460,14 @@ struct ComposerTextView: UIViewRepresentable {
 
     func updateUIView(_ v: PasteTextView, context: Context) {
         context.coordinator.parent = self
+        // No typing where the bar is read-only (the tour, `composerReadOnly`): no keyboard, no selection, and VoiceOver
+        // reads the words as text rather than offering a field that takes nothing.
+        let readOnly = context.environment.composerReadOnly
+        if v.isEditable == readOnly {
+            v.isEditable = !readOnly
+            v.isSelectable = !readOnly
+            if readOnly, v.isFirstResponder { v.resignFirstResponder() }
+        }
         if v.text != text {
             v.text = text
             v.placeholderLabel.isHidden = !text.isEmpty
@@ -624,6 +632,17 @@ final class PasteTextView: UITextView {
 
     /// An input method is composing in the field (see InputComposition): the keys are its own.
     var isComposing: Bool { InputComposition.isComposing(self) }
+
+    /// VoiceOver's escape (the two-finger Z) closes the on-screen keyboard while it is up (#350), the VoiceOver way to
+    /// what a tap in the chat does; otherwise it goes on to Back. Here on the field, where VoiceOver sits while typing:
+    /// SwiftUI's escape on the thread would always take the gesture, and Back with it.
+    override func accessibilityPerformEscape() -> Bool {
+        guard KeyboardCloseRule.escapeCloses(fieldEditing: isFirstResponder, hardwareKeyboard: KeyboardCloseRule.hardwareKeyboard) else {
+            return super.accessibilityPerformEscape()
+        }
+        resignFirstResponder()
+        return true
+    }
 
     private static let keyActions: Set<Selector> = [
         #selector(arrowUp), #selector(arrowDown), #selector(returnPressed), #selector(shiftReturnPressed),

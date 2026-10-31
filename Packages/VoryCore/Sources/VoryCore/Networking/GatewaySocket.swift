@@ -75,9 +75,10 @@ public actor GatewaySocket {
     /// The socket's first open, which `onReconnected` is not told of: whatever gave up waiting
     /// for it (a chat opened before it, #422) can be tried again.
     private let onFirstConnected: ReconnectHook
+    /// What the frames go over: a URLSession web socket, or the demo's pipe (`GatewayTransport`).
+    private let makePipe: @Sendable (URLRequest) -> any GatewayFramePipe
 
-    private var task: URLSessionWebSocketTask?
-    private var session: URLSession?
+    private var task: (any GatewayFramePipe)?
     private var receiveLoop: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -124,21 +125,25 @@ public actor GatewaySocket {
     /// the batch later gets everything that arrived in the meantime.
     public init(urlProvider: @escaping URLProvider, onEvents: @escaping EventBatchSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook,
-         onFirstConnected: @escaping ReconnectHook = {}) {
+         onFirstConnected: @escaping ReconnectHook = {},
+         makePipe: @escaping @Sendable (URLRequest) -> any GatewayFramePipe = { GatewayTransport.network.makeFramePipe($0, nil) }) {
         self.urlProvider = urlProvider
         self.onEvents = onEvents
         self.onState = onState
         self.onServerRequest = onServerRequest
         self.onReconnected = onReconnected
         self.onFirstConnected = onFirstConnected
+        self.makePipe = makePipe
     }
 
     /// Events one at a time, each as it arrives.
     public init(urlProvider: @escaping URLProvider, onEvent: @escaping EventSink, onState: @escaping StateSink,
          onServerRequest: @escaping RequestHandler, onReconnected: @escaping ReconnectHook,
-         onFirstConnected: @escaping ReconnectHook = {}) {
+         onFirstConnected: @escaping ReconnectHook = {},
+         makePipe: @escaping @Sendable (URLRequest) -> any GatewayFramePipe = { GatewayTransport.network.makeFramePipe($0, nil) }) {
         self.init(urlProvider: urlProvider, onEvents: { batch in for e in batch.take() { onEvent(e) } },
-                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected, onFirstConnected: onFirstConnected)
+                  onState: onState, onServerRequest: onServerRequest, onReconnected: onReconnected,
+                  onFirstConnected: onFirstConnected, makePipe: makePipe)
     }
 
     // MARK: Lifecycle
@@ -315,16 +320,9 @@ public actor GatewaySocket {
     }
 
     private func open(url: URL, headers: [String: String]) async throws {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.httpShouldSetCookies = false
-        cfg.waitsForConnectivity = false
-        cfg.timeoutIntervalForRequest = 20
-        let s = URLSession(configuration: cfg)
         var req = URLRequest(url: url)
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        let t = s.webSocketTask(with: req)
-        t.maximumMessageSize = 64 * 1024 * 1024
-        session = s
+        let t = makePipe(req)
         task = t
         t.resume()
         receiveLoop = Task { await self.receive(on: t) }
@@ -333,10 +331,8 @@ public actor GatewaySocket {
     private func teardown(reason: String) {
         heartbeat?.cancel(); heartbeat = nil
         receiveLoop?.cancel(); receiveLoop = nil
-        task?.cancel(with: .goingAway, reason: nil)
+        task?.close()
         task = nil
-        session?.invalidateAndCancel()
-        session = nil
         settleReadyWaiters(throwing: SocketError.notConnected)
         for t in callTimers.values { t.cancel() }
         callTimers = [:]
@@ -394,30 +390,23 @@ public actor GatewaySocket {
 
     // MARK: Receive
 
-    private func receive(on t: URLSessionWebSocketTask) async {
+    private func receive(on t: any GatewayFramePipe) async {
         while !Task.isCancelled, task === t {
             do {
-                let message = try await t.receive()
-                let text: String
-                switch message {
-                case .string(let s): text = s
-                case .data(let d): text = String(decoding: d, as: UTF8.self)
-                @unknown default: continue
-                }
+                let text = try await t.receive()
                 for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
                     handle(InboundFrame.parse(String(line)))
                 }
             } catch {
                 guard task === t else { return }
-                let code = t.closeCode.rawValue
-                let reason = t.closeReason.map { String(decoding: $0, as: UTF8.self) } ?? ""
+                let (code, reason) = t.closeInfo
                 if state != .open, code == 4401 || code == 4403 {
                     // Pre-ready rejection: surface to the connect loop via waiters.
                     settleReadyWaiters(throwing: SocketError.closed(code: code, reason: reason))
                     teardown(reason: "closed \(code)")
                     return
                 }
-                if state != .open, let refused = Self.refusal(of: t) {
+                if state != .open, let refused = Self.refusal(of: t.upgradeResponse) {
                     // The upgrade was answered with a page, not a socket: what it was, for the loop to tell apart.
                     settleReadyWaiters(throwing: refused)
                     teardown(reason: "refused")
@@ -436,8 +425,8 @@ public actor GatewaySocket {
 
     /// An upgrade answered with something other than a socket (101): its status, where it pointed or ended up, and
     /// whether Cloudflare sent it and it was a web page.
-    nonisolated static func refusal(of task: URLSessionTask) -> SocketError? {
-        guard let http = task.response as? HTTPURLResponse, http.statusCode != 101, http.statusCode != 0 else { return nil }
+    nonisolated static func refusal(of response: HTTPURLResponse?) -> SocketError? {
+        guard let http = response, http.statusCode != 101, http.statusCode != 0 else { return nil }
         let server = (http.value(forHTTPHeaderField: "Server") ?? "").lowercased()
         let cloudflare = server.contains("cloudflare") || http.value(forHTTPHeaderField: "CF-RAY") != nil
         let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
@@ -508,14 +497,14 @@ public actor GatewaySocket {
         pending.removeValue(forKey: id)?.resume(throwing: error)
     }
 
-    private func register(id: Int, continuation: CheckedContinuation<JSONValue, Error>, task: URLSessionWebSocketTask, text: String, method: String, timeout: Double) async {
+    private func register(id: Int, continuation: CheckedContinuation<JSONValue, Error>, task: any GatewayFramePipe, text: String, method: String, timeout: Double) async {
         pending[id] = continuation
         callTimers[id] = Task { [weak self] in
             try? await Task.sleep(for: .seconds(timeout))
             guard !Task.isCancelled else { return }
             await self?.fail(id: id, SocketError.timeout(method))
         }
-        do { try await task.send(.string(text)) }
+        do { try await task.send(text) }
         catch {
             // The socket may have closed while the send was in flight, and the close path has
             // then already failed every pending call, this one included: a second resume traps
@@ -531,7 +520,7 @@ public actor GatewaySocket {
 
     private func sendText(_ text: String) async {
         guard let task else { return }
-        try? await task.send(.string(text))
+        try? await task.send(text)
     }
 }
 

@@ -267,6 +267,7 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
     /// as finished (normalized), so a turn started right after on another device does not take
     /// back the answer before it.
     public static func fromHistory(_ messages: [TranscriptMessage], running: Bool = false, settled: Set<String> = []) -> [TranscriptItem] {
+        let messages = namingToolRows(messages)
         var out: [TranscriptItem] = []
         for (i, m) in messages.enumerated() {
             if let item = fromHistory(m, index: i) { out.append(item); continue }
@@ -282,6 +283,34 @@ public struct TranscriptItem: Hashable, Sendable, Identifiable {
             }
         }
         return out
+    }
+
+    /// Tool result rows named by the calls that asked for them (#387). The gateway's own history
+    /// (`session.resume`) names each one, but the stored rows the watch and the fast open read
+    /// carry a tool's name only on the asking row's calls: a result takes the name of the call its
+    /// `tool_call_id` points to, else the name it was stored with, else the turn's next call not
+    /// yet answered, in order. A row already named keeps its name.
+    static func namingToolRows(_ messages: [TranscriptMessage]) -> [TranscriptMessage] {
+        var byID: [String: String] = [:]
+        var unanswered: [TranscriptMessage.ToolCallRef] = []
+        return messages.map { m in
+            if m.role == "assistant", !m.toolCalls.isEmpty {
+                for call in m.toolCalls { if let id = call.id { byID[id] = call.name } }
+                unanswered = m.toolCalls
+                return m
+            }
+            guard m.role == "tool" || m.role == "tool_call" else { return m }
+            var out = m
+            var answered = m.toolCallID.flatMap { id in unanswered.firstIndex { $0.id == id } }.map { unanswered.remove(at: $0) }
+            if out.name == nil || out.name?.isEmpty == true {
+                if let n = m.toolCallID.flatMap({ byID[$0] }) ?? m.toolName.flatMap({ $0.isEmpty ? nil : $0 }) { out.name = n }
+                else if m.toolCallID == nil, !unanswered.isEmpty { answered = unanswered.removeFirst(); out.name = answered?.name }
+            }
+            // A result matched any other way than by its call's id answers the turn's first call of
+            // that name, so a later unnamed result does not take it again.
+            if answered == nil, let n = out.name, let i = unanswered.firstIndex(where: { $0.name == n }) { unanswered.remove(at: i) }
+            return out
+        }
     }
 
     /// The same history with each promoted answer in its row's text, for readers of messages

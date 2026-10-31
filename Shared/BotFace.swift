@@ -1057,6 +1057,22 @@ public final class BotAmbient {
         tapped[profile] = Date()
         if let session, !session.isEmpty { tappedSessions[session] = Date() }
     }
+    #if os(iOS)
+    /// When a foldable phone was last opened, as the faces should see it (Duo stage 4): every face on the page in front
+    /// blinks once then (`BotMotionModel.blink(at:)`, a list's still by its picture). Set by the root's hinge watch
+    /// (`HingeOpenBlink`), never on a phone that doesn't fold.
+    public var opened: Date?
+    #if DEBUG
+    /// DEBUG `-vory-blink-probe`: the opening's blink as each face plays it, a line each on standard output (`FACEBLINK`),
+    /// for the hinge legs to read against the hinge's own lines. Checked absent from Release at each cut.
+    public static let blinkProbe = ProcessInfo.processInfo.arguments.contains("-vory-blink-probe")
+    public static func blinkLog(_ s: String) {
+        guard blinkProbe else { return }
+        let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SS"
+        FileHandle.standardOutput.write(Data("\(s) at \(f.string(from: Date()))\n".utf8))
+    }
+    #endif
+    #endif
     /// The tap a face reacts to: its chat's when it stands for one, else its bot's.
     public func lastTap(profile: String?, session: String?) -> Date? {
         if let session, !session.isEmpty { return tappedSessions[session] }
@@ -1065,9 +1081,9 @@ public final class BotAmbient {
 
     /// A tap whose face is covered at once by what it opens (a Bots card's push, Bot info over
     /// the chat on the iPhone): the bot's face on the page that arrives plays the reaction, once,
-    /// as that page lands (judgement call #16). Used up when it plays; three seconds at most.
+    /// as that page lands. Used up when it plays; three seconds at most.
     @ObservationIgnored public private(set) var pendingArrival: (profile: String, at: Date)?
-    /// A judgement call made while Matt was out: `-vory-tap-arrival-off` leaves the arriving face
+    /// `-vory-tap-arrival-off` leaves the arriving face
     /// still (the tapped face still reacts).
     public static let arrivalOff = ProcessInfo.processInfo.arguments.contains("-vory-tap-arrival-off")
     public func markArrival(profile: String) {
@@ -1624,6 +1640,33 @@ public struct BotFaceView: View {
             model.react(at: d.timeIntervalSinceReferenceDate)
             spinTick += 1
         }
+        #if os(iOS)
+        #if DEBUG
+        // For the hinge legs: a face is there to blink (FACEUP), with whether its page is in front.
+        .onAppear { BotAmbient.blinkLog("FACEUP live \(mood.profile ?? "-") face \(UInt(bitPattern: ObjectIdentifier(model).hashValue)) front \(windowLive && !drawn) drawn \(drawn)") }
+        .onChange(of: windowLive) { _, f in BotAmbient.blinkLog("FACEFRONT live face \(UInt(bitPattern: ObjectIdentifier(model).hashValue)) \(f && !drawn)") }
+        .onDisappear { BotAmbient.blinkLog("FACEDOWN live face \(UInt(bitPattern: ObjectIdentifier(model).hashValue))") }
+        #endif
+        // A foldable phone opened (Duo stage 4): one blink, the tap's without its squash, on the page in front only, and
+        // never with the bots still (Style, Motion effects), under Reduce Motion or while a list is moving. A face that
+        // mounts after the moment doesn't play it late.
+        .onChange(of: ambient.opened) { _, d in
+            #if DEBUG
+            // Why a face didn't blink, the first gate that stopped it (the hinge legs).
+            let skip: String? = !engine ? "engine" : !live ? "live" : d == nil ? "nil" : !BotMotionModel.Reaction.plays ? "plays"
+                : reduceMotion ? "reduceMotion" : ambient.scrolling ? "scrolling"
+                : Date().timeIntervalSince(d!) >= BotMotionModel.Reaction.blinkLength ? String(format: "late %.3f", Date().timeIntervalSince(d!)) : nil
+            if let skip { BotAmbient.blinkLog("FACESKIP live \(mood.profile ?? "-") face \(UInt(bitPattern: ObjectIdentifier(model).hashValue)) \(skip)") }
+            #endif
+            guard engine, live, let d, BotMotionModel.Reaction.plays, !reduceMotion, !ambient.scrolling,
+                  Date().timeIntervalSince(d) < BotMotionModel.Reaction.blinkLength else { return }
+            model.blink(at: d.timeIntervalSinceReferenceDate)
+            spinTick += 1
+            #if DEBUG
+            BotAmbient.blinkLog("FACEBLINK live \(mood.profile ?? "-") face \(UInt(bitPattern: ObjectIdentifier(model).hashValue))")
+            #endif
+        }
+        #endif
         // Once a finish spin has played, a nudge re-evaluates the body so the timeline pauses
         // again (nothing else changes afterwards and it would keep running otherwise).
         .task(id: "\(finished ?? 0)") {

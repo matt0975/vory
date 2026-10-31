@@ -1,3 +1,4 @@
+import Speech
 import SwiftUI
 import VoryCore
 
@@ -28,6 +29,11 @@ struct VoryApp: App {
         // Which defaults keys change (every write re-runs the views that read defaults). It reads all
         // the defaults on every write: `-vory-no-defaults-probe` leaves it off, for timings (#422).
         if !ProcessInfo.processInfo.arguments.contains("-vory-no-defaults-probe") { DefaultsWriteProbe.start() }
+        // `-vory-ask-speech-permission`: the system's speech recognition prompt, a moment after launch, so a UI test can
+        // read the words it shows on each device (#500). The app itself never asks: its dictation is on-device.
+        if ProcessInfo.processInfo.arguments.contains("-vory-ask-speech-permission") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { SFSpeechRecognizer.requestAuthorization { @Sendable _ in } }
+        }
         #endif
         _model = State(initialValue: AppModel.shared)
     }

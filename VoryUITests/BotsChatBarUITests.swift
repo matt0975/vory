@@ -1,6 +1,6 @@
 import XCTest
 
-/// #378's remainder on the Bots tab (#386, the planner's call #34): with a chat left open on Chats,
+/// #378's remainder on the Bots tab (#386): with a chat left open on Chats,
 /// a chat pushed on the Bots stack (one of a bot's chats, or a new one from the compose circle on
 /// its page) took the bar's Chats logic. Before the guard the chat had its bar, but back on the
 /// bot's page that chat's bar stayed (its face, its title, its … and a Back that went nowhere),

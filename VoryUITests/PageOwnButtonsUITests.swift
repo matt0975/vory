@@ -5,7 +5,12 @@ import XCTest
 /// tab's root, so opened from Settings (or in a sheet) they had none: Settings › Projects said
 /// "Tap + to make one" with no + on the page, API Keys & Environment could not add a variable,
 /// the Board pushed from Settings had no New Task, and Sessions no Options. The Scheduled Tasks
-/// tab's + asked a page that is not there and did nothing; it is gone.
+/// tab's + asked a page that was not there and did nothing; it went, and came back with its form (#428).
+///
+/// #428: every Settings page that can make something has its + at the top, "Add …" to VoiceOver: Profile, Gateways
+/// and Scheduled Tasks join API Keys, Projects and the Board. Scheduled Tasks' + makes a task through its new form, and
+/// a gateway that answers a create as a route it doesn't know loses the + (run with MOCK_NO_CRON_CREATE=404 and
+/// HERMES_E2E_ARGS=no-cron-create).
 ///
 /// On the iPad (no morph bar) the pages are as they were; `testPagesOpenedFromSettings…` runs
 /// there as well, for a still. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
@@ -74,7 +79,9 @@ final class PageOwnButtonsUITests: XCTestCase {
     private func openSettingsRow(_ id: String) {
         let row = any("settings.row.\(id)")
         XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 20), "no Settings rows")
-        for _ in 0..<10 where !(row.exists && row.isHittable) { app.swipeUp(velocity: .slow); pause(0.5) }
+        // Clear of the tab bar: a row behind it reads as hittable, and the tap goes to the bar.
+        let limit = app.windows.firstMatch.frame.maxY - 150
+        for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { app.swipeUp(velocity: .slow); pause(0.5) }
         XCTAssertTrue(row.exists && row.isHittable, "no \(id) row on Settings")
         row.tap(); pause(1.5)
     }
@@ -96,10 +103,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › Projects: its own +, which opens New Project (#426's screen).
         openSettingsRow("projects")
-        let plus = control("projects.new", "New project")
+        let plus = control("projects.new", "Add project")
         XCTAssertTrue(plus.waitForExistence(timeout: 10) && plus.isHittable, "Settings › Projects has no +")
         shot("426-\(device)-settings-projects")
-        try checkBar("projects.new", "New project", page: "Projects")
+        try checkBar("projects.new", "Add project", page: "Projects")
         if plus.exists {
             plus.tap()
             XCTAssertTrue(app.navigationBars["New Project"].waitForExistence(timeout: 5), "the + did not open New Project")
@@ -122,10 +129,10 @@ final class PageOwnButtonsUITests: XCTestCase {
 
         // Settings › Board: its own New Task (the mock has the kanban plugin).
         openSettingsRow("kanban")
-        let newTask = control("board.new", "New Task")
+        let newTask = control("board.new", "Add task")
         XCTAssertTrue(newTask.waitForExistence(timeout: 10) && newTask.isHittable, "the Board from Settings has no New Task")
         shot("426-\(device)-settings-board")
-        try checkBar("board.new", "New Task", page: "Board")
+        try checkBar("board.new", "Add task", page: "Board")
         if newTask.exists {
             newTask.tap()
             XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "New Task did not open its sheet")
@@ -149,13 +156,13 @@ final class PageOwnButtonsUITests: XCTestCase {
     }
 
     /// The Projects tab's + (the bar's) opens one New Project, on that tab, with Settings ›
-    /// Projects open on the Settings tab; and the Scheduled Tasks tab has no + that does nothing.
-    func testTheProjectsTabsPlusOpensOneSheetAndScheduledTasksHasNone() throws {
+    /// Projects open on the Settings tab; and the Scheduled Tasks tab's + opens its form (#428).
+    func testTheProjectsTabsPlusOpensOneSheetAndScheduledTasksHasItsOwn() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token, tab: "settings")
         if wide { throw XCTSkip("the morph bar is the phone's") }
         openSettingsRow("projects")
-        XCTAssertTrue(control("projects.new", "New project").waitForExistence(timeout: 10), "Settings › Projects has no +")
+        XCTAssertTrue(control("projects.new", "Add project").waitForExistence(timeout: 10), "Settings › Projects has no +")
 
         // The Projects tab: the bar's +, one sheet.
         any("tab.projects").tap(); pause(1.5)
@@ -172,25 +179,126 @@ final class PageOwnButtonsUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["New Project"].exists, "Settings › Projects opened a New Project for the Projects tab's +")
         shot("426-settings-after-projects-tab-plus")
 
-        // Scheduled Tasks: no + in the bar (it asked for a page that is not there).
-        any("tab.cron").tap(); pause(1.5)
-        shot("426-scheduled-tasks")
-        XCTAssertFalse(any("tasks.add").exists, "the Scheduled Tasks tab still has a + that does nothing")
-        XCTAssertFalse(any("cron.plus").exists, "the Scheduled Tasks tab has a +")
+        // Scheduled Tasks: the bar's + opens the new-task form, once (#428).
+        any("tab.cron").tap(); pause(2)
+        shot("428-scheduled-tasks-tab")
+        let cronPlus = any("cron.add")
+        XCTAssertTrue(cronPlus.waitForExistence(timeout: 10) && cronPlus.isHittable, "the Scheduled Tasks tab has no +")
+        XCTAssertEqual(cronPlus.label, "Add scheduled task")
+        cronPlus.tap()
+        XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "the tab's + did not open the new-task form")
+        XCTAssertEqual(app.navigationBars.matching(identifier: "New Task").count, 1, "more than one new-task form")
+        app.buttons["Cancel"].firstMatch.tap(); pause(1)
+    }
+
+    /// #428: Profile, Gateways and Scheduled Tasks, opened from Settings, each have their + at the top, read "Add …",
+    /// pass the audit in the bar's band, and open their form; Scheduled Tasks' makes a task that the list then shows.
+    func testSettingsPagesThatMakeSomethingHaveTheirPlus() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        if (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").contains("no-cron-create") { throw XCTSkip("the refusing mock") }
+        launch(url: url, token: token, tab: "settings")
+        let device = wide ? "ipad" : "iphone"
+
+        openSettingsRow("profile")
+        let addProfile = control("profile.add", "Add profile")
+        XCTAssertTrue(addProfile.waitForExistence(timeout: 10), "Settings › Profile has no +")
+        XCTAssertEqual(addProfile.label, "Add profile")
+        try checkBar("profile.add", "Add profile", page: "Profile")
+        addProfile.tap()
+        XCTAssertTrue(app.alerts["New profile"].waitForExistence(timeout: 5), "Add profile did not open New profile")
+        shot("428-\(device)-profile-new")
+        app.alerts["New profile"].buttons["Cancel"].tap(); pause(1)
+        back()
+
+        any("settings.row.gateways").tap(); pause(1.5)
+        let addGateway = control("gateways.add", "Add gateway")
+        XCTAssertTrue(addGateway.waitForExistence(timeout: 10), "Settings › Gateways has no +")
+        XCTAssertEqual(addGateway.label, "Add gateway")
+        try checkBar("gateways.add", "Add gateway", page: "Gateways")
+        addGateway.tap()
+        XCTAssertTrue(app.navigationBars["Add Gateway"].waitForExistence(timeout: 5), "Add gateway did not open the gateway form")
+        shot("428-\(device)-gateway-new")
+        app.buttons["Cancel"].firstMatch.tap(); pause(1.5)
+        back()
+
+        openSettingsRow("cron")
+        let addTask = control("cron.add", "Add scheduled task")
+        XCTAssertTrue(addTask.waitForExistence(timeout: 10), "Settings › Scheduled Tasks has no +")
+        XCTAssertEqual(addTask.label, "Add scheduled task")
+        try checkBar("cron.add", "Add scheduled task", page: "Scheduled Tasks")
+        addTask.tap()
+        XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "Add scheduled task did not open its form")
+        let name = any("cron.new.name")
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        // The form is a new screen: all of it passes the audit, before the keyboard is up. On the iPad the dimmed page
+        // behind the form sheet shows as text with no element and no frame; the existing Add Gateway sheet shows the
+        // same, so only that one is let through there.
+        pause(1)
+        shot("428-\(device)-cron-form-audit")
+        let wideSheet = wide
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            print("PAGE-AUDIT New Task (scheduled) '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")' frame \(issue.element?.frame ?? .zero)")
+            return wideSheet && issue.auditType == .elementDetection && issue.element == nil
+        }
+        name.tap(); name.typeText("Nightly disk check")
+        let prompt = any("cron.new.prompt")
+        prompt.tap(); prompt.typeText("Check the disk use on the log host.")
+        shot("428-\(device)-cron-new")
+        let add = any("cron.new.add")
+        XCTAssertTrue(add.isEnabled, "Add stays off with a schedule and a prompt")
+        add.tap()
+        XCTAssertTrue(app.staticTexts["Nightly disk check"].waitForExistence(timeout: 10), "the new task is not in the list")
+        shot("428-\(device)-cron-made")
+        back()
+    }
+
+    /// #428: a gateway that answers a create as a route it doesn't know (an older Hermes; the mock with
+    /// MOCK_NO_CRON_CREATE=404) says so once, in plain words, and has no + from then on.
+    func testAGatewayThatCantMakeTasksLosesItsPlus() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        guard (ProcessInfo.processInfo.environment["HERMES_E2E_ARGS"] ?? "").contains("no-cron-create") else { throw XCTSkip("needs the refusing mock") }
+        launch(url: url, token: token, tab: "settings")
+        openSettingsRow("cron")
+        let addTask = control("cron.add", "Add scheduled task")
+        XCTAssertTrue(addTask.waitForExistence(timeout: 10), "no + before the gateway has said anything")
+        addTask.tap()
+        let prompt = any("cron.new.prompt")
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5)); prompt.tap(); prompt.typeText("Anything.")
+        any("cron.new.add").tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 10), "no alert for the refusal")
+        let words = alert.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "can\u{2019}t create scheduled tasks from Vory")).firstMatch
+        XCTAssertTrue(words.exists, "the refusal isn't in plain words")
+        shot("428-cron-refused")
+        alert.buttons["OK"].tap(); pause(1.5)
+        XCTAssertFalse(app.navigationBars["New Task"].exists, "the form stays open after the refusal")
+        XCTAssertFalse(any("cron.add").exists, "the + is still there after the gateway refused")
+        XCTAssertFalse(barButton("Add scheduled task").exists, "the page's own + is still there")
+        // And still gone the next time the page opens.
+        back()
+        openSettingsRow("cron"); pause(1)
+        XCTAssertFalse(any("cron.add").exists, "the + came back")
     }
 
     /// Chats › Filters › Manage projects…: the sheet's page has its own +.
     func testManageProjectsSheetHasItsPlus() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token, tab: "chats")
+        if wide {
+            // The wide layout keeps sort and filters in one View menu beside the column's title.
+            let view = any("chats.view")
+            XCTAssertTrue(view.waitForExistence(timeout: 20), "no View menu on Chats")
+            pause(2)
+            view.tap(); pause(1)
+        }
         let filters = any("chats.filters")
-        XCTAssertTrue(filters.waitForExistence(timeout: 20), "no Filters on Chats")
-        pause(2)
+        XCTAssertTrue(filters.waitForExistence(timeout: wide ? 5 : 20), "no Filters on Chats")
+        pause(wide ? 0.5 : 2)
         filters.tap()
         let manage = app.buttons["Manage projects…"]
         XCTAssertTrue(manage.waitForExistence(timeout: 5), "no Manage projects in Filters")
         manage.tap(); pause(1.5)
-        let plus = barButton("New project")
+        let plus = barButton("Add project")
         XCTAssertTrue(plus.waitForExistence(timeout: 10) && plus.isHittable, "Manage projects has no +")
         shot("426-manage-projects")
         if plus.exists {
@@ -213,7 +321,7 @@ final class PageOwnButtonsUITests: XCTestCase {
         XCTAssertTrue(newTask.waitForExistence(timeout: 10) && newTask.isHittable, "no New Task in the bar")
         XCTAssertTrue(options.exists && options.isHittable, "no Board options in the bar")
         shot("435-iphone-settings-board-one")
-        try checkBar("board.new", "New Task", page: "Board, one board")
+        try checkBar("board.new", "Add task", page: "Board, one board")
         XCTAssertLessThan(options.frame.midX, newTask.frame.midX, "Board options comes after New Task")
         newTask.tap()
         XCTAssertTrue(app.navigationBars["New Task"].waitForExistence(timeout: 5), "New Task did not open its sheet")

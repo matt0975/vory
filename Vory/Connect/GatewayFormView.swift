@@ -175,7 +175,7 @@ struct GatewayFormView: View {
         .navigationBarTitleDisplayMode(.inline)
         #if os(iOS)
         // Pushed, the form's own Cancel is the way out: no system back arrow beside it, wherever
-        // it is pushed from (judgement call #11), and no back swipe, which would drop the edits
+        // it is pushed from, and no back swipe, which would drop the edits
         // unasked (hiding the back arrow alone left the swipe on: the stack's own pan pops any
         // page). The Mac's toolbar Back does not answer to this.
         .cancelIsTheWayBack()
@@ -605,6 +605,8 @@ struct GatewayFormView: View {
     /// and they were typed here; forgets what was remembered when the switch was turned off,
     /// the method changed or the address did (see `RememberedSignInCoordinator.formChange`).
     private func updateRememberedSignIn(_ id: UUID, gateway: GatewayURL) throws {
+        // Never for the demo (#494): it is never saved, and a sign-in remembered under its id stayed in the Keychain.
+        guard id != GatewayConnection.demoID else { return }
         let typed = !username.isEmpty && !password.isEmpty
         let moved = existing.map { $0.gateway != gateway } ?? false
         switch RememberedSignInCoordinator.formChange(authMode: authMode, switchOn: rememberSignIn, wasOn: rememberedAtLoad, typed: typed, moved: moved) {

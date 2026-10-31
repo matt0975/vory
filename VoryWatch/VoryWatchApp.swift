@@ -25,9 +25,24 @@ struct VoryWatchApp: App {
         WindowGroup {
             WatchRootView()
                 .environment(model)
+                .dimmedForTests()
                 .task { WatchAppDelegate.model = model; await model.start() }
                 .onOpenURL { url in model.open(url) }
         }
+    }
+}
+
+extension View {
+    /// DEBUG only: `-vory-test-dimmed YES` draws the app as with the wrist down (the always-on,
+    /// dimmed state, `isLuminanceReduced`), which the simulator cannot be put in, for the screenshot
+    /// gate and the battery test (#387). It sets that one environment value and nothing else; a
+    /// Release build has none of it, the argument's name included.
+    @ViewBuilder func dimmedForTests() -> some View {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "vory-test-dimmed") { environment(\.isLuminanceReduced, true) } else { self }
+        #else
+        self
+        #endif
     }
 }
 

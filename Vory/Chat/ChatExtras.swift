@@ -8,20 +8,23 @@ import AppKit
 import VoryCore
 
 /// Last known session list per gateway + profile, so the Chats tab draws instantly on launch
-/// and refreshes behind it. Small JSON in UserDefaults; Settings › Appearance can clear it.
+/// and refreshes behind it. Small JSON in UserDefaults; Settings › Appearance can clear it. Never the demo's (#493):
+/// nothing of it is kept, and a list an older build saved for it kept its chats' first times, so they aged.
 enum SessionCache {
     static let prefix = "sessions.cache."
 
     static func key(connection: UUID, profile: String?) -> String { prefix + connection.uuidString + "." + (profile ?? "-") }
 
     static func load(connection: UUID, profile: String?) -> [StoredSession] {
-        guard let data = UserDefaults.standard.data(forKey: key(connection: connection, profile: profile)) else { return [] }
+        guard connection != GatewayConnection.demoID,
+              let data = UserDefaults.standard.data(forKey: key(connection: connection, profile: profile)) else { return [] }
         return (try? JSONDecoder().decode([StoredSession].self, from: data)) ?? []
     }
 
     /// Any cached list for this gateway, whichever bot it was for: shown at a cold launch when
     /// the exact one is missing, so the page is never empty while the first load runs.
     static func loadAny(connection: UUID) -> [StoredSession] {
+        guard connection != GatewayConnection.demoID else { return [] }
         let head = prefix + connection.uuidString + "."
         var best: [StoredSession] = []
         for (k, v) in UserDefaults.standard.dictionaryRepresentation() where k.hasPrefix(head) {
@@ -31,6 +34,7 @@ enum SessionCache {
     }
 
     static func save(_ sessions: [StoredSession], connection: UUID, profile: String?) {
+        guard connection != GatewayConnection.demoID else { return }
         if let data = try? JSONEncoder().encode(sessions) { UserDefaults.standard.set(data, forKey: key(connection: connection, profile: profile)) }
     }
 

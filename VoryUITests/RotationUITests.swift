@@ -44,6 +44,17 @@ final class RotationUITests: XCTestCase {
         return element.exists
     }
 
+    /// Scrolls the form up from its top half (the keyboard has the bottom one) until `element` is on screen.
+    private func scrollFormUntilVisible(_ element: XCUIElement, swipes: Int = 6) -> Bool {
+        let window = app.windows.firstMatch
+        for _ in 0..<swipes {
+            if element.exists && element.isHittable { return true }
+            window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42))
+                .press(forDuration: 0.05, thenDragTo: window.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.15)))
+        }
+        return element.exists && element.isHittable
+    }
+
     private func dismissKeyboard() {
         if app.keyboards.buttons["Return"].firstMatch.exists { app.keyboards.buttons["Return"].firstMatch.tap() }
         else if app.keyboards.buttons["return"].firstMatch.exists { app.keyboards.buttons["return"].firstMatch.tap() }
@@ -63,8 +74,10 @@ final class RotationUITests: XCTestCase {
         name.tap(); name.typeText("Workshop")
         let urlField = app.textFields["gateway.url"].firstMatch
         urlField.tap(); urlField.typeText(url)
+        // The sign-in sits under the backup address (#283): with the URL in and the keyboard up it's below the fold, and
+        // the form hasn't made its row yet.
         let tokenField = app.secureTextFields["gateway.sessionToken"].firstMatch
-        XCTAssertTrue(tokenField.waitForExistence(timeout: 5))
+        XCTAssertTrue(scrollFormUntilVisible(tokenField), "no session token field on the gateway form")
         tokenField.tap(); tokenField.typeText(token)
         dismissKeyboard()
         let test = app.buttons["gateway.test"].firstMatch

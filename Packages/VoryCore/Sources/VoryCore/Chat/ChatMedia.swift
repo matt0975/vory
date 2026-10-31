@@ -281,7 +281,12 @@ public actor MediaStore {
 
     public init() {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
-        directory = base.appendingPathComponent("vory-media", isDirectory: true)
+        self.init(directory: base.appendingPathComponent("vory-media", isDirectory: true))
+    }
+
+    /// A cache of its own: the demo's, in a folder that goes when the demo does (`GatewayRuntime.media`).
+    public init(directory: URL) {
+        self.directory = directory
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 

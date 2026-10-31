@@ -62,9 +62,11 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save a picture from a chat to your Photos.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk with your bot in voice mode, dictate a message, or record a voice memo to attach.</string>
+	<string>Talk with your bot, dictate a message or record a voice memo. Audio goes to your gateway, or to Google if you use Live voice with your own key.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Transcribe hold-to-talk speech on this device before sending it.</string>
+	<string>Turn what you say into text on this iPhone. When your gateway has its own speech provider and Speech is set to Automatic or Gateway, your audio goes to the gateway instead.</string>
+	<key>NSSpeechRecognitionUsageDescription~ipad</key>
+	<string>Turn what you say into text on this iPad. When your gateway has its own speech provider and Speech is set to Automatic or Gateway, your audio goes to the gateway instead.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>NSSupportsLiveActivitiesFrequentUpdates</key>

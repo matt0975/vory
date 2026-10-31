@@ -31,7 +31,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
         let secrets = Self.contextSecrets(store)
         guard let cdata = try? JSONEncoder().encode(store.connections), let sdata = try? JSONEncoder().encode(secrets) else { return }
         var ctx: [String: Any] = ["connections": cdata, "secrets": sdata, "sent": Date().timeIntervalSince1970]
-        if let a = store.activeConnectionID { ctx["active"] = a.uuidString }
+        // Never the demo (#392): the watch keeps what it is told, and the demo is the phone's only, for its run.
+        if let a = store.activeConnectionID, a != GatewayConnection.demoID { ctx["active"] = a.uuidString }
         // The bots as this phone draws them (shape, eyes, colour, photo thumbnail): the watch
         // draws the same faces from this, static.
         if let looks = try? JSONEncoder().encode(BotLooks.load()) { ctx["looks"] = looks }
@@ -78,6 +79,29 @@ final class WatchSync: NSObject, WCSessionDelegate {
         if let s = pending { pending = nil; push(store: s) }
     }
 
+    // MARK: A chat open on the Watch (#387)
+
+    /// Chats a Watch has open, by stored id. While one is followed, a turn starting or ending and its cards changing
+    /// are sent to the Watch (`chatChanged`, from `WatchTurnRelay`), so a Watch chat at rest asks this phone nothing.
+    /// Each request about the chat renews the follow (`WatchFeedRules.followSeconds`); leaving the chat ends it.
+    private var follows: [String: WatchFollow] = [:]
+
+    func follow(_ session: String, on: Bool = true, now: Date = Date()) {
+        follows = follows.filter { $0.value.isActive(now: now) }
+        if on { follows[session, default: WatchFollow()].renew(now: now) } else { follows[session] = nil }
+    }
+
+    func isFollowed(_ session: String, now: Date = Date()) -> Bool { follows[session]?.isActive(now: now) == true }
+
+    /// Tells a Watch following `chat` that it changed. Sent only while the Watch app can take it (the chat open on the
+    /// wrist); a Watch out of reach reads the chat itself when it comes forward or the phone comes back.
+    func chatChanged(_ chat: ChatSession, call: WatchFeedRules.TurnCall) {
+        guard isFollowed(chat.storedID), WCSession.isSupported() else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated, session.isReachable else { return }
+        session.sendMessage(["op": "chatChanged", "session": chat.storedID, "call": String(describing: call)], replyHandler: nil, errorHandler: nil)
+    }
+
     /// The watch cannot open WebSockets over the phone's Bluetooth link, so it asks the phone to
     /// submit prompts and answer approvals, and makes its HTTP calls through it when its own
     /// route does not reach the gateway. `sendMessage` wakes this app in the background; the
@@ -109,6 +133,11 @@ final class WatchSync: NSObject, WCSessionDelegate {
         // The watch's bot goes with each call; the phone's own selection stays where the person
         // left it (switching it here changed the phone's list under them).
         let profile = (m["profile"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        // The Watch renewing its follow of a chat it has open, or leaving it: nothing to open for (#387).
+        if op == "follow", let sid = m["session"] as? String {
+            shared.follow(sid, on: m["on"] as? Bool != false)
+            return ["ok": true]
+        }
         if op == "new" {
             // The watch cannot open a socket over the phone link, so the phone creates the session.
             guard let chat = try? await rt.newChat(profile: profile) else { return ["ok": false, "error": "could not create a chat"] }
@@ -116,6 +145,8 @@ final class WatchSync: NSObject, WCSessionDelegate {
         }
         guard let sid = m["session"] as? String, let chat = try? await rt.openChat(storedID: sid, title: nil, profile: m["profile"] as? String, waitForResume: true) else { return ["ok": false, "error": "could not open the chat"] }
         if let e = chat.resumeError { return ["ok": false, "error": "The iPhone could not open the chat: \(e)"] }
+        // Any request about a chat means the Watch has it open: it hears of the chat's changes for a while (#387).
+        shared.follow(sid)
         switch op {
         case "prompt":
             guard let text = m["text"] as? String, !text.isEmpty else { return ["ok": false, "error": "empty"] }
@@ -137,13 +168,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
             await chat.respond(card: card, result: .object([key: .string(m["text"] as? String ?? "")]))
             return ["ok": true]
         case "cards":
-            let cards: [[String: Any]] = chat.cards.map { c in
-                var card: [String: Any] = ["id": c.id, "method": c.method,
-                                           "text": c.approval?.description ?? c.approval?.command ?? c.clarify?.question ?? c.clarify?.questions?.first?.question ?? c.valuePrompt?.prompt ?? ""]
-                // An approval's request, which a notification names it by (`PendingCard.isNamed`).
-                if let rid = c.approval?.requestId { card["request"] = rid }
-                return card
-            }
+            // The whole card, so the Watch shows the same card on both paths (#387), with the words and request an older
+            // Watch reads and an approval's choices and scope (`WatchFeedRules.cardMessage`).
+            let cards = chat.cards.map(WatchFeedRules.cardMessage)
             // The watch shows what the bot is working on when this iPhone has written it (the
             // watch runs no model), else the step it is on.
             return ["ok": true, "running": chat.isRunning, "status": ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "", "cards": cards]

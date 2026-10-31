@@ -12,7 +12,7 @@ struct MediaFile: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         FileRepresentation(exportedContentType: .image) { item in
             guard let rt = await AppModel.shared.runtime else { throw HermesAPIError.transport("Connect a gateway first.") }
-            let url = try await MediaStore.shared.localURL(for: item.ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: item.profile))
+            let url = try await rt.media.localURL(for: item.ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: item.profile))
             return SentTransferredFile(url)
         }
     }
@@ -84,12 +84,13 @@ enum MediaSave {
         guard let rt = AppModel.shared.runtime else { return provider }
         let gateway = rt.connection.id.uuidString
         let api = GatewayMediaAPI(api: rt.api, profile: profile)
+        let media = rt.media
         // The store answers at once for a file already here, and fetches otherwise.
         provider.registerFileRepresentation(forTypeIdentifier: type.identifier, fileOptions: [], visibility: .all) { completion in
             let progress = Progress(totalUnitCount: 1)
             Task {
                 do {
-                    let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: api)
+                    let url = try await media.localURL(for: ref, gateway: gateway, api: api)
                     progress.completedUnitCount = 1
                     completion(url, false, nil)
                 } catch { completion(nil, false, error) }

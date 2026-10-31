@@ -4,7 +4,7 @@ import Testing
 import UIKit
 @testable import Vory
 
-/// The bot's still symbols against recorded baselines (the brief, section 9 as amended: 28 and
+/// The bot's still symbols against recorded baselines (28 and
 /// 64 pt in three colours, light and dark; everything else is an assertion). Every state's
 /// still is drawn from the motion model's snapped frame and compared pixel by pixel with a
 /// small tolerance. Set VORY_RECORD_BASELINES=1 to write the baselines into

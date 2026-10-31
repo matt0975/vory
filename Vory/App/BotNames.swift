@@ -24,7 +24,8 @@ enum BotNames {
 
     /// The names kept for a bot, nil when none.
     static func names(for profile: String, _ defaults: UserDefaults = .standard) -> ProfileOwnNames? {
-        guard let e = stored(defaults)[profile] else { return nil }
+        // The demo's bots go by the demo's names while it runs (`DemoLooks`), never by those kept for this person's.
+        guard let e = DemoLooks.isOn ? DemoLooks.names(for: profile) : stored(defaults)[profile] else { return nil }
         let n = e["n"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let t = e["t"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !n.isEmpty || !t.isEmpty else { return nil }
@@ -34,16 +35,19 @@ enum BotNames {
     /// Sets a bot's names. An empty name or title clears that one; both empty drops the bot's
     /// entry, so its gateway names (or the folder name) show again.
     @MainActor static func set(displayName: String?, title: String?, for profile: String, _ defaults: UserDefaults = .standard) {
-        var map = stored(defaults)
         let n = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let t = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if n.isEmpty, t.isEmpty { map[profile] = nil }
-        else {
+        var entry: [String: String]?
+        if !n.isEmpty || !t.isEmpty {
             var e: [String: String] = [:]
             if !n.isEmpty { e["n"] = n }
             if !t.isEmpty { e["t"] = t }
-            map[profile] = e
+            entry = e
         }
+        // A name given in the demo is the demo's only.
+        if DemoLooks.keep(names: entry, for: profile) { return }
+        var map = stored(defaults)
+        map[profile] = entry
         save(map, defaults)
     }
 

@@ -1,7 +1,7 @@
 import XCTest
 
-/// CPU with six bots on screen and one working (the brief, section 6), the motion engine on
-/// and off, as XCTest's CPU metric over ten seconds each: the numbers for the planner and the
+/// CPU with six bots on screen and one working, the motion engine on
+/// and off, as XCTest's CPU metric over ten seconds each: the numbers for review and the
 /// Mac's comparison. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 final class BotMotionPerfUITests: XCTestCase {
     private var env: (String, String)? {

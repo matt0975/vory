@@ -69,11 +69,16 @@ public actor HermesAPI {
 
     public func setGateway(_ gateway: GatewayURL) { self.gateway = gateway }
 
-    public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession(), makeSession: (@Sendable () -> URLSession)? = nil) {
+    /// Where downloads land (`download`): the system's temporary folder, or the demo's own (`GatewayRuntime.scratchDirectory`).
+    private let downloadDirectory: URL?
+
+    public init(gateway: GatewayURL, signer: RequestSigner, urlSession: URLSession = HermesAPI.makeSession(), makeSession: (@Sendable () -> URLSession)? = nil,
+                downloadDirectory: URL? = nil) {
         self.gateway = gateway
         self.signer = signer
         self.urlSession = urlSession
         self.makeSession = makeSession
+        self.downloadDirectory = downloadDirectory
     }
 
     /// A new session for the gateway, its connections made afresh. One session lasted as long as the app, and a
@@ -156,7 +161,7 @@ public actor HermesAPI {
             let data = (try? Data(contentsOf: tmp)) ?? Data()
             throw Self.error(for: http, data: data)
         }
-        let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let dest = (downloadDirectory ?? FileManager.default.temporaryDirectory).appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
         let name = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value.map { ($0 as NSString).lastPathComponent } ?? "download"
         let final = dest.appendingPathComponent(name.isEmpty ? "download" : name)

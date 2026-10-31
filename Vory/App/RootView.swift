@@ -5,12 +5,20 @@ import VoryCore
 struct RootView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.horizontalSizeClass) private var sizeClass
-    /// Two columns and the wide chat layout: see `wideLayout` below.
-    private var wide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
+    @Environment(\.scenePhase) private var scenePhase
+    /// Two columns and the wide chat layout: see `wideLayout` below. Held while the scene is in the background (`shownWide`).
+    private var wide: Bool { WindowGeometry.held(live: liveWide, holding: scenePhase == .background, last: shownWide) }
+    private var liveWide: Bool { Self.isWide(regular: sizeClass == .regular, size: windowGeometry.bounds.size) }
     nonisolated static func isWide(regular: Bool, size: CGSize) -> Bool {
         guard size.width > 0, size.height > 0 else { return regular }   // not measured yet
         return regular && (size.width > size.height || size.width >= 700)
     }
+    /// `wide` as last read outside the background. There the system lays the scene out again for its snapshot, at
+    /// another size class and shape (on the open Duo on its side: compact, then 466 × 678); read live, that took the
+    /// Chats page to one column and back on every trip and left its header shifted (#537). The window's geometry and
+    /// reserved regions hold the same way, and all of it is read again as the scene leaves the background. A scene
+    /// that is only inactive (the switcher, an unfocused window still on screen) is never held.
+    @State private var shownWide: Bool?
     /// The window's geometry for this scene, read from the window on every layout (see
     /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
     @State private var windowGeometry = WindowGeometry()
@@ -61,9 +69,17 @@ struct RootView: View {
             }
         }
         .animation(.default, value: model.lock.isLocked)
+        #if os(iOS)
+        // The welcome tour again, over the app as it is (#487, Settings › Troubleshooting, test builds only).
+        .fullScreenCover(isPresented: Binding(get: { model.replayingTour }, set: { model.replayingTour = $0 })) {
+            TourReplayView().withAppModel()
+        }
+        #endif
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
+        // Whether the status stands in a top corner, for the top bar's room on every tab (#516), read here once.
+        .modifier(StatusCornerEnvironment())
         .modifier(ReservedRegionsEnvironment())
         #if DEBUG && os(iOS)
         // `-vory-ax-oracle`: what VoiceOver would stop on, for UI tests (`VoiceOverOracle`, #409).
@@ -71,8 +87,14 @@ struct RootView: View {
             if VoiceOverOracle.isOn { VoiceOverOracle.Probe().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-card-probe`: where a toggled card's top was at each frame, for the card checks (#437).
             if CardMotionProbe.isOn { CardMotionProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-app-fingerprint`: what a tour replay must leave as it was, for its no-trace test (#487).
+            if AppFingerprint.isOn { AppFingerprint.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
             // `-vory-coldopen-probe`: how the thread moved as the last chat opened, for the open checks (#449).
             if ColdOpenProbe.isOn { ColdOpenProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            if DemoDeliveredReadout.isOn { DemoDeliveredReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            // `-vory-morph-frames`: the top bar's capsules as drawn, for the headings and search fields checks (#516).
+            if MorphFramesProbe.isOn { MorphFramesProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
+            if MorphFramesProbe.isOn && MorphFramesProbe.logs { MorphFramesProbe.LogReadout().frame(width: 1, height: 1).allowsHitTesting(false) }
         }
         #endif
         #if DEBUG
@@ -82,8 +104,9 @@ struct RootView: View {
             if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
                 VerticalBarEdge { edge in
                     let g = windowGeometry
-                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no"))
+                    Text(String(format: "%.0fx%.0f  safe t%.0f l%.0f b%.0f r%.0f  bar %@  wide %@  hidden %@ kb %@ open %@ hiders %d mw %@ v %@ row %.0f room %.0f", g.bounds.width, g.bounds.height, g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing, edge.map { $0 == .leading ? "leading" : "trailing" } ?? "bottom", wide ? "yes" : "no", model.tabBarHidden ? "yes" : "no", model.keyboardUp ? "yes" : "no", model.chatsPathOpen ? "yes" : "no", model.tabBarHiders[model.selectedTab] ?? 0, model.wideLayout ? "yes" : "no", model.tabBarVertical ? "yes" : "no", MorphState.shared.rootRowBottom, TopBarRoom.lastRoom))
                         .font(.caption2.monospaced()).padding(4).background(.yellow.opacity(0.9)).foregroundStyle(.black)
+                        .accessibilityIdentifier("geometry.window")
                         // Below the morph bar's chat row (its capsules sit 30 pt lower since
                         // 2026-10-12): at 40 the probe sat over Back and a UI test's tap missed.
                         .padding(.top, 150).allowsHitTesting(false)
@@ -95,6 +118,23 @@ struct RootView: View {
                 }
             }
         }
+        // `-vory-geometry-probe`, the Duo's fold (stage 2): every reserved region the window reports, active or not, in
+        // window space, and the margins the system gives each, read straight from the geometry; and the keyboard's overlap.
+        .overlay {
+            if ProcessInfo.processInfo.arguments.contains("-vory-geometry-probe") {
+                #if os(iOS)
+                if #available(iOS 27.1, *) { RegionsProbe(keyboard: windowGeometry.keyboardOverlap).ignoresSafeArea().allowsHitTesting(false) }
+                #endif
+            }
+        }
+        #if os(iOS)
+        // `-vory-hinge-probe`: every hinge change the window reports (Duo stage 4, the blink as it opens).
+        .modifier(HingeProbe.IfOn())
+        #endif
+        #endif
+        #if os(iOS)
+        // The faces blink once as a foldable phone opens (Duo stage 4).
+        .modifier(HingeOpenBlink())
         #endif
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
@@ -102,6 +142,8 @@ struct RootView: View {
         // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
         // Manager or Split View window. The window's shape decides, never the device or a pose.
         .environment(\.wideLayout, wide)
+        .onChange(of: liveWide, initial: true) { _, w in if scenePhase != .background { shownWide = w } }
+        .onChange(of: scenePhase) { _, phase in if phase != .background { shownWide = liveWide } }
         .onChange(of: wide, initial: true) { _, w in model.wideLayout = w }
         // Belt and braces: the same value again once the layout has settled after a change of
         // shape (the Duo's turn from one column to two).
@@ -155,7 +197,7 @@ struct RootView: View {
             }
             #endif
         }
-        .onChange(of: model.hasConnections) { had, has in
+        .onChange(of: model.hasOwnGateway) { had, has in
             if !had, has, !companionPromptShown { companionDue = true; offerCompanion() }
         }
         // One sheet at a time, and none over the lock: the sign-in a restore owes comes first,
@@ -197,7 +239,7 @@ struct RootView: View {
 extension RootView {
     /// Shows the Companion prompt when it is owed and nothing stands in its way.
     private func offerCompanion() {
-        guard companionDue, !companionPromptShown, model.hasConnections, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
+        guard companionDue, !companionPromptShown, model.hasOwnGateway, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
         companionDue = false
         companionPromptShown = true
         Task {
@@ -288,40 +330,39 @@ struct MainTabView: View {
                 // Not tappable while it slides away: a tap then switched tabs under an open chat.
                 .allowsHitTesting(!model.tabBarHidden)
                 .accessibilityHidden(model.tabBarHidden)
-            Group {
-                if let edge {
-                    // Into the system's strip itself (the window's inset on that side, where the
-                    // status bar and the navigation bars' items already stand), at the strip's
-                    // foot under those items, so the pages keep the width the strip leaves them.
-                    // A strip too narrow for the capsule gets the bar beside it instead.
-                    let strip = edge == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
-                    if strip >= VoryTabBar.stripItemWidth {
-                        // One column with the system's items: their width, their centre line
-                        // (measured on the closed Duo: 50 pt wide, centred 48 pt from the edge).
-                        // On the closed display the stack sits at the strip's foot, under the
-                        // page's navigation items; on the open display (wide) it starts at the
-                        // top, under the status items, as Apple orders vertical bars (Matt).
-                        let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
-                        pages.overlay(alignment: wideAlignment(edge)) {
-                            bar
-                                .frame(width: VoryTabBar.stripItemWidth)
-                                .padding(edge == .leading ? .leading : .trailing, outer)
-                                .padding(.top, model.wideLayout ? VoryTabBar.stripStatusAllowance : 0)
-                                // The overlay already ends above the home-indicator area; the stack
-                                // keeps one group gap over it, no more. Padding it by the inset again
-                                // pushed the stack up until its first tab touched the page's own
-                                // strip items (the list's filter met Home, Matt).
-                                .padding(.bottom, model.wideLayout ? 0 : VoryTabBar.stripGroupGap)
-                                .ignoresSafeArea(.container, edges: edge == .leading ? .leading : .trailing)
-                        }
-                    } else {
-                        pages.safeAreaInset(edge: edge, spacing: 0) { bar }
+            // One structure wherever the bar stands (#533): along the bottom, beside a narrow strip, or in the strip,
+            // each a slot that holds the bar or nothing, so only the bar moves. The pages stood in one of three branches
+            // by the bar's place, each another identity: every move of the bar (a turn of the open Duo, closing or
+            // opening it) rebuilt every tab's navigation stack at its root, and a pushed page went back to the root.
+            let side = edge ?? .trailing
+            // Into the system's strip itself (the window's inset on that side, where the status bar and the navigation
+            // bars' items already stand), at the strip's foot under those items, so the pages keep the width the strip
+            // leaves them. A strip too narrow for the capsule gets the bar beside it instead.
+            let strip = side == .leading ? windowGeometry.safeArea.leading : windowGeometry.safeArea.trailing
+            let inStrip = vertical && strip >= VoryTabBar.stripItemWidth
+            // One column with the system's items: their width, their centre line (measured on the closed Duo: 50 pt
+            // wide, centred 48 pt from the edge). The stack sits at the strip's foot, under the page's navigation items,
+            // on the closed display and the open one alike (#516). On the open display it stood at the top under a
+            // fixed allowance for the status items, and a taller status column (an extra pill in it on a real Duo)
+            // covered its first tabs; at the foot nothing in the status column reaches it.
+            let outer = VoryTabBar.stripCentreFromEdge - VoryTabBar.stripItemWidth / 2
+            pages
+                .safeAreaInset(edge: .bottom, spacing: 0) { if !vertical { bar } }
+                .safeAreaInset(edge: side, spacing: 0) { if vertical && !inStrip { bar } }
+                .overlay(alignment: side == .leading ? .bottomLeading : .bottomTrailing) {
+                    if inStrip {
+                        bar
+                            .frame(width: VoryTabBar.stripItemWidth)
+                            .padding(side == .leading ? .leading : .trailing, outer)
+                            // The overlay already ends above the home-indicator area; the stack
+                            // keeps one group gap over it, no more. Padding it by the inset again
+                            // pushed the stack up until its first tab touched the page's own
+                            // strip items (the list's filter met Home, Matt).
+                            .padding(.bottom, VoryTabBar.stripGroupGap)
+                            .ignoresSafeArea(.container, edges: side == .leading ? .leading : .trailing)
                     }
-                } else {
-                    pages.safeAreaInset(edge: .bottom, spacing: 0) { bar }
                 }
-            }
-            .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
+                .onChange(of: vertical, initial: true) { _, v in model.tabBarVertical = v }
         }
         // Lists on every page (roots and the pages pushed over them) do not pick up the bar's
         // inset on this iOS (their last rows ended under the bar), so their scroll content gets
@@ -382,16 +423,6 @@ struct MainTabView: View {
         model.selectedTab = .chats
     }
 
-    /// Where the vertical bar stands in the strip: the foot on a closed display, the top on an open one.
-    private func wideAlignment(_ edge: HorizontalEdge) -> Alignment {
-        switch (edge, model.wideLayout) {
-        case (.leading, true): .topLeading
-        case (.leading, false): .bottomLeading
-        case (.trailing, true): .topTrailing
-        case (.trailing, false): .bottomTrailing
-        }
-    }
-
     @ViewBuilder private func content(for tab: AppModel.AppTab) -> some View {
         switch tab {
         // The list beside the open chat on a wide window; the list with the chat pushed over it
@@ -412,6 +443,162 @@ struct MainTabView: View {
     }
 }
 
+
+#if os(iOS)
+/// The hinge's last reading (iOS 27.1, a foldable phone), kept from launch for Settings › Troubleshooting › Screen layout
+/// (#516); nil before one has come, and always on a phone that doesn't fold.
+@MainActor @Observable final class DevicePosture {
+    static let shared = DevicePosture()
+    struct Reading: Equatable { var status: String; var degrees: Double }
+    var last: Reading?
+}
+
+/// The faces blink once as a foldable phone opens (Duo stage 4): the root watches the hinge and the window and stamps
+/// `BotAmbient.opened` when `HingeOpenRule` says (the later of 0.3 s after the hinge leaves closed and the open
+/// display's window; none if that window doesn't come within 2 s). Nothing on a phone that doesn't fold, where no hinge
+/// reading comes, or before iOS 27.1.
+struct HingeOpenBlink: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 27.1, *) { content.modifier(Watch()) } else { content }
+    }
+
+    @available(iOS 27.1, *)
+    private struct Watch: ViewModifier {
+        @Environment(\.windowGeometry) private var windowGeometry
+        @State private var rule = HingeOpenRule()
+        /// Bumped whenever the waiting opening changes: an earlier wait that wakes to a newer one does nothing.
+        @State private var generation = 0
+
+        private static var now: Double { Date().timeIntervalSinceReferenceDate }
+
+        private static func status(_ s: DeviceHinge.Status) -> HingeOpenRule.Status {
+            s == .closed ? .closed : s == .fullyOpen ? .open : .partly
+        }
+
+        func body(content: Content) -> some View {
+            content
+                .onHingeChange { old, new in
+                    guard let n = new.hinge else { return }
+                    DevicePosture.shared.last = .init(status: n.status == .closed ? "Closed" : n.status == .fullyOpen ? "Open" : n.status == .partiallyOpen ? "Partly open" : "Other",
+                                                      degrees: n.angle.degrees)
+                    let before = (rule.leftClosedAt, rule.windowAt)
+                    rule.hinge(from: old.hinge.map { Self.status($0.status) }, to: Self.status(n.status), at: Self.now)
+                    if before != (rule.leftClosedAt, rule.windowAt) { schedule() }
+                }
+                .onChange(of: windowGeometry.bounds.size, initial: true) { _, size in
+                    let before = (rule.leftClosedAt, rule.windowAt)
+                    rule.window(size, at: Self.now)
+                    if before != (rule.leftClosedAt, rule.windowAt) { schedule() }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKWIN %.0fx%.0f", size.width, size.height))
+                    #endif
+                }
+                #if DEBUG
+                // For the hinge legs: a second appearance means the root was made again (its rule with it), not resized.
+                .onAppear { BotAmbient.blinkLog("BLINKWATCH appear") }
+                #endif
+        }
+
+        /// Waits for the opening's blink and stamps it, or gives the opening up when no open window came in time.
+        private func schedule() {
+            generation += 1
+            let g = generation
+            if let at = rule.blinkAt {
+                Task { @MainActor in
+                    let wait = at - Self.now
+                    if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+                    guard g == generation, rule.blinkAt != nil else { return }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKSTAMP left %.3f window %.3f due %.3f", rule.leftClosedAt ?? 0, rule.windowAt ?? 0, at))
+                    #endif
+                    rule.done()
+                    BotAmbient.shared.opened = Date()
+                }
+            } else if let left = rule.leftClosedAt {
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(max(0, left + HingeOpenRule.windowWait - Self.now) + 0.05))
+                    guard g == generation, rule.gaveUp(at: Self.now) else { return }
+                    #if DEBUG
+                    BotAmbient.blinkLog(String(format: "BLINKGIVEUP left %.3f", left))
+                    #endif
+                    rule.done()
+                }
+            }
+        }
+    }
+}
+#endif
+
+#if DEBUG && os(iOS)
+/// DEBUG, `-vory-geometry-probe`: the window's reserved regions as the system reports them (stage 2 of the Duo work):
+/// division (the fold) and occlusion (a camera), each with its frame in window space, its margins and whether it is
+/// active, included inactive ones; printed in a band the fold doesn't cover.
+@available(iOS 27.1, *)
+private struct RegionsProbe: View {
+    var keyboard: CGFloat
+    var body: some View {
+        GeometryReader { proxy in
+            let line: (ReservedRegion) -> String = { r in
+                let f = r.frame, m = r.margins
+                return String(format: "%@ %@ x%.0f y%.0f w%.0f h%.0f m%.0f/%.0f/%.0f/%.0f", r.kind == .division ? "fold" : "occl",
+                              r.isActive ? "ON" : "off", f.minX, f.minY, f.width, f.height, m.top, m.leading, m.bottom, m.trailing)
+            }
+            let all = proxy.reservedRegions(kind: .division, options: .includeInactive) + proxy.reservedRegions(kind: .occlusion, options: .includeInactive)
+            Text((all.isEmpty ? ["no regions"] : all.map(line)).joined(separator: "\n") + String(format: "\nwin %.0fx%.0f kb %.0f", proxy.size.width, proxy.size.height, keyboard))
+                .font(.caption2.monospaced()).padding(4).background(.mint.opacity(0.9)).foregroundStyle(.black)
+                // The fold's frame for the pose tests (FoldPoseUITests), read off this text.
+                .accessibilityIdentifier("geometry.regions")
+                .position(x: min(proxy.size.width - 130, 160), y: 250)
+        }
+    }
+}
+
+/// DEBUG, `-vory-hinge-probe`: every hinge change the window reports, oldest first (the time, the old and the new
+/// status, the new angle), in a band at the foot of the window and in the log as `HINGE` lines; the UI tests read
+/// `hinge.probe`'s value. It tells whether the simulator sends them for Device Hub's posture buttons (Duo stage 4,
+/// the blink as the phone opens).
+private enum HingeProbe {
+    static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-hinge-probe")
+
+    struct IfOn: ViewModifier {
+        func body(content: Content) -> some View {
+            if #available(iOS 27.1, *), HingeProbe.isOn { content.modifier(Readout()) } else { content }
+        }
+    }
+
+    @available(iOS 27.1, *)
+    struct Readout: ViewModifier {
+        @State private var lines: [String] = []
+
+        func body(content: Content) -> some View {
+            content
+                .onHingeChange { old, new in
+                    let angle = new.hinge.map { String(format: "%.0f", $0.angle.degrees) } ?? "-"
+                    let line = "\(Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(2)))) \(Self.name(old)) > \(Self.name(new)) \(angle)"
+                    // Written straight to standard output, unbuffered: to a file (simctl launch --stdout) print's output is
+                    // block-buffered, so the lines could come late, or be lost when the app is stopped.
+                    FileHandle.standardOutput.write(Data("HINGE \(line)\n".utf8))
+                    lines.append(line)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    Text(lines.isEmpty ? "hinge: none yet" : lines.suffix(8).joined(separator: "\n"))
+                        .font(.caption2.monospaced()).padding(4).background(.mint.opacity(0.9)).foregroundStyle(.black)
+                        .accessibilityIdentifier("hinge.probe")
+                        .accessibilityValue(lines.joined(separator: " | "))
+                        .padding(.bottom, 140).allowsHitTesting(false)
+                }
+        }
+
+        private static func name(_ c: DeviceHingeContext) -> String {
+            guard let h = c.hinge else { return "nil" }
+            if h.status == .closed { return "closed" }
+            if h.status == .partiallyOpen { return "partly" }
+            if h.status == .fullyOpen { return "open" }
+            return "other"
+        }
+    }
+}
+#endif
 
 /// Publishes the window's reserved regions (the fold, the camera) into the environment.
 private struct ReservedRegionsEnvironment: ViewModifier {

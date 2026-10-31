@@ -25,7 +25,7 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
             bot: bot,
             chatTitle: (hermes["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? content.subtitle,
             text: (hermes["text"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? Self.stripTitle(content.body),
-            tintHex: looks.colors[key] ?? "",
+            tintHex: looks.color(for: key, profile: profile),
             avatar: looks.avatars[key] ?? "initial",
             failed: content.categoryIdentifier == "HERMES_ERROR",
             when: notification.date)

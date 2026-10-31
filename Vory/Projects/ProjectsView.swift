@@ -57,16 +57,18 @@ struct ProjectsView: View {
             ToolbarItem(placement: .primaryAction) {
                 #if os(iOS)
                 if barDrawsPlus || pushedUnderBar { EmptyView() } else {
-                Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
+                Button { showCreate = true } label: { Label("Add project", systemImage: "plus") }
                     .disabled(model.runtime?.projects.available != true)
+                    .accessibilityIdentifier("projects.new")
                 }
                 #else
-                Button { showCreate = true } label: { Label("New project", systemImage: "plus") }
+                Button { showCreate = true } label: { Label("Add project", systemImage: "plus") }
                     .disabled(model.runtime?.projects.available != true)
+                    .accessibilityIdentifier("projects.new")
                 #endif
             }
         }
-        .morphPageActions([MorphPageAction(id: "projects.new", symbol: "plus", label: "New project",
+        .morphPageActions([MorphPageAction(id: "projects.new", symbol: "plus", label: "Add project",
                                            enabled: model.runtime?.projects.available == true) { showCreate = true }],
                           on: pushedUnderBar)
         .sheet(isPresented: $showCreate) { if let rt = model.runtime { NewProjectSheet(runtime: rt).sheetFrame().withAppModel() } }

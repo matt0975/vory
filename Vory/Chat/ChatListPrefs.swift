@@ -20,10 +20,25 @@ final class ChatListPrefs {
     var showArchived: Bool { didSet { if showArchived != oldValue { d.set(showArchived, forKey: "chats.filter.archived") } } }
     var sortKey: String { didSet { if sortKey != oldValue { d.set(sortKey, forKey: "chats.sort") } } }
     var groupsOnly: Bool { didSet { if groupsOnly != oldValue { d.set(groupsOnly, forKey: "chats.filter.groups") } } }
-    var projectFilter: String { didSet { if projectFilter != oldValue { d.set(projectFilter, forKey: "chats.filter.project") } } }
+    var projectFilter: String { didSet { if projectFilter != oldValue { keepOwn(projectFilter, "chats.filter.project") } } }
     var byProject: Bool { didSet { if byProject != oldValue { d.set(byProject, forKey: "chats.byProject") } } }
-    var collapsedRaw: String { didSet { if collapsedRaw != oldValue { d.set(collapsedRaw, forKey: "chats.byProject.collapsed") } } }
-    var archivedRoomsRaw: String { didSet { if archivedRoomsRaw != oldValue { d.set(archivedRoomsRaw, forKey: "chats.archivedRooms") } } }
+    var collapsedRaw: String { didSet { if collapsedRaw != oldValue { keepOwn(collapsedRaw, "chats.byProject.collapsed") } } }
+    var archivedRoomsRaw: String { didSet { if archivedRoomsRaw != oldValue { keepOwn(archivedRoomsRaw, "chats.archivedRooms") } } }
+    /// While the demo runs, the filter by project, the folded projects and the archived rooms are the demo's, for its life
+    /// (#494): its projects and rooms are not the person's, and kept they left the person's list filtered to a project
+    /// they don't have. Leaving it brings the person's own back.
+    var inDemo = false {
+        didSet {
+            guard inDemo != oldValue else { return }
+            if inDemo { projectFilter = ""; collapsedRaw = ""; archivedRoomsRaw = "" } else { refresh() }
+        }
+    }
+    /// One of the three, kept outside the demo, and only when it is not what is kept already: coming back from the demo
+    /// puts the person's own back from the defaults and wrote them over themselves, an absent one as "" (#494).
+    private func keepOwn(_ value: String, _ key: String) {
+        guard !inDemo, value != (d.string(forKey: key) ?? "") else { return }
+        d.set(value, forKey: key)
+    }
     var botColorsRaw: String { didSet { if botColorsRaw != oldValue { d.set(botColorsRaw, forKey: BotColors.storageKey) } } }
     var botAvatarsRaw: String { didSet { if botAvatarsRaw != oldValue { d.set(botAvatarsRaw, forKey: BotAvatarStore.storageKey) } } }
     var glassAll: Bool { didSet { if glassAll != oldValue { d.set(glassAll, forKey: BotAvatarStore.glassAllKey) } } }
@@ -61,10 +76,12 @@ final class ChatListPrefs {
         let new_showArchived = d.object(forKey: "chats.filter.archived") as? Bool ?? true; if new_showArchived != showArchived { showArchived = new_showArchived }
         let new_sortKey = d.object(forKey: "chats.sort") as? String ?? "recent"; if new_sortKey != sortKey { sortKey = new_sortKey }
         let new_groupsOnly = d.object(forKey: "chats.filter.groups") as? Bool ?? false; if new_groupsOnly != groupsOnly { groupsOnly = new_groupsOnly }
-        let new_projectFilter = d.object(forKey: "chats.filter.project") as? String ?? ""; if new_projectFilter != projectFilter { projectFilter = new_projectFilter }
         let new_byProject = d.object(forKey: "chats.byProject") as? Bool ?? false; if new_byProject != byProject { byProject = new_byProject }
-        let new_collapsedRaw = d.object(forKey: "chats.byProject.collapsed") as? String ?? ""; if new_collapsedRaw != collapsedRaw { collapsedRaw = new_collapsedRaw }
-        let new_archivedRoomsRaw = d.object(forKey: "chats.archivedRooms") as? String ?? ""; if new_archivedRoomsRaw != archivedRoomsRaw { archivedRoomsRaw = new_archivedRoomsRaw }
+        if !inDemo {
+            let new_projectFilter = d.object(forKey: "chats.filter.project") as? String ?? ""; if new_projectFilter != projectFilter { projectFilter = new_projectFilter }
+            let new_collapsedRaw = d.object(forKey: "chats.byProject.collapsed") as? String ?? ""; if new_collapsedRaw != collapsedRaw { collapsedRaw = new_collapsedRaw }
+            let new_archivedRoomsRaw = d.object(forKey: "chats.archivedRooms") as? String ?? ""; if new_archivedRoomsRaw != archivedRoomsRaw { archivedRoomsRaw = new_archivedRoomsRaw }
+        }
         let new_botColorsRaw = d.object(forKey: BotColors.storageKey) as? String ?? ""; if new_botColorsRaw != botColorsRaw { botColorsRaw = new_botColorsRaw }
         let new_botAvatarsRaw = d.object(forKey: BotAvatarStore.storageKey) as? String ?? ""; if new_botAvatarsRaw != botAvatarsRaw { botAvatarsRaw = new_botAvatarsRaw }
         let new_glassAll = d.object(forKey: BotAvatarStore.glassAllKey) as? Bool ?? false; if new_glassAll != glassAll { glassAll = new_glassAll }

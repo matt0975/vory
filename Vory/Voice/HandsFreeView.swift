@@ -8,31 +8,149 @@ import VoryCore
 struct HandsFreeView: View {
     @Bindable var chat: ChatSession
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
     private var session: HandsFreeSession { HandsFreeSession.shared }
-    private var state: HandsFreeState { session.state }
+    private var state: HandsFreeState {
+        #if DEBUG
+        if let worst = Self.worst { return worst.state }
+        #endif
+        return session.state
+    }
+    /// What the bot is about, under "Thinking…".
+    private var goal: String? {
+        #if DEBUG
+        if let worst = Self.worst { return worst.goal }
+        #endif
+        return ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine
+    }
+    private var lastError: String? {
+        #if DEBUG
+        if let worst = Self.worst { return worst.error }
+        #endif
+        return session.lastError
+    }
+    /// A fold across the window (the Duo half open like a laptop), in window space, and the column's own frame (inside the
+    /// safe area, where the content goes): where the split falls (`VoiceSplit`, Duo stage 4).
+    @State private var foldAcross: CGRect?
+    @State private var column: CGRect = .zero
+
+    /// The two halves' heights in the column (the top from the column's top to the fold, the bottom from the fold to the
+    /// column's foot), or nil for one column.
+    private var split: (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
+        guard column.height > 0 else { return nil }
+        #if DEBUG
+        // `-vory-voice-worst`: the split at every size short of the accessibility sizes, to measure its worst content.
+        if Self.worst != nil, let fold = foldAcross, fold.width > fold.height, !typeSize.isAccessibilitySize {
+            return (fold.minY - column.minY, fold.height, column.maxY - fold.maxY)
+        }
+        #endif
+        return VoiceSplit.halves(column: column, fold: foldAcross, size: typeSize)
+    }
 
     var body: some View {
+        let split = split
         ZStack {
             background
+            // One tree, whatever the pose: half open like a laptop only the frames change (the bot above the fold, the
+            // conversation and the controls below it), so a posture change keeps every view and its state.
             VStack(spacing: 0) {
-                top
-                bot.padding(.top, 12)
-                // Everything said so far, scrolling, between the state line and the controls (#235).
-                VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.top, 6)
-                if let card = chat.firstCard {
-                    PendingCardView(chat: chat, card: card)
-                        .padding(.horizontal, 16)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                VStack(spacing: 0) {
+                    top
+                        #if DEBUG
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeRow = $0 }
+                        #endif
+                    bot
+                        #if DEBUG
+                        // Measuring the worst (`-vory-voice-worst`): the block at its own height, so a line lost to a
+                        // short half shows as an overflow, not as a quietly shorter block.
+                        .fixedSize(horizontal: false, vertical: Self.worst != nil)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeBot = $0 }
+                        #endif
+                        .padding(.top, 12).frame(maxHeight: split == nil ? nil : .infinity)
                 }
-                controls
+                .frame(height: split?.top, alignment: .top)
+                Color.clear.frame(height: split?.gap ?? 0).accessibilityHidden(true)
+                VStack(spacing: 0) {
+                    // Everything said so far, scrolling, between the state line and the controls (#235).
+                    VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 6)
+                    if let card = chat.firstCard {
+                        if let split {
+                            // Below the fold the card takes what the controls leave (the conversation gives up its
+                            // lines while it waits), never across the fold. An approval's choices stand under its words,
+                            // which scroll from their start when it's taller than that: what's allowed is read first.
+                            PendingCardView(chat: chat, card: card)
+                                .environment(\.approvalChoicesPinned, true)
+                                .padding(.horizontal, 16)
+                                .frame(maxHeight: max(0, split.bottom - VoiceSplit.controls), alignment: .top)
+                                .layoutPriority(1)
+                                #if DEBUG
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeCard = $0 }
+                                #endif
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        } else {
+                            PendingCardView(chat: chat, card: card)
+                                .padding(.horizontal, 16)
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+                    }
+                    controls
+                        #if DEBUG
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeControls = $0 }
+                        #endif
+                }
+                .frame(height: split?.bottom)
             }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { column = $0 }
+            .background { FoldAcrossProbe(fold: $foldAcross).ignoresSafeArea() }
+            #if DEBUG
+            .overlay(alignment: .topLeading) {
+                if Self.framesProbe {
+                    Text(framesReadout).font(.system(size: 1)).opacity(0.01).frame(width: 1, height: 1)
+                        .accessibilityIdentifier("voice.frames").accessibilityLabel(framesReadout)
+                }
+            }
+            #endif
             .animation(.snappy, value: state.phase)
             .animation(.snappy, value: chat.cards.count)
         }
         .preferredColorScheme(.dark)
     }
+
+    #if DEBUG
+    /// DEBUG `-vory-voice-frames`: the top row's, the bot's, the controls' and a waiting card's frames, the column, the fold
+    /// and the split (window space), read by the hinge legs as `voice.frames`' label (the bot's face is hidden from
+    /// accessibility). Checked absent from Release.
+    private static let framesProbe = ProcessInfo.processInfo.arguments.contains("-vory-voice-frames")
+    @State private var probeRow: CGRect = .zero
+    @State private var probeBot: CGRect = .zero
+    @State private var probeControls: CGRect = .zero
+    @State private var probeCard: CGRect = .zero
+    private var framesReadout: String {
+        func r(_ f: CGRect) -> String { String(format: "%.1f %.1f %.1f %.1f", f.minX, f.minY, f.width, f.height) }
+        return "row \(r(probeRow));bot \(r(probeBot));controls \(r(probeControls));card \(chat.firstCard == nil || split == nil ? "none" : r(probeCard))"
+            + ";column \(r(column));fold \(foldAcross.map(r) ?? "none");split \(split == nil ? "no" : "yes")"
+    }
+
+    /// DEBUG `-vory-voice-worst thinking|paused|error`: the bot's block in a state's tallest form, for measuring the top
+    /// half's worst (`VoiceSplit.minTop`): thinking and muted with a long goal; paused and muted with a long note; listening with a
+    /// long error under it and the waveform. The split stands at every size short of the accessibility sizes meanwhile.
+    private struct Worst { var state = HandsFreeState(); var goal: String?; var error: String? }
+    private static let worst: Worst? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-vory-voice-worst"), args.indices.contains(i + 1) else { return nil }
+        let long = "Checking the nightly export job's logs for the failed upload, then retrying it against the backup bucket in the other region before the window closes"
+        var w = Worst()
+        switch args[i + 1] {
+        case "thinking": w.state.phase = .thinking; w.state.isMuted = true; w.goal = long
+        case "paused": w.state.phase = .paused; w.state.isMuted = true; w.state.note = long
+        case "error": w.state.phase = .listening; w.error = long
+        default: return nil
+        }
+        return w
+    }()
+    #endif
 
     private var tint: Color { BotColors.color(for: chat.profileName) }
 
@@ -63,8 +181,8 @@ struct HandsFreeView: View {
 
     private var mood: BotFaceView.Mood {
         switch state.phase {
-        // Listening and transcribing are the arcs; speaking is the plain bot (the brief's
-        // decision 3: the words are heard, not shown), 1.5 #304.
+        // Listening and transcribing are the arcs; speaking is the plain bot (the
+        // words are heard, not shown), 1.5 #304.
         case .listening, .transcribing: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .listening : .idle)
         case .thinking: return BotFaceView.Mood(thinking: true, profile: chat.profileName, state: .thinking)
         case .speaking: return BotFaceView.Mood(profile: chat.profileName, state: BotFace.motionEngine ? .working : .streaming)
@@ -81,12 +199,12 @@ struct HandsFreeView: View {
                 if !BotFace.motionEngine {
                     Circle()
                         .stroke(tint.opacity(0.5), lineWidth: 3)
-                        .frame(width: 196, height: 196)
+                        .frame(width: split == nil ? 196 : VoiceSplit.ring, height: split == nil ? 196 : VoiceSplit.ring)
                         .scaleEffect(state.hearing || state.phase == .speaking ? 1.12 : 0.98)
                         .opacity(state.hearing || state.phase == .speaking ? 1 : 0.25)
                         .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: state.hearing || state.phase == .speaking)
                 }
-                BotAvatar(profile: chat.profileName, size: 164, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
+                BotAvatar(profile: chat.profileName, size: split == nil ? 164 : VoiceSplit.face, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
             }
             VStack(spacing: 6) {
                 Text(state.title).font(.title2.weight(.semibold)).contentTransition(.numericText())
@@ -97,16 +215,17 @@ struct HandsFreeView: View {
                         .background(.white.opacity(0.18), in: .capsule)
                         .transition(.opacity)
                 }
-                if state.phase == .thinking, let goal = ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine {
+                // Above the fold every line stops at two (`VoiceSplit.minTop`); VoiceOver still reads it whole.
+                if state.phase == .thinking, let goal {
                     Text(goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
                 } else if state.phase == .needsApproval {
-                    Text("Approve on screen. The loop waits.").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Allow or deny on screen. The loop waits.").font(.subheadline).foregroundStyle(.secondary).lineLimit(split == nil ? nil : 2)
                 } else if state.phase == .paused {
-                    Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
                 } else if let note = state.note {
-                    Text(note).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center)
-                } else if let err = session.lastError {
-                    Text(err).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center)
+                    Text(note).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+                } else if let lastError {
+                    Text(lastError).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
                 }
             }
             .padding(.horizontal, 24)
@@ -156,6 +275,31 @@ struct HandsFreeView: View {
         .frame(width: 76)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
+    }
+}
+
+/// Where a fold runs across the window, in window space, for voice mode's split (Duo stage 4); nil with none, and before
+/// iOS 27.1. Read in the cover itself rather than taken from the root, which the full-screen cover may not pass on.
+private struct FoldAcrossProbe: View {
+    @Binding var fold: CGRect?
+
+    var body: some View {
+        if #available(iOS 27.1, *) { Reader(fold: $fold) } else { Color.clear }
+    }
+
+    @available(iOS 27.1, *)
+    private struct Reader: View {
+        @Binding var fold: CGRect?
+        var body: some View {
+            GeometryReader { proxy in
+                let frame = proxy.frame(in: .global)
+                let across = proxy.reservedRegions(kind: .division).filter(\.isActive)
+                    .map { $0.frame.offsetBy(dx: frame.minX, dy: frame.minY) }.first { $0.width > $0.height }
+                Color.clear
+                    .onChange(of: [across ?? .null, frame], initial: true) { _, _ in fold = across }
+            }
+            .accessibilityHidden(true)
+        }
     }
 }
 

@@ -137,7 +137,8 @@ final class ChatSummarizer {
 
     /// Makes (or refreshes) the summary for a chat from its recent messages, in the background.
     func refresh(_ session: StoredSession, runtime: GatewayRuntime, profile: String?) {
-        guard enabled, Self.isAvailable, !inFlight.contains(session.id) else { return }
+        // The demo's chats (#392) get no summary: the summaries are kept on the device and sent to the Watch.
+        guard enabled, Self.isAvailable, !runtime.isEphemeral, !inFlight.contains(session.id) else { return }
         if let s = summaries[session.id], Self.current(s, for: session) { return }
         inFlight.insert(session.id)
         pending.append(.session(session, runtime, profile))
@@ -159,7 +160,7 @@ final class ChatSummarizer {
     /// loaded here; the model gets the last ten things said.
     func refreshRoom(_ room: Room, events: [RoomEvent]) {
         let key = Self.roomKey(room)
-        guard enabled, Self.isAvailable, !inFlight.contains(key), !events.isEmpty else { return }
+        guard enabled, Self.isAvailable, !AppModel.shared.isInDemo, !inFlight.contains(key), !events.isEmpty else { return }
         if let s = summaries[key], s.stamp == Self.roomStamp(events) { return }
         inFlight.insert(key)
         pending.append(.room(room, events))

@@ -94,9 +94,9 @@ struct MacBoardView: View {
                 ContentUnavailableView {
                     Label("No tasks on this board", systemImage: "rectangle.split.3x1")
                 } description: {
-                    Text("Make one with New Task; a task with a bot starts in Ready and the dispatcher hands it over.")
+                    Text("Add one with the + (⌘N); a task with a bot starts in Ready and the dispatcher hands it over.")
                 } actions: {
-                    Button("New Task") { showNew = true }
+                    Button("Add task") { showNew = true }
                 }
                 .allowsHitTesting(true)
             }
@@ -195,7 +195,7 @@ struct MacBoardView: View {
         case .review: return "A worker that wants a look before done asks for review."
         case .done: return "Finished work lands here; archive it to clear the board."
         case .scheduled: return "A card given a time waits here."
-        default: return "Drop a card here, or make one with New Task."
+        default: return "Drop a card here, or add one with the +."
         }
     }
 
@@ -242,8 +242,9 @@ struct MacBoardView: View {
             Button { Task { await store?.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                 .help("Read the board again")
                 .disabled(store?.isPresent != true)
-            Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
-                .help("New Task (⌘N)")
+            // "Add task", as on every page's + (#428); the Board menu keeps the Mac's "New Task" (⌘N).
+            Button { showNew = true } label: { Label("Add task", systemImage: "plus") }
+                .help("Add task (⌘N)")
                 .disabled(store?.isPresent != true)
                 .accessibilityIdentifier("board.new")
         }

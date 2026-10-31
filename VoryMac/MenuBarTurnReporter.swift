@@ -102,7 +102,7 @@ final class MenuBarTurnReporter: TurnActivityReporting {
 }
 
 /// What drops down from the menu-bar item: the turns in flight, each with its bot, what it is
-/// doing and how long; a waiting approval gets Approve once and Deny right there.
+/// doing and how long; a waiting approval gets Allow once and Deny right there.
 struct TurnMenu: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openWindow) private var openWindow
@@ -159,7 +159,7 @@ struct TurnMenu: View {
                 Text(t.attention ? t.detail : (ChatGoals.shared.goal(for: t.id) ?? t.detail)).font(.caption).foregroundStyle(t.attention ? .orange : .secondary).lineLimit(2)
                 HStack(spacing: 8) {
                     if t.attention, let chat = t.chat, let card = chat.firstCard, card.method == "approval" {
-                        Button("Approve once") { Task { await chat.respond(card: card, result: ["choice": "once"]) } }
+                        Button("Allow once") { Task { await chat.respond(card: card, result: ["choice": "once"]) } }
                             .buttonStyle(.borderedProminent).controlSize(.small)
                         Button("Deny") { Task { await chat.respond(card: card, result: ["choice": "deny"]) } }
                             .buttonStyle(.bordered).controlSize(.small)

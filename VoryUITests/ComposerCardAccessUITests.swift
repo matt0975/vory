@@ -2,7 +2,7 @@ import XCTest
 
 /// The card composer (#320) at a large Dynamic Type size and in VoiceOver's order: the card
 /// still fits with its control row reachable, and a swipe through it goes text, +, model chip,
-/// mic or send. Pictures for the planner; the order asserted from the accessibility tree.
+/// mic or send. Pictures for review; the order asserted from the accessibility tree.
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 @MainActor
 final class ComposerCardAccessUITests: XCTestCase {

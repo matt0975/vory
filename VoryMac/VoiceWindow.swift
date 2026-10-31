@@ -187,7 +187,7 @@ struct VoiceHUDPresentation: Equatable {
     static let prompt = "Say something. I'll answer when you pause."
     static let livePrompt = "Say something."
     static func prompt(live: Bool) -> String { live ? livePrompt : prompt }
-    static let approvalHint = "Approve on screen. The loop waits."
+    static let approvalHint = "Allow or deny on screen. The loop waits."
     static let pausedHint = "Resume to keep going."
 
     /// `spoken` and `liveText` are the words in flight; the transcript view shows them, so the

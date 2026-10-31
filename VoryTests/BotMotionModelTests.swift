@@ -159,7 +159,7 @@ import Testing
         return t0
     }
 
-    /// A tap (judgement call #8 (a)): a blink and a small bounce, then rest. The model is unsettled
+    /// A tap: a blink and a small bounce, then rest. The model is unsettled
     /// while it plays, so the face's clock runs, and settled soon after, so it pauses again.
     @Test func aTapBlinksBouncesAndSettles() {
         let m = BotMotionModel(seed: 1)
@@ -174,6 +174,49 @@ import Testing
         #expect(m.unsettled.contains("react"))
         _ = run(m, .idle, from: t0 + 0.3, seconds: 1.5)
         #expect(m.isSettled, "still moving: \(m.unsettled)")
+    }
+
+    /// A foldable phone opening (Duo stage 4): one blink, the tap's, with no bounce, then rest.
+    @Test func anOpeningBlinksWithoutABounceAndSettles() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        _ = run(m, .idle, from: 0, seconds: t0)
+        #expect(m.isSettled)
+        m.blink(at: t0)
+        var minEye = 1.0, sy = (lo: 1.0, hi: 1.0), sx = (lo: 1.0, hi: 1.0)
+        _ = run(m, .idle, from: t0, seconds: 0.3) { f, _ in
+            minEye = min(minEye, f.eyeOpen); sy = (min(sy.lo, f.sy), max(sy.hi, f.sy)); sx = (min(sx.lo, f.sx), max(sx.hi, f.sx))
+        }
+        #expect(minEye < 0.2, "no blink: \(minEye)")
+        #expect(sy.lo > 0.999 && sy.hi < 1.001 && sx.lo > 0.999 && sx.hi < 1.001, "it bounced: sy \(sy) sx \(sx)")
+        _ = run(m, .idle, from: t0 + 0.3, seconds: 1)
+        #expect(m.isSettled, "still moving: \(m.unsettled)")
+    }
+
+    /// The opening's blink keeps the clock running while it plays, so a paused face wakes for it.
+    @Test func anOpeningsBlinkHoldsTheClockUntilItEnds() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        _ = run(m, .idle, from: 0, seconds: t0)
+        m.blink(at: t0)
+        #expect(m.unsettled.contains("blink"))
+        _ = run(m, .idle, from: t0, seconds: BotMotionModel.Reaction.blinkLength + 0.05)
+        #expect(!m.unsettled.contains("blink"))
+    }
+
+    /// Reduce Motion and a held face snap to the still on every frame: an opening moves nothing.
+    @Test func aSnappedFaceDoesNotBlinkForAnOpening() {
+        let m = BotMotionModel(seed: 1)
+        let t0 = quiet(after: 2, seed: 1)
+        _ = run(m, .idle, from: 0, seconds: t0)
+        m.blink(at: t0)
+        var t = t0, minEye = 1.0
+        for _ in 0..<30 {
+            t += 1.0 / 60
+            m.snap(to: .targets(for: .idle), at: t)
+            minEye = min(minEye, m.advance(to: t, targets: .targets(for: .idle)).eyeOpen)
+        }
+        #expect(minEye > 0.99)
     }
 
     /// A face mounted for the tap (a list's still swapped for the live view) plays it from its
@@ -203,7 +246,7 @@ import Testing
         #expect(minEye > 0.99 && sy.lo == 1 && sy.hi == 1)
     }
 
-    /// Judgement call #16: a tap whose face is covered (a card's push, Bot info) leaves one
+    /// A tap whose face is covered (a card's push, Bot info) leaves one
     /// arrival for the page that lands; it plays once there and is used up, so a pop back to the
     /// page, a remount or Bot info shown again without a new tap plays nothing. A stale one (the
     /// page never landed) is dropped.

@@ -93,13 +93,8 @@ final class ThreadWidthUITests: XCTestCase {
         shot("433-open-landscape")
         assertInside("open, landscape")
         XCUIDevice.shared.orientation = .portrait; pause(2)
-        // The iPad (the iPhone cannot turn): its split view's chat column keeps its landscape width after turning
-        // back, with the sidebar over it, whatever the chat holds (#440). Expected to fail there until that is
-        // fixed; not strict, so the fix shows as a pass.
-        if app.windows.firstMatch.frame.width > 700 {
-            let options = XCTExpectedFailure.Options(); options.isStrict = false
-            XCTExpectFailure("#440: on the iPad the chat column keeps its landscape width after turning back", options: options)
-        }
+        // The iPad (the iPhone app does not turn): the open notice kept its landscape row's width, and the thread and
+        // the whole chat with it, wider than the column it came back to (#440).
         shot("433-open-portrait-again")
         assertInside("open, portrait again")
 

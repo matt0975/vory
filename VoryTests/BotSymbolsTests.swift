@@ -58,4 +58,33 @@ import Testing
         let b = p.boundingRect
         #expect(b.width > box.width, "the arcs should reach past the square's sides: \(b)")
     }
+
+    @Test func theArcsAreTwoStrokesWithNothingAcrossTheFace() throws {
+        // Stroked as the face strokes them (s × 0.05 wide, round caps) into a bitmap 0.3 s wider than the square on
+        // every side, since the arcs stand past it. In one subpath the second arc began with a straight line from the
+        // first's end: a bar across the face at mid − r·sin 0.38 (#516).
+        let p = BotSymbols.arcs(in: box, amount: 1)
+        let s = min(box.width, box.height), r = s * 0.61, c = CGPoint(x: box.midX, y: box.midY)
+        let canvas = box.insetBy(dx: -0.3 * s, dy: -0.3 * s)
+        let w = Int(canvas.width), h = Int(canvas.height)
+        let ctx = try #require(CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        // Rows counted from the top, as the path's y runs.
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+        ctx.translateBy(x: -canvas.minX, y: -canvas.minY)
+        ctx.addPath(p.cgPath)
+        ctx.setLineWidth(s * 0.05)
+        ctx.setLineCap(.round)
+        ctx.setStrokeColor(CGColor(gray: 0, alpha: 1))
+        ctx.strokePath()
+        let pixels = try #require(ctx.data).assumingMemoryBound(to: UInt8.self)
+        func alpha(_ pt: CGPoint) -> UInt8 { pixels[Int(pt.y - canvas.minY) * w * 4 + Int(pt.x - canvas.minX) * 4 + 3] }
+        let across = CGPoint(x: box.midX, y: c.y - r * sin(0.38))
+        #expect(alpha(across) == 0, "a stroke runs across the face between the arcs, at \(across)")
+        for angle: CGFloat in [0, .pi] {
+            let onArc = CGPoint(x: c.x + r * cos(angle), y: c.y + r * sin(angle))
+            #expect(alpha(onArc) > 0, "the arc at angle \(angle) isn't drawn, at \(onArc)")
+        }
+    }
 }

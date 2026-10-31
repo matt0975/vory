@@ -5,7 +5,7 @@ import XCTest
 /// menu, a settings sheet, a long thread's scroll and a whole turn. Each flow is measured with
 /// XCTest's os_signpost hitch metrics (hitch time per second, the hitch count and the frame
 /// rate) over the app's `Smooth` animation intervals, or the system's navigation and scroll
-/// intervals. The numbers are the table for the planner; the simulator's are a rough guide,
+/// intervals. The numbers are the table for review; the simulator's are a rough guide,
 /// the device's are the bar. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 final class SmoothnessPerfUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -34,8 +34,8 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTOSSignpostMetric(subsystem: "Vory", category: "Smooth", name: name)
     }
 
-    /// Ten rounds for the quick flows (a single hitch in five rounds is noise; the planner wants
-    /// a mean and a worst that mean something), five for the long ones (a fling is 2.4 s each).
+    /// Ten rounds for the quick flows (a single hitch in five rounds is noise; a mean and a worst
+    /// should mean something), five for the long ones (a fling is 2.4 s each).
     private func rounds(_ n: Int) -> XCTMeasureOptions {
         let o = XCTMeasureOptions()
         o.iterationCount = n

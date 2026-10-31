@@ -178,7 +178,7 @@ public struct HandsFreeState: Equatable, Sendable {
 
     public init() {}
 
-    public static let approvalLine = "Approval needed: %@. Approve on screen."
+    public static let approvalLine = "Approval needed: %@. Allow or deny on screen."
 
     /// Applies one event and returns what to do about it.
     public mutating func handle(_ event: HandsFreeEvent) -> [HandsFreeEffect] {

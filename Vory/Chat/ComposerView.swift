@@ -40,9 +40,17 @@ struct ComposerView: View {
     private var group: Bool { newMessage?.group == true }
     /// Keyboard focus, driven both ways (the text view is UIKit; see ComposerTextView).
     @State private var focused = false
+    /// The cursor stays in the field after a send, ready for the next message, as in Messages. Onboarding's tour (#388)
+    /// turns it off: its Send is a step of the tour, and the keyboard coming up covered the chat it shows.
+    @Environment(\.composerFocusesAfterSend) private var focusesAfterSend
     @AppStorage(VoiceSettings.holdMicKey) private var holdMicRaw = VoiceSettings.HoldMicAction.dictate.rawValue
     /// Settings › Appearance › Return key sends (the on-screen keyboard's Return; a line otherwise).
     @AppStorage(ChatStyle.returnSends) private var returnSends = false
+    #if os(iOS)
+    @AppStorage(ChatStyle.closeKeyboardAfterSend) private var closeKeyboardAfterSend = false
+    #else
+    private let closeKeyboardAfterSend = false
+    #endif
     /// Settings › Voice › Hold the mic to: Start voice mode. The Mac's mic is a click and keeps it.
     /// A drag is over the card (the Mac): the outline says it will take the drop.
     @State private var dropTargeted = false
@@ -100,17 +108,37 @@ struct ComposerView: View {
     @State private var attachTappedAt: Date?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.windowGeometry) private var windowGeometry
-    @Environment(AppModel.self) private var model
     /// The fold of a partly open Duo, when it runs across the window above the composer (a
     /// laptop pose): the lists that grow up from the field stop under it (Step D).
     @Environment(\.reservedRegions) private var regions
+    /// The chat's header's bottom in the window (ConversationView), for the + panel's cap.
+    @Environment(\.chatHeaderBottom) private var chatHeaderBottom
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var composerFrame = CGRect.zero
-    /// How far up from the field's top a list may grow before the fold: nil with no such fold.
-    private var roomUnderFold: CGFloat? {
-        guard let ceiling = regions.ceiling(for: composerFrame), composerFrame.height > 0 else { return nil }
-        // The field's top: the stack's bottom edge less a one-line field and its padding.
-        return max(SlashMenuList.rowHeight + 8, composerFrame.maxY - 46 - 10 - ceiling)
+    /// How far a list growing up from `y` (window space) may reach before the fold: nil with
+    /// no such fold. No floor: a list that wants more lifts the dock over the fold instead
+    /// (`listReach`, ConversationView's `foldLift`).
+    private func roomUnderFold(from y: CGFloat) -> CGFloat? {
+        guard composerFrame.height > 0 else { return nil }
+        return regions.room(under: y)
+    }
+
+    /// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full
+    /// size, 0 with none open: the chat lifts its dock over a fold the list would cross, while
+    /// the list is open (Duo stage 2).
+    private var listReach: CGFloat {
+        guard composerFrame.height > 0 else { return 0 }
+        let h = composerFrame.height
+        if showAttach { return h + 10 + AttachPanel.naturalHeight(rows: attachItems.count) }
+        // The lists at the height they take with no fold (capped), so one that fits under the
+        // fold leaves the dock where it is, however long the list.
+        if !menuItems.isEmpty || menuLoading { return h + 10 + min(listCap, CGFloat(max(menuItems.count, 1)) * SlashMenuList.rowHeight + 8) }
+        if !mentionSuggestions.isEmpty {
+            // In the card: what it shows is in the card's height already.
+            let full = min(listCap, mentionListHeight)
+            return h + max(0, full - min(mentionListCap, full))
+        }
+        return 0
     }
 
     /// "@" at the start of the word being typed lists the bots; a pick puts "@name " in its place.
@@ -120,8 +148,9 @@ struct ComposerView: View {
         return String(last.dropFirst())
     }
     private var mentionSuggestions: [ProfileInfo] {
-        guard let q = mentionQuery?.lowercased(), let profiles = model.runtime?.profiles else { return [] }
-        return profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
+        // The chat's own gateway's bots: onboarding's tour (#388) runs a demo that is not the app's gateway in use.
+        guard let q = mentionQuery?.lowercased() else { return [] }
+        return chat.runtime.profiles.filter { q.isEmpty || $0.name.lowercased().hasPrefix(q) || $0.label.lowercased().hasPrefix(q) }
     }
     private func pickMention(_ p: ProfileInfo) {
         var parts = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
@@ -171,9 +200,22 @@ struct ComposerView: View {
     /// The command list scrolls inside a cap: about 30 % of the window, so with the keyboard up
     /// it stops well short of the bot header at the top.
     private var commandListCap: CGFloat {
-        let cap = max(120, min(280, visibleHeight * 0.30))
-        return roomUnderFold.map { min(cap, $0) } ?? cap
+        // The "/" list stands 10 pt above the card (`slashOverlay`).
+        roomUnderFold(from: composerFrame.minY - 10).map { min(listCap, $0) } ?? listCap
     }
+
+    /// The "/" and "@" lists' cap with no fold: about 30 % of the window above the keyboard.
+    private var listCap: CGFloat { max(120, min(280, visibleHeight * 0.30)) }
+
+    /// The "@" list's cap: the same share, under a fold measured from the field's top (the
+    /// stack's bottom edge less a one-line field and its padding), which the list itself does
+    /// not move.
+    private var mentionListCap: CGFloat {
+        roomUnderFold(from: composerFrame.maxY - 46 - 10).map { min(listCap, $0) } ?? listCap
+    }
+
+    /// The "@" list's height with every bot in it.
+    private var mentionListHeight: CGFloat { CGFloat(mentionSuggestions.count) * 40 + 8 }
 
     /// The window's height less the keyboard: what the caps are a share of. The Mac's views get
     /// the empty window geometry (its layout is the window's own), so there the window itself
@@ -193,10 +235,10 @@ struct ComposerView: View {
     private func pick(_ item: SlashMenu.Item, completing: Bool = false) {
         Perf.stamp("slash: pick \(item.name)")
         menuMark = nil
-        // With a reply quoted or files staged the text goes out as a message, not a command
-        // (ChatSession.send), so the command waits in the field instead.
+        // With a reply quoted, files staged or a message being edited the text goes out as a message, not a command
+        // (ChatSession.send, `resend`), so the command waits in the field instead.
         let outcome = SlashMenu.outcome(of: item, in: text, wholeText: menuContext?.wholeText == true,
-                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty)
+                                        completing: completing, canRun: quote.isEmpty && chat.staged.isEmpty && chat.editingID == nil)
         switch outcome {
         case .run(let command):
             text = command
@@ -215,10 +257,10 @@ struct ComposerView: View {
 
     /// A bare Return with a chooser open (a bare Return would otherwise add a line, or send,
     /// under a half-typed command): the marked row, or a typed "/model …" sent as typed (see
-    /// SlashMenu.returnAction). With a reply quoted or files staged that text would go to the bot
+    /// SlashMenu.returnAction). With a reply quoted, files staged or a message being edited that text would go to the bot
     /// as a message, so it stays in the field instead. True when Return was used here.
     private func takeOnReturn() -> Bool {
-        let canRun = quote.isEmpty && chat.staged.isEmpty
+        let canRun = quote.isEmpty && chat.staged.isEmpty && chat.editingID == nil
         switch SlashMenu.returnAction(menuItems, context: openMenuContext, marked: markedIndex, canRun: canRun) {
         case .take(let item): pick(item); return true
         case .send: Task { await send() }; return true
@@ -307,6 +349,10 @@ struct ComposerView: View {
             }
             // Where the composer stands in the window, for the fold above it (`roomUnderFold`).
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { composerFrame = $0 }
+            #if os(iOS)
+            // How far its open list reaches, for the dock's lift over a fold (ConversationView).
+            .preference(key: ComposerListReach.self, value: listReach)
+            #endif
     }
 
     /// The + panel, always in the tree: closed, a faint circle the size of the + button on
@@ -391,7 +437,7 @@ struct ComposerView: View {
                 HStack {
                     Text("Agent is working. Send queues the message.").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Steer now") { let t = text; text = ""; Task { await chat.steer(t) } }.font(.caption2)
+                    Button("Steer now") { let t = text; text = ""; Task { if let back = await chat.steer(t) { text = back } } }.font(.caption2)
                 }
                 .padding(.horizontal, 8)
             }
@@ -514,6 +560,7 @@ struct ComposerView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !chat.staged.isEmpty { thumbnails }
+            if chat.editingID != nil { editStrip }
             if !quote.isEmpty { quoteStrip }
             #if os(macOS)
             if !menuItems.isEmpty || menuLoading {
@@ -611,6 +658,29 @@ struct ComposerView: View {
         .quickLookPreview($stagedPreview)
     }
 
+    /// Edit & resend: the words in the box replace the chat's last message when sent (#556). Cancel ends the edit and
+    /// empties the box, as cancelling an edit in Messages does; nothing was taken back yet.
+    private var editStrip: some View {
+        HStack(alignment: .center, spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(Color.vory).frame(width: 3)
+            Label("Editing your message", systemImage: "pencil").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            // A 44 pt square to hit, the glyph its usual size: the audit's smallest target.
+            Button { withAnimation(.snappy) { chat.cancelEdit(); text = "" } } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+            }
+                .buttonStyle(.plain).disabled(chat.resending)
+                .accessibilityLabel("Cancel editing")
+                .accessibilityIdentifier("composer.cancelEdit")
+        }
+        // No padding above and below: the button's square sets the strip's height.
+        .padding(.leading, 6)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("composer.editing")
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
     /// What the reply answers: the first lines of the bubble, with a way out.
     private var quoteStrip: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -619,11 +689,17 @@ struct ComposerView: View {
                 Text("Replying to").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 Text(quote).font(.caption).lineLimit(2).foregroundStyle(.secondary)
             }
+            .padding(.vertical, 4)
             Spacer(minLength: 0)
-            Button { withAnimation(.snappy) { quote = "" } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            // A 44 pt square to hit, the glyph its usual size: the audit's smallest target, as Cancel editing's.
+            Button { withAnimation(.snappy) { quote = "" } } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+            }
                 .buttonStyle(.plain).accessibilityLabel("Cancel reply")
+                .accessibilityIdentifier("composer.cancelReply")
         }
-        .padding(.horizontal, 6).padding(.vertical, 4)
+        // The words keep their padding; the button's square sets the strip's height where it's taller.
+        .padding(.leading, 6)
         // The bar beside the words is flexible in height; without this the strip took the whole screen.
         .fixedSize(horizontal: false, vertical: true)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -656,7 +732,7 @@ struct ComposerView: View {
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
         }
-        .frame(height: min(commandListCap, CGFloat(mentionSuggestions.count) * 40 + 8))
+        .frame(height: min(mentionListCap, mentionListHeight))
         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
     }
 
@@ -667,7 +743,7 @@ struct ComposerView: View {
             Section("Model") { ModelMenuContent(chat: chat) }
             ReasoningEffortMenu(chat: chat)
         } label: {
-            // Matt's wording (2026-10-10, via the planner): the model's name in the text's own
+            // Matt's wording (2026-10-10): the model's name in the text's own
             // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
             // sizes the level stands alone.
             HStack(spacing: 6) {
@@ -780,15 +856,16 @@ struct ComposerView: View {
             // the whole conversation by voice on this chat (the Mac's mic is a click; it keeps it).
             TalkButton(dictation: dictation, engine: chat.runtime.voice, onHold: holdStartsVoiceMode ? { HandsFreeSession.shared.start(chat: chat) } : nil) { transcript in text = transcript; focused = true; if VoiceSettings.sendAfterDictation { Task { await send() } } }
         } else {
-            let disabled = text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty
+            // An edit on its way is sent once (#556).
+            let disabled = (text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty) || chat.resending
             Button { Task { await send() } } label: {
                 Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
                     .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.vory), in: .circle)
             }
             .buttonStyle(.plain)
             .disabled(disabled)
-            .accessibilityLabel(chat.isRunning ? "Queue message" : "Send")
-            .accessibilityShowsLargeContentViewer { Label(chat.isRunning ? "Queue message" : "Send", systemImage: "arrow.up") }
+            .accessibilityLabel(chat.editingID != nil ? "Send edited message" : chat.isRunning ? "Queue message" : "Send")
+            .accessibilityShowsLargeContentViewer { Label(chat.editingID != nil ? "Send edited message" : chat.isRunning ? "Queue message" : "Send", systemImage: "arrow.up") }
             .accessibilityIdentifier("composer.send")
         }
     }
@@ -836,6 +913,11 @@ struct ComposerView: View {
     #endif
 
     private var attachPanel: some View {
+        AttachPanel(items: attachItems, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+    }
+
+    /// The + panel's rows: a fixed set, some greyed out where they cannot be used now.
+    private var attachItems: [AttachItem] {
         var items: [AttachItem] = []
         #if os(iOS)
         items.append(AttachItem(title: "Camera", symbol: "camera.fill", color: .black, disabled: !Self.cameraAvailable) { showCamera = true })
@@ -849,7 +931,7 @@ struct ComposerView: View {
         })
         items.append(AttachItem(title: "Paste", symbol: "doc.on.clipboard.fill", color: .indigo) { paste() })
         items.append(AttachItem(title: "Message History", symbol: "clock.arrow.circlepath", color: .orange, disabled: chat.composerHistory.isEmpty) { showHistory = true })
-        return AttachPanel(items: items, surface: false, cap: attachCap) { withAnimation(.snappy(duration: 0.28)) { showAttach = false } }
+        return items
     }
 
     /// The room above the card for the + panel: down from the header (the status bar plus the
@@ -857,8 +939,10 @@ struct ComposerView: View {
     private var attachCap: CGFloat {
         #if os(iOS)
         guard composerFrame.minY > 0 else { return 400 }
-        let room = composerFrame.minY - windowGeometry.safeArea.top - 60 - 10
-        return max(180, roomUnderFold.map { min(room, $0) } ?? room)
+        let room = AttachPanel.room(cardTop: composerFrame.minY, safeTop: windowGeometry.safeArea.top, headerBottom: chatHeaderBottom)
+        // Under a fold, no 180 pt floor: it won over the fold (the 10-12 round). The panel
+        // stands 10 pt above the card.
+        return roomUnderFold(from: composerFrame.minY - 10).map { min(room, $0) } ?? max(180, room)
         #else
         return 600
         #endif
@@ -893,6 +977,7 @@ struct ComposerView: View {
     private func send() async {
         // The New Message sheet starts the chat with the words; the draft holds the rest.
         if let newMessage { newMessage.send(text); return }
+        if chat.editingID != nil { await resendEdited(); return }
         var t = text
         Perf.stamp("slash: send \(t.prefix(30))")
         if !quote.isEmpty {
@@ -903,10 +988,24 @@ struct ComposerView: View {
             quote = ""
         }
         text = ""
-        focused = true
+        // The app's chats keep the cursor for the next message unless Close keyboard after sending is on (#350); the
+        // tour's and the demo's put the keyboard away either way.
+        focused = ComposerFocusRule.afterSend(placeKeepsFocus: focusesAfterSend, closeAfterSending: closeKeyboardAfterSend)
         historyCursor = nil
         NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
         if let prefill = await chat.send(t) { text = prefill }
+    }
+
+    /// Send while editing (#556): the gateway takes the old message and what followed it back, and these words go in its
+    /// place. Until it's sent the words stay in the box, so anything that stops it (a reply running, a gateway that can't
+    /// take messages back) keeps them, with the reason in the banner; nothing is sent then.
+    private func resendEdited() async {
+        let outcome = await chat.resend(text)
+        guard outcome == .sent else { chat.banner = outcome.message; return }
+        text = ""
+        focused = ComposerFocusRule.afterSend(placeKeepsFocus: focusesAfterSend, closeAfterSending: closeKeyboardAfterSend)
+        historyCursor = nil
+        NotificationCenter.default.post(name: .hermesMessageSent, object: chat)
     }
 
     private func recallHistory(_ delta: Int) -> Bool {
@@ -1034,4 +1133,27 @@ struct HistorySheet: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }
+}
+
+extension EnvironmentValues {
+    /// Whether a send leaves the cursor in the composer (`ComposerView`); the app's chats do. Onboarding's tour and Demo
+    /// mode's chats don't: there a send puts the keyboard away (#490), where the next thing to read is the reply.
+    @Entry var composerFocusesAfterSend: Bool = true
+    /// The message bar's field takes no typing (onboarding's tour, #490: beat 3's message is ready-made and beat 4's
+    /// mention types itself), so no keyboard comes up for it. VoiceOver reads its words as text, not as a field.
+    @Entry var composerReadOnly: Bool = false
+}
+
+/// How far above the composer's bottom edge its open list (+, "/", "@") reaches at full size,
+/// 0 with none open (`ComposerView.listReach`): the chat lifts its dock over a fold across the
+/// window that the list would cross (Duo stage 2).
+struct ComposerListReach: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+extension EnvironmentValues {
+    /// The bottom of the chat's header in window space, 0 until measured (ConversationView): the morph bar's chat row
+    /// on a narrow window, the chat's own header on a wide one.
+    @Entry var chatHeaderBottom: CGFloat = 0
 }

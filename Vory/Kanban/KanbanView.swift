@@ -13,6 +13,11 @@ struct KanbanView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.windowGeometry) private var windowGeometry
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// A window that can fold: the column chips stand either side of the fold (`KanbanChips`).
+    @Environment(\.reservedRegions) private var regions
+    /// The chips' span across the window (window space), the width the strip offers them (`OfferedWidth`), for where the
+    /// fold falls.
+    @State private var chipsFrame = CGRect.zero
     @Environment(\.barTab) private var barTab
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
     @State private var showNew = false
@@ -61,7 +66,7 @@ struct KanbanView: View {
                 .init(label: "Nudge Dispatcher", symbol: "hare") { Task { await store?.nudge() } },
                 .init(label: "Refresh", symbol: "arrow.clockwise") { Task { await store?.refresh() } },
             ]),
-            MorphPageAction(id: "board.new", symbol: "plus", label: "New Task", enabled: store?.isPresent == true) { showNew = true },
+            MorphPageAction(id: "board.new", symbol: "plus", label: "Add task", enabled: store?.isPresent == true) { showNew = true },
         ], on: pushedUnderBar)
         .sheet(item: $detailTask) { t in
             KanbanTaskSheet(taskID: t.id, onOpenChat: { sid, profile in detailTask = nil; openChat(sid, profile: profile) }).sheetFrame(.wide).withAppModel()
@@ -177,26 +182,38 @@ struct KanbanView: View {
     /// The columns as chips with their counts, four to a row so all eight are in view; one
     /// is open at a time. (A scrolling row inside a safe-area inset would not scroll.)
     private func columns(_ board: KanbanBoard) -> some View {
-        // Two to a row at the accessibility sizes, where four left only an icon and "…".
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: typeSize.isAccessibilitySize ? 2 : 4), spacing: 6) {
-            ForEach(KanbanStatus.columns, id: \.self) { s in
-                let n = board.count(s)
-                Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
-                        Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
-                        if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
+        // Two to a row at the accessibility sizes, where four left only an icon and "…". On a window
+        // that can fold up its middle, half each side of the fold (`KanbanChips`, Duo stage 4).
+        // The span the fold's place is read against is the width the strip offers the chips, whatever their columns add up
+        // to (`OfferedWidth`): read on the grid, a turn's first pass held them at the window's full width (#553).
+        OfferedWidth {
+            LazyVGrid(columns: KanbanChips.items(regions: regions, frame: chipsFrame, count: typeSize.isAccessibilitySize ? 2 : 4, spacing: 6), spacing: 6) {
+                ForEach(KanbanStatus.columns, id: \.self) { s in
+                    let n = board.count(s)
+                    Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
+                            Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
+                            if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 6).padding(.vertical, 7)
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.plain)
+                    .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
+                    .foregroundStyle(column == s ? Color.accentColor : .primary)
+                    .accessibilityLabel("\(s.title), \(n)")
+                    .accessibilityAddTraits(column == s ? .isSelected : [])
                 }
-                .buttonStyle(.plain)
-                .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
-                .foregroundStyle(column == s ? Color.accentColor : .primary)
-                .accessibilityLabel("\(s.title), \(n)")
-                .accessibilityAddTraits(column == s ? .isSelected : [])
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        #if os(iOS)
+        // Its span across the window only, as Home's tiles read theirs.
+        .onGeometryChange(for: CGRect.self) { g in
+            let f = g.frame(in: .global); return CGRect(x: f.minX, y: 0, width: f.width, height: 0)
+        } action: { chipsFrame = $0 }
+        #endif
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.bar)
     }
@@ -224,8 +241,9 @@ struct KanbanView: View {
             // The Board tab's root under the morph bar: the bar draws New Task. Pushed from
             // Settings › Board the bar draws it too, beside its Back (#426, #435).
             if !barDrawsNew && !pushedUnderBar {
-            Button { showNew = true } label: { Label("New Task", systemImage: "plus") }
+            Button { showNew = true } label: { Label("Add task", systemImage: "plus") }
                 .disabled(store?.isPresent != true)
+                .accessibilityIdentifier("board.new")
             }
         }
     }

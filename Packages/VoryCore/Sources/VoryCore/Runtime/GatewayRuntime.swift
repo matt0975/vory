@@ -7,6 +7,16 @@ import OSLog
 @Observable
 public final class GatewayRuntime {
     public let connection: GatewayConnection
+    /// How this runtime reaches its gateway: the network, or in process for the demo.
+    public let transport: GatewayTransport
+    /// The demo (#392): nothing it does is saved or synced. The one check every persistence path asks: the demo
+    /// connection, or any runtime on the in-process demo transport (onboarding's tour makes one of its own, #388).
+    public var isEphemeral: Bool { connection.isDemo || transport.isInProcess }
+    /// Where this runtime keeps files for the moment (staged attachments, downloads, fetched pictures): the system's
+    /// temporary folder, or for the demo a folder of its own that `stop()` removes, so leaving the demo leaves no file.
+    public let scratchDirectory: URL
+    /// Pictures and files fetched for the chats: the shared cache, or for the demo one in `scratchDirectory`.
+    public let media: MediaStore
     /// The address in use: the gateway's own, or for a gateway with a backup address (#283) the
     /// one that answered when the socket last connected.
     public private(set) var address: GatewayURL
@@ -39,6 +49,8 @@ public final class GatewayRuntime {
                 Task { [api] in await api.resetSession() }
             }
             awaySince = nil
+            // Suspension can miss sessions.changed even without a socket-state change.
+            owedListRefresh = true
             // The chats' views catch up once, when the app says (`scheduleCatchUp`); they stay
             // held until then, so a live change meanwhile does not have them catch up early.
             for chat in registry.all { chat.beginCatchUp() }
@@ -113,6 +125,10 @@ public final class GatewayRuntime {
     var registry = ChatRegistry<ChatSession>()
     /// Every open chat, in the order it was opened.
     public var chats: [ChatSession] { registry.all }
+    /// This gateway answered `session.undo` with "unknown method": a Hermes without it, where a sent message can't be
+    /// taken back, so a bubble offers Copy to message instead of Edit & resend (#556). Learnt from that answer, never
+    /// guessed from a version.
+    public var undoUnsupported = false
     private var globalEventTask: Task<Void, Never>?
     /// Platform hooks, set by the app that owns this runtime.
     public var pushRegistrar: (any PushRegistrationSyncing)?
@@ -132,16 +148,27 @@ public final class GatewayRuntime {
     /// Speech in and out, by the Speech setting: the gateway's providers or this device's engines.
     public let voice = VoiceEngine()
 
-    public init(connection: GatewayConnection, store: ConnectionStore) {
+    public init(connection: GatewayConnection, store: ConnectionStore, transport: GatewayTransport = .network) {
         self.connection = connection
+        self.transport = transport
         self.store = store
+        let ephemeral = connection.isDemo || transport.isInProcess
+        if ephemeral {
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("vory-demo-" + UUID().uuidString, isDirectory: true)
+            scratchDirectory = scratch
+            media = MediaStore(directory: scratch.appendingPathComponent("media", isDirectory: true))
+        } else {
+            scratchDirectory = FileManager.default.temporaryDirectory
+            media = .shared
+        }
         let loadedSecrets = store.secrets(for: connection.id)
         self.secrets = loadedSecrets
         self.selectedProfile = connection.lastProfile
         let addresses = connection.addresses
         let first = AddressMemory().lastGood(for: connection.id).flatMap { addresses.indices.contains($0) ? addresses[$0] : nil } ?? connection.gateway
         self.address = first
-        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets))
+        self.api = HermesAPI(gateway: first, signer: RequestSigner(authMode: connection.authMode, secrets: loadedSecrets), urlSession: transport.makeHTTPSession(), makeSession: { [transport] in transport.makeHTTPSession() },
+                              downloadDirectory: ephemeral ? scratchDirectory : nil)
         self.socket = GatewaySocket(
             urlProvider: { [weak self] in
                 guard let self else { throw SocketError.cancelled }
@@ -164,7 +191,8 @@ public final class GatewayRuntime {
                 return await self.answer(serverRequest: req)
             },
             onReconnected: { [weak self] in await self?.didReconnect() },
-            onFirstConnected: { [weak self] in await self?.didConnectFirst() })
+            onFirstConnected: { [weak self] in await self?.didConnectFirst() },
+            makePipe: { [transport] in transport.makeFramePipe($0, nil) })
         // An attempt that got no answer from the ticket's REST call twice in a row, or a network change while
         // waiting: the REST session's connections are made afresh, as quitting the app did (#423).
         Task { [socket, api] in await socket?.setTroubleHandler { _ in await api.resetSession() } }
@@ -356,6 +384,9 @@ public final class GatewayRuntime {
         globalEventTask?.cancel()
         kanban.stopEvents()
         await socket.disconnect()
+        transport.stop()
+        // The demo's files for the moment go with it.
+        if isEphemeral { try? FileManager.default.removeItem(at: scratchDirectory) }
     }
 
     public func reconnectNow() async {
@@ -427,9 +458,16 @@ public final class GatewayRuntime {
     /// with another one; empty follows the gateway's own active profile.
     public static let defaultProfileKey = "bots.defaultProfile"
     public var defaultProfile: String? {
-        let d = UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? ""
+        let d = defaultProfileChoice
         return d.isEmpty || !profiles.contains(where: { $0.name == d }) ? nil : d
     }
+    /// The default bot as Settings shows it ("": follow the gateway). The demo's is its own, for its life only (#494):
+    /// the setting is the person's, kept and synced, and a demo bot chosen there stayed after leaving the demo.
+    public var defaultProfileChoice: String {
+        get { isEphemeral ? ephemeralDefaultProfile : (UserDefaults.standard.string(forKey: Self.defaultProfileKey) ?? "") }
+        set { if isEphemeral { ephemeralDefaultProfile = newValue } else { UserDefaults.standard.set(newValue, forKey: Self.defaultProfileKey) } }
+    }
+    private var ephemeralDefaultProfile = ""
     /// Back to the default bot, when one is chosen and the selection drifted (a chat opened from
     /// another bot's list, a route from a notification).
     public func returnToDefaultProfile() {
@@ -718,6 +756,8 @@ public final class GatewayRuntime {
                                       needsAttention: needsAttention.count, chats: chats, contextPercent: ctx,
                                       connected: socketState.isOpen || (httpCountsAsOnline && lastListAnswered), usage: kept)
             snap.throughRelay = throughRelay ? true : nil
+            // The demo's chats stay in the app: not in the widgets' stored data, nor on the Watch.
+            guard !isEphemeral else { return }
             snap.save()
             onSnapshotPublished?(snap)
         }

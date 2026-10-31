@@ -50,12 +50,12 @@ import Testing
 
     @Test func theApprovalQuestionNamesTheBotAndTheCommand() throws {
         let req = ApprovalRequest(requestId: "r1", sessionId: "s1", command: "rm -rf build/", description: "Clean the build folder")
-        #expect(SiriWords.approvalQuestion(bot: "work", request: req, answer: .approve) == "work wants to run: rm -rf build/. Approve it?")
+        #expect(SiriWords.approvalQuestion(bot: "work", request: req, answer: .approve) == "work wants to run: rm -rf build/. Allow it?")
         #expect(SiriWords.approvalQuestion(bot: "work", request: req, answer: .deny) == "work wants to run: rm -rf build/. Deny it?")
         let long = ApprovalRequest(requestId: "r2", sessionId: "s1", command: String(repeating: "x", count: 200))
         #expect(SiriWords.approvalQuestion(bot: "work", request: long, answer: .approve).count < 170)
         // Nothing to name: still a sentence.
         let bare = ApprovalRequest(requestId: "r3", sessionId: "s1")
-        #expect(SiriWords.approvalQuestion(bot: "work", request: bare, answer: .approve) == "work wants to run: a command. Approve it?")
+        #expect(SiriWords.approvalQuestion(bot: "work", request: bare, answer: .approve) == "work wants to run: a command. Allow it?")
     }
 }

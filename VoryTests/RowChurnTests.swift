@@ -65,14 +65,30 @@ struct RowChurnTests {
         // The whole context differs (the tail's rows read it per row)…
         #expect(a != b)
         // …but the older rows' does not: they are never the last row nor the typing one.
-        #expect(a.forOlderRows == b.forOlderRows)
+        #expect(a.forOlderRows(tail: []) == b.forOlderRows(tail: []))
         // What the older rows do draw with still counts.
         var wider = b
         wider.wide = true
-        #expect(a.forOlderRows != wider.forOlderRows)
+        #expect(a.forOlderRows(tail: []) != wider.forOlderRows(tail: []))
     }
 
-    /// The older rows are drawn without the last row's inputs (`forOlderRows`), which holds because the last row is
+    /// A card toggled at the end leaves the older rows' context as it was: the open cards it carries are the older rows'
+    /// own (#473; with the tail's in, the lazy stack was laid out again at every toggle and its rows not yet measured went
+    /// back to their estimate). A card toggled in an older row still changes it.
+    @Test func aCardToggledAtTheEndLeavesTheOlderRowsContextAlone() {
+        let tail = TranscriptRowModel.build([tool, reply])[...]
+        let closed = context(typingTool: nil, lastID: "r1")
+        var tailOpen = closed
+        tailOpen.openTools = ["t1"]
+        tailOpen.openReasoning = ["r1"]
+        #expect(closed != tailOpen)
+        #expect(closed.forOlderRows(tail: tail) == tailOpen.forOlderRows(tail: tail))
+        var olderOpen = closed
+        olderOpen.openTools = ["t0"]
+        #expect(closed.forOlderRows(tail: tail) != olderOpen.forOlderRows(tail: tail))
+    }
+
+    /// The older rows are drawn without the last row's inputs (`forOlderRows(tail:)`), which holds because the last row is
     /// never among them: the lazy part ends before the last row for every thread of one row or more, whatever boundary
     /// the thread has set. Kept true here if the split changes.
     @Test func theLastRowIsNeverInTheLazyPart() {

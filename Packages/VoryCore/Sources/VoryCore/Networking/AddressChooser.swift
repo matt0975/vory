@@ -158,7 +158,7 @@ public enum AddressChooser {
                         newRequest request: URLRequest) async -> URLRequest? { nil }
     }
 
-    /// The words for an address where the gateway is named (#283, judgement call #10): a home
+    /// The words for an address where the gateway is named (#283): a home
     /// network address, a Tailscale one, or else its host.
     public static func label(for address: GatewayURL) -> String {
         if address.isTailscaleHost { return "Tailscale" }

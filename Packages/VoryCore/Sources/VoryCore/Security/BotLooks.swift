@@ -29,4 +29,14 @@ public struct BotLooks: Codable, Sendable {
         return (Array(colors.keys) + Array(avatars.keys)).first { wanted.contains($0.lowercased()) }
     }
     public func save() { try? Keychain.setCodable(self, account: Self.account) }
+
+    /// A bot's colour as the extensions draw it (#506): the one in this copy under `key`, else the default the app gives a
+    /// bot by its name (`BotPalette`, the same on every device). A bot never recoloured is missing from the copy until it
+    /// catches up with the gateway's bots, and was drawn in a fixed purple in a pushed notification, another colour in the
+    /// app. `profile`, the bot's name, picks the default when `key` is a label.
+    public func color(for key: String, profile: String? = nil) -> String {
+        if let h = colors[key], !h.isEmpty { return h }
+        let name = profile.flatMap { $0.isEmpty ? nil : $0 } ?? key
+        return BotPalette.defaultHex(for: name)
+    }
 }

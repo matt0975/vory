@@ -11,9 +11,7 @@
 	<!-- NativeAuth's OAuth callback listens on a loopback port. -->
 	<key>com.apple.security.network.server</key>
 	<true/>
-	<!-- Attachments: photos, voice memos, dictation. -->
-	<key>com.apple.security.device.camera</key>
-	<true/>
+	<!-- Voice memos, dictation and voice mode. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 	<!-- Files chosen in open/save panels and dropped into the composer. -->

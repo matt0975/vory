@@ -98,6 +98,7 @@ struct CloudMerge {
         ChatStyle.showToolCalls, ChatStyle.showReasoning, ChatStyle.showTurnStats, ChatStyle.showSystemNotes,
         ChatStyle.showBots, ChatStyle.showToolOutput, ChatStyle.currentStepOnly, ChatStyle.compactTools,
         ChatStyle.collapseAfterTurn, ChatStyle.bubbleStyle, ChatStyle.botTint, ChatStyle.wideReplies, ChatStyle.returnSends,
+        ChatStyle.closeKeyboardAfterSend,
         BotAvatarStore.glassAllKey, GatewayRuntime.defaultProfileKey,
         ChatSummarizer.enabledKey, ChatSummarizer.titlesKey, ChatSummarizer.previewsKey, ChatGoals.enabledKey,
     ] + VoiceSettings.syncedKeys

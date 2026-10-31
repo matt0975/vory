@@ -2,8 +2,8 @@ import XCTest
 
 /// Pictures of the 1.5 bot symbols (#304) on the chat header and the pinned thread bot, state
 /// by state, driven through the mock: thinking (the orb), a tool (the toolbox), writing (the
-/// bubbles), an approval (the exclamation), and the plain bot at rest. For the planner and
-/// Matt, not an assertion of looks. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
+/// bubbles), an approval (the exclamation), and the plain bot at rest. For review,
+/// not an assertion of looks. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 final class BotSymbolShotsUITests: XCTestCase {
     private var app: XCUIApplication!
 

@@ -122,7 +122,7 @@ final class ChatShowcaseUITests: XCTestCase {
         shot("15-approval-card")
 
         // Approve once and let the turn finish.
-        let once = app.buttons["Once"].firstMatch
+        let once = app.buttons["Allow once"].firstMatch
         XCTAssertTrue(once.waitForExistence(timeout: 10))
         once.tap()
         XCTAssertTrue(waitForText("4.2 GB freed", timeout: 90), "turn never completed")

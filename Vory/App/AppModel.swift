@@ -243,7 +243,7 @@ final class AppModel {
     /// The other root pages' bar actions, asked for by the morph prototype's bar; each page
     /// answers its own.
     struct PageRequest: Equatable {
-        enum Kind { case botsNewBot, filesHome, filesToggleHidden, filesUpload, projectsNew, boardNew, sessionsAdvanced }
+        enum Kind { case botsNewBot, filesHome, filesToggleHidden, filesUpload, projectsNew, boardNew, sessionsAdvanced, cronNew }
         let id = UUID(); let kind: Kind; init(_ kind: Kind) { self.kind = kind }
     }
     var pageRequest: PageRequest?
@@ -308,15 +308,26 @@ final class AppModel {
         // next turn of the run loop, when this model exists).
         #if DEBUG
         DemoMode.addGateway(to: store)
+        // `-vory-demo`: start on the built-in demo gateway (#392), before the welcome screen has its button.
+        if ProcessInfo.processInfo.arguments.contains("-vory-demo") { store.activeConnectionID = GatewayConnection.demoID }
         #endif
+        // What an older build kept of the demo, gone before anything reads it (#493); not while a demo runs.
+        DemoTraces.sweepAtLaunch(store: store)
         // The bots' own names (#315) before anything reads a label.
         BotNames.install()
         CloudSync.shared.start(store: store)
         NotificationCenter.default.addObserver(forName: .hermesPushRegistrationNeedsSync, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self, let rt = self.runtime else { return }
+                guard let self, let rt = self.runtime, !rt.isEphemeral else { return }
                 await self.push.syncRegistration(runtime: rt)
             }
+        }
+        // The demo asks for notifications on its first message (#501, Matt's call): its replies and approvals are local
+        // notifications, and nothing else in it asks. The system's question only, while it has not been answered; nothing
+        // is registered anywhere (`PushRegistrar` refuses the demo).
+        NotificationCenter.default.addObserver(forName: .hermesMessageSent, object: nil, queue: .main) { [weak self] n in
+            let chat = n.object as? ChatSession
+            Task { @MainActor in await self?.messageSent(on: chat) }
         }
         #if os(iOS)
         // Started while the phone was locked (a watch message, a notification, the backup task),
@@ -328,10 +339,64 @@ final class AppModel {
         }
         // A runtime started away (a launch in the background) is in front once the app is.
         AwayAtLaunch.clearOnActive { [weak self] in self?.runtime }
+        // Whether this is a test build, for Troubleshooting's test-build rows (the tour's replay, Screen layout): asked at
+        // launch, and again each time the app comes to the front while the answer is still no (#532: a launch in the
+        // background could find the App Store unable to answer, and the rows stayed away).
+        Task { [weak self] in await self?.testBuildFlag.refresh() }
+        NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.testBuildFlag.refresh() }
+        }
         #endif
     }
 
-    var hasConnections: Bool { !store.connections.isEmpty }
+    var hasConnections: Bool { !store.connections.isEmpty || store.demo != nil }
+    /// A gateway of the person's own (the demo is not one): what the Companion prompt and the notifications card are
+    /// for (#494: the demo used both up, and a gateway added after it was never offered them).
+    var hasOwnGateway: Bool { !store.connections.isEmpty }
+
+    // MARK: Demo mode (#392)
+
+    // MARK: The welcome tour again (#487)
+
+    /// A test build (`TestBuild.checkHere`): TestFlight's or Xcode's, never the App Store's. The one flag every
+    /// test-build row in Settings › Troubleshooting reads (Replay the welcome tour, Screen layout). False until the App
+    /// Store (or the receipt) has said; asked again while it's no (`TestBuildFlag`).
+    var testBuild: Bool { testBuildFlag.value }
+    let testBuildFlag = TestBuildFlag()
+    /// The tour is being replayed over the app (`TourReplayView`).
+    var replayingTour = false
+
+    /// Whether "Try a demo" can start it here: always, unless the demo is already running. Onboarding (#388) and the first
+    /// screen's button ask this and call `startDemo()`, and nothing else of the demo.
+    var demoAvailable: Bool { !isInDemo }
+    /// The demo is the gateway in use.
+    var isInDemo: Bool { store.demo != nil }
+
+    /// Switches to the demo: the built-in gateway with its bots and chats, no server and no network. The saved gateway in
+    /// use, if any, stops and stays saved; `endDemo()` brings it back.
+    func startDemo() async {
+        guard demoAvailable else { return }
+        await activate(.demo)
+    }
+
+    /// Leaves the demo: its runtime stops (its files for the moment go with it), its looks go, and the saved gateway that
+    /// was in use comes back, or the first screen when there is none.
+    func endDemo() async {
+        guard isInDemo else { return }
+        // What it showed outside the app goes too: its turns' Live Activities and its notifications; and its drafts.
+        #if os(iOS)
+        LiveActivityController.endAll(connection: GatewayConnection.demoID)
+        #endif
+        LocalNotifier.removeAll(connection: GatewayConnection.demoID)
+        ComposerDrafts.forgetDemo()
+        await deactivate()
+        DemoTraces.sweep()
+        DemoTraces.sweepKeychain(store: store)
+        store.leaveDemo()
+        if let c = store.active { await activate(c) }
+        // The extensions' and the Watch's copy of the looks, if a change of the person's own was held back meanwhile (#494).
+        BotLooksMirror.mirrorIfOwed()
+    }
 
     #if DEBUG
     /// `-vory-show-signin`: the gateway in use is treated as needing a sign-in, so the banner
@@ -358,9 +423,49 @@ final class AppModel {
         return c
     }
 
+    /// A message sent (#501): the demo's notification question goes with a message on the app's own demo runtime only. A
+    /// tour replayed while the demo is on runs its chat on an ephemeral runtime of its own, and its Send asked the system's
+    /// question in the middle of the tour.
+    func messageSent(on chat: ChatSession?) async {
+        guard isInDemo, let rt = runtime, let chat, chat.runtime === rt else { return }
+        await askForDemoNotifications()
+    }
+
+    /// The system's notification question, while it has not been answered (#501): asked on the demo's first message. One
+    /// at a time: the settings' read can take seconds (after a boot, more than ten), and a second message sent meanwhile
+    /// found them undetermined too and asked again.
+    func askForDemoNotifications() async {
+        guard !askingDemoNotifications else { return }
+        askingDemoNotifications = true
+        defer { askingDemoNotifications = false }
+        #if DEBUG
+        if let ask = Self.demoNotificationsAskForTests { await ask(); return }
+        #endif
+        await push.refreshAuthorization()
+        if push.authorization == .notDetermined { _ = await push.requestAuthorization() }
+    }
+    @ObservationIgnored private var askingDemoNotifications = false
+    #if DEBUG
+    /// The tests' stand-in for the system's question (#501), which in the unit-test host would put an alert up that
+    /// nothing answers; it can take its time, as the system's can. DEBUG only, checked absent from Release at each cut.
+    nonisolated(unsafe) static var demoNotificationsAskForTests: (() async -> Void)?
+    #endif
+
     func activateSavedConnection() async {
+        guard !Self.isUnitTestHost else { return }
         if let c = store.active { await activate(c) }
     }
+
+    /// The app as the host the unit tests run inside: it connects no saved gateway (#494). A used simulator's saved gateway
+    /// came back with the host, and its runtime wrote the person's stores (the widgets' snapshot, the chat list's settings
+    /// as it switched the demo's off) while the tests read them: the demo's no-trace checks failed on a used simulator and
+    /// passed on a fresh one. The UI tests launch the app as itself, which this leaves alone. A test hook, so DEBUG only:
+    /// a Release build never reads the test runner's variable (checked at each cut).
+    #if DEBUG
+    nonisolated static let isUnitTestHost = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    #else
+    nonisolated static let isUnitTestHost = false
+    #endif
 
     /// Whether Face ID may be asked for now, for a remembered sign-in: the app in front and its
     /// own lock not up (the lock asks for Face ID itself, and two prompts would collide).
@@ -405,11 +510,17 @@ final class AppModel {
             await rt.stop()
         }
         store.activeConnectionID = connection.id
-        let rt = GatewayRuntime(connection: connection, store: store)
-        rt.pushRegistrar = push
+        // The demo's bots wear its looks while it runs, in memory only.
+        DemoLooks.set(on: connection.isDemo)
+        ChatListPrefs.shared.inDemo = connection.isDemo
+        // The demo (#392) runs on its own gateway inside the app, and registers nowhere for push.
+        let rt = GatewayRuntime(connection: connection, store: store, transport: connection.isDemo ? .demo(DemoGateway()) : .network)
+        if !rt.isEphemeral { rt.pushRegistrar = push }
         rt.cardNotifier = LocalCardNotifier()
         #if os(iOS)
-        rt.activityReporterFactory = { LiveActivityController() }
+        // The Live Activity, passed on to a Watch that has the chat open (#387): a turn starting or ending and its cards
+        // changing tell the Watch, which then reads instead of asking every few seconds.
+        rt.activityReporterFactory = { WatchTurnRelay(inner: LiveActivityController()) }
         #else
         rt.activityReporterFactory = { MenuBarTurnReporter() }   // the menu-bar item is the Mac's Live Activity
         #endif
@@ -427,7 +538,8 @@ final class AppModel {
         ChatGoals.shared.attach(rt)
         activationError = nil
         await rt.start()
-        await push.registerForRemoteNotificationsIfAuthorized()
+        // The demo registers nowhere (#501, and `PushRegistrar` refuses it too).
+        if !connection.isDemo { await push.registerForRemoteNotificationsIfAuthorized() }
         #if os(iOS)
         WatchSync.shared.push(store: store)
         #endif
@@ -507,6 +619,8 @@ final class AppModel {
     func deactivate() async {
         await runtime?.stop()
         runtime = nil
+        DemoLooks.set(on: false)
+        ChatListPrefs.shared.inDemo = false
         ChatGoals.shared.attach(nil)
     }
 
@@ -517,7 +631,7 @@ final class AppModel {
     func resetApp(eraseCloud: Bool) async {
         let sync = CloudSync.shared
         sync.suspended = true
-        if let rt = runtime { await push.removeRegistration(runtime: rt) }
+        await push.removeEverywhere(runtime: runtime)
         await deactivate()
         for c in store.connections { store.delete(id: c.id) }
         if eraseCloud { sync.eraseCloud() } else { sync.removeOwnDeviceEntry() }
@@ -548,7 +662,7 @@ final class AppModel {
 
     func deleteConnection(_ id: UUID) async {
         if runtime?.connection.id == id {
-            if let rt = runtime { await push.removeRegistration(runtime: rt) }
+            if let rt = runtime { await push.removeRegistration(runtime: rt, everywhere: false) }
             await deactivate()
         }
         store.delete(id: id)
@@ -643,8 +757,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         BotLooksMirror.mirror()   // so the notification extensions show the right bot from the start
         #if DEBUG
         // Simulator testing: `simctl push` only works once the app has asked for notification permission.
+        // The async form, as PushRegistrar asks: a completion handler written here is the main actor's, and the
+        // system calls it on its own queue, which traps under Swift 6's checks.
         if ProcessInfo.processInfo.arguments.contains("-vory-request-notifications") {
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+            Task { _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
         }
         #endif
         return true

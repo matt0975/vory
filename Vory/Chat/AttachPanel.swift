@@ -25,7 +25,17 @@ struct AttachPanel: View {
     var close: () -> Void
 
     /// A row is a 40 pt icon with 8 pt above and below; the stack adds 10 pt at each end.
-    private var naturalHeight: CGFloat { CGFloat(items.count) * 56 + 20 }
+    private var naturalHeight: CGFloat { Self.naturalHeight(rows: items.count) }
+    static func naturalHeight(rows: Int) -> CGFloat { CGFloat(rows) * 56 + 20 }
+
+    /// The room above the card for the panel: from 10 pt above the card's top up to the chat's header. The header's
+    /// measured bottom (window space) where it reaches lower than the 60 pt under the safe area the panel always
+    /// allowed, so the panel stops under it: on the iPhone 17 Pro the chat's row ends at 129.7 (safe area 62), and with
+    /// the keyboard up the old line (122) let the panel reach 7.7 pt over Back and the title; the closed Duo the same;
+    /// the open Duo's laptop pose (to 150) and a wide window's title pill (to 92) more.
+    static func room(cardTop: CGFloat, safeTop: CGFloat, headerBottom: CGFloat) -> CGFloat {
+        cardTop - max(safeTop + 60, headerBottom) - 10
+    }
 
     var body: some View {
         if let cap, naturalHeight > cap {

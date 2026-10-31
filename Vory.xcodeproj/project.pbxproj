@@ -49,6 +49,13 @@
 			remoteGlobalIDString = AA00000000000000000040;
 			remoteInfo = Vory;
 		};
+		AA00000000000000000746 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA000000000000000000E0;
+			remoteInfo = VoryWatch;
+		};
 		AA000000000000000000DA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AA00000000000000000001 /* Project object */;
@@ -155,6 +162,7 @@
 		AA00000000000000000021 /* HermesLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HermesLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000022 /* VoryTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoryTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000023 /* VoryUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoryUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA00000000000000000741 /* VoryWatchUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VoryWatchUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000000000000000000D1 /* VoryWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VoryWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA000000000000000000D3 /* VoryWatchComplications.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryWatchComplications.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000101 /* VoryNotificationService.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VoryNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -219,6 +227,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppIcon.icon,
+				LiveTurnViews.swift,
 			);
 			target = AA00000000000000000110 /* VoryNotificationService */;
 		};
@@ -226,6 +235,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				AppIcon.icon,
+				LiveTurnViews.swift,
 			);
 			target = AA00000000000000000125 /* VoryNotificationContent */;
 		};
@@ -343,6 +353,11 @@
 			path = VoryUITests;
 			sourceTree = "<group>";
 		};
+		AA00000000000000000742 /* VoryWatchUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = VoryWatchUITests;
+			sourceTree = "<group>";
+		};
 		AA000000000000000000E2 /* VoryWatch */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
@@ -442,6 +457,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000743 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA000000000000000000E5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -524,6 +546,7 @@
 				AA00000000000000000022 /* VoryTests.xctest */,
 				AA00000000000000000520 /* VoryMacTests.xctest */,
 				AA00000000000000000023 /* VoryUITests.xctest */,
+				AA00000000000000000741 /* VoryWatchUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -543,6 +566,7 @@
 				AA00000000000000000460 /* VoryMacWidgets */,
 				AA00000000000000000061 /* VoryTests */,
 				AA00000000000000000066 /* VoryUITests */,
+				AA00000000000000000742 /* VoryWatchUITests */,
 				AA00000000000000000070 /* Products */,
 				C929CDF0306CC3C2002EDF0A /* Recovered References */,
 			);
@@ -659,6 +683,29 @@
 			);
 			productName = VoryUITests;
 			productReference = AA00000000000000000023 /* VoryUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		AA00000000000000000740 /* VoryWatchUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA0000000000000000074A /* Build configuration list for PBXNativeTarget "VoryWatchUITests" */;
+			buildPhases = (
+				AA00000000000000000745 /* Sources */,
+				AA00000000000000000743 /* Frameworks */,
+				AA00000000000000000744 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA00000000000000000747 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000742 /* VoryWatchUITests */,
+			);
+			name = VoryWatchUITests;
+			packageProductDependencies = (
+			);
+			productName = VoryWatchUITests;
+			productReference = AA00000000000000000741 /* VoryWatchUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 		AA000000000000000000E0 /* VoryWatch */ = {
@@ -878,6 +925,9 @@
 					AA00000000000000000043 = {
 						TestTargetID = AA00000000000000000040;
 					};
+					AA00000000000000000740 = {
+						TestTargetID = AA000000000000000000E0;
+					};
 					AA00000000000000000540 = {
 						TestTargetID = AA00000000000000000240;
 					};
@@ -912,6 +962,7 @@
 				AA00000000000000000042 /* VoryTests */,
 				AA00000000000000000043 /* VoryUITests */,
 				AA00000000000000000540 /* VoryMacTests */,
+				AA00000000000000000740 /* VoryWatchUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -939,6 +990,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA0000000000000000009B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000744 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -1032,6 +1090,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000745 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		AA000000000000000000E7 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1105,6 +1170,11 @@
 			isa = PBXTargetDependency;
 			target = AA00000000000000000040 /* Vory */;
 			targetProxy = AA00000000000000000032 /* PBXContainerItemProxy */;
+		};
+		AA00000000000000000747 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA000000000000000000E0 /* VoryWatch */;
+			targetProxy = AA00000000000000000746 /* PBXContainerItemProxy */;
 		};
 		AA000000000000000000EA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
@@ -1293,7 +1363,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1319,7 +1389,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1346,7 +1416,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.LiveActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1373,7 +1443,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.LiveActivity;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
@@ -1393,7 +1463,7 @@
 				DEVELOPMENT_TEAM = 4PLALDQ8V8;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1411,7 +1481,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4PLALDQ8V8;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1429,7 +1499,7 @@
 				DEVELOPMENT_TEAM = 4PLALDQ8V8;
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -1446,13 +1516,52 @@
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 4PLALDQ8V8;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.uitests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = Vory;
+			};
+			name = Release;
+		};
+		AA00000000000000000748 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				ENABLE_DEBUG_DYLIB = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = VoryWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		AA00000000000000000749 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4PLALDQ8V8;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.5.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SUPPORTED_PLATFORMS = "watchos watchsimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 4;
+				TEST_TARGET_NAME = VoryWatch;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
 			};
 			name = Release;
 		};
@@ -1473,7 +1582,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1501,7 +1610,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1529,7 +1638,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp.complications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1556,7 +1665,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.watchkitapp.complications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = watchos;
@@ -1583,7 +1692,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -1607,7 +1716,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -1632,7 +1741,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1663,7 +1772,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-framework",
@@ -1700,7 +1809,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory;
 				PRODUCT_NAME = Vory;
 				SDKROOT = macosx;
@@ -1728,7 +1837,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory;
 				PRODUCT_NAME = Vory;
 				SDKROOT = macosx;
@@ -1754,7 +1863,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1780,7 +1889,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.notifications;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1808,7 +1917,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1835,7 +1944,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1855,7 +1964,7 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.mactests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1875,7 +1984,7 @@
 				ENABLE_DEBUG_DYLIB = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.5.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.vorantx.vory.mactests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -1929,6 +2038,15 @@
 			buildConfigurations = (
 				AA000000000000000000B8 /* Debug */,
 				AA000000000000000000B9 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA0000000000000000074A /* Build configuration list for PBXNativeTarget "VoryWatchUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000748 /* Debug */,
+				AA00000000000000000749 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -45,8 +45,9 @@ enum ChatHandoff {
 extension View {
     /// Offers this chat to the person's other devices while it is on screen.
     func handsOff(_ chat: ChatSession) -> some View {
-        // A fresh chat has no stored id until its first message: nothing to hand over yet.
-        userActivity(ChatHandoff.activityType, isActive: !chat.storedID.isEmpty) { activity in
+        // A fresh chat has no stored id until its first message: nothing to hand over yet. Nor the demo's (#392): another
+        // device has no such chat.
+        userActivity(ChatHandoff.activityType, isActive: !chat.storedID.isEmpty && !chat.runtime.isEphemeral) { activity in
             ChatHandoff.fill(activity, chat: chat)
         }
     }

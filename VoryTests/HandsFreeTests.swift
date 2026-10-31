@@ -56,7 +56,7 @@ import Testing
     @Test func aCardStopsTheLoopAndSaysSoOnceThenTheScreenAnswers() {
         var s = HandsFreeState()
         _ = s.handle(.start); _ = s.handle(.speechStarted); _ = s.handle(.speechEnded); _ = s.handle(.transcript("clean it up")); _ = s.handle(.sent)
-        #expect(s.handle(.cardArrived(summary: "Delete 34 rotated log files")) == [.announce("Approval needed: Delete 34 rotated log files. Approve on screen.")])
+        #expect(s.handle(.cardArrived(summary: "Delete 34 rotated log files")) == [.announce("Approval needed: Delete 34 rotated log files. Allow or deny on screen.")])
         #expect(s.phase == .needsApproval && s.cardsPending)
         // No speech is taken while it waits.
         #expect(s.handle(.speechStarted).isEmpty && !s.capturing)
@@ -69,7 +69,7 @@ import Testing
         // A card while the person is mid-sentence drops the recording.
         var t = HandsFreeState()
         _ = t.handle(.start); _ = t.handle(.speechStarted)
-        #expect(t.handle(.cardArrived(summary: "sudo")) == [.captureCancel, .announce("Approval needed: sudo. Approve on screen.")])
+        #expect(t.handle(.cardArrived(summary: "sudo")) == [.captureCancel, .announce("Approval needed: sudo. Allow or deny on screen.")])
         #expect(t.handle(.cardsCleared).isEmpty && t.phase == .listening)
     }
 
@@ -80,7 +80,7 @@ import Testing
         #expect(s.phase == .speaking)
         // The card comes while the reply streams: the reply's speech is closed where it is
         // (the rest of the words come only after the answer), then the card is announced.
-        #expect(s.handle(.cardArrived(summary: "Delete 34 rotated log files")) == [.finishReplySpeech, .announce("Approval needed: Delete 34 rotated log files. Approve on screen.")])
+        #expect(s.handle(.cardArrived(summary: "Delete 34 rotated log files")) == [.finishReplySpeech, .announce("Approval needed: Delete 34 rotated log files. Allow or deny on screen.")])
         #expect(s.phase == .needsApproval && s.replyCut && !s.replySpoken)
         // The spoken part drains; the loop stays on the card.
         #expect(s.handle(.audioFinished).isEmpty && s.phase == .needsApproval && !s.replyPending)

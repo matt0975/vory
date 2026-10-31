@@ -3,7 +3,7 @@ import XCTest
 /// Pictures of the thread behind the composer's glass (Matt, 2026-10-10: no fade above the
 /// bar, the text seen through the field as in 1.4; the page's background below the bar only).
 /// Light and dark, keyboard up: scrolled to the middle so text passes behind the bar, and at
-/// the end; then the end with the keyboard down. For the planner and Matt, not an assertion of
+/// the end; then the end with the keyboard down. For review, not an assertion of
 /// looks. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 final class DockGlassShotsUITests: XCTestCase {
     private var app: XCUIApplication!

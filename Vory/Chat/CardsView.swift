@@ -23,6 +23,11 @@ struct PendingCardView: View {
     }
 }
 
+extension EnvironmentValues {
+    /// Voice mode's split pins an approval's choices under its words (`ApprovalCardView`, Duo stage 4).
+    @Entry var approvalChoicesPinned = false
+}
+
 struct ApprovalCardView: View {
     var approval: ApprovalRequest
     var count: Int
@@ -31,36 +36,61 @@ struct ApprovalCardView: View {
     var onChoice: (String) -> Void
     @State private var confirmAlways = false
 
+    /// Voice mode's split (Duo stage 4): the choices stand under the words, which scroll from their start when the card is
+    /// taller than its room, so what's allowed is read first and the choices are at hand at rest.
+    @Environment(\.approvalChoicesPinned) private var choicesPinned
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(.orange)
-                Spacer()
-                if count > 1 { Text("\(count) waiting").font(.caption).foregroundStyle(.secondary) }
-            }
-            if let d = approval.description, !d.isEmpty { Text(d).font(.subheadline) }
-            if let cmd = approval.command, !cmd.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(8)
+        Group {
+            if choicesPinned {
+                ViewThatFits(in: .vertical) {
+                    VStack(alignment: .leading, spacing: 10) { details; choices }
+                    VStack(alignment: .leading, spacing: 10) {
+                        ScrollView { VStack(alignment: .leading, spacing: 10) { details }.frame(maxWidth: .infinity, alignment: .leading) }
+                            .scrollBounceBehavior(.basedOnSize)
+                        choices
+                    }
                 }
-                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-            }
-            if let t = approval.toolName { Text("Tool: \(t)").font(.caption).foregroundStyle(.secondary) }
-            if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(.orange) }
-            // What each answer covers, so "Always" is never a surprise: it is a rule on this
-            // bot's gateway profile, not the one command, and it lives on until revoked.
-            Text(scopeLine).font(.caption2).foregroundStyle(.secondary)
-            // Four choices do not fit on one line at iPhone width, and a wrapped "Ses-sion" looks
-            // broken, so fall back to a 2x2 grid when the row cannot fit.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { choiceButtons }
-                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                    GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
-                    GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
-                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) { details; choices }
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// What's asked: the heading, the description, the command, the tool, the guardian's flag and what each answer covers.
+    /// The items alone, no stack of their own: in a chat the card stays the one flat stack it always was, so the dock's
+    /// height squeezes the choices as before (their names scale down) rather than the words.
+    @ViewBuilder private var details: some View {
+        HStack {
+            Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(.orange)
+            Spacer()
+            if count > 1 { Text("\(count) waiting").font(.caption).foregroundStyle(.secondary) }
+        }
+        if let d = approval.description, !d.isEmpty { Text(d).font(.subheadline) }
+        if let cmd = approval.command, !cmd.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(8)
+            }
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+        }
+        if let t = approval.toolName { Text("Tool: \(t)").font(.caption).foregroundStyle(.secondary) }
+        if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(.orange) }
+        // What each answer covers, so "Always" is never a surprise: it is a rule on this
+        // bot's gateway profile, not the one command, and it lives on until revoked.
+        Text(scopeLine).font(.caption2).foregroundStyle(.secondary)
+    }
+
+    /// Four choices do not fit on one line at iPhone width, and a wrapped name looks broken, so fall back to a 2x2 grid
+    /// when the row cannot fit.
+    private var choices: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { choiceButtons }
+            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
+                GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
+            }
+        }
     }
 
     @ViewBuilder private var choiceButtons: some View {
@@ -83,14 +113,16 @@ struct ApprovalCardView: View {
 
     private var scopeLine: String {
         let who = botName.isEmpty ? "this bot" : botName
-        var parts = ["Once: this command only."]
-        if approval.offeredChoices.contains("session") { parts.append("Session: \(approval.alwaysScope) in this chat.") }
-        if approval.offeredChoices.contains("always") { parts.append("Always: \(approval.alwaysScope) for \(who), every chat, until revoked in Settings › Approvals.") }
+        var parts = ["Allow once: this command only."]
+        if approval.offeredChoices.contains("session") { parts.append("Allow for this chat: \(approval.alwaysScope) in this chat.") }
+        if approval.offeredChoices.contains("always") { parts.append("Always allow: \(approval.alwaysScope) for \(who), every chat, until revoked in Settings › Approvals.") }
         return parts.joined(separator: " ")
     }
 
+    /// One set of names everywhere: "session" was a word for strangers to puzzle over, and in Vory a
+    /// session is a chat. "Always allow…" asks first (the alert above).
     private func label(_ c: String) -> String {
-        switch c { case "once": return "Once"; case "session": return "Session"; case "always": return "Always"; case "deny": return "Deny"; default: return c.capitalized }
+        switch c { case "once": return "Allow once"; case "session": return "Allow for this chat"; case "always": return "Always allow…"; case "deny": return "Deny"; default: return c.capitalized }
     }
 }
 

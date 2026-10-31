@@ -91,7 +91,8 @@ struct MacRootView: View {
 extension MacRootView {
     /// Shows the Companion prompt, once, when a gateway is up and nothing stands in its way.
     private func offerCompanion() {
-        guard !companionPromptShown, let rt = model.runtime, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
+        // Never for the demo (#494): it used the prompt up, and the person's own gateway was never offered it.
+        guard !companionPromptShown, let rt = model.runtime, !rt.isEphemeral, model.signInPrompt.isEmpty, model.needsSignIn == nil, !model.lock.isLocked else { return }
         companionPromptShown = true
         Task {
             // The gateway must have answered before it can be asked about the Companion: asked
@@ -129,7 +130,7 @@ private struct MainSplitView: View {
     @State private var appearedAt = Date.distantPast
     /// The rail's other pages, kept mounted once visited (first visit order). See `body`.
     @State private var kept: [AppModel.AppTab] = []
-    /// Judgement call while Matt is away (2026-10-13, vory-ops/JUDGEMENT-CALLS.md): a page left with a
+    /// Decided 2026-10-13: a page left with a
     /// page pushed on it keeps it, as the phone's tabs do. Setting this key (`defaults write <bundle id>
     /// mac.pages.popOnLeave -bool YES`) goes back to 1.5 (18)'s way: a page left is re-created at its
     /// root a moment after the switch, out of sight.
@@ -508,7 +509,8 @@ private struct GatewayFooter: View {
     }
 
     var body: some View {
-        Button { editing = true } label: {
+        // In the demo (#392) there is no gateway form to open: the click goes to Settings, where Leave demo is.
+        Button { if model.isInDemo { model.selectedTab = .settings } else { editing = true } } label: {
             VStack(spacing: 4) {
                 BotFaceView(spec: liveVory, size: 30, active: model.runtime != nil && BotAmbient.shared.decorativeActive, mood: BotFaceView.Mood(profile: "vory-mac-footer"))
                     .overlay(alignment: .bottomTrailing) {
@@ -517,6 +519,7 @@ private struct GatewayFooter: View {
                             .offset(x: 2, y: 2)
                     }
                 Text(name).font(.caption2.weight(.medium)).lineLimit(1).foregroundStyle(.secondary)
+                if model.isInDemo { DemoTag() }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
@@ -524,8 +527,8 @@ private struct GatewayFooter: View {
         }
         .buttonStyle(.plain)
         .help("\(name) · \(state)\nClick to edit the gateway")
-        .accessibilityLabel("Gateway \(name), \(state)")
-        .accessibilityHint("Edits the gateway.")
+        .accessibilityLabel("Gateway \(name)\(model.isInDemo ? ", demo" : ""), \(state)")
+        .accessibilityHint(model.isInDemo ? "Opens Settings, to leave the demo." : "Edits the gateway.")
         .accessibilityIdentifier("rail.gateway")
         .disabled(model.store.active == nil)
         .sheet(isPresented: $editing) { GatewayFormSheet(existing: model.store.active).withAppModel() }
@@ -533,8 +536,8 @@ private struct GatewayFooter: View {
 }
 
 /// The gateway form as the Mac shows it everywhere: a sheet with its own Cancel and Save (the
-/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again";
-/// judgement call #13), never pushed beside a toolbar Back.
+/// sidebar's gateway, Settings › Gateways, Status › Sign-in, Push setup's "Sign in again"),
+/// never pushed beside a toolbar Back.
 struct GatewayFormSheet: View {
     var existing: GatewayConnection?
     var body: some View {

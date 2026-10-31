@@ -243,7 +243,7 @@ final class Crash371UITests: XCTestCase {
     /// are on screen. By frame, not hittability: XCTest fails the test when it cannot settle hittability on a thread
     /// that is still taking rows. From one copy of the tree: read element by element (each one's existence, then its
     /// frame), every lookup made the app build its whole accessibility tree, about 250 ms over a long chat, the very
-    /// stalls the restore drive measures (the macOS Agent, 28).
+    /// stalls the restore drive measures (found on 28).
     private func onScreen(of total: Int) -> (top: Int, endShown: Bool) {
         guard let snap = try? app.snapshot() else { return (0, false) }
         let window = snap.frame

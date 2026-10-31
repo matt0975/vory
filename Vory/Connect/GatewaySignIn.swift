@@ -6,6 +6,8 @@ extension GatewayConnection {
     /// back from iCloud brings its address, and its session token when it uses one; a browser
     /// or password sign-in stays on the device it was made on, so it is missing here.
     func lacksCredentials(_ secrets: GatewaySecrets) -> Bool {
+        // The demo (#392) runs inside the app: there is nothing to sign in to.
+        if isDemo { return false }
         switch authMode {
         case .sessionToken: return (secrets.sessionToken ?? "").trimmingCharacters(in: .whitespaces).isEmpty
         case .oauth, .password: return secrets.bearer == nil

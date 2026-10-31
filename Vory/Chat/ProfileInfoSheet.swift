@@ -87,10 +87,13 @@ struct ProfileCardView: View {
         self.chat = chat
         self.floatingControls = floatingControls
         self.onClose = onClose
-        _tab = State(initialValue: chat != nil ? .thisChat : .look)
+        _tab = State(initialValue: chat != nil ? .thisChat : (AppModel.shared.isInDemo ? .instructions : .look))
     }
 
     private var rt: GatewayRuntime? { model.runtime }
+    /// No Look in the demo (#494): a look edited there, a colour or a photo, went to the person's own bot of the same
+    /// name, and to their other devices.
+    private var lookShown: Bool { !(rt?.isEphemeral ?? false) }
     private var profile: ProfileInfo? { rt?.profiles.first { $0.name == profileName } }
     private var label: String { _ = namesRaw; return profile?.label ?? profileName }
     private var modelLabel: String {
@@ -109,13 +112,13 @@ struct ProfileCardView: View {
         SettingsList {
             header
             Section {
-                ProfileTabRow(tabs: ProfileTab.available(withChat: chat != nil), selected: $tab)
+                ProfileTabRow(tabs: ProfileTab.available(withChat: chat != nil, look: lookShown), selected: $tab)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8))
             }
             switch tab {
-            case .look: lookSections
+            case .look: if lookShown { lookSections }
             case .instructions: instructionsSections
             case .model: modelSections
             case .thisChat: thisChatSections
@@ -404,9 +407,10 @@ enum ProfileTab: String, CaseIterable, Identifiable {
         case .display: "Display"
         }
     }
-    /// The tabs a card shows: This chat only when it was opened from one.
-    static func available(withChat: Bool) -> [ProfileTab] {
-        withChat ? [.thisChat, .look, .instructions, .model, .display] : [.look, .instructions, .model, .display]
+    /// The tabs a card shows: This chat only when it was opened from one; Look only outside the demo (#494).
+    static func available(withChat: Bool, look: Bool = true) -> [ProfileTab] {
+        let tabs: [ProfileTab] = withChat ? [.thisChat, .look, .instructions, .model, .display] : [.look, .instructions, .model, .display]
+        return look ? tabs : tabs.filter { $0 != .look }
     }
     /// Where the arrows go: the tab `delta` places along, held at the ends.
     static func moved(from tab: ProfileTab, by delta: Int, in tabs: [ProfileTab]) -> ProfileTab {

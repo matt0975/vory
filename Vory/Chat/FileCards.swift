@@ -107,7 +107,7 @@ struct FileCard: View {
         #endif
         .task(id: ref.id) {
             guard let rt = model.runtime else { return }
-            if let cached = await MediaStore.shared.cached(ref, gateway: rt.connection.id.uuidString) { local = Self.named(cached, as: ref.name) }
+            if let cached = await rt.media.cached(ref, gateway: rt.connection.id.uuidString) { local = Self.named(cached, as: ref.name) }
         }
     }
 
@@ -144,7 +144,7 @@ struct FileCard: View {
         fetching = true; failure = nil
         defer { fetching = false }
         do {
-            let cached = try await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            let cached = try await rt.media.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
             local = Self.named(cached, as: ref.name)
         } catch {
             failure = FileFetchFailure.describe(error, name: ref.name)

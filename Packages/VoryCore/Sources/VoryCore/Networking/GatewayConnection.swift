@@ -84,6 +84,14 @@ public struct GatewayConnection: Codable, Identifiable, Hashable, Sendable {
         c.gateway = address
         return c
     }
+
+    /// The demo's gateway (#392): one fixed connection, reached in process (`GatewayTransport`),
+    /// never saved, synced or remembered. Its id is the one check everything that persists asks
+    /// (`isDemo`, `GatewayRuntime.isEphemeral`); nothing compares its name or address.
+    public static let demoID = UUID(uuidString: "D3A0D3A0-0000-4000-8000-00000000DE30")!
+    /// `.invalid` never resolves, and only the demo's own transport ever sees it.
+    public static let demo = GatewayConnection(id: demoID, name: "Vory demo", gateway: try! GatewayURL.normalize("http://demo.invalid"), authMode: .sessionToken)
+    public var isDemo: Bool { id == Self.demoID }
 }
 
 /// Everything sensitive for one gateway, stored in the Keychain under the connection id.

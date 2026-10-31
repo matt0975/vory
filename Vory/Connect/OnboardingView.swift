@@ -60,10 +60,39 @@ struct OnboardingView: View {
     private var isLast: Bool { page == pages.count - 1 }
 
     var body: some View {
+        #if os(iOS)
+        // The tour of #388 (`TourView`): the welcome is its first beat and the gateway form follows its last.
+        NavigationStack {
+            // Try a demo (beat 6) is Demo mode's way in (#392), offered while the demo can start.
+            TourView(onRestore: { showRestore = true }, onConnect: { showForm = true },
+                     onDemo: model.demoAvailable ? { Task { await model.startDemo() } } : nil, startAtConnect: welcomed)
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(isPresented: $showForm) { GatewayFormView() }
+        }
+        .sheet(isPresented: $showRestore) { restoreSheet.sheetFrame().withAppModel() }
+        #else
         if welcomed || skipWelcome {
             tour.transition(.opacity)
         } else {
             welcome.transition(.opacity)
+        }
+        #endif
+    }
+
+    /// Restore from iCloud: a gateway that came back connects (the root view moves on by itself); settings without a
+    /// gateway go on to the form. Each `.sheet` gives it its frame and the model, where the presentations' scan
+    /// (PresentationModelTests) reads them.
+    private var restoreSheet: some View {
+        CloudRestoreSheet { outcome in
+            // A gateway that came back without its sign-in: asked for before the app is used.
+            model.signInPrompt = outcome.pending
+            if outcome.gateways > 0 {
+                Task { await model.activateSavedConnection() }
+            } else {
+                page = pages.count - 1
+                welcomed = true
+                showForm = true
+            }
         }
     }
 
@@ -91,6 +120,14 @@ struct OnboardingView: View {
                     }
                     .buttonStyle(.glass)
                     .accessibilityIdentifier("onboarding.restore")
+                    // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
+                    Button { Task { await model.startDemo() } } label: {
+                        Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glass)
+                    .disabled(!model.demoAvailable)
+                    .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
+                    .accessibilityIdentifier("onboarding.tryDemo")
                 }
             }
             .frame(maxWidth: 380)
@@ -101,23 +138,7 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 28).padding(.bottom, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .sheet(isPresented: $showRestore) {
-            CloudRestoreSheet { outcome in
-                // A gateway that came back without its sign-in: asked for before the app is used.
-                model.signInPrompt = outcome.pending
-                if outcome.gateways > 0 {
-                    // A gateway is saved now: the root view moves on by itself, and this connects it.
-                    Task { await model.activateSavedConnection() }
-                } else {
-                    // Settings came back but no gateway did: on to the form.
-                    page = pages.count - 1
-                    welcomed = true
-                    showForm = true
-                }
-            }
-            .sheetFrame()
-            .withAppModel()
-        }
+        .sheet(isPresented: $showRestore) { restoreSheet.sheetFrame().withAppModel() }
     }
 
     private var tour: some View {

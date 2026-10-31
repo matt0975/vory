@@ -107,7 +107,9 @@ public enum BotSymbols {
         }
     }
 
-    /// The listening arcs: two short arcs standing off the body's sides.
+    /// The listening arcs: two short arcs standing off the body's sides, each its own subpath. Each starts with a move
+    /// to its own first point: without one, the second arc began with a straight line from the first's end, a bar
+    /// across the face (appending each arc as a separate Path joins them the same way).
     public static func arcs(in box: CGRect, amount: Double) -> Path {
         let s = min(box.width, box.height)
         let c = CGPoint(x: box.midX, y: box.midY)
@@ -115,6 +117,7 @@ public enum BotSymbols {
         var p = Path()
         for side in [-1.0, 1.0] as [Double] {
             let mid = side > 0 ? 0.0 : Double.pi
+            p.move(to: CGPoint(x: c.x + r * cos(mid - 0.38), y: c.y + r * sin(mid - 0.38)))
             p.addArc(center: c, radius: r, startAngle: .radians(mid - 0.38), endAngle: .radians(mid + 0.38), clockwise: false)
         }
         return p

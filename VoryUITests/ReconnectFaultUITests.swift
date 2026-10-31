@@ -146,7 +146,7 @@ final class ReconnectFaultUITests: XCTestCase {
         let send = app.buttons.matching(identifier: "composer.send").firstMatch
         guard send.waitForExistence(timeout: 5) else { log("no send"); return false }
         send.tap()
-        let once = app.buttons["Once"]
+        let once = app.buttons["Allow once"]
         guard once.waitForExistence(timeout: 40) else { log("no approval came"); return false }
         once.tap()
         pause(2)
@@ -247,7 +247,7 @@ final class ReconnectFaultUITests: XCTestCase {
         let words = "Mid-turn reset check"
         composer.tap(); composer.typeText(words)
         app.buttons.matching(identifier: "composer.send").firstMatch.tap()
-        XCTAssertTrue(app.buttons["Once"].waitForExistence(timeout: 40), "no approval came")
+        XCTAssertTrue(app.buttons["Allow once"].waitForExistence(timeout: 40), "no approval came")
         shot("6-approval-before")
         // Back to the list, Reconnect from the Chats menu (the REST session and the socket made afresh), and back.
         app.buttons["chat.back"].tap(); pause(1)
@@ -255,15 +255,15 @@ final class ReconnectFaultUITests: XCTestCase {
         log("reconnect tapped")
         XCTAssertEqual(waitForLine(seconds: 30) { $0 == "Connected" }, "Connected")
         row.tap()
-        XCTAssertTrue(app.buttons["Once"].waitForExistence(timeout: 20), "the approval was lost in the reset")
+        XCTAssertTrue(app.buttons["Allow once"].waitForExistence(timeout: 20), "the approval was lost in the reset")
         shot("7-approval-after")
         // The message, once, where it is on screen: just above its approval. Counted before the reply moves it up and
         // out of the thread's tree (rows off screen are not in it), with the chat holding earlier tests' turns too.
         let sent = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", words))
         XCTAssertEqual(sent.count, 1, "the message shows \(sent.count) times")
-        app.buttons["Once"].tap()
+        app.buttons["Allow once"].tap()
         pause(4)
-        XCTAssertFalse(app.buttons["Once"].exists, "the approval did not go")
+        XCTAssertFalse(app.buttons["Allow once"].exists, "the approval did not go")
         shot("8-turn-after")
     }
 

@@ -417,6 +417,8 @@ def session_info(title: str, running: bool, profile: str) -> dict:
 # ── REST ──────────────────────────────────────────────────────────────────────────────────────
 
 RESUMES: list[dict] = []
+# Every session.undo answered (Edit & resend, #556), for a test to read back (GET /api/_mock/undos).
+UNDOS: list[dict] = []
 STORED_SESSIONS: list[dict] = [
     {"id": "20260921_154212_a1b2c3", "title": "Disk cleanup on the log host",
      "preview": "I'll look at what's filling the disk on that host, then clean up safely.",
@@ -655,15 +657,24 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # The real gateway refuses a page over 100 (FastAPI le=100 → 422), as a tester's Home found out.
         if int(query.get("limit") or 20) > 100:
             return 422, {"detail": [{"loc": ["query", "limit"], "msg": "Input should be less than or equal to 100", "type": "less_than_equal"}]}
+        # Archived chats as the real gateway lists them (hermes_cli/web_routers/sessions.py, 1eda335a): left out
+        # unless asked for (archived=exclude, the default), only them (only), or every chat (include) (#474).
+        archived = query.get("archived") or "exclude"
+        if archived not in ("exclude", "only", "include"):
+            return 400, {"detail": "archived must be one of: exclude, only, include"}
         # The mock lists every chat under every bot (the demo data is small), but each row says
         # whose store it is in, as the real gateway's rows do.
-        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS]
+        rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS
+                if archived == "include" or bool(s.get("archived")) == (archived == "only")]
         if NO_PINS:
             rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
-        return 200, {"sessions": rows, "total": len(STORED_SESSIONS), "limit": 100, "offset": 0}
+        return 200, {"sessions": rows, "total": len(rows), "limit": 100, "offset": 0}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
+    if base == "/api/_mock/undos":
+        # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
+        return 200, {"undos": UNDOS}
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
         return 200, {"triggers": CRON_TRIGGERS}
@@ -766,6 +777,10 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
             {"name": "github", "url": "https://api.githubcopilot.com/mcp/", "enabled": False, "transport": "http"}]}
     if base == "/api/cron/jobs":
         return 200, {"jobs": CRON_JOBS, "count": len(CRON_JOBS)}
+    if base == "/api/cron/delivery-targets":
+        # As the real gateway lists them (hermes_cli/web_routers/cron.py): local first, then the platforms it has set up.
+        return 200, {"targets": [{"id": "local", "name": "Local (save only)", "home_target_set": True, "home_env_var": None},
+                                 {"id": "telegram", "name": "Telegram", "home_target_set": True, "home_env_var": "TELEGRAM_HOME_CHANNEL"}]}
     if base == "/api/messaging/platforms":
         return 200, {"platforms": [
             {"id": "telegram", "label": "Telegram", "status": "not configured", "enabled": False},
@@ -1522,6 +1537,8 @@ def model_options() -> dict:
 #   stall           nothing answers: REST and upgrades hang, open sockets go quiet (pings unanswered)
 #   slow-resume     session.resume answers N seconds late (default 4); nothing else changes and no socket is dropped
 #                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
+#   resume-refused  the next N session.resume calls (default 1) answer an error, then all is well; no socket is dropped
+#                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
 
@@ -1582,8 +1599,8 @@ async def process_request(connection, request):
         q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
-        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] == "ticket-expired" else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume") else 0
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -1600,6 +1617,21 @@ async def process_request(connection, request):
                 touched += 1
         print(f"[mock] touched {touched} chat(s) titled {title!r}", flush=True)
         body = json.dumps({"touched": touched}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/start-turn":
+        # Test only (#387): a turn starts in a chat a client has open, as if its prompt had been sent there
+        # (GET /mock/start-turn?session=<stored id or title words>&prompt=<text>), at a moment the test picks: after
+        # the chat's first read, so what the turn brings is an arrival. The chat's members see it on their sockets.
+        q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
+        want, prompt = unquote(q.get("session", "")).replace("+", " "), unquote(q.get("prompt", "")).replace("+", " ")
+        live = next((s for s in LIVE.values() if want and (s.stored == want or want.lower() in (s.title or "").lower())), None)
+        member = next(iter(live.members), None) if live else None
+        if member is None or not prompt:
+            body = json.dumps({"ok": False, "error": "no prompt" if member else "no such chat open"}).encode()
+            return Response(404, "Not Found", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+        asyncio.get_running_loop().create_task(member.run_turn(live, prompt))
+        print(f"[mock] start-turn {live.stored} {prompt!r}", flush=True)
+        body = json.dumps({"ok": True, "session": live.stored}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     faulted = await _fault(request)
     if faulted is not None:
@@ -1686,6 +1718,18 @@ def _process_request(connection, request):
         result = delete_profile(unquote(base.split("/")[3]))
     elif method == "PUT" and re.fullmatch(r"/api/profiles/[^/]+/(description|model)", base):
         result = put_profile(unquote(base.split("/")[3]), base.split("/")[4], body_json if isinstance(body_json, dict) else {})
+    elif method == "PUT" and base == "/api/env":
+        # The env page's Save and its + (Add variable, #428): the variable set, its value shown redacted as the gateway
+        # shows it. One store for every profile, as the rest of the mock's env.
+        b = body_json if isinstance(body_json, dict) else {}
+        key, value = str(b.get("key") or "").strip(), str(b.get("value") or "")
+        if not key:
+            result = (400, {"detail": "key is required"})
+        else:
+            row = ENV_VARS.setdefault(key, {"description": "", "category": "Other", "is_password": True})
+            row.update({"is_set": bool(value), "redacted_value": f"«redacted:{value[:4]}...»" if value else None})
+            print(f"[mock] set env {key}", flush=True)
+            result = (200, {"ok": True, "key": key})
     elif FENCE and method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/mutation-snapshot", base):
         # The chat's revision as the fenced gateway gives it; an absent chat is exists false, never a 404.
         sid = unquote(base.split("/")[3])
@@ -1728,6 +1772,29 @@ def _process_request(connection, request):
                         row[key] = body_json[key]
             print(f"[mock] patched chat {sid}: {({k: body_json[k] for k in known if k in body_json}) if isinstance(body_json, dict) else {}}", flush=True)
             result = (200, {"ok": True, "title": row["title"] if row else ""})
+    elif method == "POST" and base == "/api/cron/jobs":
+        # A new scheduled task (#428), as the real gateway takes it (CronJobCreate, 1eda335a): a schedule is required
+        # (FastAPI answers 422 without one, which is also how the app learns the route is there), the bot is the
+        # profile query. MOCK_NO_CRON_CREATE: a Hermes from before the route, "404" (no such route) or anything else for 405
+        # (the path's GET only).
+        spec = body_json if isinstance(body_json, dict) else {}
+        refuse = os.environ.get("MOCK_NO_CRON_CREATE", "")
+        if refuse:
+            result = (404, {"detail": "Not Found"}) if refuse == "404" else (405, {"detail": "Method Not Allowed"})
+        elif not str(spec.get("schedule") or "").strip():
+            result = (422, {"detail": [{"loc": ["body", "schedule"], "msg": "Field required", "type": "missing"}]})
+        else:
+            name = str(spec.get("name") or "").strip() or f"Task {len(CRON_JOBS) + 1}"
+            jid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or f"task-{len(CRON_JOBS) + 1}"
+            while _cron_job(jid):
+                jid += "-2"
+            prompt = str(spec.get("prompt") or "")
+            job = {"job_id": jid, "name": name, "schedule": spec["schedule"], "prompt": prompt, "prompt_preview": prompt[:120],
+                   "deliver": spec.get("deliver") or "local", "enabled": True, "state": "scheduled",
+                   "profile": query.get("profile") or "default"}
+            CRON_JOBS.append(job)
+            print(f"[mock] created cron job {jid}: {spec['schedule']} on {job['profile']}", flush=True)
+            result = (200, job)
     elif method == "POST" and re.fullmatch(r"/api/cron/jobs/[^/]+/trigger", base):
         # Held while the task "runs": answered later, without holding up anything else.
         async def held() -> Response:
@@ -1934,6 +2001,10 @@ class Gateway:
         (live.pending if live is not None else self.pending)[rid] = fut
         self.pending[rid] = fut
         frame = {"jsonrpc": "2.0", "id": rid, "method": method, "params": {"session_id": sid, **params}}
+        # One line per ask and per answer, by the request's own id, so a UI test can match the answer it gave to the
+        # card it gave it on (the session's title says which chat).
+        s = getattr(self, "sessions", {}).get(sid)
+        print(f"ask {method} {sid} title={getattr(s, 'title', '')!r} request={params.get('request_id', rid)}", flush=True)
         if live is not None:
             live.open_frames[rid] = frame
         for m in (list(live.members) if live is not None and live.members else [self]):
@@ -1942,7 +2013,9 @@ class Gateway:
             except Exception:  # noqa: BLE001
                 pass
         try:
-            return await asyncio.wait_for(fut, timeout)
+            answer = await asyncio.wait_for(fut, timeout)
+            print(f"answer {method} {sid} request={params.get('request_id', rid)} choice={(answer or {}).get('choice')!r}", flush=True)
+            return answer
         except asyncio.TimeoutError:
             await self.event("request.cancel", sid, {"id": rid, "method": method, "reason": "timeout"})
             return None
@@ -1969,6 +2042,9 @@ class Gateway:
             await self.event("reasoning.available", s.sid, {"text": text})
 
     async def run_turn(self, s: Session, prompt: str) -> None:
+        # One line per turn: which prompt came in on which session, so a UI test whose turn took another branch than it
+        # asked for (a "steps 8" answered by the default flow) shows what the mock actually read.
+        print(f"turn {s.sid} prompt={prompt[:120]!r}", flush=True)
         s.running = True
         s.turn_started_at = time.time()
         s.inflight = {"user": prompt, "assistant": "", "streaming": True}
@@ -2077,7 +2153,7 @@ class Gateway:
     async def _morph_turn(self, s: Session, prompt: str) -> None:
         """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
         later while the toolbox is still forming, an approval is asked; the tool completes once
-        the approval is answered, then a short reply. For the planner's clip."""
+        the approval is answered, then a short reply. For a review clip."""
         await self.event("message.start", s.sid)
         await self.stream_words(s, "Checking the disk first. ", delay=0.01)
         tool_id = f"t-{uuid.uuid4().hex[:8]}"
@@ -2096,6 +2172,24 @@ class Gateway:
         self.store_turn(s, prompt, ["Checking the disk first. ", 1, text])
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": "Checking the disk first. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
+    async def _tour_turn(self, s: Session, prompt: str) -> None:
+        """Onboarding's ask (#388), with the tour's own command and words and only Allow once and Deny: what the
+        tour's Watch picture shows (TourWatchShot in WatchChatUITests)."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, "Checking what takes the space. ", delay=0.01)
+        answer = await self.ask("approval", s.sid, {
+            "request_id": f"req-{uuid.uuid4().hex[:8]}",
+            "command": "find ./logs -mtime +30 -delete",
+            "description": "Delete the logs older than 30 days (3.1 GB)",
+            "tool_name": "terminal",
+            "choices": ["once", "deny"],
+            "allow_session": False, "allow_permanent": False})
+        text = "Done. I cleared 3.1 GB." if (answer or {}).get("choice", "deny") != "deny" else "Understood, I'll leave the logs alone."
+        await self.stream_words(s, text)
+        self.store_turn(s, prompt, ["Checking what takes the space. ", 1, text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": "Checking what takes the space. " + text, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
     async def _marathon_turn(self, s: Session, prompt: str) -> None:
         """A long run of the kind a person starts and leaves going with the phone in a pocket:
@@ -2412,6 +2506,9 @@ class Gateway:
         if prompt.strip().lower().startswith("morph"):
             await self._morph_turn(s, prompt)
             return
+        if prompt.strip().lower().startswith("tour"):
+            await self._tour_turn(s, prompt)
+            return
         if prompt.strip().lower().startswith("card") or prompt.strip().lower().startswith("chart"):
             await self._card_turn(s, prompt)
             return
@@ -2437,6 +2534,16 @@ class Gateway:
                 n += 1
                 text += f"**Step {n}.** {para}" + ("\n\n" if n % 3 == 0 else "")
             text += "\n\nThat is the end of the export notes."   # a last line a test can wait for
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if prompt.strip().lower().startswith("short link"):
+            # A short reply that ends on a link (#350's tests): at the thread's end with the keyboard up the link stays in
+            # view, where a long paragraph's link sits above the screen.
+            await self.event("message.start", s.sid)
+            text = "The export finished and every shard matched. The details are on the [status page](https://status.example.com/shards)."
             await self.stream_words(s, text)
             self.store_turn(s, prompt, [text])
             s.inflight = None
@@ -2714,6 +2821,12 @@ class Gateway:
         if method in ("session.resume", "session.activate"):
             if method == "session.resume" and FAULT["mode"] == "slow-resume":
                 await asyncio.sleep(FAULT["count"] or 4)
+            if method == "session.resume" and FAULT["mode"] == "resume-refused" and FAULT["count"] > 0:
+                FAULT["count"] -= 1
+                if FAULT["count"] == 0:
+                    FAULT["mode"] = "none"
+                print(f"[mock] fault resume-refused: session.resume {p.get('session_id', '')} refused ({FAULT['count']} left)", flush=True)
+                return err(5000, "session could not be resumed")
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
@@ -2788,6 +2901,13 @@ class Gateway:
                             for m in base:
                                 live.history.append({**m, "timestamp": m["timestamp"] - (reps - i) * 600, "row_id": len(live.history) + 1})
                 LIVE[sid] = live
+                # MOCK_WORKING=<title words or stored id>: that chat is mid-turn from its first
+                # resume, a reply streaming for ten minutes, so its bot is working (the Watch's
+                # live faces and their battery check, #387).
+                working = os.environ.get("MOCK_WORKING", "")
+                if working and row and (working == row["id"] or working.lower() in row["title"].lower()):
+                    live.running, live.turn_started_at = True, time.time()
+                    asyncio.ensure_future(self.run_turn(live, "long 600"))
             live.members.add(self)
             self.sessions[live.sid] = live
             messages = [] if p.get("omit_messages") else list(live.history)
@@ -2939,6 +3059,28 @@ class Gateway:
             return ok({"status": "streaming"})
         if method == "session.interrupt":
             return ok({"status": "interrupted", "interrupted": True})
+        if method == "session.undo":
+            # Hermes' tui_gateway/methods_session.py: the last user turn and everything after it leave the history, never
+            # while a turn runs (4009). Faults: undo-unknown (a Hermes without it, -32601), undo-busy (4009 at rest).
+            if FAULT["mode"] == "undo-unknown":
+                return err(-32601, f"unknown method: {method}")
+            s = self.sessions.get(p.get("session_id", ""))
+            if s is None:
+                return err(4006, "unknown session")
+            if s.running or FAULT["mode"] == "undo-busy":
+                return err(4009, "session busy: stop the reply before undo")
+            users = [i for i, r in enumerate(s.history) if r.get("role") == "user"]
+            removed = 0
+            if users:
+                cut = users[-1]
+                removed = len(s.history) - cut
+                first_row = s.history[cut].get("row_id") or 0
+                del s.history[cut:]
+                if first_row:
+                    s.db_rows = [r for r in s.db_rows if r["id"] < first_row]
+            UNDOS.append({"session_id": s.sid, "intent": p.get("intent"), "removed": removed, "at": time.time()})
+            print(f"[mock] session.undo {s.sid} intent={p.get('intent')!r}: removed {removed}", flush=True)
+            return ok({"removed": removed})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
             # Voice mode's quick answers set reasoning and fast for the session and put them back.

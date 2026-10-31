@@ -100,7 +100,7 @@ struct BotStatusIntent: AppIntent {
 /// keeps the standing rule and never answers approvals.
 struct AnswerApprovalIntent: AppIntent {
     static let title: LocalizedStringResource = "Answer Approval"
-    static let description = IntentDescription("Approves or denies the approval waiting in Vory, after reading it to you.")
+    static let description = IntentDescription("Allows or denies the approval waiting in Vory, after reading it to you.")
     static let openAppWhenRun = false
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
@@ -120,7 +120,7 @@ struct AnswerApprovalIntent: AppIntent {
         let question = SiriWords.approvalQuestion(bot: found.bot, request: found.request, answer: answer)
         try await requestConfirmation(result: .result(dialog: IntentDialog(stringLiteral: question)))
         await found.chat.respond(card: found.card, result: ["choice": .string(answer == .approve ? "once" : "deny")])
-        return .result(dialog: answer == .approve ? "Approved." : "Denied.")
+        return .result(dialog: answer == .approve ? "Allowed." : "Denied.")
     }
 }
 
@@ -266,7 +266,7 @@ enum SiriAsk {
         }
         if let p = profile, rt.selectedProfile != p { rt.selectedProfile = p }
         guard let chat = try? await rt.newChat() else { return nil }
-        if !chat.storedID.isEmpty { UserDefaults.standard.set(chat.storedID, forKey: key) }
+        if !chat.storedID.isEmpty, !rt.isEphemeral { UserDefaults.standard.set(chat.storedID, forKey: key) }
         await chat.rename(chatTitle)
         return chat
     }

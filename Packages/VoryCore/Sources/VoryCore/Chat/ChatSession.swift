@@ -147,6 +147,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         didSet {
             guard isRunning != oldValue else { return }
             runtime.publishSnapshot()
+            // A turn that starts while a message waits in the composer to be edited (a reply from another device, say)
+            // ends the edit: the message is no longer the chat's last. The turn a resend starts leaves it to `resend`.
+            if isRunning, editingID != nil, !resending { editingID = nil }
             if isRunning {
                 activityEndTask?.cancel(); activityEndTask = nil
                 // A missed approval frame (a proxy that drops it, another client that answered
@@ -571,11 +574,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// Shows the last transcript this device saw for the session while `resume()` runs, or a REST
     /// page of it when nothing is cached; `resume()` then replaces both with the live snapshot.
     public func beginResume() {
-        if items.isEmpty, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
+        if items.isEmpty, !runtime.isEphemeral, let cached = TranscriptCache.load(connection: runtime.connection.id, storedID: storedID), !cached.isEmpty {
             items = TranscriptItem.fromHistory(cached)
             fetchedRowIDs = Set(items.map(\.id))
         }
-        if info == nil, cachedModel == nil {
+        if info == nil, cachedModel == nil, !runtime.isEphemeral {
             cachedModel = TranscriptCache.loadInfo(connection: runtime.connection.id, storedID: storedID)?.model
             // No cache and no bots yet (a first launch whose profile load failed and was not
             // asked again): the bot's default model needs the list.
@@ -616,6 +619,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func saveTranscriptCache() {
+        // The demo's chats are never written to this device's cache.
+        guard !runtime.isEphemeral else { return }
         TranscriptCache.save(items, connection: runtime.connection.id, storedID: storedID)
         if let info { TranscriptCache.saveInfo(info, connection: runtime.connection.id, storedID: storedID) }
     }
@@ -1000,7 +1005,105 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         return nil
     }
 
-    private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async {
+    // MARK: Edit & resend (#556)
+
+    /// The message the composer holds to be edited (Edit & resend): its item id, nil when none. Only the chat's last
+    /// message of the person's own can be (`lastResendableID`), since the gateway takes a chat back from its last user
+    /// turn. It ends on Cancel, on a resend that went, on leaving the chat, and when a turn starts meanwhile (a reply from
+    /// another device): not for the turn its own resend starts (`resending`).
+    public private(set) var editingID: String?
+    /// While `resend` runs: the turn it starts leaves the edit alone; `resend` ends it itself.
+    public private(set) var resending = false
+
+    /// The chat's last message of the person's own, when it can be edited and sent again: plain words, no attachments (a
+    /// resend sends words only). A notice the gateway put in the person's seat (a background process reporting, another
+    /// bot's message) standing last means none, since the gateway would take back from its own last user turn instead.
+    public var lastResendableID: String? {
+        guard let last = items.last(where: { if case .user = $0.kind { return true }; return false }),
+              case .user(let text, let attachments) = last.kind, attachments.isEmpty,
+              InjectedNote.parse(text) == nil, AgentMessage.parse(text) == nil else { return nil }
+        return last.id
+    }
+
+    /// Starts editing `id` in the composer, if it's the chat's last message of the person's own and no reply runs.
+    @discardableResult public func beginEdit(_ id: String) -> Bool {
+        guard !isRunning, !runtime.undoUnsupported, id == lastResendableID else { return false }
+        editingID = id
+        return true
+    }
+
+    /// Ends the edit (Cancel, leaving the chat). Not while a resend is on its way: that ends it itself.
+    public func cancelEdit() {
+        guard !resending else { return }
+        editingID = nil
+    }
+
+    /// How a resend ended. Only `sent` sent anything; every other case leaves the edited words to the composer.
+    public enum ResendOutcome: Equatable, Sendable {
+        case sent
+        /// A reply was running, here or on the gateway (4009).
+        case busy
+        /// The message isn't the chat's last of the person's own any more.
+        case notLast
+        /// The gateway had nothing to take back (`removed` 0).
+        case nothingRemoved
+        /// The gateway doesn't know `session.undo`: Copy to message from now on.
+        case unsupported
+        /// The old message was taken back, but the chat couldn't be read again: the words stay to send as a new message.
+        case reloadFailed(String)
+        /// The old message was taken back and the chat read again, but the new words didn't go: they stay, to send as a new
+        /// message.
+        case sendFailed
+        /// Anything else, in the gateway's words.
+        case failed(String)
+
+        /// What the person is told, or nil for a resend that went.
+        public var message: String? {
+            switch self {
+            case .sent: return nil
+            case .busy: return "A reply is running. Stop it, then send your edited message."
+            case .notLast: return "Only your last message can be edited and sent again. Your words are still in the box."
+            case .nothingRemoved: return "The gateway had no message to take back, so nothing was sent. Your words are still in the box."
+            case .unsupported: return "This gateway can't take back a sent message. Your words are still in the box: send them as a new message."
+            case .reloadFailed(let why): return "Your message was taken back, but the chat couldn't be read again (\(why)). Your words are still in the box: send them as a new message."
+            case .sendFailed: return "Your message was taken back, but the new one didn't go. Your words are still in the box: send them as a new message."
+            case .failed(let why): return "Your message couldn't be edited (\(why)). Nothing was sent; your words are still in the box."
+            }
+        }
+    }
+
+    /// Sends `rawText` in place of the message being edited (`editingID`): the gateway takes that turn and everything after
+    /// it back (`session.undo`, said as a retry), the chat is read again so the old turn leaves as one change, then the
+    /// words go as a new turn. Anything that stops it before the gateway took the turn back keeps the edit; once it did,
+    /// the edit ends whatever follows, so a second Send never takes back the turn before it.
+    public func resend(_ rawText: String) async -> ResendOutcome {
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let id = editingID, !text.isEmpty else { return .failed("nothing to send") }
+        await awaitResume()
+        if let e = resumeError { return .failed(e) }
+        guard !isRunning else { return .busy }
+        guard id == lastResendableID else { return .notLast }
+        resending = true
+        defer { resending = false }
+        do {
+            let r = try await rpc("session.undo", ["session_id": .string(runtimeID), "intent": "retry"])
+            guard (r["removed"]?.intValue ?? 0) > 0 else { return .nothingRemoved }
+        } catch let e as RPCError where e.code == RPCError.methodNotFound {
+            runtime.undoUnsupported = true
+            editingID = nil
+            return .unsupported
+        } catch let e as RPCError where e.code == 4009 {
+            return .busy
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+        editingID = nil
+        do { try await resumeFromGateway() } catch { return .reloadFailed(error.localizedDescription) }
+        composerHistory.append(text)
+        return await submit(text: text, queued: false) ? .sent : .sendFailed
+    }
+
+    @discardableResult private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async -> Bool {
         interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
@@ -1026,11 +1129,13 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
             activity.start(for: self)
             runtime.pushRegistrar?.noteSend(session: storedID, runtime: runtime)
+            return true
         } catch {
             startedHere = false
             isRunning = false
             statusLine = nil
             items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: error.localizedDescription)))
+            return false
         }
     }
 
@@ -1080,7 +1185,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func stageAttachment(data: Data, name: String, kind: AttachmentPreview.Kind) {
         var data = data, name = name
         if kind == .image, let t = Self.imageTranscoder?(data, name) { data = t.0; name = t.1 }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
+        let dir = runtime.scratchDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent(UUID().uuidString + "-" + name)
         do {
@@ -1101,13 +1206,28 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
 
-    public func steer(_ text: String) async {
+    /// The composer's Steer now: `text` into the running turn. Gives back the words for the composer to put back, as a
+    /// failed send does: the text itself when the steer failed (said in the banner), and when no turn took it (the
+    /// gateway's "rejected": the turn had ended) whatever sending it as the next message gives back.
+    @discardableResult
+    public func steer(_ text: String) async -> String? {
         do {
-            let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
-            items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: r["status"]?.stringValue ?? "queued")))
+            guard try await steerSending(text) == "rejected" else { return nil }
+            return await send(text)
         } catch {
             banner = error.localizedDescription
+            return text
         }
+    }
+
+    /// session.steer, and the gateway's answer: "queued" when the running turn takes the words (they go in after its
+    /// current tool calls), "rejected" when no turn takes them, for the client to send as its next prompt. A steer row
+    /// only for words a turn took.
+    private func steerSending(_ text: String) async throws -> String {
+        let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
+        let status = r["status"]?.stringValue ?? "queued"
+        if status != "rejected" { items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: status))) }
+        return status
     }
 
     public func removeQueued(_ id: UUID) { queue.removeAll { $0.id == id } }
@@ -1317,7 +1437,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     public func beginQuickAnswers() async {
         guard VoiceSettings.quickAnswers, !quickAnswersOn else { return }
         let before = ["reasoning": info?.reasoningEffort ?? "", "fast": (info?.fast ?? false) ? "on" : "off"]
-        if !storedID.isEmpty { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
+        if !storedID.isEmpty, !runtime.isEphemeral { UserDefaults.standard.set(before, forKey: Self.quickRestoreKey(storedID)) }
         quickAnswersOn = true
         try? await setReasoning(Self.quickEffort)
         try? await setFast(true)
@@ -1346,7 +1466,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func rename(_ newTitle: String) async {
         if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
-        Self.markRenamedByPerson(storedID)
+        if !runtime.isEphemeral { Self.markRenamedByPerson(storedID) }
         // The chat list draws the gateway's stored rows, read again on this notice: without it
         // the row kept the old name until the next open or close (seen at once on the Mac,
         // where the list sits beside the chat).

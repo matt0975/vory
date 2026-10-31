@@ -156,10 +156,37 @@ extension View {
         #if os(macOS)
         modifier(MacPageSearchable(text: text, prompt: prompt))
         #else
-        searchable(text: text, placement: .navigationBarDrawer(displayMode: always ? .always : .automatic), prompt: prompt.map { Text($0) })
+        modifier(PhonePageSearchable(text: text, prompt: prompt, always: always))
         #endif
     }
 }
+
+#if os(iOS)
+/// The phone's search drawer, and the page's own Back hidden SwiftUI's way where the top bar has the Back (#481).
+/// SwiftUI writes a page's `hidesBackButton` from its preferences whenever they change, which a page with its search
+/// field always shown did when something walked its accessibility tree (VoiceOver, Voice Control, Full Keyboard
+/// Access): the bar's own hiding of it (`VoryTabBar`'s page probe) was undone, and the system's Back stood under the
+/// bar's. On a wide window the bar is off and the page keeps its Back. A page with a search field never keeps its own
+/// bar (`pushedPage(keepsOwnBar:)`), nor sits on one that does: there the bar would step aside and this would still
+/// hide the Back. A root page has no Back to hide.
+private struct PhonePageSearchable: ViewModifier {
+    @Environment(AppModel.self) private var model: AppModel?
+    @Environment(\.statusInCorner) private var statusInCorner
+    @Environment(\.barLift) private var barLift
+    var text: Binding<String>
+    var prompt: LocalizedStringKey?
+    var always: Bool
+    func body(content: Content) -> some View {
+        content
+            .searchable(text: text, placement: .navigationBarDrawer(displayMode: always ? .always : .automatic), prompt: prompt.map { Text($0) })
+            // Under a status in a top corner, or with the bar up in the status band (the open Duo upright), the bar and its
+            // title band stay while the search is presented, so the field doesn't move under the top bar's row (#516,
+            // `TopBarRoom.keepsBarWhileSearching`).
+            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0) ? .avoidHidingContent : .automatic)
+            .navigationBarBackButtonHidden(model.map { MorphTopBar.active($0) } ?? false)
+    }
+}
+#endif
 
 extension View {
     /// `.toolbar` for a page and the pages pushed on it. On the Mac its items stand in the window's
@@ -255,7 +282,7 @@ extension EnvironmentValues {
 /// A menu item's label with a system symbol. On the iPhone it is `Label(title, systemImage:)`.
 /// On the Mac the symbol comes from `SymbolImages`, drawn once per name: SwiftUI looked every
 /// menu item's symbol up in the asset catalog again each time a toolbar's menus were rebuilt,
-/// some 30 of them each time Chats came back (judgement call #5).
+/// some 30 of them each time Chats came back.
 struct MenuLabel: View {
     private enum Title { case key(LocalizedStringKey), string(String) }
     private let title: Title
@@ -284,7 +311,7 @@ struct MenuLabel: View {
 
 #if os(macOS)
 /// The menus' symbols as images, each drawn once. `defaults write <app id> mac.symbolCache.off
-/// -bool YES` goes back to SwiftUI's own lookup (judgement call #5's way back).
+/// -bool YES` goes back to SwiftUI's own lookup (the way back).
 @MainActor enum SymbolImages {
     static let cached = !UserDefaults.standard.bool(forKey: "mac.symbolCache.off")
     private static var images: [String: NSImage] = [:]

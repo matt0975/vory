@@ -7,6 +7,32 @@ import WidgetKit
 /// back up, and what changed since the last visit (summed up on the phone by the on-device
 /// model when there is one). The cards, their order and their size come from `HomeLayout`;
 /// the numbers from the gateway's analytics endpoint; the sessions from its chat list.
+/// Home's "since you were here" mark (`dashboard.lastVisit`): the later of the one kept and this visit's start. A visit
+/// in the demo keeps none (#392), not even the key: after leaving the demo, the person's own Home measures from their own
+/// last visit, as if the demo had never been opened.
+enum HomeVisit {
+    /// The mark to keep after a visit, or nil to leave the stored one as it is (and absent if it was).
+    static func mark(kept: Double, visitStart: Double, inDemo: Bool) -> Double? { inDemo ? nil : max(kept, visitStart) }
+}
+
+/// What Home's desk answers in place, and in what order (Duo stage 4, `DeskSplit`).
+enum DeskCards {
+    /// An approval, with its choices. A question or a value prompt needs typing, and the keyboard would cover the half,
+    /// so it opens the chat instead.
+    static func answersInPlace(_ card: PendingCard) -> Bool { card.approval != nil }
+    /// The chats waiting on the person, as Home's chat list orders them (the latest first), then any it doesn't list.
+    static func waiting(ids: Set<String>, order: [String]) -> [String] {
+        let place = Dictionary(order.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        return ids.sorted { (place[$0] ?? .max, $0) < (place[$1] ?? .max, $1) }
+    }
+    /// The word on a waiting chat's line: none when its card is answered here, "Answer in the chat" for one that needs
+    /// typing, "Needs you" for a chat whose card isn't loaded.
+    static func note(for card: PendingCard?) -> String? {
+        guard let card else { return "Needs you" }
+        return answersInPlace(card) ? nil : "Answer in the chat"
+    }
+}
+
 struct DashboardView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("user.name") private var userName = ""
@@ -35,52 +61,114 @@ struct DashboardView: View {
     @State private var rangeMoved = false
     /// The range moves under the title at the accessibility sizes.
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// A window that can fold: the tiles go two to a row, either side of the fold (`HomeTiles`).
+    @Environment(\.reservedRegions) private var regions
+    /// The tiles' span in the window, the width the card offers them (`OfferedWidth`), for the fold's place in it.
+    @State private var tilesFrame = CGRect.zero
+    /// The page in the window (under our top bar's row, to the window's safe bottom), for the desk's halves.
+    @State private var pageFrame = CGRect.zero
+    #if os(iOS)
+    @Environment(\.windowGeometry) private var windowGeometry
+    /// The tab bar's height under Home, when it is there and runs along the bottom. The page's scroll runs on under the
+    /// bar (its content margin keeps the last card clear), so `pageFrame` reaches the window's safe bottom; the desk's
+    /// bottom half ends at the bar's top, as the chat's dock does.
+    private var barReserve: CGFloat { model.tabBarReserved && !model.tabBarVertical ? VoryTabBar.reservedHeight(in: windowGeometry) : 0 }
+    #else
+    private var barReserve: CGFloat { 0 }
+    #endif
+    /// The page the desk is laid in: `pageFrame` less our tab bar's reserve at its foot.
+    private var deskPage: CGRect { CGRect(x: pageFrame.minX, y: pageFrame.minY, width: pageFrame.width, height: max(0, pageFrame.height - barReserve)) }
+    /// Home as a desk, the window folded across like a laptop (`DeskSplit`); nil for Home as everywhere else.
+    private var desk: (top: CGFloat, gap: CGFloat, bottom: CGFloat)? {
+        DeskSplit.halves(page: deskPage, fold: deskFold, accessibilityText: typeSize.isAccessibilitySize, editing: editingHome)
+    }
+    /// The fold the desk lays out against: the window's, taken a main-actor turn after the system reports it (see the
+    /// onChange that sets it).
+    @State private var deskFold: CGRect?
+    /// The idle bots' faces on the desk: 44 pt (Matt, on build 39's stills), 36 at the two largest text sizes short of
+    /// the accessibility ones, so the row keeps clear of Who's working's rows and the fold. Hit areas stay at least 44.
+    private var idleFace: CGFloat { typeSize >= .xxLarge ? 36 : 44 }
     /// The gateway the last finished load ran against (see `shouldLoad`).
     @State private var loadedConnection: UUID?
 
     private var runtime: GatewayRuntime? { model.runtime }
+    /// This visit kept as "since you were here" (`HomeVisit`): never one of the demo's.
+    private func markVisit() { if let mark = HomeVisit.mark(kept: lastVisit, visitStart: visitStart, inDemo: model.isInDemo) { lastVisit = mark } }
     private var layout: HomeLayout { HomeLayout.parse(layoutRaw) }
     private func update(_ change: (inout HomeLayout) -> Void) { var l = layout; change(&l); layoutRaw = l.encoded }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                header
-                // Home opens first on a restored device: the sign-in it still owes is asked for here too.
-                if let waiting = model.needsSignIn { GatewaySignInBanner(connection: waiting) }
-                if let runtime, !runtime.needsAttention.isEmpty { needsYou(runtime) }
-                ForEach(layout.items) { item in
-                    editableCard(item)
-                        // While Home is being edited the press is a drag, so the menu stands
-                        // aside; otherwise a long press races the drag and the menu won.
-                        .contextMenu(menuItems: { if !editingHome { cardMenu(item) } })
-                }
-                if let error, model.needsSignIn == nil { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
-                // Edit: the cards can be dragged onto one another until Done; Settings has the
-                // sizes, the hidden cards, the name and the opening tab.
-                HStack(spacing: 10) {
-                    Button { withAnimation(.snappy) { editingHome.toggle() } } label: {
-                        Label(editingHome ? "Done" : "Edit Home", systemImage: editingHome ? "checkmark" : "arrow.up.arrow.down").font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity).padding(.vertical, 10)
-                    }
-                    .buttonStyle(.bordered).tint(editingHome ? Color.vory : .secondary)
-                    NavigationLink { HomeSettingsView().pushedPage() } label: {
-                        Label("Settings", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
-                            .frame(maxWidth: .infinity).padding(.vertical, 10)
-                    }
-                    .buttonStyle(.bordered).tint(.secondary)
-                }
-                .padding(.top, 4)
-                if editingHome {
-                    Text("Press, hold and drag a card onto another to put it there.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
-                }
+        let desk = desk
+        // One tree in every pose: half open like a laptop the desk's top half stands over the scroll, which keeps its
+        // place, its position and its numbers, so a posture change loads nothing (Duo stage 4).
+        VStack(spacing: 0) {
+            if let desk {
+                // The fold's band as padding, no view of its own: a hidden Color.clear there still stood in the
+                // accessibility audit as an element with no description, the fold's frame exactly.
+                deskTop.frame(height: desk.top, alignment: .top).padding(.bottom, desk.gap)
             }
-            .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
-            .animation(.snappy, value: layoutRaw)
-            // A reading width in the middle of a wide window, not cards the width of the screen.
-            .readingColumn(640)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // On the desk the greeting stands in its top half, and what needs you opens the bottom one.
+                    if desk == nil { header() }
+                    // Home opens first on a restored device: the sign-in it still owes is asked for here too.
+                    if let waiting = model.needsSignIn { GatewaySignInBanner(connection: waiting) }
+                    if let runtime, desk != nil { deskNeedsYou(runtime) }
+                    else if let runtime, !runtime.needsAttention.isEmpty { needsYou(runtime) }
+                    // On the desk the bots stand in its top half, as who's working.
+                    ForEach(desk == nil ? layout.items : layout.items.filter { $0.card != .bots }) { item in
+                        editableCard(item)
+                            // While Home is being edited the press is a drag, so the menu stands
+                            // aside; otherwise a long press races the drag and the menu won.
+                            .contextMenu(menuItems: { if !editingHome { cardMenu(item) } })
+                    }
+                    if let error, model.needsSignIn == nil { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4) }
+                    // Edit: the cards can be dragged onto one another until Done; Settings has the
+                    // sizes, the hidden cards, the name and the opening tab.
+                    HStack(spacing: 10) {
+                        Button { withAnimation(.snappy) { editingHome.toggle() } } label: {
+                            Label(editingHome ? "Done" : "Edit Home", systemImage: editingHome ? "checkmark" : "arrow.up.arrow.down").font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        }
+                        .buttonStyle(.bordered).tint(editingHome ? Color.vory : .secondary)
+                        NavigationLink { HomeSettingsView().pushedPage() } label: {
+                            Label("Settings", systemImage: "slider.horizontal.3").font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        }
+                        .buttonStyle(.bordered).tint(.secondary)
+                    }
+                    .padding(.top, 4)
+                    if editingHome {
+                        Text("Press, hold and drag a card onto another to put it there.").font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+                    }
+                }
+                .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 24)
+                .animation(.snappy, value: layoutRaw)
+                // A reading width in the middle of a wide window, not cards the width of the screen.
+                .readingColumn(640)
+            }
+            .scrollPosition($scrollPosition)
+            .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
         }
-        .scrollPosition($scrollPosition)
+        // The desk comes and goes in one frame. The system changes the posture inside an animation, and with it the
+        // scroll's frame glided from the fold up to the page's top going flat, the greeting passing mid-screen (Matt, on
+        // build 39; the recording put the slide at 0.2 s).
+        .transaction(value: desk != nil) { $0.animation = nil }
+        // The system reports a posture change inside its own UIKit animation, and a layout change made in that pass
+        // glided with it (the scroll view's frame is a UIKit view's, out of SwiftUI's transactions' reach). Taken on
+        // the next turn, the desk comes and goes outside it, in one frame. At once when Home appears, so a launch
+        // already half open shows the desk from its first frame.
+        .onAppear { deskFold = regions.horizontalFold }
+        .onChange(of: regions.horizontalFold) { _, fold in Task { @MainActor in deskFold = fold } }
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { pageFrame = $0 }
+        #if DEBUG
+        .overlay(alignment: .topLeading) {
+            if Self.deskProbe {
+                Text(deskReadout).font(.system(size: 1)).opacity(0.01).frame(width: 1, height: 1)
+                    .accessibilityIdentifier("desk.frames").accessibilityLabel(deskReadout)
+            }
+        }
+        #endif
         // A tap on the Home tab while it is in front brings the page back to its top, as the
         // other tabs' lists do (a tester asked for it).
         .onChange(of: model.tabReselected[.dashboard]) { _, _ in withAnimation(.snappy) { scrollPosition.scrollTo(edge: .top) } }
@@ -88,7 +176,6 @@ struct DashboardView: View {
         .alert(tileNote?.title ?? "", isPresented: Binding(get: { tileNote != nil }, set: { if !$0 { tileNote = nil } })) {
             Button("OK") { tileNote = nil }
         } message: { Text(tileNote?.text ?? "") }
-        .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
         // See `shouldLoad`. The rows and numbers are replaced in place, so a return shows no reload.
         .task(id: "\(runtime?.connection.id.uuidString ?? "")|\(runtime?.selectedProfile ?? "")|\(rangeDays)|\(homeAllBots)|\(visits)|\(pageLive)") {
             let connection = runtime?.connection.id
@@ -101,9 +188,9 @@ struct DashboardView: View {
             if Self.counts(cancelled: Task.isCancelled, hasGateway: runtime != nil, gotList: gotList) { loadedKey = key; loadedConnection = connection }
         }
         .onAppear { visitStart = Date().timeIntervalSince1970 }
-        .onDisappear { lastVisit = max(lastVisit, visitStart); editingHome = false }
+        .onDisappear { markVisit(); editingHome = false }
         .onChange(of: pageShown) { _, shown in
-            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { lastVisit = max(lastVisit, visitStart); editingHome = false }
+            if shown { visitStart = Date().timeIntervalSince1970; visits += 1 } else { markVisit(); editingHome = false }
         }
         .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).pushedPage() }
         .onChange(of: rangeDays) { _, _ in rangeMoved = true }
@@ -217,15 +304,19 @@ struct DashboardView: View {
         return cachedGreetingKey == key && !cachedGreeting.isEmpty ? cachedGreeting : plainGreeting
     }
 
-    private var header: some View {
+    /// The greeting and the date; on one line on the desk, where the top half is short.
+    private func header(oneLine: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 10) {
                 BotFaceView(spec: AboutView.voryBot, size: 34, active: BotAmbient.shared.decorativeActive)
-                Text(greeting).font(.title.weight(.bold)).lineLimit(2).minimumScaleFactor(0.8)
+                Text(greeting).font(.title.weight(.bold)).lineLimit(oneLine ? 1 : 2).minimumScaleFactor(0.8)
             }
             Text(Date(), format: .dateTime.weekday(.wide).month(.wide).day()).font(.subheadline).foregroundStyle(.secondary)
         }
         .padding(.top, 4)
+        // The page's heading for the UI tests that hold it clear of the top bar's capsules (#516).
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.heading")
         .task(id: "\(dayPart)|\(userName)") { await freshenGreeting() }
     }
 
@@ -259,6 +350,120 @@ struct DashboardView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: The desk (Duo stage 4)
+
+    /// The desk's top half: the greeting, then who's working (the bots working or waiting first, as the Bots card's list
+    /// shows them, more than fit scrolling in the panel; then the idle ones' faces).
+    private var deskTop: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            header(oneLine: true)
+            cardBackground(VStack(alignment: .leading, spacing: 10) {
+                Text("Who's working").font(.headline)
+                if let rt = runtime, !rt.profiles.isEmpty {
+                    let busy = rt.profiles.filter { let s = botStatus(rt, $0); return s.working != nil || s.waiting }
+                    let idle = rt.profiles.filter { let s = botStatus(rt, $0); return s.working == nil && !s.waiting }
+                    if busy.isEmpty {
+                        Text("No one's working right now.").font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        // The rows take what the half leaves them and scroll in it: without a floor of 0 the list stood
+                        // at its whole height and the panel ran onto the fold with two bots working (the Duo, 2026-10-27).
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 10) { ForEach(busy) { p in botRow(rt, p) } }
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
+                        .layoutPriority(-1)
+                    }
+                    if !idle.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(idle) { p in
+                                    Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
+                                        BotAvatar(profile: p.name, size: idleFace).frame(width: idleFace + 8, height: idleFace + 8).contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("\(p.label): idle")
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text("Connect a gateway to see your bots.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top))
+            #if DEBUG
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probePanel = $0 }
+            #endif
+        }
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 8)
+        .readingColumn(640)
+    }
+
+    /// What needs you, at the head of the desk's bottom half: each waiting chat's first card, an approval answered here
+    /// with its choices at the large size, a question or a value prompt with the way into its chat (`DeskCards`), and a
+    /// chat whose card isn't loaded with its line alone. One quiet line when nothing waits.
+    private func deskNeedsYou(_ rt: GatewayRuntime) -> some View {
+        let ids = DeskCards.waiting(ids: rt.needsAttention.union(rt.chats.filter(\.needsAttention).map(\.storedID)), order: sessions.map(\.id))
+        return Group {
+            if ids.isEmpty {
+                Text("Nothing needs you").font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(ids, id: \.self) { id in
+                        let chat = rt.chatForStored(id)
+                        let stored = sessions.first { $0.id == id }
+                        let card = chat?.firstCard
+                        VStack(alignment: .leading, spacing: 8) {
+                            deskChatLine(id: id, title: chat?.title ?? stored?.displayTitle ?? "A chat",
+                                         profile: chat?.profileName ?? stored?.profile ?? rt.selectedProfile ?? "default", note: DeskCards.note(for: card))
+                            if let chat, let card, DeskCards.answersInPlace(card) {
+                                PendingCardView(chat: chat, card: card).controlSize(.large)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #if DEBUG
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeCards = $0 }
+        #endif
+    }
+
+    /// A waiting chat's line on the desk: its bot's face, its title, and what it wants when that isn't answered here. A
+    /// tap opens the chat, as Pick up's rows do.
+    @ViewBuilder private func deskChatLine(id: String, title: String, profile: String, note: String?) -> some View {
+        let line = HStack(spacing: 8) {
+            BotAvatar(profile: profile, size: 24, mood: BotFaceView.Mood(session: id, state: .awaitingApproval))
+            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            Spacer(minLength: 8)
+            if let note { Text(note).font(.caption.weight(.medium)).foregroundStyle(.red) }
+            Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(.secondary)
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        if MorphTopBar.active(model) {
+            Button { model.openStoredChat(id: id, profile: profile, title: title, returningTo: .dashboard) } label: { line }.buttonStyle(.plain)
+        } else {
+            NavigationLink(value: ChatRoute(storedID: id, title: title, profile: profile)) { line }.buttonStyle(.plain)
+        }
+    }
+
+    #if DEBUG
+    /// DEBUG `-vory-desk-frames`: the page, the desk's panel and what needs you (window space), the fold, the split and
+    /// how many loads have run (a posture change must add none), read by the hinge legs as `desk.frames`' label. Checked
+    /// absent from Release.
+    private static let deskProbe = ProcessInfo.processInfo.arguments.contains("-vory-desk-frames")
+    @State private var probePanel: CGRect = .zero
+    @State private var probeCards: CGRect = .zero
+    @State private var probeLoads = 0
+    private var deskReadout: String {
+        func r(_ f: CGRect) -> String { String(format: "%.1f %.1f %.1f %.1f", f.minX, f.minY, f.width, f.height) }
+        return "page \(r(deskPage));panel \(r(probePanel));cards \(r(probeCards));fold \(regions.horizontalFold.map(r) ?? "none");split \(desk == nil ? "no" : "yes");loads \(probeLoads)"
+    }
+    #endif
+
     // MARK: Overview
 
     private var periodSessions: [StoredSession] {
@@ -269,7 +474,7 @@ struct DashboardView: View {
     private func overviewCard(full: Bool) -> some View {
         cardBackground(VStack(alignment: .leading, spacing: 12) {
             // The range beside the title where it fits at its own size; on a row of its own under
-            // it at the accessibility sizes, or wherever it does not fit (planner's call #35).
+            // it at the accessibility sizes, or wherever it does not fit.
             if typeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 10) { Text("Overview").font(.headline); rangePicker }
             } else {
@@ -282,16 +487,29 @@ struct DashboardView: View {
             let tokens = (t?.totalInput ?? 0) + (t?.totalOutput ?? 0) + (t?.totalCacheRead ?? 0)
             let messages = periodSessions.reduce(0) { $0 + ($1.messageCount ?? 0) }
             let activeDays = Set((usage?.daily ?? []).filter { ($0.sessions ?? 0) > 0 }.map(\.day)).count
-            // Three to a row everywhere: six tiles fill two rows that way, where four left a short
-            // second row on the Mac (the even-column rule is for the card grids, not these tiles).
-            LazyVGrid(columns: EvenColumns.items(3, spacing: 8), spacing: 8) {
-                tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
-                tile("Messages", Format.count(messages))
-                tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
-                tile("Active days", "\(activeDays > 0 ? activeDays : Set(periodSessions.compactMap { $0.startedAt.map { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0)) } }).count)")
-                tile("Peak hour", peakHour ?? "–")
-                tile("Top model", favoriteModel ?? "–")
+            // Three to a row on a phone, an iPad and the Mac: six tiles fill two rows that way,
+            // where four left a short second row on the Mac. Two to a row on a window that can
+            // fold, so a fold up the middle falls between the tiles (`HomeTiles`, Duo stage 2).
+            // The span the fold's place is read against is the width the card offers the tiles, whatever their columns
+            // add up to (`OfferedWidth`).
+            OfferedWidth {
+                LazyVGrid(columns: HomeTiles.items(regions: regions, frame: tilesFrame, spacing: 8), spacing: 8) {
+                    tile("Sessions", t.map { Format.count($0.totalSessions ?? 0) } ?? Format.count(periodSessions.count))
+                    tile("Messages", Format.count(messages))
+                    tile("Tokens", tokens > 0 ? Format.tokens(tokens) : "–")
+                    tile("Active days", "\(activeDays > 0 ? activeDays : Set(periodSessions.compactMap { $0.startedAt.map { Calendar.current.startOfDay(for: Date(timeIntervalSince1970: $0)) } }).count)")
+                    tile("Peak hour", peakHour ?? "–")
+                    tile("Top model", favoriteModel ?? "–")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            #if os(iOS)
+            // Its span across the window only: Home scrolls, and its height and place down the page are no business
+            // of the columns (a full frame changed on every frame of a scroll and re-ran the whole page).
+            .onGeometryChange(for: CGRect.self) { g in
+                let f = g.frame(in: .global); return CGRect(x: f.minX, y: 0, width: f.width, height: 0)
+            } action: { tilesFrame = $0 }
+            #endif
             if full {
                 ActivityGrid(daily: usage?.daily ?? [], sessions: sessions, weeks: 13)
                     .contentShape(.rect)
@@ -381,28 +599,32 @@ struct DashboardView: View {
         return (chats.first { $0.isRunning }, chats.contains { $0.needsAttention })
     }
 
+    /// A bot with its face, its name and what it's doing (the goal or status line, "Needs you", or "Idle"); a tap opens
+    /// its chats. The Bots card's list, and the desk's who's working.
+    private func botRow(_ rt: GatewayRuntime, _ p: ProfileInfo) -> some View {
+        let (working, waiting) = botStatus(rt, p)
+        return Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
+            HStack(spacing: 12) {
+                BotAvatar(profile: p.name, size: 36, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(p.label).font(.body.weight(.medium))
+                    Text(waiting ? "Needs you" : (working.map { ChatGoals.shared.goal(for: $0.storedID) ?? $0.statusLine ?? "Working…" } ?? "Idle"))
+                        .font(.caption).foregroundStyle(waiting ? .red : (working != nil ? .blue : .secondary)).lineLimit(1)
+                }
+                Spacer()
+                Circle().fill(waiting ? Color.red : (working != nil ? Color.blue : Color.secondary.opacity(0.4))).frame(width: 8, height: 8)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func botsCard(full: Bool) -> some View {
         cardBackground(VStack(alignment: .leading, spacing: 10) {
             Text("Bots").font(.headline)
             if let rt = runtime, !rt.profiles.isEmpty {
                 if full {
-                    ForEach(rt.profiles) { p in
-                        let (working, waiting) = botStatus(rt, p)
-                        Button { rt.selectedProfile = p.name; model.selectedTab = .chats } label: {
-                            HStack(spacing: 12) {
-                                BotAvatar(profile: p.name, size: 36, active: working != nil, mood: BotFaceView.Mood(session: working?.storedID, state: waiting ? .awaitingApproval : (working?.botState ?? .idle)))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(p.label).font(.body.weight(.medium))
-                                    Text(waiting ? "Needs you" : (working.map { ChatGoals.shared.goal(for: $0.storedID) ?? $0.statusLine ?? "Working…" } ?? "Idle"))
-                                        .font(.caption).foregroundStyle(waiting ? .red : (working != nil ? .blue : .secondary)).lineLimit(1)
-                                }
-                                Spacer()
-                                Circle().fill(waiting ? Color.red : (working != nil ? Color.blue : Color.secondary.opacity(0.4))).frame(width: 8, height: 8)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
+                    ForEach(rt.profiles) { p in botRow(rt, p) }
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 14) {
@@ -564,6 +786,9 @@ struct DashboardView: View {
     @discardableResult private func load() async -> Bool {
         guard let rt = runtime else { return false }
         loading = true; defer { loading = false }
+        #if DEBUG
+        probeLoads += 1
+        #endif
         // The gateway caps a page at 100 (a larger ask is refused outright).
         let allBots = homeAllBots
         async let u: (UsageAnalytics?, keep: Bool) = Self.usage(rt, days: rangeDays)
@@ -579,13 +804,17 @@ struct DashboardView: View {
             if let list { sessions = list; error = nil }
             else if sessions.isEmpty { error = "Could not load the chat list." }
         }
-        // The Overview widget and complications draw from the shared snapshot.
-        if let a = usageResult.0, var snap = WidgetSnapshot.load() {
-            snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: list, previous: snap.usage)
-            snap.save()
-            WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
-        }
+        if let a = usageResult.0 { Self.keepForWidgets(a, sessions: list, runtime: rt) }
         return list != nil
+    }
+
+    /// The month's numbers into the shared snapshot the Overview widget and complications draw from: a gateway's own,
+    /// never the demo's (#493: its numbers stayed on the saved gateway's widget after leaving it).
+    static func keepForWidgets(_ a: UsageAnalytics, sessions: [StoredSession]?, runtime rt: GatewayRuntime) {
+        guard !rt.isEphemeral, var snap = WidgetSnapshot.load() else { return }
+        snap.usage = WidgetSnapshot.Usage.make(analytics: a, sessions: sessions, previous: snap.usage)
+        snap.save()
+        WidgetCenter.shared.reloadTimelines(ofKind: "vory.overview")
     }
 }
 

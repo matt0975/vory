@@ -327,6 +327,11 @@ final class LiveActivityController: TurnActivityReporting {
         }
     }
 
+    /// Ends every card a gateway's chats have up: leaving the demo (#392) leaves none of its turns on the Lock Screen.
+    static func endAll(connection: UUID) {
+        for a in Activity<HermesTurnAttributes>.activities where a.attributes.connectionID == connection.uuidString { endNow(a) }
+    }
+
     private static func endNow(_ a: Activity<HermesTurnAttributes>) {
         var st = a.content.state
         st.endedAtUnix = st.endedAtUnix ?? Date().timeIntervalSince1970
@@ -404,7 +409,9 @@ final class LiveActivityController: TurnActivityReporting {
                                                        startedAt: startedAt, contextUsed: chat.usage?.contextUsed, contextMax: chat.usage?.contextMax)
         state.voiceMode = voiceLine
         do {
-            let a = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: Date().addingTimeInterval(3600)), pushType: .token)
+            let a = try Activity.request(attributes: attributes, content: .init(state: state, staleDate: Date().addingTimeInterval(3600)),
+                                     // The demo's (#392) is updated from the app alone: no push token, which the system fetches from Apple.
+                                     pushType: chat.runtime.isEphemeral ? nil : .token)
             let h = ActivityHandle(a)
             handle = h
             lastAsk = nil

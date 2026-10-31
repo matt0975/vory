@@ -1,6 +1,6 @@
 import XCTest
 
-/// A bot's face is tapped through what it sits in (#339, judgement call #8 (a)): it has no gesture
+/// A bot's face is tapped through what it sits in (#339): it has no gesture
 /// of its own, so a tap on it does what a tap on its card or pill does, and the face reacts. On a
 /// Bots card a tap on the face opens the bot; in a chat a tap on the face seated over the pill (its
 /// top, its middle) opens Bot info, as the pill does. Before, the face's own tap took the touch:

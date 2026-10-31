@@ -18,8 +18,11 @@ public protocol ChatIdentity: AnyObject {
 public struct ChatRegistry<Chat: ChatIdentity> {
     public private(set) var all: [Chat] = []
 
-    public func byRuntime(_ id: String) -> Chat? { all.first { $0.runtimeID == id } }
-    public func byStored(_ id: String) -> Chat? { all.first { $0.storedID == id } }
+    /// Session-less events must not match a chat whose runtime id is still awaiting attach.
+    public func byRuntime(_ id: String) -> Chat? { id.isEmpty ? nil : all.first(where: { $0.runtimeID == id }) }
+    /// Nor an empty stored id, a chat's until it has one: a server request is looked up by its session id as a runtime
+    /// id, then as a stored one (`answer(serverRequest:)`), so a request with none went to that chat by this lookup.
+    public func byStored(_ id: String) -> Chat? { id.isEmpty ? nil : all.first(where: { $0.storedID == id }) }
 
     /// Registers a chat, replacing any earlier entry for the same stored id.
     public mutating func add(_ chat: Chat) {

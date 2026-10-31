@@ -108,7 +108,7 @@ struct MacMediaMenu: View {
     /// The original, fetched if it is not here yet.
     private func file() async -> URL? {
         guard let rt = model.runtime else { return nil }
-        return try? await MediaStore.shared.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
+        return try? await rt.media.localURL(for: ref, gateway: rt.connection.id.uuidString, api: GatewayMediaAPI(api: rt.api, profile: profile))
     }
 
     private func save() async {
@@ -151,13 +151,13 @@ struct MediaThumb: View {
     private func load() async {
         guard let rt = AppModel.shared.runtime else { failed = true; return }
         let gateway = rt.connection.id.uuidString
-        if let url = await MediaStore.shared.cached(ref, gateway: gateway) {
+        if let url = await rt.media.cached(ref, gateway: gateway) {
             image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
             return
         }
         do {
-            let url = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            let url = try await rt.media.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             guard !Task.isCancelled else { return }
             image = await AttachmentThumbs.imageAsync(at: url, side: side, scale: displayScale)
             failed = image == nil
@@ -330,7 +330,7 @@ struct ImageViewerSheet: View {
         guard let rt = AppModel.shared.runtime else { error = "Connect a gateway first."; return }
         let gateway = rt.connection.id.uuidString
         do {
-            let file = try await MediaStore.shared.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
+            let file = try await rt.media.localURL(for: ref, gateway: gateway, api: GatewayMediaAPI(api: rt.api, profile: profile))
             url = file
             image = await AttachmentThumbs.imageAsync(at: file, side: 2400, scale: displayScale)
             if image == nil { error = "This file is not an image the device can show." }

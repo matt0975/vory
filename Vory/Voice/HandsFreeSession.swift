@@ -142,6 +142,8 @@ final class HandsFreeSession {
     // MARK: Start and end
 
     func start(chat: ChatSession) {
+        // Demo mode (#392) has no voice: it needs a real provider, through a gateway of one's own.
+        if chat.runtime.isEphemeral { chat.banner = "Connect a gateway to use voice."; return }
         if isActive { end() }
         // The session follows the chat's turn through observation, with the app away too
         // (a locked phone): the chat keeps telling it, and tells now what it held back.
@@ -573,7 +575,7 @@ final class HandsFreeSession {
                 // The model says it in its own words; nothing is ever answered by voice.
                 state.cardsPending = cards
                 if cards, let card = chat.cards.first {
-                    live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to approve it on their screen; the answer comes after.")
+                    live?.send(text: "System note: an approval is needed on the screen before the bot can go on: \(Self.summary(of: card)). Tell the user briefly to allow or deny it on their screen; the answer comes after.")
                     setLivePhase(.needsApproval)
                 } else if state.phase == .needsApproval {
                     setLivePhase(liveIdlePhase)

@@ -14,6 +14,8 @@ struct VoryTypedBubble: View {
     var reduceMotion = false
     var tint: Color = .primary
     var fill: Color = Color(.secondarySystemFill)
+    /// How much of the tail shows (`SpeechBubbleShape.tail`).
+    var tail: CGFloat = 1
     @State private var shown = ""
 
     var body: some View {
@@ -26,7 +28,7 @@ struct VoryTypedBubble: View {
         .multilineTextAlignment(.center)
         .padding(.horizontal, 14).padding(.vertical, 9)
         .padding(.top, 8)
-        .background(fill, in: SpeechBubbleShape(tailOnTop: true))
+        .background(fill, in: SpeechBubbleShape(tailOnTop: true, tail: tail))
         .frame(maxWidth: 340)
         .task(id: key) {
             if reduceMotion { shown = text; return }

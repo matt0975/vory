@@ -269,8 +269,8 @@ struct EnvView: View {
         // Never a tab's root: under the morph bar (a page pushed from Settings) the bar draws its Add
         // beside its Back, in the one morph as the page comes in (#435); elsewhere it is the page's
         // own. Hidden under the bar with nothing drawing it, a variable could not be added (#426).
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add", systemImage: "plus") } } } }
-        .morphPageActions([MorphPageAction(id: "env.add", symbol: "plus", label: "Add") { showAdd = true }], on: MorphTopBar.active(model))
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add variable", systemImage: "plus") }.accessibilityIdentifier("env.add") } } }
+        .morphPageActions([MorphPageAction(id: "env.add", symbol: "plus", label: "Add variable") { showAdd = true }], on: MorphTopBar.active(model))
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -573,7 +573,10 @@ struct CronView: View {
     @State private var jobs: [CronJob] = []
     @State private var raw: [String: JSONValue] = [:]
     @State private var error: String?
+    @State private var showCreate = false
     private var rt: GatewayRuntime? { model.runtime }
+    /// Add scheduled task, where the gateway can make one (#428, `CronCreateSupport`).
+    private var canCreate: Bool { CronCreateSupport.shared.canCreate(on: rt) }
 
     var body: some View {
         SettingsList {
@@ -595,6 +598,19 @@ struct CronView: View {
             }
         }
         .contentMargins(.top, 14, for: .scrollContent)
+        // Add scheduled task at the top as on every page that can make something (#428): pushed from Settings the bar draws
+        // it beside its Back (`morphPageActions`); as its own tab the bar draws it as the tab's + (`tabChrome`, asked
+        // through `pageRequest`); elsewhere (a wide window, the Mac) the page's own toolbar has it. None where the gateway
+        // can't make a task.
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), canCreate { Button { showCreate = true } label: { Label("Add scheduled task", systemImage: "plus") }.accessibilityIdentifier("cron.add") } } }
+        .morphPageActions([MorphPageAction(id: "cron.add", symbol: "plus", label: "Add scheduled task") { showCreate = true }],
+                          on: MorphTopBar.active(model) && canCreate)
+        .onChange(of: model.pageRequest) { _, r in
+            guard let r, r.kind == .cronNew else { return }
+            model.pageRequest = nil
+            showCreate = true
+        }
+        .sheet(isPresented: $showCreate) { NavigationStack { CronCreateView { Task { await load() } } }.sheetFrame().withAppModel() }
         .reloadable { await load() }
         .task { await load() }
     }
@@ -616,6 +632,8 @@ struct CronView: View {
                 out.append(c2); rawMap[c2.identity] = j
             }
             jobs = out; raw = rawMap; error = nil
+            // The list is the gateway's word that it keeps scheduled tasks: the + comes with it (`CronCreateSupport`).
+            await CronCreateSupport.shared.listLoaded(on: rt)
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -634,6 +652,20 @@ enum CronSchedule {
         }
         if let at = v["at"]?.stringValue { return "at \(at)" }
         return v.displayText
+    }
+
+    /// The cron line for one of the pickers' shapes (`kind`: daily, weekdays, weekends, weekly, monthly) at `time`: a
+    /// task's page and the new-task form build theirs the same way.
+    static func build(kind: String, weekday: Int, monthDay: Int, time: Date, calendar: Calendar = .current) -> String {
+        let c = calendar.dateComponents([.hour, .minute], from: time)
+        let hm = "\(c.minute ?? 0) \(c.hour ?? 0)"
+        switch kind {
+        case "weekdays": return "\(hm) * * 1-5"
+        case "weekends": return "\(hm) * * 0,6"
+        case "weekly": return "\(hm) * * \(weekday)"
+        case "monthly": return "\(hm) \(monthDay) * *"
+        default: return "\(hm) * * *"
+        }
     }
 
     static func describe(_ s: String?) -> String {
@@ -803,15 +835,7 @@ struct CronJobDetailView: View {
 
     private func rebuildSchedule() {
         guard repeatKind != "custom" else { return }
-        let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-        let hm = "\(c.minute ?? 0) \(c.hour ?? 0)"
-        switch repeatKind {
-        case "weekdays": schedule = "\(hm) * * 1-5"
-        case "weekends": schedule = "\(hm) * * 0,6"
-        case "weekly": schedule = "\(hm) * * \(weekday)"
-        case "monthly": schedule = "\(hm) \(monthDay) * *"
-        default: schedule = "\(hm) * * *"
-        }
+        schedule = CronSchedule.build(kind: repeatKind, weekday: weekday, monthDay: monthDay, time: time)
     }
 
     private static func pretty(_ v: JSONValue) -> String {

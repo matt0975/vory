@@ -2,7 +2,7 @@
 import SwiftUI
 import VoryCore
 
-// Morph prototype, option A proper (BRIEF-1.5-MORPH, `-vory-morph-root`): the top controls of
+// Morph prototype, option A proper (`-vory-morph-root`): the top controls of
 // the Chats list and of an open chat are drawn here, over the pages and outside every
 // NavigationStack, as three persistent glass capsules in ONE GlassEffectContainer. Each capsule
 // is drawn at the frame interpolated by `t` between its two measured end states (0 the chat's
@@ -11,21 +11,28 @@ import VoryCore
 // animate the same `t`. Reduce Motion: a cross-fade between the two sets, no interpolation.
 // Visual apart from Back; nothing here runs without the flag.
 
-/// A control's place in the bar: the leading circle, the middle capsule, the trailing one.
-enum MorphSlot: Hashable, CaseIterable { case lead, mid, trail }
+/// A control's place in the bar: the leading circle, the middle capsule, the trailing one; and, on the closed Duo, a
+/// chat's Back and More in the status column under the time and Wi-Fi (#542), which only a chat has.
+enum MorphSlot: Hashable, CaseIterable {
+    case lead, mid, trail, columnBack, columnMore
+    var inColumn: Bool { self == .columnBack || self == .columnMore }
+}
 
 /// What a root page keeps in the bar's leading and trailing slots (the middle is its title).
 /// A tab switch morphs one page's set into the next; a slot a page does not have fades.
 enum TabLead { case botMenu, filesHome }
 enum TabTrail { case chatActions, plus(String), filesActions, boardActions, sessionsOptions }
-func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
+@MainActor func tabChrome(_ tab: AppModel.AppTab) -> (lead: TabLead?, trail: TabTrail?) {
     switch tab {
     case .chats: (.botMenu, .chatActions)
-    case .bots: (nil, .plus("New bot"))
+    // No New bot in the demo (#494): its look editor wrote the person's own bot's look.
+    case .bots: (nil, AppModel.shared.isInDemo ? nil : .plus("New bot"))
     case .files: (.filesHome, .filesActions)
-    case .projects: (nil, .plus("New project"))
+    case .projects: (nil, .plus("Add project"))
     case .kanban: (nil, .boardActions)
     case .sessions: (nil, .sessionsOptions)
+    // Only where the gateway in use can make a task (#428): none rather than one that can't work.
+    case .cron: (nil, CronCreateSupport.shared.onActiveGateway ? .plus("Add scheduled task") : nil)
     default: (nil, nil)
     }
 }
@@ -101,6 +108,13 @@ private struct MorphPageActions: ViewModifier {
     /// its controls form. Stepped aside there, the bar left the page with no Back and showed
     /// empty glass as the page came in (the frame check's BLANK and LONE runs at a cold push).
     var opening = false
+    /// Up in the band, a chat's opening holds the list's side capsules until the chat comes, for `holdLimit` at
+    /// most: a slow or failed load ("Opening…", "Could not open chat") lets them go as before, so the list's controls
+    /// never stand untappable for long. Set by `open()`, cleared by a timer of that opening only.
+    var holdingSides = false
+    static let holdLimit: TimeInterval = 0.6
+    /// The opening whose hold the timer may end (a later opening has its own).
+    @ObservationIgnored private var holdToken = 0
     /// Away from a root page: a chat or a pushed page is up (or on its way).
     var away: Bool { chat != nil || pushedTab != nil || opening }
     /// 0 = the chat's (or the pushed page's) controls, 1 = the root page's. The value the bar
@@ -114,6 +128,15 @@ private struct MorphPageActions: ViewModifier {
     @ObservationIgnored private var generation = 0
     /// The finger has the pop: `t` follows it and nothing is tappable.
     var scrubbing = false
+    /// The bottom of the root page's row of controls (the bot circle, the title, the page's own) in the bar's space
+    /// (`.named("morph")`, whose top is the bar's padding under the safe area's top). Where the system's bars stand in a
+    /// side strip (the closed iPhone Duo) nothing else keeps a band for the row, and the root pages start under it by
+    /// this much (`TopBarRoom`, #340). Kept, not cleared, over a chat or a pushed page, so a root page coming back has
+    /// its room at once.
+    var rootRowBottom: CGFloat = 0
+    /// The bottom of a chat's row (Back, the title pill, More) in the bar's space, for what may grow up under it (the
+    /// + panel's cap, `AttachPanel.room`).
+    var chatRowBottom: CGFloat = 0
     /// A swipe back to a tab's root page is under way (its root probe saw it start). Only that
     /// swipe, or a chat's, is the bar's to follow: a swipe from a page three deep back to the one
     /// under it moved the bar to the root's title and left it there, over a page still pushed
@@ -129,7 +152,7 @@ private struct MorphPageActions: ViewModifier {
     /// (`morphPageActions`); its token keeps a page that left from taking away the next one's.
     struct PageActions { var token: UUID; var actions: [MorphPageAction] }
     var pageActions: [AppModel.AppTab: PageActions] = [:]
-    /// A judgement call made while Matt was out: `-vory-ownbar-off` puts the bar's Back over
+    /// `-vory-ownbar-off` puts the bar's Back over
     /// those pages again, as in (18) and (19).
     static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
 
@@ -180,6 +203,12 @@ private struct MorphPageActions: ViewModifier {
         guard chat == nil, !scrubbing else { return }
         generation += 1
         opening = true; pushedTab = nil
+        holdToken += 1; holdingSides = true
+        let h = holdToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.holdLimit) { [weak self] in
+            guard let self, self.holdToken == h else { return }
+            self.holdingSides = false
+        }
         guard t > 0 else { return }
         if !follow(to: 0) { toAway() }
     }
@@ -236,6 +265,7 @@ private struct MorphPageActions: ViewModifier {
         withAnimation(.snappy(duration: 0.22)) {
             chat = nil
             opening = opens
+            holdingSides = false
             pushedTab = pushed ? tab : nil
             t = awayHere ? 0 : 1
         }
@@ -433,6 +463,64 @@ struct MorphTopBar: View {
     /// Content Viewer instead, so the pill's long-press menu steps aside (its items are in …).
     @Environment(\.dynamicTypeSize) private var typeSize
     private var axSize: Bool { typeSize.isAccessibilitySize }
+    /// The open Duo upright (#516): the bar stands this much higher, in the status band (`TopBarRoom.barUp`); 0 elsewhere.
+    @Environment(\.barLift) private var lift
+    /// The bar's inset from the window's sides.
+    static let sideInset: CGFloat = 16
+    /// Up in the band, every row (a root's, a pushed page's, a chat's) ends short of the status (`TopBarRoom.statusReserve`,
+    /// from the window's trailing edge).
+    private var statusClear: CGFloat { lift > 0 ? TopBarRoom.statusReserve - Self.sideInset : 0 }
+    /// The bar up in the status band (the open Duo upright, or half open like a laptop): a chat's row stands in it too.
+    private var inBand: Bool { lift > 0 }
+    /// Between Back and the face, up in the band.
+    static let faceGap: CGFloat = 8
+    @Environment(\.windowGeometry) private var windowGeometry
+    /// The closed Duo: the system's bars stand in a status strip at the window's side (`VoryTabBar.statusStrip`).
+    private var stripClosed: Bool {
+        model.tabBarVertical && VoryTabBar.statusStrip(windowGeometry.safeArea) != nil
+    }
+    /// A chat's bar like Messages' on the Duo (Matt, 2026-10-28, #542): no pill. Up in the band, Back, the face with no
+    /// glass behind it (as a contact's photo is), then the bot's name and the chat's title as plain text, and More. Closed, the face and the
+    /// name at the top left, and Back and More in the status column (`columnFrame`). Elsewhere (a phone, an iPad) the pill
+    /// with the face seated on it, as before.
+    private var messagesBar: Bool { inBand || stripClosed }
+    /// The slot whose place the face stands in: the title capsule's up in the band, the bot circle's when closed. It keeps
+    /// its frame through the morph and draws no glass while a chat shows (`CapsuleFrame.bare`).
+    private var faceSlot: MorphSlot { stripClosed && !inBand ? .lead : .mid }
+    /// The bot's name and the chat's title, as laid out beside the face (the bar's space).
+    @State private var nameFrame: CGRect = .zero
+    /// A chat's band, like Messages' (`ChatBand`): from the window's top to a quarter of the face under the row; closed,
+    /// not down the status column, where Back and More stand on their own glass. It comes in with the chat. Drawn behind
+    /// the bar, from the bar's own top-left (the safe area's), out to the window's edges.
+    @ViewBuilder private var chatBand: some View {
+        if messagesBar, state.chat != nil, let lead = chatFrames[.lead] {
+            let g = windowGeometry
+            let top = g.safeArea.top + TopBarRoom.barPadding
+            ChatBand(width: g.bounds.width, bottom: top + max(lead.maxY, nameFrame.maxY) + ChatBand.below)
+                .offset(x: -g.safeArea.leading, y: -g.safeArea.top)
+                .opacity(Double(max(0, 1 - shown * 2.4)))
+        }
+    }
+    /// Which slots a chat's state has.
+    private func chatHas(_ slot: MorphSlot) -> Bool {
+        switch slot {
+        case .lead: return true
+        case .mid, .trail: return !(stripClosed && !inBand)
+        case .columnBack, .columnMore: return stripClosed && !inBand
+        }
+    }
+    /// A chat's Back or More in the closed Duo's status column, in the bar's space: 44 pt, centred
+    /// `VoryTabBar.stripCentreFromEdge` from the window's edge on the strip's side, its top where UIKit's own navigation
+    /// items stand under the time and Wi-Fi (`TopBarRoom.statusColumnTops`). The bar's space starts at the safe area's
+    /// leading edge and top, inside the bar's side inset and padding.
+    private func columnFrame(_ slot: MorphSlot) -> CGRect? {
+        guard slot.inColumn, stripClosed, !inBand else { return nil }
+        let g = windowGeometry, tops = TopBarRoom.statusColumnTops(closed: true)
+        let onTrailing = g.safeArea.trailing >= g.safeArea.leading
+        let centreX = onTrailing ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
+        return CGRect(x: centreX - 22 - g.safeArea.leading - Self.sideInset, y: (slot == .columnBack ? tops[0] : tops[1]) - g.safeArea.top - TopBarRoom.barPadding,
+                      width: 44, height: 44)
+    }
     /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
     /// shipped chrome back for a comparison.
     static var on: Bool { !ProcessInfo.processInfo.arguments.contains("-vory-morph-off") }
@@ -481,23 +569,41 @@ struct MorphTopBar: View {
         let _ = Perf.tick("morphbar-body")
         GlassEffectContainer(spacing: 10) {
             ZStack(alignment: .topLeading) {
-                // The end states, for their frames only.
-                listLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
-                if let chat = state.chat { chatLayout(chat).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
+                // The end states, for their frames only. Up in the status band (the open Duo upright) the whole bar
+                // stands `lift` higher, a chat's row with it (like Messages, #542), so nothing travels between the list and
+                // a chat.
+                listLayout.padding(.trailing, statusClear).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                if let chat = state.chat { chatLayout(chat).padding(.trailing, statusClear).opacity(0).allowsHitTesting(false).accessibilityHidden(true) }
                 // A pushed page's end state is the same on every page: laid out always, so the
                 // first push already knows where its Back goes.
-                pushedLayout.opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                pushedLayout.padding(.trailing, statusClear).opacity(0).allowsHitTesting(false).accessibilityHidden(true)
                 // The capsules that are seen, one per slot, at the frame between the two.
                 ForEach(MorphSlot.allCases, id: \.self) { slot in capsule(slot) }
             }
             .coordinateSpace(.named("morph"))
-            .padding(.horizontal, 16).padding(.top, 4)
+            .padding(.horizontal, Self.sideInset).padding(.top, TopBarRoom.barPadding)
         }
         // The seated face rides above the middle capsule in the chat state: outside the glass
         // container, which composites its glass over anything drawn inside it (the face sat
         // behind its pill, Matt 2026-10-12). Same inset as the measured space.
         .overlay(alignment: .topLeading) {
-            if let chat = state.chat, let a = chatFrames[.mid], let b = listFrames[.mid] {
+            if let chat = state.chat, messagesBar, let a = chatFrames[faceSlot] {
+                // Like Messages (#542): the face on its slot's glass, then the name as plain text, one Chat info button
+                // over both. The name comes in as the morph lands, where it stays.
+                let circle = lerp(a, listFrames[faceSlot] ?? lastListFrames[faceSlot] ?? a, shown)
+                ZStack(alignment: .topLeading) {
+                    face(chat, over: circle)
+                    #if DEBUG
+                    Color.clear.frame(width: 44, height: 44)
+                        .modifier(MorphFramesProbe.RecordFace(shown: shown < 0.02))
+                        .position(faceCentre(chat, circle)).allowsHitTesting(false)
+                    #endif
+                    nameButton(chat, face: a)
+                        .opacity(Double(max(0, 1 - shown * 2.4)))
+                        .allowsHitTesting(shown < 0.02 && !state.scrubbing)
+                }
+                .padding(.horizontal, Self.sideInset).padding(.top, TopBarRoom.barPadding)
+            } else if let chat = state.chat, let a = chatFrames[.mid], let b = listFrames[.mid] {
                 let mid = lerp(a, b, shown)
                 ZStack(alignment: .topLeading) {
                     face(chat, over: mid)
@@ -505,12 +611,18 @@ struct MorphTopBar: View {
                     // and the face reacts. Only with the chat at rest.
                     FaceTapArea { openBotInfo(chat) }
                         .frame(width: 44, height: 44)
-                        .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * seatDrop(chat))
+                        #if DEBUG
+                        .modifier(MorphFramesProbe.RecordFace(shown: shown < 0.02))
+                        #endif
+                        .position(faceCentre(chat, mid))
                         .allowsHitTesting(shown < 0.02 && !state.scrubbing)
                 }
-                .padding(.horizontal, 16).padding(.top, 4)
+                .padding(.horizontal, Self.sideInset).padding(.top, TopBarRoom.barPadding)
             }
         }
+        .background(alignment: .topLeading) { chatBand }
+        // Up in the status band on the open Duo upright (0 elsewhere): drawn, hit and read by VoiceOver there.
+        .offset(y: -lift)
         // The bar's type stops at XXXL, as the system's own bar does: at the accessibility
         // sizes the three capsules no longer fit one row (the actions ran off the right edge
         // and the pill hid the circles, AX3 on the simulator).
@@ -534,6 +646,19 @@ struct MorphTopBar: View {
             else if !open, state.chat != nil || state.opening, !state.scrubbing { state.pop() }
         }
         .onChange(of: model.roomsOnScreen) { _, n in if n > 0, model.chatsPathOpen { state.roomShown() } }
+        // The root row's bottom for the pages under it (#340): from the root row's own frames only, never mid-scrub
+        // (the row's height doesn't change while `t` moves).
+        .onChange(of: listFrames, initial: true) { _, f in
+            guard !state.scrubbing else { return }
+            let bottom = f.values.map(\.maxY).max() ?? 0
+            if abs(bottom - state.rootRowBottom) > 0.5 { state.rootRowBottom = bottom }
+        }
+        .onChange(of: chatFrames, initial: true) { _, f in
+            guard !state.scrubbing else { return }
+            // Like Messages on the Duo, the thread starts under the chat's band, not under its row (Matt, 2026-10-28).
+            let bottom = (f.values.map(\.maxY).max() ?? 0) + (messagesBar ? ChatBand.reach : 0)
+            if bottom > 0, abs(bottom - state.chatRowBottom) > 0.5 { state.chatRowBottom = bottom }
+        }
         // Initial too: the bar is made afresh when a wide window narrows again.
         .onChange(of: model.selectedTab, initial: true) { _, tab in
             let chats = tab == .chats && model.chatsPathOpen
@@ -549,7 +674,7 @@ struct MorphTopBar: View {
             // tab's own only: with a chat left open on Chats (the Overview widget's link goes to
             // Home and leaves it there), a chat pushed on another tab's stack (from a bot's page or
             // its compose) took the bar, and after its Back the chat's bar stayed over the page
-            // (#386, the planner's call #34). On another tab a chat gets the page's own Back.
+            // (#386). On another tab a chat gets the page's own Back.
             if id != nil, model.chatsPathOpen, model.selectedTab == .chats, let c = model.visibleChat, state.chat !== c { state.push(c) }
         }
     }
@@ -560,7 +685,7 @@ struct MorphTopBar: View {
         // Whether this page (or the chat) has the slot at all: from the page's chrome, not from
         // the measured frames (a slot that went away left a faint empty capsule on Settings).
         let chrome = tabChrome(model.selectedTab)
-        let pageHas = slot == .mid || (slot == .lead ? chrome.lead != nil : chrome.trail != nil)
+        let pageHas = !slot.inColumn && (slot == .mid || (slot == .lead ? chrome.lead != nil : chrome.trail != nil))
         // Over a group chat on Chats the bar steps aside: that page keeps its own header.
         // Inside the glass container neither a capsule's opacity nor a transition is
         // honoured, so there is no capsule at all there. A page pushed on another tab is an
@@ -568,7 +693,15 @@ struct MorphTopBar: View {
         // So does it over a page that keeps its own bar (a form with its Cancel and Save).
         // A chat's page whose chat is not there yet is away, with its Back (`opening`).
         let pushedAway = (model.selectedTab == .chats && model.chatsPathOpen && state.chat == nil && !state.opening) || state.ownBarTabs.contains(model.selectedTab)
-        let awayHas = state.chat != nil ? true : (state.pushedTab != nil || state.opening ? slot == .mid || (slot == .trail && pushedActions != nil) : pageHas)
+        // Up in the band (the open Duo upright), a chat's page that opens before its chat is there keeps the list's side
+        // capsules standing, their controls in them, until the chat comes (for `MorphState.holdLimit` at most); then they
+        // turn into Back and More level with the row. Gone at once, they grew back from nothing as the chat came: 22 pt of
+        // travel in the band (#516).
+        // Closed too (#542): there the bot circle becomes the face's, in the same place.
+        let holdSides = messagesBar && state.opening && state.holdingSides && state.chat == nil && state.pushedTab == nil && (slot == .lead || slot == .trail)
+        // A chat has its own slots (`chatHas`): closed, its Back and More stand in the status column and the list's title
+        // and trailing capsules go where they are; nothing moves from one place to another (#542).
+        let awayHas = state.chat != nil ? chatHas(slot) : (holdSides ? true : (state.pushedTab != nil || state.opening ? slot == .mid || (slot == .trail && pushedActions != nil) : pageHas))
         let present = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
@@ -578,8 +711,9 @@ struct MorphTopBar: View {
         let goesAtOnce = !present && state.away
         if pushedAway {
             EmptyView()
-        } else if let b = listFrames[slot] ?? lastListFrames[slot] ?? awayFrames[slot] {
-            let f = (awayHas ? awayFrames[slot] : nil).map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
+        } else if let b = slot.inColumn ? columnFrame(slot) : (listFrames[slot] ?? lastListFrames[slot] ?? awayFrames[slot]) {
+            // A status-column slot stands where it is: it grows there as a chat comes and shrinks there as it goes.
+            let f = slot.inColumn ? b : (awayHas ? awayFrames[slot] : nil).map { lerp($0, listFrames[slot] ?? lastListFrames[slot] ?? $0, shown) } ?? b
             ZStack {
                 // Only the state that is showing takes taps: the other sits in the stack at
                 // opacity 0 and would otherwise cover it (the Back tap went nowhere).
@@ -598,20 +732,22 @@ struct MorphTopBar: View {
                 // opacity is 0 and with no transition of their own (a fade in on top of the one
                 // here would lag it).
                 if shown < 1 {
-                    if let chat = state.chat { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
+                    if let chat = state.chat, chatHas(slot) { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                     else if let tab = state.pushedTab ?? (state.opening ? .chats : nil), slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                     else if slot == .trail, let acts = pushedActions { pageActionButtons(acts).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                 }
                 // Keyed by tab, so a tab switch cross-fades one page's control into the next's (at
                 // a root page only; going away or back the opacity here does it).
-                if shown > 0 { listContent(slot).id(model.selectedTab).transition(state.away ? .identity : .opacity).opacity(Double(max(0, (shown - Self.handoff) * 2.4))).allowsHitTesting(shownTarget >= 0.5 && pageHas) }
+                // A side held through a chat's opening keeps the list's control in it, seen, until the chat comes.
+                if shown > 0 || holdSides { listContent(slot).id(model.selectedTab).transition(state.away ? .identity : .opacity).opacity(holdSides ? 1 : Double(max(0, (shown - Self.handoff) * 2.4))).allowsHitTesting(shownTarget >= 0.5 && pageHas) }
             }
             // An absent slot shrinks to nothing where it was: a view's opacity does not fade
             // glass (the + panel taught that), so the capsule also drops its glass there, in
             // the one modifier so its identity holds.
             // Absent on this page: shrunk to nothing where it was (a view's opacity does not
             // fade glass, so the capsule also drops its glass there, in the one modifier).
-            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown))
+            .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown, slot: slot,
+                                   inPlace: slot.inColumn, bare: messagesBar && slot == faceSlot && state.chat != nil && shownTarget < 0.5))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(.snappy(duration: 0.22), value: selecting)
@@ -633,9 +769,57 @@ struct MorphTopBar: View {
         model.chatRequest = .init(.profile)
     }
 
+    /// Where the face's middle stands: like Messages on the Duo, in its own slot's place (#542); elsewhere over the pill,
+    /// seated on its top (its shape's own seat).
+    private func faceCentre(_ chat: ChatSession, _ mid: CGRect) -> CGPoint {
+        messagesBar ? CGPoint(x: mid.midX, y: mid.midY) : CGPoint(x: mid.midX, y: mid.minY + 10 - 22 + 44 * seatDrop(chat))
+    }
+
+    /// The name beside the face, like Messages' contact (#542): the bot's name, and the chat's title or its step (`ChatNameLines`).
+    private func nameText(_ chat: ChatSession) -> some View {
+        let label = chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName
+        return ChatNameLines(name: label, line: chat.isRunning ? (chat.statusLine ?? "Thinking…") : (chat.showsSyncing ? "Syncing…" : chat.title))
+    }
+
+    /// The face and the name as one button, Chat info, as the pill was (#542): a tap opens Bot info and the face
+    /// reacts; a long press offers Rename chat and Bot info, and VoiceOver has both as actions. 44 pt tall at least.
+    private func nameButton(_ chat: ChatSession, face a: CGRect) -> some View {
+        let r = CGRect(x: a.minX, y: min(a.minY, nameFrame.minY), width: max(a.width, nameFrame.maxX - a.minX),
+                       height: max(a.height, nameFrame.height))
+        let button = Button { openBotInfo(chat) } label: {
+            HStack(spacing: ChatNameLines.faceGap) {
+                Color.clear.frame(width: 44, height: 44)   // the face's room: `face` draws it
+                nameText(chat)
+                    #if DEBUG
+                    .modifier(MorphFramesProbe.Mark(key: "name"))
+                    #endif
+            }
+            .frame(width: r.width, height: r.height, alignment: .leading).contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        return Group {
+            if axSize {
+                button.accessibilityShowsLargeContentViewer { Label(chat.title, systemImage: "person.text.rectangle") }
+            } else {
+                button.contextMenu {
+                    Button { model.chatRequest = .init(.rename) } label: { Label("Rename chat", systemImage: "pencil") }
+                    Button { model.chatRequest = .init(.profile) } label: { Label("Bot info", systemImage: "person.text.rectangle") }
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Chat info: \(chat.title), \(chat.subtitle)")
+        .accessibilityAddTraits([.isButton, .isHeader])
+        .accessibilityAction { openBotInfo(chat) }
+        .accessibilityAction(named: "Rename chat") { model.chatRequest = .init(.rename) }
+        .accessibilityAction(named: "Bot info") { model.chatRequest = .init(.profile) }
+        .accessibilitySortPriority(2)
+        .accessibilityIdentifier("chat.titlePill")
+        .position(x: r.midX, y: r.midY)
+    }
+
     private func face(_ chat: ChatSession, over mid: CGRect) -> some View {
-        let drop = seatDrop(chat)
-        return BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
+        BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
                          mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
             .scaleEffect(reduceMotion ? 1 : 0.6 + 0.4 * (1 - t))
             // The face lands last: it is seen only once the pill is nearly in place.
@@ -643,8 +827,9 @@ struct MorphTopBar: View {
             // Seated on the pill by its base, 10 pt over the top edge plus the shape's own seat:
             // a 44-pt face seated this low lets the row sit 18 pt under the bar's top with the
             // head's top at 50 pt, under the Dynamic Island's edge (Matt, 2026-10-12: the
-            // buttons were too far down, the head must stay off the island).
-            .position(x: mid.midX, y: mid.minY + 10 - 22 + 44 * drop)
+            // buttons were too far down, the head must stay off the island). Like Messages on
+            // the Duo, in its own slot's place instead (`faceCentre`).
+            .position(faceCentre(chat, mid))
             .allowsHitTesting(false)
     }
 
@@ -655,7 +840,28 @@ struct MorphTopBar: View {
 
     @ViewBuilder private func chatContent(_ slot: MorphSlot, _ chat: ChatSession) -> some View {
         switch slot {
-        case .lead:
+        // Like Messages (#542): the face's slot carries nothing (`nameButton` takes its taps, `CapsuleFrame.bare` its glass);
+        // closed, Back and More stand in the status column, Back first for VoiceOver.
+        case _ where slot == faceSlot && messagesBar:
+            Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+        // VoiceOver's order in every posture: Back, Chat info (`nameButton`, 2), More.
+        case .columnBack:
+            chatContent(.lead, chat, plain: true).accessibilitySortPriority(3)
+        case .columnMore:
+            chatContent(.trail, chat, plain: true).accessibilitySortPriority(1)
+        case .lead where messagesBar:
+            chatContent(.lead, chat, plain: true).accessibilitySortPriority(3)
+        case .trail where messagesBar:
+            chatContent(.trail, chat, plain: true).accessibilitySortPriority(1)
+        default:
+            chatContent(slot, chat, plain: true)
+        }
+    }
+
+    /// A chat's own control in a slot, wherever the slot stands: Back, the pill, More.
+    @ViewBuilder private func chatContent(_ slot: MorphSlot, _ chat: ChatSession, plain: Bool) -> some View {
+        switch slot {
+        case .lead, .columnBack:
             Button { model.chatRequest = .init(.back) } label: {
                 Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
             }
@@ -686,7 +892,7 @@ struct MorphTopBar: View {
                 .accessibilityAddTraits([.isButton, .isHeader])
                 .accessibilityAction { model.chatRequest = .init(.profile) }
                 .accessibilityIdentifier("chat.titlePill")
-        case .trail:
+        case .trail, .columnMore:
             Menu {
                 ChatMenuItems(chat: chat, onProfile: { model.chatRequest = .init(.profile) }, onRename: { model.chatRequest = .init(.rename) },
                               onContext: { model.chatRequest = .init(.context) }, onNewChat: { model.chatRequest = .init(.newChat) }, onClose: { model.chatRequest = .init(.close) })
@@ -718,8 +924,8 @@ struct MorphTopBar: View {
             switch chrome.lead {
             case .botMenu:
                 Menu { ChatListProfileItems() } label: {
-                    Image(uiImage: BotAvatarImage.cached(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme))
-                        .renderingMode(.original).frame(width: 44, height: 44).contentShape(.circle)
+                    BarFaceCircle(profile: model.listChipProfile ?? "?", size: 26, scheme: scheme)
+                        .frame(width: 44, height: 44).contentShape(.circle)
                 }
                 .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .circle))
                 .accessibilityLabel("Profile: \(model.listChipProfile ?? "none")")
@@ -755,29 +961,33 @@ struct MorphTopBar: View {
             case .boardActions:
                 // The board's … menu needs its store (nudge, refresh): the page's own until wired.
                 trailButtons([("ellipsis.circle", "Board options", "board.options", {}),
-                              ("plus", "New Task", "board.new", { model.pageRequest = .init(.boardNew) })])
+                              ("plus", "Add task", "board.new", { model.pageRequest = .init(.boardNew) })])
             case .sessionsOptions:
                 Menu {
                     Button { model.pageRequest = .init(.sessionsAdvanced) } label: { Label("Advanced", systemImage: "internaldrive") }
                 } label: { Image(systemName: "gearshape").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .font(.body.weight(.medium)).foregroundStyle(.tint)
-                .padding(.horizontal, 16).frame(height: 44)
+                .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
                 .accessibilityLabel("Options").accessibilityIdentifier("sessions.options")
                 .accessibilityShowsLargeContentViewer { Label("Options", systemImage: "gearshape") }
             case nil: EmptyView()
             }
             }
+        // Only a chat has the status column's slots.
+        case .columnBack, .columnMore:
+            EmptyView()
         }
     }
 
     private func pageRequestID(for tab: AppModel.AppTab) -> String {
-        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; default: "\(tab.rawValue).plus" }
+        switch tab { case .bots: "bots.newBot"; case .projects: "projects.new"; case .cron: "cron.add"; default: "\(tab.rawValue).plus" }
     }
     private func plusRequest(for tab: AppModel.AppTab) {
         switch tab {
         case .bots: model.pageRequest = .init(.botsNewBot)
         case .projects: model.pageRequest = .init(.projectsNew)
+        case .cron: model.pageRequest = .init(.cronNew)
         default: break
         }
     }
@@ -794,10 +1004,10 @@ struct MorphTopBar: View {
 
     /// A page's trailing buttons, live, with the footprint `trailIcons` is measured with.
     private func trailButtons(_ items: [(symbol: String, label: String, id: String, action: () -> Void)]) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                 Button(action: item.action) { Image(systemName: item.symbol).contentShape(.rect) }
-                    .buttonStyle(MorphPressStyle(kind: .icon))
+                    .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                     .accessibilityElement(children: .ignore).accessibilityLabel(item.label).accessibilityAddTraits(.isButton)
                     .accessibilityAction { item.action() }
                     .accessibilityShowsLargeContentViewer { Label(item.label, systemImage: item.symbol) }
@@ -805,16 +1015,16 @@ struct MorphTopBar: View {
             }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     /// A pushed page's own controls, live, with the footprint `trailIcons` is measured with (#435).
     private func pageActionButtons(_ acts: [MorphPageAction]) -> some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
             ForEach(acts) { a in
                 if a.menu.isEmpty {
                     Button(action: a.action) { Image(systemName: a.symbol).contentShape(.rect) }
-                        .buttonStyle(MorphPressStyle(kind: .icon))
+                        .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                         .accessibilityElement(children: .ignore).accessibilityLabel(a.label).accessibilityAddTraits(.isButton)
                         .accessibilityAction { if a.enabled { a.action() } }
                         .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
@@ -827,7 +1037,7 @@ struct MorphTopBar: View {
                             Button { item.action() } label: { Label(item.label, systemImage: item.symbol) }
                         }
                     } label: { Image(systemName: a.symbol).contentShape(.rect) }
-                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                    .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                     .accessibilityLabel(a.label).accessibilityIdentifier(a.id)
                     .accessibilityShowsLargeContentViewer { Label(a.label, systemImage: a.symbol) }
                     .disabled(!a.enabled).opacity(a.enabled ? 1 : 0.35)
@@ -835,14 +1045,14 @@ struct MorphTopBar: View {
             }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     /// A page's trailing icons (visual in this pass, measured and morphed like the list's).
     private func trailIcons(_ names: [String], label: String) -> some View {
-        HStack(spacing: 18) { ForEach(names, id: \.self) { Image(systemName: $0) } }
+        HStack(spacing: BarIcon.spacing) { ForEach(names, id: \.self) { Image(systemName: $0).barIconSlot() } }
             .font(.body.weight(.medium)).foregroundStyle(.tint)
-            .padding(.horizontal, 16).frame(height: 44)
+            .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
             .accessibilityLabel(label)
             .accessibilityShowsLargeContentViewer { Label(label, systemImage: names.first ?? "circle") }
     }
@@ -850,24 +1060,27 @@ struct MorphTopBar: View {
     /// The + / sort / filters capsule with its controls live: the same footprint as `actions`,
     /// which the layout is measured with.
     private var liveActions: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: BarIcon.spacing) {
+            // No New bot in the demo (#494), here and in `actions`, which the layout is measured with.
+            if !model.isInDemo {
             Button { model.chatListRequest = .init(.newBot) } label: { Image(systemName: "plus").contentShape(.rect) }
-                .buttonStyle(MorphPressStyle(kind: .icon))
+                .buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityElement(children: .ignore).accessibilityLabel("New bot").accessibilityAddTraits(.isButton)
                 .accessibilityAction { model.chatListRequest = .init(.newBot) }
                 .accessibilityShowsLargeContentViewer { Label("New bot", systemImage: "plus") }
                 .accessibilityIdentifier("chats.newBot")
+            }
             Menu { ChatListSortItems() } label: { Image(systemName: "arrow.up.arrow.down").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityLabel("Sort").accessibilityIdentifier("chats.sort")
                 .accessibilityShowsLargeContentViewer { Label("Sort", systemImage: "arrow.up.arrow.down") }
             Menu { ChatListFilterItems() } label: { Image(systemName: "line.3.horizontal.decrease.circle").contentShape(.rect) }
-                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon))
+                .menuStyle(.button).buttonStyle(MorphPressStyle(kind: .icon)).barIconHitArea()
                 .accessibilityLabel("Filters").accessibilityIdentifier("chats.filters")
                 .accessibilityShowsLargeContentViewer { Label("Filters", systemImage: "line.3.horizontal.decrease.circle") }
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 
     // MARK: The end states (laid out, not seen)
@@ -943,7 +1156,29 @@ struct MorphTopBar: View {
         .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
     }
 
-    private func chatLayout(_ chat: ChatSession) -> some View {
+    @ViewBuilder private func chatLayout(_ chat: ChatSession) -> some View {
+        if messagesBar {
+            // Like Messages (#542), level with the list's row: nothing is seated over anything. Up in the band: Back (the
+            // bot circle's place), the face in the title capsule's place, the name, More. Closed: the face in the bot
+            // circle's place and the name; Back and More stand in the status column (`columnFrame`).
+            HStack(spacing: 0) {
+                Color.clear.frame(width: 44, height: 44).measured(.lead, into: $chatFrames)
+                if inBand {
+                    Color.clear.frame(width: 44, height: 44).measured(.mid, into: $chatFrames).padding(.leading, Self.faceGap)
+                }
+                nameText(chat).hidden()
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { nameFrame = $0 }
+                    .padding(.leading, ChatNameLines.faceGap)
+                Spacer(minLength: 8)
+                if inBand { Color.clear.frame(width: 44, height: 44).measured(.trail, into: $chatFrames) }
+            }
+        } else {
+            seatedChatLayout(chat)
+        }
+    }
+
+    /// Elsewhere (a phone, an iPad window): the pill with the face seated on it.
+    private func seatedChatLayout(_ chat: ChatSession) -> some View {
         // The chat's row sits a little lower than the list's: the seated face rises over the
         // pill's top, and at the list's height it went up under the Dynamic Island.
         HStack(spacing: 12) {
@@ -975,13 +1210,13 @@ struct MorphTopBar: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 18) {
-            Image(systemName: "plus")
-            Image(systemName: "arrow.up.arrow.down")
-            Image(systemName: "line.3.horizontal.decrease.circle")
+        HStack(spacing: BarIcon.spacing) {
+            if !model.isInDemo { Image(systemName: "plus").barIconSlot() }
+            Image(systemName: "arrow.up.arrow.down").barIconSlot()
+            Image(systemName: "line.3.horizontal.decrease.circle").barIconSlot()
         }
         .font(.body.weight(.medium)).foregroundStyle(.tint)
-        .padding(.horizontal, 16).frame(height: 44)
+        .padding(.horizontal, BarIcon.endPadding).frame(height: 44)
     }
 }
 
@@ -1023,28 +1258,59 @@ private struct CapsuleFrame: ViewModifier {
     /// page): the wheel's room goes with the morph. Given in full, a refresh still running as a
     /// chat opened widened its pill to the right, off its words, until the refresh ended.
     var widen: CGFloat = 1
+    /// The capsule's slot, for the DEBUG frames readout (`MorphFramesProbe`).
+    var slot: MorphSlot? = nil
+    /// A status-column slot (the closed Duo, #542): it keeps its frame where it stands and grows from its own middle as a
+    /// chat comes, shrinking there as it goes. From a zero frame its corner rode from its middle into place, 22 pt down
+    /// and right of where it rests at first (the gate's frame log).
+    var inPlace = false
+    /// The face's slot while a chat shows on the Duo: its frame as ever, so nothing in the morph moves, but no glass, so
+    /// the face stands on nothing, as a contact's photo does in Messages (Matt, 2026-10-28, #542).
+    var bare = false
     /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     func body(content: Content) -> some View {
         let open = pull.map { $0.refreshing || $0.shown > 0 } ?? false
-        let width = present ? frame.width + (open ? side * 1.4 * widen : 0) : 0
+        let width = inPlace ? frame.width : present ? frame.width + (open ? side * 1.4 * widen : 0) : 0
         content
-            .frame(width: width, height: present ? frame.height : 0)
+            .frame(width: width, height: present || inPlace ? frame.height : 0)
+            #if DEBUG
+            .modifier(MorphFramesProbe.Record(slot: slot, present: present))
+            #endif
             // The page's glass under the capsule stays still when it is touched (#344).
             .barShieldShape()
             .clipShape(.capsule)
-            .glassEffect(present ? .regular : .identity, in: .capsule)
-            .position(x: present ? frame.minX + width / 2 : frame.midX, y: frame.midY)
+            .glassEffect(present && !bare ? .regular : .identity, in: .capsule)
+            .scaleEffect(inPlace && !present ? 0.01 : 1)
+            .position(x: present || inPlace ? frame.minX + width / 2 : frame.midX, y: frame.midY)
             // With the wheel's own slot: one snappy step open, and closed after the refresh.
             .animation(.snappy(duration: 0.3), value: open)
     }
+}
+
+/// The icons in the bar's capsules (+, sort, filters, a page's own): each in a slot of its own, the capsule's height and
+/// at least `width` wide, which is also what's hit. The glyph alone was the hit area, and the audit's hit region failed
+/// the sort arrows (24 × 19) and, once those were the capsule's height, the + (18 wide). The slots are closer together
+/// and the capsule's ends a little narrower, so the glyphs stand where they did and the capsule is its old width.
+enum BarIcon {
+    static let width: CGFloat = 28
+    static let spacing: CGFloat = 12
+    static let endPadding: CGFloat = 11
+}
+
+extension View {
+    /// An icon control's slot in a capsule (`BarIcon`): on the control, outside its button style, so the pressed square
+    /// still hugs the glyph.
+    func barIconHitArea() -> some View { frame(minWidth: BarIcon.width, minHeight: 44).contentShape(.rect) }
+    /// The same slot in the capsules laid out for measuring (`trailIcons`, `actions`).
+    func barIconSlot() -> some View { frame(minWidth: BarIcon.width) }
 }
 
 /// The bar's controls pressed (Matt on 1.5 (18): "at touching indication on the top right icons
 /// for the chat page"): a soft fill behind the control touched, not its whole shared capsule, and
 /// a slight grow, like the system's glass controls, at touch-down; gone on lift or when the finger
 /// slides off. A fill, never glass taken to 0 (the glass reference). Reduce Motion: the fill
-/// alone. A judgement call made while Matt was out: `-vory-press-style-off` brings back (18)'s
+/// alone. `-vory-press-style-off` brings back (18)'s
 /// plain controls.
 struct MorphPressStyle: ButtonStyle {
     enum Kind {
@@ -1120,6 +1386,112 @@ private struct FaceTapArea: UIViewRepresentable {
         @objc func tapped() { action() }
     }
 }
+
+#if DEBUG
+/// DEBUG `-vory-morph-frames` (#516's checks; DEBUG only, checked absent from Release at each cut): each of the top bar's
+/// capsules as drawn, in the window's space, for the UI tests to hold the page's headings and search fields against. The
+/// capsules are glass shapes, not accessibility elements, and the title's text is narrower than its capsule. Read through
+/// a 1 pt element, "debug.morphframes", whose value is "lead x y w h;mid …;trail …" for the capsules shown.
+enum MorphFramesProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-morph-frames")
+    @MainActor static var frames: [MorphSlot: CGRect] = [:]
+    /// The chat's face (its tap area, where the face is drawn), while the chat is at rest; nil otherwise.
+    @MainActor static var face: CGRect?
+    /// With `-vory-morph-log` too: every drawn frame of every capsule and of the face, "<wall time> <slot> x y w h", as
+    /// they change (a push's or a pop's every frame), the latest 4,000; read through "debug.morphlog". A capsule that
+    /// goes logs a zero frame under its name, so a capsule that vanishes reads as travel there; one that stands still
+    /// logs nothing.
+    nonisolated static let logs = ProcessInfo.processInfo.arguments.contains("-vory-morph-log")
+    @MainActor static var log: [String] = []
+    @MainActor static func note(_ name: String, _ f: CGRect) {
+        guard logs else { return }
+        log.append(String(format: "%.3f %@ %.1f %.1f %.1f %.1f", Date().timeIntervalSince1970, name, f.minX, f.minY, f.width, f.height))
+        if log.count > 4000 { log.removeFirst(log.count - 4000) }
+    }
+    /// Other frames by name, while they're drawn: the chat's band (its opaque part, `ChatBand`) and the name beside the
+    /// face, on the Duo (#542).
+    @MainActor static var marks: [String: CGRect] = [:]
+    @MainActor static var summary: String {
+        let f = { (n: String, r: CGRect) in "\(n) \(Int(r.minX.rounded())) \(Int(r.minY.rounded())) \(Int(r.width.rounded())) \(Int(r.height.rounded()))" }
+        return (MorphSlot.allCases.compactMap { s in frames[s].map { f("\(s)", $0) } } + [face.map { f("face", $0) }].compactMap { $0 }
+                + marks.keys.sorted().compactMap { k in marks[k].map { f(k, $0) } })
+            .joined(separator: ";")
+    }
+    /// A named frame for the readout (`marks`) while the view is drawn.
+    struct Mark: ViewModifier {
+        let key: String
+        @ViewBuilder func body(content: Content) -> some View {
+            if isOn {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in MorphFramesProbe.marks[key] = f.width > 0 ? f : nil }
+                    .onDisappear { MorphFramesProbe.marks[key] = nil }
+            } else {
+                content
+            }
+        }
+    }
+    /// The face's frame for the readout while `shown` (the chat at rest).
+    struct RecordFace: ViewModifier {
+        let shown: Bool
+        /// Its last frame, so a face that comes to rest without moving (closed, in the bot circle's place) is read then
+        /// too: measured only on a change, it was left out of the readout there.
+        @State private var last: CGRect = .zero
+        @ViewBuilder func body(content: Content) -> some View {
+            if isOn {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                    last = f
+                    MorphFramesProbe.face = shown && f.width > 0 ? f : nil
+                    if shown && f.width > 0 { MorphFramesProbe.note("face", f) }
+                }
+                .onChange(of: shown) { _, now in
+                    MorphFramesProbe.face = now && last.width > 0 ? last : nil
+                    if now && last.width > 0 { MorphFramesProbe.note("face", last) }
+                }
+                .onDisappear { MorphFramesProbe.face = nil }
+            } else {
+                content
+            }
+        }
+    }
+    struct Record: ViewModifier {
+        let slot: MorphSlot?
+        let present: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if isOn, let slot {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in
+                    MorphFramesProbe.frames[slot] = present && f.width > 0 ? f : nil
+                    if present && f.width > 0 { MorphFramesProbe.note("\(slot)", f) }
+                }
+                // A capsule that hides without moving isn't measured again: it leaves the readout at once, so no check
+                // reads a capsule that's gone. The frame log gets a zero frame under its name as it goes.
+                .onChange(of: present) { _, shown in if !shown { MorphFramesProbe.frames[slot] = nil; MorphFramesProbe.note("\(slot)", .zero) } }
+            } else {
+                content
+            }
+        }
+    }
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.morphframes" } set {} }
+        override var accessibilityLabel: String? { get { "Top bar frames" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { MorphFramesProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    /// The frame log (`-vory-morph-log`), one line per drawn change.
+    final class LogView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.morphlog" } set {} }
+        override var accessibilityLabel: String? { get { "Top bar frame log" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { MorphFramesProbe.log.joined(separator: "\n") } } set {} }
+    }
+    struct LogReadout: UIViewRepresentable {
+        func makeUIView(context: Context) -> LogView { LogView() }
+        func updateUIView(_ v: LogView, context: Context) {}
+    }
+}
+#endif
 #else
 import SwiftUI
 import VoryCore

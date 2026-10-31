@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.38"
+VERSION = "1.0.39"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -607,6 +607,10 @@ class Gateway:
 
     async def connect(self) -> None:
         """Connect to the configured URL; the error says what that URL answered, for the app."""
+        # A reconnect replaces the socket: the one before it is closed, or it stays open, still
+        # attached to every session it mirrored (so the gateway never reaps them), still pinged,
+        # and its reader still feeding events into the queue next to the new one's.
+        await self.close()
         try:
             ready, how = await asyncio.to_thread(self._ws_for, self.url)
             kwargs = {"additional_headers": {k: v for k, v in self.headers.items() if not k.startswith("Authorization") and k != "X-Hermes-Session-Token"},
@@ -616,7 +620,7 @@ class Gateway:
         except Exception as exc:  # noqa: BLE001
             raise ConnectionError(f"{self.url}: {describe_error(exc)}") from None
         self.transport = f"{self.url} ({how})"
-        asyncio.create_task(self._reader())
+        asyncio.create_task(self._reader(self.ws))
         # Advertise that server→client requests may be sent to this socket. The companion never
         # ANSWERS one (see _reader): the phone does, or the request waits in the gateway's
         # open_requests for the phone's next resume. Without this, an approval raised while the
@@ -635,9 +639,19 @@ class Gateway:
             self.server_requests = False
         self.requests: asyncio.Queue = asyncio.Queue()
 
-    async def _reader(self) -> None:
+    async def close(self) -> None:
+        ws, self.ws = self.ws, None
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _reader(self, ws) -> None:
         try:
-            async for raw in self.ws:
+            async for raw in ws:
+                if ws is not self.ws:
+                    break  # replaced: what it still had buffered is not news
                 for line in str(raw).splitlines():
                     if not line.strip():
                         continue
@@ -661,7 +675,12 @@ class Gateway:
                         await self.events.put({"type": "__request__", "id": msg["id"], "method": msg["method"], "params": msg.get("params") or {}})
         except Exception as exc:  # noqa: BLE001
             log.warning("ws reader ended: %s", exc)
-        await self.events.put({"type": "__closed__"})
+        # Only the current socket's end is news. A socket released on purpose (ReleaseIdle, a
+        # config reload) finishes closing after its replacement is up; its "closed" read as the
+        # new socket's made the relay reconnect again without closing that one, leaking one
+        # healthy, attached socket per idle release (every 10 min by default).
+        if ws is self.ws:
+            await self.events.put({"type": "__closed__"})
 
     async def call(self, method: str, params: dict | None = None, timeout: float = 60) -> dict:
         self._id += 1
@@ -1411,19 +1430,11 @@ class Relay:
                 # session.info, a sessions.changed) would release again at once: a reconnect loop
                 # that flipped the heartbeat's `connected` and showed as "not running" in the app.
                 self._last_running_at = time.time()
-                try:
-                    if self.gw.ws:
-                        await self.gw.ws.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                await self.gw.close()
                 backoff = 1
             except CodeChanged:
                 log.info("hermes_push.py changed on disk; handing over to the new code")
-                try:
-                    if self.gw.ws:
-                        await self.gw.ws.close()
-                except Exception:  # noqa: BLE001
-                    pass
+                await self.gw.close()
                 self._status(connected=False, gateway=self.gw.public_url, transport=self.gw.transport, error="reloading new code…")
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -1437,11 +1448,7 @@ class Relay:
                 backoff = min(30, backoff * 2)
 
     async def _reload_config(self) -> None:
-        try:
-            if self.gw.ws:
-                await self.gw.ws.close()
-        except Exception:  # noqa: BLE001
-            pass
+        await self.gw.close()
         _CONF.clear()
         _load_conf()
         while True:

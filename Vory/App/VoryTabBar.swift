@@ -82,12 +82,18 @@ struct VoryTabBar: View {
     /// too narrow to hold it): the capsule plus a margin each side.
     static let reservedWidth: CGFloat = 56 + 2 * 10
     /// The system's strip items, measured on the closed iPhone Duo: 50 pt wide, their centre
-    /// line 48 pt in from the window's edge, 10 pt between groups; the status items at the top
-    /// of the strip end about 150 pt down. Ours line up with them (Matt).
+    /// line 48 pt in from the window's edge, 10 pt between groups. Ours line up with them (Matt).
     static let stripItemWidth: CGFloat = 50
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
-    static let stripStatusAllowance: CGFloat = 156
+    /// The side of a status strip like the Duo's (closed, or open on its side: the safe area 84 on one side, 0 on the
+    /// other): one side deep enough for the strip's items, the other none. Nil anywhere else, an iPhone held sideways among
+    /// them (its Dynamic Island's inset on both sides) (#542).
+    static func statusStrip(_ safe: EdgeInsets) -> HorizontalEdge? {
+        if safe.trailing >= stripItemWidth, safe.leading < 1 { return .trailing }
+        if safe.leading >= stripItemWidth, safe.trailing < 1 { return .leading }
+        return nil
+    }
     /// The longest the bar group (the capsule and the circles) runs along the bottom: its length on the
     /// widest iPhone, the 17 Pro Max (440 pt wide, less the two 21 pt side margins), so no iPhone
     /// reaches it (the iPhone app is portrait-only). An iPad and the open Duo upright keep the
@@ -406,6 +412,7 @@ struct HidesTabBar: ViewModifier {
 /// while deeper pops the stack the way a swipe back would, animated.
 struct TabRoot: ViewModifier {
     @Environment(AppModel.self) private var model
+    @Environment(\.statusInCorner) private var statusInCorner
     /// The page's pull-to-refresh state when its `.reloadable` is applied outside this marker
     /// (Bots, Files): by environment then, by preference when it sits inside (Home, Projects,
     /// the Board, Status, Sessions, Tasks). The bar's title capsule hosts the wheel either way;
@@ -436,6 +443,10 @@ struct TabRoot: ViewModifier {
             // An empty bar collapses (on the Duo the search drawer rode up under the capsules):
             // an invisible item keeps the bar at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
+            // Where nothing of the system's keeps a band under the bar's row (the closed Duo, the open Duo upright), the
+            // stack starts under the row (#340).
+            .background(TopBarRoomProbe(tab: tab, room: TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
+                                                               barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
             // the pop begins, and the bar's capsules came back over the pushed page before it
             // had moved (Matt, 2026-10-12: "swiping back on other pages is broken"). The probe
@@ -675,10 +686,10 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             watchPage(vc)
             let first = !wasPushed
             wasPushed = true
-            guard active, let nav else { return }
+            guard active, let nav else { giveBackItem(under: vc); return }
             // A page that keeps its own bar keeps its back and title, and the bar's state under it
             // stays as it was (the root's, or the Back of the page it came from).
-            if ownsBar(vc, in: nav) { return }
+            if ownsBar(vc, in: nav) { giveBackItem(under: vc); return }
             hideChrome(of: vc)
             guard first else { return }
             Perf.stamp("root probe \(tab.rawValue): push seen")
@@ -762,18 +773,45 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             chromeTaken.add(vc)
             let item = vc.navigationItem
             item.hidesBackButton = true
+            // The page under it gives no Back either. Where the system's bars stand in a side strip (the closed iPhone
+            // Duo), the strip drew a Back from the page underneath's own back item whenever something walked the page's
+            // accessibility tree (VoiceOver, Voice Control, Full Keyboard Access), whatever `hidesBackButton` said: a
+            // second Back beside the bar's.
+            if let under = page(under: vc), under.navigationItem.backBarButtonItem == nil {
+                under.navigationItem.backBarButtonItem = HiddenBack()
+            }
             let titled = keepsTitle && !(item.title ?? "").isEmpty
             if !titled, !(item.titleView is BarHolder) { item.titleView = BarHolder() }
             else if titled, item.titleView is BarHolder { item.titleView = nil }
         }
         /// An empty title view: holds an untitled pushed page's bar at its height.
         private final class BarHolder: UIView {}
+        /// The back item the bar puts on the page under a pushed one, hidden; only this one is taken back.
+        private final class HiddenBack: UIBarButtonItem {
+            override init() { super.init(); isHidden = true }
+            required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        }
+
+        /// The page a pushed page sits on, in this stack.
+        private func page(under vc: UIViewController) -> UIViewController? {
+            guard let pages = nav?.viewControllers, let i = pages.firstIndex(of: vc), i > 0 else { return nil }
+            return pages[i - 1]
+        }
 
         private func showChrome(of vc: UIViewController) {
             guard chromeTaken.contains(vc) else { return }
             chromeTaken.remove(vc)
             vc.navigationItem.hidesBackButton = false
+            giveBackItem(under: vc)
             if vc.navigationItem.titleView is BarHolder { vc.navigationItem.titleView = nil }
+        }
+
+        /// A page keeps the system's Back after all (a wide window, or a page with its own bar): the page under it gets
+        /// its back item back, where the bar had hidden it.
+        private func giveBackItem(under vc: UIViewController) {
+            if let under = page(under: vc), under.navigationItem.backBarButtonItem is HiddenBack {
+                under.navigationItem.backBarButtonItem = nil
+            }
         }
 
         /// This page keeps its own bar: it, or a page under it other than the root, carries the
@@ -830,6 +868,46 @@ struct OwnBarMarker: UIViewControllerRepresentable {
             queue += c.children
         }
         return false
+    }
+}
+
+/// The top bar's room on a tab's navigation stack (#340, `TopBarRoom`): the stack's additional safe area at the top, so
+/// its pages and the system's search drawer start under the bar's row where nothing of the system's keeps a band for it
+/// (the closed iPhone Duo, the open Duo upright). On the stack, not the page: the drawer belongs to the stack's bar and
+/// stays where the stack's safe area puts it (a page's own inset moved its rows and left the drawer under the row, as did
+/// a SwiftUI inset or padding). Pages pushed on the stack get it too: they start that much lower there, never under the
+/// row. A child view controller of the root page applies it when it changes and when the page appears, never in the
+/// middle of a transition (again as the transition completes): nothing is read back from the page.
+struct TopBarRoomProbe: UIViewControllerRepresentable {
+    /// The tab whose root this is: the room each root applied is kept by tab (`AppliedRoom`).
+    var tab: AppModel.AppTab
+    var room: CGFloat
+    func makeUIViewController(context: Context) -> Probe { Probe() }
+    func updateUIViewController(_ probe: Probe, context: Context) {
+        probe.rootTab = tab
+        probe.room = room
+        DispatchQueue.main.async { probe.apply() }
+    }
+
+    final class Probe: UIViewController {
+        /// Not `tab`: UIKit's view controllers have one of their own.
+        var rootTab: AppModel.AppTab = .chats
+        var room: CGFloat = 0
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.backgroundColor = .clear; view = v }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); apply() }
+
+        func apply() {
+            guard let nav = navigationController else { return }
+            if let transition = nav.transitionCoordinator {
+                transition.animate(alongsideTransition: nil) { [weak self] _ in self?.apply() }
+                return
+            }
+            // Only on a change: the readouts observe these, and every root applies on every update.
+            if TopBarRoom.lastRoom != room { TopBarRoom.lastRoom = room }
+            if AppliedRoom.shared.rooms[rootTab] != room { AppliedRoom.shared.rooms[rootTab] = room }
+            guard nav.additionalSafeAreaInsets.top != room else { return }
+            nav.additionalSafeAreaInsets.top = room
+        }
     }
 }
 

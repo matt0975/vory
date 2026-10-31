@@ -12,6 +12,8 @@ import Testing
 /// The snapshots are counted through this runtime's own callback; the list refresh by the
 /// runtime's owed state (the notice goes to the shared centre, where tests running alongside
 /// post it too, so its count can only be a lower bound).
+///
+/// Returning also refreshes once when suspension missed every sessions.changed notice.
 @MainActor @Suite struct AwayRefreshTests {
     final class Counter: @unchecked Sendable {
         private let lock = NSLock()
@@ -25,11 +27,9 @@ import Testing
         return GatewayRuntime(connection: conn, store: ConnectionStore())
     }
 
-    /// The gateway sends it with no session id; here it carries one no chat has, because this
-    /// test's chat was never opened and its runtime id is still empty, and the runtime hands an
-    /// event to the chat whose runtime id matches before it looks at its type.
+    /// The gateway's real session-less event must bypass chats awaiting attach.
     private func sessionsChanged() -> GatewayEvent {
-        GatewayEvent(type: "sessions.changed", sessionID: "global", payload: .object([:]), seq: nil)
+        GatewayEvent(type: "sessions.changed", sessionID: "", payload: .object([:]), seq: nil)
     }
 
     private func settle(until done: () -> Bool, seconds: Double = 5) async {
@@ -84,6 +84,59 @@ import Testing
         #expect(snapshots.value == 4)
         #expect(lists.value >= 3, "a sessions.changed in front did not refresh the lists")
         #expect(!rt.owedListRefresh && !rt.owedSnapshot)
+    }
+
+    /// No event is needed to owe a refresh after the foreground animation.
+    @Test func theReturnWithNothingArrivingStillReadsTheListsOnce() async throws {
+        let rt = try runtime()
+        let snapshots = Counter()
+        rt.onSnapshotPublished = { _ in snapshots.add() }
+        let chat = ChatSession(runtime: rt, storedID: nil, title: nil)
+        rt.registry.add(chat)
+        #expect(!rt.owedListRefresh)
+        rt.isAway = true
+        #expect(!rt.owedListRefresh, "going away owed a read for a notice that never came")
+        rt.isAway = false
+        #expect(rt.owedListRefresh, "the way back owed no read with nothing delivered away")
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(rt.owedListRefresh, "the lists were read inside the return's animation")
+        await settle { !rt.owedListRefresh }
+        #expect(!rt.owedListRefresh, "the way back did not read the lists")
+        #expect(snapshots.value == 0, "the way back published a snapshot nothing owed")
+    }
+
+    /// A return cut short must leave its refresh owed until the next return.
+    @Test func aReturnCutShortWithNothingArrivingOwesTheReadStill() async throws {
+        let rt = try runtime()
+        rt.isAway = true
+        rt.isAway = false
+        rt.isAway = true          // a glance at the app and away again, inside the 0.7 s
+        try await Task.sleep(for: .milliseconds(1000))
+        #expect(rt.owedListRefresh, "a return cut short paid the owed read while away")
+        rt.isAway = false
+        await settle { !rt.owedListRefresh }
+        #expect(!rt.owedListRefresh)
+    }
+
+    /// Assigning the current foreground state must not schedule another refresh.
+    @Test func sayingTheSameThingAgainOwesNothing() async throws {
+        let rt = try runtime()
+        rt.isAway = false
+        rt.isAway = false         // in front already: the app says it again
+        #expect(!rt.owedListRefresh, "a repeated \"in front\" owed a read")
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(!rt.owedListRefresh, "a repeated \"in front\" read the lists")
+
+        // One read per return; the same value again afterwards owes nothing.
+        rt.isAway = true
+        #expect(!rt.owedListRefresh, "going away owed a read for a notice that never came")
+        rt.isAway = false
+        await settle { !rt.owedListRefresh }
+        #expect(!rt.owedListRefresh)
+        rt.isAway = false
+        rt.isAway = false
+        try await Task.sleep(for: .milliseconds(900))
+        #expect(!rt.owedListRefresh, "saying \"in front\" again owed a second read")
     }
 
     @Test func goingAwayAgainBeforeTheReturnSettlesOwesTheRefreshStill() async throws {

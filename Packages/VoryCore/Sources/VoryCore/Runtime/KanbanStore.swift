@@ -38,9 +38,13 @@ public final class KanbanStore {
 
     func attach(_ runtime: GatewayRuntime) {
         self.runtime = runtime
+        // The demo keeps its board's answers in memory only, and reads none another gateway left.
+        guard !runtime.isEphemeral else { return }
         if let raw = UserDefaults.standard.string(forKey: cacheKey), let a = Availability(rawValue: raw) { cached = a }
         selectedBoard = UserDefaults.standard.string(forKey: boardKey)
     }
+
+    private var ephemeral: Bool { runtime?.isEphemeral ?? false }
 
     private var gatewayKey: String { runtime?.connection.id.uuidString ?? "" }
     private var cacheKey: String { "kanban.available." + gatewayKey }
@@ -75,7 +79,7 @@ public final class KanbanStore {
 
     private func set(_ a: Availability) {
         availability = a; cached = a
-        UserDefaults.standard.set(a.rawValue, forKey: cacheKey)
+        if !ephemeral { UserDefaults.standard.set(a.rawValue, forKey: cacheKey) }
     }
 
     // MARK: Reads
@@ -137,7 +141,7 @@ public final class KanbanStore {
     public func select(board slug: String) {
         guard slug != selectedBoard else { return }
         selectedBoard = slug
-        UserDefaults.standard.set(slug, forKey: boardKey)
+        if !ephemeral { UserDefaults.standard.set(slug, forKey: boardKey) }
         board = nil; workers = []
         cursor = KanbanEventCursor()
         Task { await refresh(); startEvents() }
@@ -157,10 +161,10 @@ public final class KanbanStore {
         eventsTask?.cancel(); eventsTask = nil
         // `receive()` does not notice a cancelled task: the socket is closed under it, so the
         // loop ends now and not at the next frame.
-        eventSocket?.cancel(with: .goingAway, reason: nil); eventSocket = nil
+        eventSocket?.close(); eventSocket = nil
         liveConnected = false
     }
-    private var eventSocket: URLSessionWebSocketTask?
+    private var eventSocket: (any GatewayFramePipe)?
 
     private func eventLoop() async {
         var backoff: Double = 2
@@ -173,21 +177,16 @@ public final class KanbanStore {
                 let (url, headers) = try await runtime.pluginWebsocketURL(path: KanbanAPI.base + "/events", query: query)
                 var request = URLRequest(url: url)
                 for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
-                let socket = Self.socketSession.webSocketTask(with: request)
+                // Through the runtime's transport: the network's web socket, or the demo's pipe.
+                let socket = runtime.transport.makeFramePipe(request, Self.socketSession)
                 eventSocket = socket
                 socket.resume()
                 liveConnected = true
                 backoff = 2
-                defer { socket.cancel(with: .goingAway, reason: nil); if eventSocket === socket { eventSocket = nil } }
+                defer { socket.close(); if eventSocket === socket { eventSocket = nil } }
                 while !Task.isCancelled {
-                    let message = try await socket.receive()
-                    let data: Data?
-                    switch message {
-                    case .data(let d): data = d
-                    case .string(let s): data = Data(s.utf8)
-                    @unknown default: data = nil
-                    }
-                    if let data, let frame = try? JSONCoding.decoder.decode(KanbanEventsFrame.self, from: data), cursor.take(frame) {
+                    let data = Data(try await socket.receive().utf8)
+                    if let frame = try? JSONCoding.decoder.decode(KanbanEventsFrame.self, from: data), cursor.take(frame) {
                         scheduleRefetch()
                     }
                 }

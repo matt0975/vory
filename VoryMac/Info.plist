@@ -59,13 +59,11 @@
 		     content keys) beside NSAllowsArbitraryLoads makes the system ignore the latter, and
 		     plain http to a Tailscale or LAN host was refused on the Mac (ATS error -1022). -->
 	</dict>
-	<key>NSCameraUsageDescription</key>
-	<string>Take a photo to attach to a chat with your Hermes agent.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to a Hermes dashboard running on your local network, such as http://192.168.x.x:9119.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Talk to your bot in voice mode, dictate a message, or record a voice memo to attach.</string>
+	<string>Talk with your bot, dictate a message or record a voice memo. Audio goes to your gateway, or to Google if you use Live voice with your own key.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Transcribe hold-to-talk speech on this Mac before sending it.</string>
+	<string>Turn what you say into text on this Mac. When your gateway has its own speech provider and Speech is set to Automatic or Gateway, your audio goes to the gateway instead.</string>
 </dict>
 </plist>

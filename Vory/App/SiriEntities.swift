@@ -119,7 +119,7 @@ struct ChatQuery: EntityQuery, EntityStringQuery {
 enum ApprovalAnswer: String, AppEnum {
     case approve, deny
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "Answer"
-    static let caseDisplayRepresentations: [ApprovalAnswer: DisplayRepresentation] = [.approve: "Approve", .deny: "Deny"]
+    static let caseDisplayRepresentations: [ApprovalAnswer: DisplayRepresentation] = [.approve: "Allow", .deny: "Deny"]
 }
 
 /// The words Siri says for a bot's status and an approval, kept pure for the tests.
@@ -141,10 +141,10 @@ enum SiriWords {
         return parts.joined(separator: " ")
     }
 
-    /// "<Bot> wants to run <command>. Approve it?"
+    /// "<Bot> wants to run <command>. Allow it?"
     static func approvalQuestion(bot: String, request: ApprovalRequest, answer: ApprovalAnswer) -> String {
         let what = (request.command ?? request.description ?? request.toolName ?? "a command").trimmingCharacters(in: .whitespacesAndNewlines)
         let short = what.count > 120 ? String(what.prefix(119)) + "…" : what
-        return "\(bot) wants to run: \(short). \(answer == .approve ? "Approve" : "Deny") it?"
+        return "\(bot) wants to run: \(short). \(answer == .approve ? "Allow" : "Deny") it?"
     }
 }

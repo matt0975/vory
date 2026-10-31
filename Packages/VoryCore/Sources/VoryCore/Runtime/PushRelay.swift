@@ -16,7 +16,17 @@ public enum PushRelay {
     public static let credentialsAccount = "push.relay.credentials"
 
     /// Base URL baked into the build (`VoryPushRelayURL` in Info.plist); nil means no relay.
+    #if DEBUG
+    /// A relay for the unit tests to point at (#501): Debug builds have none baked in, so a test that says nothing reaches
+    /// the relay would otherwise pass without the relay path ever running. An `.invalid` host, caught by the test's
+    /// URLProtocol before anything leaves the machine. DEBUG only, checked absent from Release at each cut.
+    nonisolated(unsafe) public static var testURL: URL?
+    #endif
+
     public static var url: URL? {
+        #if DEBUG
+        if let testURL { return testURL }
+        #endif
         guard let s = Bundle.main.object(forInfoDictionaryKey: "VoryPushRelayURL") as? String,
               let u = URL(string: s.trimmingCharacters(in: .whitespaces)), u.scheme?.hasPrefix("http") == true else { return nil }
         return u

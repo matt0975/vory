@@ -1,0 +1,7 @@
+{
+  "images" : [
+    { "filename" : "TourPad-light.jpg", "idiom" : "universal" },
+    { "filename" : "TourPad-dark.jpg", "idiom" : "universal", "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ] }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}

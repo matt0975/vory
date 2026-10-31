@@ -87,14 +87,20 @@ enum AppRestore {
     /// The app leaving the screen: the chat on it (or none) is remembered.
     static func leftFront(_ model: AppModel, defaults: UserDefaults = .standard) {
         lasted(defaults: defaults)
-        guard let id = model.visibleChatID, !id.isEmpty, let rt = model.runtime else {
+        guard let saved = kept(id: model.visibleChatID, chat: model.visibleChat, runtime: model.runtime) else {
             defaults.removeObject(forKey: savedKey)
             return
         }
-        let chat = model.visibleChat?.storedID == id ? model.visibleChat : nil
-        let saved = Saved(storedID: id, profile: chat?.profileName ?? rt.selectedProfile, connectionID: rt.connection.id,
-                          gateway: rt.connection.gateway.description, leftAt: Date(), title: chat?.title)
         if let data = try? JSONEncoder().encode(saved) { defaults.set(data, forKey: savedKey) }
+    }
+
+    /// What is kept of the chat on screen as the app leaves it: nothing for the demo (#494: its chat, under its gateway's
+    /// id, stayed on the device until the next launch).
+    static func kept(id: String?, chat: ChatSession?, runtime rt: GatewayRuntime?, now: Date = Date()) -> Saved? {
+        guard let id, !id.isEmpty, let rt, !rt.isEphemeral else { return nil }
+        let chat = chat?.storedID == id ? chat : nil
+        return Saved(storedID: id, profile: chat?.profileName ?? rt.selectedProfile, connectionID: rt.connection.id,
+                     gateway: rt.connection.gateway.description, leftAt: now, title: chat?.title)
     }
 
     /// Once per process, the first time it is in front with the saved gateway up (whichever of
@@ -133,8 +139,11 @@ struct RestoreSceneKeeper: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onAppear { AppRestore.sceneAppeared(holding: sceneChat) }
-            .onChange(of: model.visibleChatID) { _, id in sceneChat = id ?? "" }
-            .onChange(of: phase) { _, _ in sceneChat = model.visibleChatID ?? "" }
+            .onChange(of: model.visibleChatID) { _, _ in sceneChat = held }
+            .onChange(of: phase) { _, _ in sceneChat = held }
     }
+
+    /// The chat on screen, or none in the demo (#494).
+    private var held: String { AppRestore.kept(id: model.visibleChatID, chat: nil, runtime: model.runtime)?.storedID ?? "" }
 }
 #endif

@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 import VoryCore
 
-/// Settings › Bots › Style on the Mac (1.5, the bot-motion brief's decision E): the iPhone's
+/// Settings › Bots › Style on the Mac (1.5): the iPhone's
 /// style key (`bots.motionStyle`), applied to the engine the same way, without the phone's
 /// gyroscope part (`BotMotionSource` is the iPhone's; it needs CoreMotion and the tilt switch,
 /// neither of which the Mac has). There is no on/off switch: the engine is always on and the

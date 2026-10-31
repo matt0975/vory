@@ -1,7 +1,7 @@
 import UIKit
 import XCTest
 
-/// Pictures of the card composer (#320) for the planner and Matt: empty, several lines typed,
+/// Pictures of the card composer (#320) for review: empty, several lines typed,
 /// "/" open, two attachments staged, a running turn. Light and dark. Not an assertion of looks.
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 final class ComposerCardShotsUITests: XCTestCase {

@@ -97,9 +97,23 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
     public var finishReason: String?
     /// Whether the row asked for tools: its reasoning is thinking before a tool call, never an answer.
     public var hasToolCalls: Bool
+    /// An asking row's calls, every one in order: the stored row names a tool only here, so its
+    /// result rows are named by matching (`TranscriptItem.fromHistory`).
+    public var toolCalls: [ToolCallRef]
+    /// A tool result row: the call it answers, and the tool's name when the row was stored with it.
+    public var toolCallID: String?
+    public var toolName: String?
+
+    /// One call on an asking row.
+    public struct ToolCallRef: Codable, Hashable, Sendable {
+        public var id: String?
+        public var name: String
+        public init(id: String?, name: String) { self.id = id; self.name = name }
+    }
 
     public init(role: String, text: String? = nil, timestamp: Double? = nil, rowId: Int? = nil, displayKind: String? = nil, name: String? = nil, context: String? = nil, reasoning: String? = nil,
-                apiContent: String? = nil, finishReason: String? = nil, hasToolCalls: Bool = false) {
+                apiContent: String? = nil, finishReason: String? = nil, hasToolCalls: Bool = false,
+                toolCalls: [ToolCallRef] = [], toolCallID: String? = nil, toolName: String? = nil) {
         self.role = role
         self.text = text
         self.timestamp = timestamp
@@ -110,7 +124,10 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         self.reasoning = reasoning
         self.apiContent = apiContent
         self.finishReason = finishReason
-        self.hasToolCalls = hasToolCalls
+        self.hasToolCalls = hasToolCalls || !toolCalls.isEmpty
+        self.toolCalls = toolCalls
+        self.toolCallID = toolCallID
+        self.toolName = toolName
     }
 
     // The WebSocket `session.resume` history is pre-flattened (`text`), but the REST
@@ -119,8 +136,9 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
     // The watch and the fast-open prefetch read that page, so both shapes decode here.
     private enum Keys: String, CodingKey {
         case role, text, timestamp, rowId, displayKind, name, context, reasoning, content, id, toolCalls, displayContent
-        case apiContent, finishReason, reasoningContent, hasToolCalls
+        case apiContent, finishReason, reasoningContent, hasToolCalls, toolCallID, toolName
         case rowIdRaw = "row_id", displayKindRaw = "display_kind", toolCallsRaw = "tool_calls", displayContentRaw = "display_content"
+        case toolCallIDRaw = "tool_call_id", toolCallIdCamel = "toolCallId", toolNameRaw = "tool_name"
         case apiContentRaw = "api_content", finishReasonRaw = "finish_reason", reasoningContentRaw = "reasoning_content"
     }
 
@@ -136,9 +154,17 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         rowId = (try? c.decodeIfPresent(Int.self, forKey: .rowId)) ?? (try? c.decodeIfPresent(Int.self, forKey: .rowIdRaw)) ?? (try? c.decodeIfPresent(Int.self, forKey: .id))
         displayKind = (try? c.decodeIfPresent(String.self, forKey: .displayKind)) ?? (try? c.decodeIfPresent(String.self, forKey: .displayKindRaw))
         let calls = (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCalls)) ?? (try? c.decodeIfPresent(JSONValue.self, forKey: .toolCallsRaw))
+        // Every call, not only the first: a row that asked for three tools named one of them and
+        // its other results read "tool" (#387). The cache's own spelling is a list of refs.
+        toolCalls = calls?.arrayValue?.compactMap { call -> ToolCallRef? in
+            guard let n = call["function"]?["name"]?.stringValue ?? call["name"]?.stringValue, !n.isEmpty else { return nil }
+            return ToolCallRef(id: call["id"]?.stringValue ?? call["call_id"]?.stringValue, name: n)
+        } ?? []
         var n = try? c.decodeIfPresent(String.self, forKey: .name)
-        if n == nil, let first = calls?.arrayValue?.first { n = first["function"]?["name"]?.stringValue ?? first["name"]?.stringValue }
+        if n == nil { n = toolCalls.first?.name }
         name = n
+        toolCallID = (try? c.decodeIfPresent(String.self, forKey: .toolCallID)) ?? (try? c.decodeIfPresent(String.self, forKey: .toolCallIDRaw)) ?? (try? c.decodeIfPresent(String.self, forKey: .toolCallIdCamel))
+        toolName = (try? c.decodeIfPresent(String.self, forKey: .toolName)) ?? (try? c.decodeIfPresent(String.self, forKey: .toolNameRaw))
         context = try? c.decodeIfPresent(String.self, forKey: .context)
         // Both spellings: `JSONValue.decode` converts snake_case, the transcript cache does not.
         // Blank is absent: the gateway pads reasoning_content with a single space for some APIs.
@@ -165,6 +191,9 @@ public struct TranscriptMessage: Codable, Hashable, Sendable {
         try c.encodeIfPresent(apiContent, forKey: .apiContent)
         try c.encodeIfPresent(finishReason, forKey: .finishReason)
         if hasToolCalls { try c.encode(true, forKey: .hasToolCalls) }
+        if !toolCalls.isEmpty { try c.encode(toolCalls, forKey: .toolCalls) }
+        try c.encodeIfPresent(toolCallID, forKey: .toolCallID)
+        try c.encodeIfPresent(toolName, forKey: .toolName)
     }
 
     /// OpenAI-style content: a string, or parts like `{type: "text", text: …}`.

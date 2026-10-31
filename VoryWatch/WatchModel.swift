@@ -56,8 +56,24 @@ final class WatchModel {
     /// Reply or a complication push that launched the app found it not yet activated.
     init() {
         connectivity.onContext = { [weak self] ctx in Task { @MainActor in self?.receive(context: ctx) } }
+        // The iPhone's word that a chat open here changed, and the phone coming within reach: the open chat's feed
+        // reads it again (#387) instead of asking every few seconds.
+        connectivity.onMessage = { [weak self] m in
+            guard m["op"] as? String == "chatChanged", let sid = m["session"] as? String else { return }
+            Task { @MainActor in self?.feeds[sid]?.value?.wake(.chatChanged) }
+        }
+        connectivity.onReachability = { [weak self] reachable in
+            guard reachable else { return }
+            Task { @MainActor in self?.feeds.values.forEach { $0.value?.wake(.phoneReachable) } }
+        }
         connectivity.activate()
     }
+
+    /// The chats open on the Watch, by stored id (`WatchChatFeed.run`), for the iPhone's word that one changed.
+    private var feeds: [String: WeakFeed] = [:]
+    private struct WeakFeed { weak var value: WatchChatFeed? }
+    func register(_ feed: WatchChatFeed) { feeds[feed.storedID] = WeakFeed(value: feed) }
+    func unregister(_ feed: WatchChatFeed) { if feeds[feed.storedID]?.value === feed { feeds[feed.storedID] = nil } }
 
     /// Settings › Connect through: the watch's own connection with the iPhone taking over when
     /// the gateway does not answer there (Automatic), or always the iPhone (no socket at all).
@@ -112,7 +128,10 @@ final class WatchModel {
         store.activeConnectionID = connection.id
         let rt = GatewayRuntime(connection: connection, store: store)
         rt.pushRegistrar = push
-        rt.cardNotifier = WatchCardNotifier()
+        let notifier = WatchCardNotifier()
+        // The chat open on screen has its feed's haptics (#387): the notifier buzzes for the others only.
+        notifier.feedOpen = { [weak self] id in self?.feeds[id]?.value != nil }
+        rt.cardNotifier = notifier
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
         // iPhone only opens no socket; the watch's HTTP goes by the route, the iPhone carrying
         // what its own connection cannot.
@@ -268,14 +287,29 @@ final class WatchModel {
         // A gateway the phone no longer has (removed there, or the phone was reset) goes here too.
         let incoming = Set(connections.map(\.id.uuidString))
         let previous = Set(UserDefaults.standard.stringArray(forKey: Self.syncedGatewaysKey) ?? [])
-        for id in previous.subtracting(incoming) {
-            guard let uuid = UUID(uuidString: id) else { continue }
+        let removed = previous.subtracting(incoming).compactMap(UUID.init(uuidString:))
+        let gatewaysLeft = store.connections.filter { !removed.contains($0.id) }.count
+        let leaving = WatchPushRules.onGatewayRemoved(gatewaysLeft: gatewaysLeft)
+        var unregistered = false
+        for uuid in removed {
             if let rt = runtime, rt.connection.id == uuid {
-                Task { await rt.stop() }
+                // Its device file goes while the gateway can still be reached, and the relay record with the last
+                // gateway (#499); then the runtime stops.
+                let push = self.push
+                Task {
+                    await push.removeRegistration(runtime: rt, deviceFile: leaving.removeDeviceFile, relay: leaving.unregisterFromRelay)
+                    await rt.stop()
+                }
+                unregistered = leaving.unregisterFromRelay
                 runtime = nil
                 sessions = []
             }
             store.delete(id: uuid)
+        }
+        // The last gateway went while another was running (or none was): the relay record goes all the same.
+        if !removed.isEmpty, leaving.unregisterFromRelay, !unregistered {
+            let push = self.push
+            Task { await push.removeRegistration(runtime: nil, deviceFile: false, relay: true) }
         }
         UserDefaults.standard.set(Array(incoming).sorted(), forKey: Self.syncedGatewaysKey)
         guard !store.connections.isEmpty else { syncStatus = "No gateway on the iPhone yet"; return }
@@ -353,6 +387,10 @@ final class WatchModel {
 /// WCSession plumbing; callbacks arrive off the main thread and are hopped by the model.
 final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sendable {
     nonisolated(unsafe) var onContext: (([String: Any]) -> Void)?
+    /// A message from the iPhone that wants no answer (`chatChanged`).
+    nonisolated(unsafe) var onMessage: (([String: Any]) -> Void)?
+    /// The iPhone came within reach, or went.
+    nonisolated(unsafe) var onReachability: ((Bool) -> Void)?
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -367,6 +405,14 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sen
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         onContext?(applicationContext)
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        onMessage?(message)
+    }
+
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        onReachability?(session.isReachable)
     }
 
     /// Whether the phone could take a message now.
@@ -459,6 +505,16 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
         else { let s = UUID().uuidString.lowercased(); UserDefaults.standard.set(s, forKey: "pushInstallID"); installID = s }
     }
 
+    /// Leaving a gateway (#499, `WatchPushRules.onGatewayRemoved`): this Watch's device file on it, so it stops pushing
+    /// here, and the relay record when it was the last gateway.
+    func removeRegistration(runtime: GatewayRuntime?, deviceFile: Bool, relay: Bool) async {
+        if deviceFile, let runtime, let home = runtime.profileHome {
+            let path = "\(home)/push/devices/\(installID)-watch.json"
+            let _: JSONValue? = try? await runtime.api.send("DELETE", "/api/files", json: ["path": .string(path), "recursive": false])
+        }
+        if relay, PushRelay.isConfigured { await PushRelay.unregister() }
+    }
+
     func syncRegistration(runtime: GatewayRuntime) async {
         guard let token = deviceToken, let home = runtime.profileHome else { return }
         let path = "\(home)/push/devices/\(installID)-watch.json"
@@ -491,9 +547,16 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
 /// so mirrored iPhone notifications show the same actions here.
 @MainActor
 final class WatchCardNotifier: CardNotifying {
+    /// Whether a chat is open on screen with its feed (`WatchChatFeed`), whose events are that chat's only haptics (#387).
+    var feedOpen: (String) -> Bool = { _ in false }
+
     func cardArrived(_ card: PendingCard, chat: ChatSession) {
-        // On screen already: a tap on the wrist, no banner over the card itself.
-        guard WKApplication.shared().applicationState != .active else { WKInterfaceDevice.current().play(.notification); return }
+        // On screen already: a tap on the wrist, no banner over the card itself; none for the open chat, whose feed
+        // announces the card.
+        guard WKApplication.shared().applicationState != .active else {
+            if !feedOpen(chat.storedID) { WKInterfaceDevice.current().play(.notification) }
+            return
+        }
         let content = UNMutableNotificationContent()
         content.title = "\(chat.profileName) · \(card.method == "approval" ? "approval needed" : "question")"
         content.subtitle = chat.title
@@ -517,7 +580,8 @@ final class WatchCardNotifier: CardNotifying {
 
     func turnFinished(chat: ChatSession, error: String?) {
         guard WKApplication.shared().applicationState != .active else {
-            WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success)
+            // The open chat's feed announces its reply or failure.
+            if !feedOpen(chat.storedID) { WKInterfaceDevice.current().play(error?.isEmpty == false ? .failure : .success) }
             return
         }
         let content = UNMutableNotificationContent()
@@ -547,7 +611,7 @@ enum WatchNotifier {
     }
 
     static func registerCategories() {
-        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Approve once", options: [])
+        let approve = UNNotificationAction(identifier: approveOnceAction, title: "Allow once", options: [])
         let deny = UNNotificationAction(identifier: denyAction, title: "Deny", options: [.destructive])
         let reply = UNTextInputNotificationAction(identifier: replyAction, title: "Reply", options: [], textInputButtonTitle: "Send", textInputPlaceholder: "Message")
         UNUserNotificationCenter.current().setNotificationCategories([

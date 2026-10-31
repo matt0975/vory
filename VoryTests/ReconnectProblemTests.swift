@@ -374,3 +374,38 @@ final class StateLog: @unchecked Sendable {
     func add(_ s: SocketState) { lock.lock(); states.append(s); lock.unlock() }
     var all: [SocketState] { lock.lock(); defer { lock.unlock() }; return states }
 }
+
+/// The runtime makes its REST session afresh through its own transport (#423), never as a plain network session: a demo
+/// runtime (the demo's in-process transport, #392) must never be handed a real network session by a reset.
+@Suite(.serialized) struct TransportSessionResetTests {
+    /// Answers in process, as the demo's transport does.
+    final class InProcessProtocol: URLProtocol {
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let r = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: r, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(#"{"ok":true}"#.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
+    @MainActor @Test func aDemoRuntimesResetSessionComesFromItsTransportAndStaysInProcess() async throws {
+        let made = ReconnectProblemTests.Counter()
+        let transport = GatewayTransport(makeHTTPSession: {
+            _ = made.bump()
+            let cfg = URLSessionConfiguration.ephemeral
+            cfg.protocolClasses = [InProcessProtocol.self]
+            return URLSession(configuration: cfg)
+        }, makeFramePipe: { request, session in GatewayTransport.network.makeFramePipe(request, session) })
+        let rt = GatewayRuntime(connection: .demo, store: ConnectionStore(), transport: transport)
+        let before = made.count
+        await rt.api.resetSession()
+        #expect(made.count == before + 1, "the reset did not ask the runtime's transport for its session")
+        let classes = await rt.api.sessionConfiguration.protocolClasses ?? []
+        #expect(classes.count == 1 && classes.first == InProcessProtocol.self, "the reset session is not the transport's alone: \(classes)")
+        let answer: JSONValue = try await rt.api.get("/api/status")
+        #expect(answer["ok"]?.boolValue == true)
+    }
+}

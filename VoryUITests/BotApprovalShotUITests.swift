@@ -1,7 +1,7 @@
 import XCTest
 
 /// Pictures of the bot while an approval waits (the exclamation) and while a reply writes (the
-/// bubbles on the header), at full resolution, for the planner and Matt (#304). Skipped unless
+/// bubbles on the header), at full resolution, for review (#304). Skipped unless
 /// HERMES_E2E_URL / HERMES_E2E_TOKEN are set (the mock gateway).
 final class BotApprovalShotUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -92,7 +92,7 @@ final class BotApprovalShotUITests: XCTestCase {
             hideKeyboard()
             settle(1)
             shot("motion-\(scheme)-3-approval")
-            let once = app.buttons.matching(NSPredicate(format: "label == 'Once'")).firstMatch
+            let once = app.buttons.matching(NSPredicate(format: "label == 'Allow once'")).firstMatch
             XCTAssertTrue(once.waitForExistence(timeout: 5), "no Once button")
             once.tap()
             XCTAssertTrue(text("filesystem is back").firstMatch.waitForExistence(timeout: 60), "the turn did not finish")

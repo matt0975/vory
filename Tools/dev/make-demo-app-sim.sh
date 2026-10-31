@@ -16,7 +16,9 @@
 set -euo pipefail
 SRC="${1:?path to the Debug simulator Vory.app}"
 SIM="${2:?simulator udid}"
-DEMO_ID="com.vorantx.vory.demo"
+# DEMO_ID: another id ending in ".demo" (the app's test for its demo copy) gives a copy whose system permissions start
+# unanswered, which an uninstall does not reset (#501's notification question).
+DEMO_ID="${DEMO_ID:-com.vorantx.vory.demo}"
 
 [ -d "$SRC" ] || { echo "no app at $SRC" >&2; exit 1; }
 if ! LC_ALL=C grep -q -a -- "-vory-demo-gateway" "$SRC/Vory"; then

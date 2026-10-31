@@ -73,7 +73,10 @@ final class FavouriteModels {
     }
 
     private func save() {
-        if let s = Self.encode(all) { defaults.set(s, forKey: Self.storageKey) } else { defaults.removeObject(forKey: Self.storageKey) }
+        // The demo's favourites (#392) stay for the app's run: never stored or synced.
+        var kept = all
+        kept[GatewayConnection.demoID.uuidString] = nil
+        if let s = Self.encode(kept) { defaults.set(s, forKey: Self.storageKey) } else { defaults.removeObject(forKey: Self.storageKey) }
     }
 
     /// The stored form: a JSON object, gateway id to a list of `{"p", "m"}`; nil when there is nothing to keep.

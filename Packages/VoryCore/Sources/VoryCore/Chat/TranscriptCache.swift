@@ -9,10 +9,11 @@ public enum TranscriptCache {
     /// when the app came back and re-read its chats.
     private static let writer = DispatchQueue(label: "dev.vory.transcript-cache", qos: .utility)
 
+    /// Where the session's file goes. Asking makes nothing: the folder is made by a save (#493: a read made a folder
+    /// named after the gateway, the demo's too).
     static func url(connection: UUID, storedID: String) -> URL? {
         guard !storedID.isEmpty, let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
         let dir = base.appending(path: "transcripts/\(connection.uuidString)", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let safe = storedID.replacingOccurrences(of: "/", with: "_")
         return dir.appending(path: "\(safe).json")
     }
@@ -40,6 +41,7 @@ public enum TranscriptCache {
             }
         }
         writer.async {
+            try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let data = try? JSONEncoder().encode(rows) { try? data.write(to: u, options: .atomic) }
         }
     }
@@ -58,6 +60,7 @@ public enum TranscriptCache {
     public static func saveInfo(_ info: SessionLiveInfo, connection: UUID, storedID: String) {
         guard let u = infoURL(connection: connection, storedID: storedID) else { return }
         writer.async {
+            try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let data = try? JSONEncoder().encode(info) { try? data.write(to: u, options: .atomic) }
         }
     }

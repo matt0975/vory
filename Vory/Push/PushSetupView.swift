@@ -89,6 +89,11 @@ struct PushSetupView: View {
     private var turnKey: String { "\(step.rawValue)-\(isDone(step))" }
 
     var body: some View {
+        // The demo (#392) has no Companion or push: they live on a gateway of one's own.
+        if model.isInDemo { DemoNeedsGateway(description: DemoNeedsGateway.notifications) } else { setupBody }
+    }
+
+    @ViewBuilder private var setupBody: some View {
         ZStack {
             StepPage(step: step, done: isDone(step), headerHeight: $headerHeight) {
                 if let rt { content(for: step, runtime: rt) } else { Text("Connect a gateway first.").foregroundStyle(.secondary) }
@@ -597,7 +602,7 @@ struct CompanionUpdateRows: View {
 struct RestartCountdownRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
-    /// The gateway form, as a sheet on the Mac (judgement call #13).
+    /// The gateway form, as a sheet on the Mac.
     @State private var signingIn = false
 
     var body: some View {
@@ -789,6 +794,11 @@ struct CompanionView: View {
     private var rt: GatewayRuntime? { model.runtime }
 
     var body: some View {
+        // The demo (#392) has no Companion or push: they live on a gateway of one's own.
+        if model.isInDemo { DemoNeedsGateway(description: DemoNeedsGateway.notifications) } else { setupBody }
+    }
+
+    @ViewBuilder private var setupBody: some View {
         SettingsList {
             SettingsHeaderSection(title: "Companion", symbol: "puzzlepiece.fill", color: .blue, description: "The plugin on your gateway that brings \(DeviceWords.companionBrings) to \(DeviceWords.this).")
             if let rt {
@@ -850,7 +860,7 @@ struct CompanionView: View {
             Button("Uninstall", role: .destructive) { Task { resetting = true; if let rt { await setup.uninstall(runtime: rt, model: model) }; resetting = false } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — approve it in the chat that opens). \(DeviceWords.CompanionBrings) stop until it is installed again.")
+            Text("The plugin is disabled, its service is stopped and its files are deleted from the gateway (a bot runs the removal — allow it in the chat that opens). \(DeviceWords.CompanionBrings) stop until it is installed again.")
         }
         .task {
             guard let rt else { return }
@@ -1123,7 +1133,7 @@ final class PushSetupModel {
 
     private static func completedKey(_ rt: GatewayRuntime) -> String { "pushSetupCompleted." + rt.connection.id.uuidString }
     func isCompleted(for rt: GatewayRuntime) -> Bool { UserDefaults.standard.bool(forKey: Self.completedKey(rt)) }
-    func markCompleted(for rt: GatewayRuntime) { UserDefaults.standard.set(true, forKey: Self.completedKey(rt)) }
+    func markCompleted(for rt: GatewayRuntime) { if !rt.isEphemeral { UserDefaults.standard.set(true, forKey: Self.completedKey(rt)) } }
 
     /// Removes the companion for good: the plugin is disabled, this phone's device file is
     /// withdrawn, Hermes is asked to run `install.sh --uninstall` (service, plugin folder and the
@@ -1131,7 +1141,7 @@ final class PushSetupModel {
     /// its setup. The next Configure is a clean install.
     func uninstall(runtime rt: GatewayRuntime, model: AppModel) async {
         let _: JSONValue? = try? await rt.api.send("POST", "/api/dashboard/agent-plugins/vory-push/disable", body: EmptyBody())
-        await model.push.removeRegistration(runtime: rt)
+        await model.push.removeRegistration(runtime: rt, everywhere: false)
         let cmd = installCommand(for: rt) + " --uninstall"
         if let chat = try? await rt.newChat() {
             await chat.send("Run this exact command in the terminal and show me its full output: `\(cmd)`. It stops the Vory companion service and deletes its files. If it fails, tell me the error verbatim.")

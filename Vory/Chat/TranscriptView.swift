@@ -5,8 +5,9 @@ import VoryCore
 
 struct TranscriptView: View {
     @Bindable var chat: ChatSession
-    /// Long-press › "Edit & resend" hands the text back to the composer.
-    var onEditMessage: (String) -> Void = { _ in }
+    /// Long-press › "Edit & resend" (with the message's id: the composer edits it in place) or "Copy to message" (nil:
+    /// the words only, for a new message) hands the text to the composer (#556).
+    var onEditMessage: (String, String?) -> Void = { _, _ in }
     /// A "Messaged X" or "Message from X" notice was tapped: open X's chat.
     var onOpenBot: (String) -> Void = { _ in }
     /// Reply on a bubble: the composer quotes it above the next message.
@@ -63,6 +64,10 @@ struct TranscriptView: View {
     /// The floating header's bottom edge in window space (0 = not measured): the thread's top
     /// margin ends there, however much safe area the header stands in.
     var headerBottom: CGFloat = 0
+    /// False where the keyboard never covers the thread: onboarding's tour (#388) lifts its chat, dock and all, over
+    /// the keyboard, so the floor below (the keyboard's height, for a thread that runs to the window's bottom) would
+    /// push its last line out of a frame that size.
+    var keyboardFloors = true
     /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
     /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
     /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
@@ -227,7 +232,9 @@ struct TranscriptView: View {
                     }
                     if let s = chat.statusLine, chat.isRunning {
                         HStack(spacing: 8) {
-                            ProgressView().controlSize(.small)
+                            // The words beside it say what's under way; on its own the spinner was an element with no
+                            // name and a 14-point hit area to the audit.
+                            ProgressView().controlSize(.small).accessibilityHidden(true)
                             #if os(macOS)
                             // The Mac has no header pill over the thread: what the bot is working
                             // on, when the on-device model has written it, sits here with the step.
@@ -250,7 +257,7 @@ struct TranscriptView: View {
                 // A reopened chat whose history is still on its way shows nothing, then the rows
                 // land as one (the fade is the only animation of the stack, see below). Its history
                 // landing under the rows it opened with, nothing either until it is at its end (#449).
-                .opacity((chat.isResuming && chat.items.isEmpty) || landingOutOfSight ? 0 : 1)
+                .opacity((chat.isResuming && chat.items.isEmpty) || landingOutOfSight || historyArriving ? 0 : 1)
                 .animation(.easeOut(duration: 0.25), value: chat.items.isEmpty)
                 // A reading column in the middle of the pane on a wide layout, a page wide however
                 // wide the window is; the full width on the phone.
@@ -271,7 +278,7 @@ struct TranscriptView: View {
                 // land where they belong in every frame and a new row fades in on its own
                 // (`rowView`); what moves the thread is scrolling (`followRows`), which moves
                 // every row together.
-                .background(ScrollViewProbe(metrics: metrics))
+                .background(ScrollViewProbe(metrics: metrics, dockTop: dockTop, headerBottom: headerBottom))
                 }
             }
             .scrollPosition($scrollPosition)
@@ -297,12 +304,6 @@ struct TranscriptView: View {
                 autoInsetFixed = 0   // no home indicator under a window
                 #endif
             }
-            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentSize.height, $0.containerSize.height] } action: { old, v in
-                metrics.contentHeight = v[0]; metrics.containerHeight = v[1]
-                // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
-                // before the thread is shown starts again (#449).
-                if landingOutOfSight, old.first != v[0] { landingReveal?.cancel(); landingReveal = nil; revealIfLanded() }
-            }
             // The window around the thread (`WindowGeometry`): its own frame in window space, the
             // window's shape (a fold, a resize or an inset that moves makes the automatic inset
             // measure again), and the keyboard as the window has it (in window space, only when
@@ -311,8 +312,8 @@ struct TranscriptView: View {
                                         frame: { scrollTop = $0.minY; scrollBottom = $0.maxY },
                                         shapeChanged: { autoInsetFixed = nil },
                                         keyboard: { keyboardMoved(to: $0) }))
-            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, new in
-                metrics.offsetY = new
+            .onScrollGeometryChange(for: [CGFloat].self) { [$0.contentOffset.y, $0.contentInsets.top] } action: { _, new in
+                metrics.offsetY = new[0]; metrics.insetTop = new[1]
             }
             // Your own message brings the thread to the end, as in Messages, however far up it
             // was scrolled: a tester sent one from up the thread, saw nothing happen, and had to
@@ -321,13 +322,27 @@ struct TranscriptView: View {
                 guard (n.object as? ChatSession) === chat, !metrics.stickToBottom || metrics.distanceFromBottom > 24 else { return }
                 jumpToBottom()
             }
-            // Insets included: the bottom margin (dock plus home indicator) is about the size of
+            // The thread's height, its window's and its distance from the end, from one reading of the scroll geometry,
+            // all written before anything is decided from them (#453, #452). Read by two handlers, each told of a change in
+            // its own turn, the height missed the last change of a burst while the distance had it: under load it held
+            // 20,091 pt with the scroll view at 20,030, and in a Bot Chat it stayed 69 pt off for good, so a thread still
+            // being measured read as still and was shown, and one at rest read as not landed.
+            // Insets included in the distance: the bottom margin (dock plus home indicator) is about the size of
             // the threshold, so without it a slightly taller dock showed the arrow at the very end.
-            .onScrollGeometryChange(for: CGFloat.self) { g in
-                g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY
-            } action: { was, distance in
-                metrics.distanceFromBottom = distance
+            .onScrollGeometryChange(for: ThreadGeometry.self) { g in
+                ThreadGeometry(height: g.contentSize.height, container: g.containerSize.height,
+                               distance: g.contentSize.height + g.contentInsets.bottom - g.visibleRect.maxY)
+            } action: { old, now in
+                metrics.contentHeight = now.height; metrics.containerHeight = now.container
+                metrics.distanceFromBottom = now.distance
+                // Out of sight while a history lands: the lazy stack is still measuring its rows, so the quiet time
+                // before the thread is shown starts again (#449).
+                if landingOutOfSight, old.height != now.height { landingReveal?.cancel(); landingReveal = nil }
                 if landingOutOfSight { revealIfLanded() }
+                // The rest follows the distance alone, as it did: nothing to do when only the height moved under a
+                // thread that kept its place.
+                let was = old.distance, distance = now.distance
+                guard distance != was else { return }
                 // Past the end with no finger on it, by any amount: a scroll-to-bottom that used the
                 // lazy stack's estimated height lands beyond the real content and the thread shows
                 // nothing until a drag bounces it back ("chats open blank until you scroll"), and
@@ -337,7 +352,7 @@ struct TranscriptView: View {
                 // followed every change of the last row hid the small ones until it went with the
                 // per-token scroll.
                 if distance < -1, !metrics.userScrolling { landPastTheEnd(distance) }
-                let away = distance > 120
+                let away = distance > 120 && !metrics.probing
                 if away != awayFromBottom { withAnimation(.snappy) { awayFromBottom = away } }
                 // Content growing under a locked thread also reads as "away" for a frame; only a
                 // finger on the thread unlocks it: any upward pull from where the touch began
@@ -427,6 +442,7 @@ struct TranscriptView: View {
                 // A chat opening with its history still to come and only a few rows (or none) to show meanwhile waits out
                 // of sight until the history has landed and the thread is at its end (#449, see `historyLanding`); a
                 // history slow to come (1.5 s), the rows it has are shown meanwhile, and its landing hides it again.
+                metrics.shownItems = chat.items.count; metrics.landings = 0; metrics.probed = false
                 if chat.isResuming, rows.count < 20 { landingOutOfSight = true; capLanding(after: 1500) }
             }
             .onChange(of: chat.isResuming) { _, now in
@@ -493,7 +509,7 @@ extension TranscriptView {
             // changed: a token landing in the reply at the end used to re-evaluate every row
             // the lazy stack had drawn, which with a long history was most of a core for the
             // whole reply (the Mac's "beachball on send"). Now a token touches the tail only.
-            OlderRows(rows: rowCache.older(than: split), context: ctx.forOlderRows).equatable()
+            OlderRows(rows: rowCache.older(than: split), context: ctx.forOlderRows(tail: all[split...])).equatable()
         }
         let entering = Self.enteringRowID(all, opening: settling || chat.isResuming)
         ForEach(Array(all[split...])) { row in ctx.rowView(row, entering: row.id == entering) }
@@ -528,12 +544,16 @@ extension TranscriptView {
         return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName,
                           botLabel: chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
+                          resendableID: chat.runtime.undoUnsupported ? nil : chat.lastResendableID,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
     }
 
     /// A card opening or closing keeps its place: for the length of the toggle's animation the thread's size changes
-    /// anchor at its top, so the tapped card's top does not move and the rows below it glide. Anchored at the end, a
+    /// anchor at its top, so the tapped card's top does not move and the rows below it glide; and since that anchor holds
+    /// the thread's top, not the card, the card's own top is kept as well (`CardHold`): rows above it measured in the same
+    /// pass (the lazy stack's estimate for rows not yet measured, as soon after an open) moved it by their correction, 175
+    /// to 251 pt under load and once 1,310 pt (#473). Anchored at the end, a
     /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
     /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
     /// thread is shorter after it, so the rows above come down, in the same animation as the close.
@@ -541,10 +561,35 @@ extension TranscriptView {
     /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
     /// thread following it. With no turn running, nothing moves after the toggle.
     private func holdCard(opening: Bool) {
-        guard opening || metrics.distanceFromBottom >= 4 else { return }
+        guard opening || metrics.distanceFromBottom >= 4 else { CardHold.shared.end(); return }
         cardHold += 1
         let hold = cardHold
         holdingCard = true
+        // The tapped card's own place, kept against any change above it (`CardHold`): moved by n pt, the thread goes to
+        // the offset that puts it back, from the offset of the same pass, so a move reported again before the scroll has
+        // landed asks for the same place, once. At once, unanimated: it lands in the run-loop turn of the move, so the
+        // moved layout is never drawn. Asked in the toggle's animation instead, the scroll itself was drawn as a slide
+        // (near the end, frames' similarity 0.66 over a second against 1.00), and could be dropped altogether. A finger on
+        // the thread ends it.
+        // An ask that has not moved the thread at all two frames on is asked again (a scroll can be dropped: the card once
+        // stayed 330 pt low, below the dock). Until then a repeat of the same place is not asked twice.
+        var asked: CGFloat?
+        CardHold.shared.begin { delta in
+            guard !metrics.userScrolling else { CardHold.shared.end(); return }
+            let target = metrics.offsetY + delta
+            if let asked, abs(asked - target) < 1 { return }
+            asked = target
+            let from = metrics.offsetY
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { scrollPosition.scrollTo(y: max(0, target + metrics.insetTop)) }
+            Task { @MainActor in
+                for _ in 0..<2 { await FrameClock.next() }
+                guard CardHold.shared.holding, let pending = asked, abs(pending - target) < 1,
+                      abs(metrics.offsetY - from) < 1, abs(metrics.offsetY - target) >= 1 else { return }
+                withTransaction(still) { scrollPosition.scrollTo(y: max(0, target + metrics.insetTop)) }
+            }
+        }
         #if DEBUG
         CardMotionProbe.holding = true
         #endif
@@ -552,6 +597,10 @@ extension TranscriptView {
             try? await Task.sleep(for: .milliseconds(700))
             guard cardHold == hold else { return }
             holdingCard = false
+            CardHold.shared.end()
+            // Past its end at the hold's end (rows above measured shorter while the card was held): landed now, as it
+            // would have been meanwhile.
+            if metrics.distanceFromBottom < -1, !metrics.userScrolling { landPastTheEnd(metrics.distanceFromBottom) }
             #if DEBUG
             CardMotionProbe.holding = false
             #endif
@@ -635,7 +684,7 @@ extension TranscriptView {
             if metrics.stickToBottom { scrollPosition.scrollTo(edge: .bottom) }
         }
         floorTask?.cancel()
-        if inset == 0 { keyboardFloor = 0 } else {
+        if inset == 0 || !keyboardFloors { keyboardFloor = 0 } else {
             floorTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(450))
                 guard !Task.isCancelled else { return }
@@ -654,7 +703,11 @@ extension TranscriptView {
     /// A chat that opened with only a few rows is out of sight from the start (`onAppear`): the history then lands unseen.
     /// Opened with more (rows kept from before), the landing itself puts it out of sight, the same update or the next.
     private func historyLanding(from old: Int, to new: Int) {
-        guard chat.isResuming, new - old >= 20, !landingOutOfSight else { return }
+        guard chat.isResuming, new - old >= 20 else { return }
+        // Landings count from the history's coming, out of sight already (opened with few rows) or not, and its rows are
+        // measured once before it is shown (`probeMeasuring`).
+        metrics.landings = 0; metrics.probed = false
+        guard !landingOutOfSight else { return }
         landingOutOfSight = true
         landingReveal?.cancel(); landingReveal = nil
         capLanding()
@@ -667,31 +720,95 @@ extension TranscriptView {
         landingCap = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(ms))
             guard !Task.isCancelled, landingOutOfSight else { return }
-            reveal()
+            reveal("cap")
         }
     }
 
-    /// At its end, or, the history in, shorter than the screen, and still so 80 ms later with its content's height unchanged
-    /// meanwhile (a change starts the wait again, from the geometry handler): the thread is shown, faded in. The throw to the
-    /// top came in the same layout as a first frame at the end, and the lazy stack measuring the rows that had just come
-    /// left a thread shown at its end 556 pt past it a moment later.
+    /// How far a landing's layout may still move the thread's height for the landing to count as stuck (#453).
+    static let settledStep: CGFloat = 12
+    /// The measuring scroll's rounds at most, out of sight before a long history is shown (#468, `probeMeasuring`).
+    static let probeRounds = 4
+
+    /// At its end, or, the history in, shorter than the screen, and still so two frames later with its content's height
+    /// unchanged meanwhile (a change starts the wait again, from the geometry handler, and from here): the thread is
+    /// shown, faded in. The throw to the top came in the same layout as a first frame at the end, and the lazy stack
+    /// measuring the rows that had just come left a thread shown at its end 556 pt past it a moment later (#449).
+    ///
+    /// If the thread had to be landed past its end meanwhile, the landing must also have stuck: the layout after it moved
+    /// the height by less than `settledStep` (#453). Under load the lazy stack measures in bursts, each set off by the
+    /// landing before it (rows newly in the window measure shorter, the end moves up, the thread is landed again), and the
+    /// bursts came 30 to 230 ms apart, so two quiet frames fell between two of them and the thread was shown 81 to 99 pt
+    /// from where it would settle, still moving. Bursts shrink as they go (209, 226, 127, 61, 35, 23, 19, 9 pt): the
+    /// thread is shown once one is under a line, or at the cap.
+    ///
+    /// The wait is in frames, not milliseconds (#453): under load the lazy stack's reports of its height came farther
+    /// apart than the 80 ms the wait used to be, while the height was still falling, so the quiet read as settled and the
+    /// thread was shown 99 to 185 pt past its end, its correction in sight. A frame comes as often as the app gets to draw,
+    /// so two of them stretch with the load; with none, they are 17 to 33 ms. Only SwiftUI's own report counts, read with
+    /// the distance in one reading (the geometry handler): a check against the UIKit scroll view refused every frame where
+    /// a separate height handler had missed the last change (69 pt in a Bot Chat), and left the thread to its cap.
     private func revealIfLanded() {
-        let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
-        if short || abs(metrics.distanceFromBottom) < 10 {
+        guard !metrics.probing else { return }
+        if landedAtEnd() {
             guard landingReveal == nil else { return }
             landingReveal = Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(80))
-                let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
-                guard !Task.isCancelled, short || abs(metrics.distanceFromBottom) < 10 else { landingReveal = nil; return }
-                reveal()
+                let height = metrics.contentHeight
+                for _ in 0..<2 {
+                    await FrameClock.next()
+                    guard !Task.isCancelled else { return }
+                }
+                guard metrics.contentHeight == height, landedAtEnd() else {
+                    landingReveal = nil
+                    revealIfLanded()
+                    return
+                }
+                // A history taller than two screens is measured before it is shown (#468): see `probeMeasuring`.
+                if !metrics.probed, metrics.contentHeight > metrics.containerHeight * 2 {
+                    metrics.probed = true
+                    landingReveal = nil
+                    probeMeasuring()
+                    return
+                }
+                // Landed past its end since the history came: shown once the layout after the last landing has moved the
+                // height by less than a line; more, and this height is the one the next quiet frames must hold.
+                if metrics.landings > 0, abs(height - metrics.landedHeight) >= Self.settledStep {
+                    metrics.landedHeight = height
+                    landingReveal = nil
+                    revealIfLanded()
+                    return
+                }
+                reveal(metrics.landings > 0 ? "landing" : "frames")
             }
         } else {
             landingReveal?.cancel(); landingReveal = nil
         }
     }
 
-    private func reveal() {
+    /// A history arriving under the rows the thread was shown with (#449, #453): out of sight in the update that brings
+    /// it, not the next. `historyLanding` puts the thread out of sight from the rows' count, an update later, and a thread
+    /// shown with its few stored rows flashed 15,703 pt past its end for 15 ms as its history landed. Counted in items,
+    /// which the rows are made from, as `rows` is built afresh on every read.
+    private var historyArriving: Bool { chat.isResuming && chat.items.count >= metrics.shownItems + 20 }
+
+    /// At its end, or, the history in, shorter than the screen.
+    private func landedAtEnd() -> Bool {
+        let short = !chat.isResuming && metrics.contentHeight <= metrics.containerHeight + 1
+        return short || abs(metrics.distanceFromBottom) < 10
+    }
+
+    private func reveal(_ why: String = "now") {
         landingCap?.cancel(); landingReveal?.cancel(); landingReveal = nil
+        // The cap during a probe: back at the end first, so the thread is never shown a screen up its history.
+        if metrics.probing {
+            metrics.probeTask?.cancel(); metrics.probeTask = nil; metrics.probing = false
+            var still = Transaction()
+            still.disablesAnimations = true
+            withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+        }
+        #if DEBUG
+        if ThreadGeometryWatch.log { Perf.stamp("SHOWN \(chat.title) by \(why)") }
+        #endif
+        metrics.shownItems = chat.items.count
         withAnimation(.easeOut(duration: 0.15)) { landingOutOfSight = false }
     }
 
@@ -735,15 +852,63 @@ extension TranscriptView {
     /// following after a moment, once its rows have laid out, eased; either waits while the
     /// keyboard's spring is carrying the thread, and none meets an eased landing under way.
     private func landPastTheEnd(_ distance: CGFloat) {
-        guard Date() > overscrollEaseUntil else { return }
+        guard Date() > overscrollEaseUntil, !CardHold.shared.holding else { return }
         // Locked, any size, once there is more thread than screen (a chat still empty or shorter
         // than the screen reads as past its end until its rows come, and is no landing).
         let locked = metrics.stickToBottom && metrics.contentHeight > metrics.containerHeight
         guard distance >= -60 || locked, Date().timeIntervalSince(keyboardMovedAt) > 0.6 else { scheduleOverscrollFix(); return }
         Perf.tick("overscrollLand")
+        noteLanding()
         var still = Transaction()
         still.disablesAnimations = true
         withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+    }
+
+    /// The lazy stack measures its rows only as a scroll brings them near, and until then a long history's height is its
+    /// estimate (40,494 pt for a chat that settles at 19,282). Shown at its end over that, nothing moves while it rests (the
+    /// anchor holds the end), but the first scroll measures it: in a pull past the end the scroll view kept its offset while
+    /// the content shrank under the finger, 4,404 pt past the end in sight, then snapped back in a frame (#468; Matt's
+    /// "stutters instead of rubber-banding" right after opening). So out of sight, at its end and quiet, the thread is
+    /// scrolled up and, a frame later, landed back at its end, in rounds. The lazy stack measures a step with each scroll
+    /// that moves the view, and the scroll's layout runs in its own turn, so the next frame has it. One round took a long
+    /// chat from 40,494 to 22,940 pt and stopped there (the end clamped back, so the landing stuck on a height still 3,600
+    /// pt off, and the first pull measured the rest in sight), so the rounds go on, each two screens deeper than the last,
+    /// until one from the second on moves the height by less than a line, at most `probeRounds`. Two frames a round: rounds
+    /// of two frames each way had a loaded open shown at 1,025 to 1,140 ms against 606 to 709 without them. Then the
+    /// landing waits for one that sticks (`revealIfLanded`). Unanimated and out of sight, with no finger, so no arrow,
+    /// haptic or lock changes; the cap meanwhile lands it first (`reveal`).
+    private func probeMeasuring() {
+        guard landingOutOfSight, !metrics.probing else { return }
+        metrics.probing = true
+        metrics.probeTask = Task { @MainActor in
+            var still = Transaction()
+            still.disablesAnimations = true
+            for round in 1...Self.probeRounds {
+                let before = metrics.contentHeight
+                withTransaction(still) { scrollPosition.scrollTo(y: max(0, metrics.offsetY + metrics.insetTop - metrics.containerHeight * CGFloat(2 * round))) }
+                await FrameClock.next()
+                guard !Task.isCancelled else { return }
+                withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+                await FrameClock.next()
+                guard !Task.isCancelled else { return }
+                // Never on the first round: the thread's end is its tail (rows never lazy, always measured), which can be
+                // taller than a screen, and a round inside it measures nothing new and reads as settled (a long chat
+                // shown at 21,088 pt that way had the rest measured by the first pull's bounce, 1,770 pt past the end).
+                if round > 1, abs(metrics.contentHeight - before) < Self.settledStep { break }
+            }
+            metrics.probing = false; metrics.probeTask = nil
+            guard landingOutOfSight else { return }
+            noteLanding()
+            withTransaction(still) { scrollPosition.scrollTo(edge: .bottom) }
+            revealIfLanded()
+        }
+    }
+
+    /// A landing past the end while the thread is out of sight: the reveal waits for one that sticks (`revealIfLanded`).
+    private func noteLanding() {
+        guard landingOutOfSight else { return }
+        metrics.landings += 1
+        metrics.landedHeight = metrics.contentHeight
     }
 
     private func scheduleOverscrollFix() {
@@ -756,8 +921,9 @@ extension TranscriptView {
                 guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
                 if Date().timeIntervalSince(keyboardMovedAt) > 0.6 { break }
             }
-            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1 else { return }
+            guard !Task.isCancelled, !metrics.userScrolling, metrics.distanceFromBottom < -1, !CardHold.shared.holding else { return }
             Perf.tick("overscrollFix")
+            noteLanding()
             // Eased, so it reads as the thread settling rather than a jump of its own; from more
             // than a screen past (a thread showing nothing) at once, as an animated scroll through
             // rows still being laid out glitched them (`jumpToBottom`).
@@ -838,7 +1004,7 @@ enum ChatRowTransition {
 /// What a row does when tapped: one object for the thread's life, so the context that carries
 /// it compares equal from one update to the next (closures never do).
 final class RowActions {
-    var onEdit: (String) -> Void = { _ in }
+    var onEdit: (String, String?) -> Void = { _, _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onChooseModel: () -> Void = {}
@@ -868,6 +1034,9 @@ struct RowContext: Equatable {
     var showStats: Bool
     var interruptCause: InterruptedTurn.Cause?
     var lastID: String?
+    /// The message Edit & resend is offered on (`ChatSession.lastResendableID`, none where the gateway can't take a
+    /// message back); every other bubble of the person's own offers Copy to message (#556).
+    var resendableID: String?
     var openReasoning: Set<String>
     var openTools: Set<String>
     var showToolOutput: Bool
@@ -879,6 +1048,7 @@ struct RowContext: Equatable {
     static func == (a: RowContext, b: RowContext) -> Bool {
         a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
+            && a.resendableID == b.resendableID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
     }
@@ -899,12 +1069,23 @@ struct RowContext: Equatable {
     /// The context the older, lazy rows are drawn with: what only the thread's last row uses left out (the typing
     /// bubble's tool, which row is last, why a turn was cut short). An older row is never the last one. With them in,
     /// `OlderRows` compared unequal at every tool step and every new row, and every older row the lazy stack had drawn
-    /// was rebuilt with it (#422).
-    var forOlderRows: RowContext {
+    /// was rebuilt with it (#422). Nor the open cards of the rows after them (`tail`): a card toggled at the end left the
+    /// older rows' context unequal, the lazy stack laid itself out again, and the height of its rows not yet measured
+    /// went back to its estimate (a cold open's first toggle: 22,500 pt to the whole history's 41,065, the thread blank
+    /// for four seconds; at rest 330 pt taller or 1,072 pt shorter), moving the tapped card by as much (#473).
+    func forOlderRows(tail: ArraySlice<TranscriptRowModel>) -> RowContext {
         var c = self
         c.typingTool = nil
         c.lastID = nil
         c.interruptCause = nil
+        // The message Edit & resend is on, only when it's one of them: it's usually among the last rows, and the older
+        // rows' context then stays equal as a new message comes and goes.
+        if let r = resendableID, tail.contains(where: { $0.item.id == r }) { c.resendableID = nil }
+        if !openReasoning.isEmpty || !openTools.isEmpty {
+            let ids = Set(tail.map(\.item.id))
+            c.openReasoning = openReasoning.subtracting(ids)
+            c.openTools = openTools.subtracting(ids)
+        }
         return c
     }
 
@@ -919,7 +1100,7 @@ struct RowContext: Equatable {
         let id = row.item.id
         let actions = actions
         TranscriptRow(item: row.item, profile: profile, bot: bot, botShown: row.lastOfRun,
-                      typingTool: bubbleTool(for: row.item),
+                      typingTool: bubbleTool(for: row.item), resendable: id == resendableID,
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
                       interruptCause: interruptCause(for: id), onKeepRunning: actions.onKeepRunning,
@@ -976,21 +1157,37 @@ enum TimeLabels {
 /// SwiftUI scroll position, which is what the probe's absence means below.
 private struct ScrollViewProbe: View {
     let metrics: ScrollMetrics
+    var dockTop: CGFloat = 0
+    var headerBottom: CGFloat = 0
     var body: some View { Color.clear }
 }
 #else
-/// Finds the UIKit scroll view behind the thread and hands it to the metrics box.
+/// Finds the UIKit scroll view behind the thread and hands it to the metrics box. It also carries the tap that closes the
+/// on-screen keyboard (#350, `ThreadKeyboardTap`), attached to that scroll view while the thread is in a window, with the
+/// dock's top and the header's bottom it must leave alone.
 private struct ScrollViewProbe: UIViewRepresentable {
     let metrics: ScrollMetrics
-    func makeUIView(context: Context) -> ProbeView { let v = ProbeView(); v.metrics = metrics; v.isUserInteractionEnabled = false; return v }
-    func updateUIView(_ v: ProbeView, context: Context) { v.metrics = metrics }
+    var dockTop: CGFloat = 0
+    var headerBottom: CGFloat = 0
+    func makeUIView(context: Context) -> ProbeView {
+        let v = ProbeView(); v.metrics = metrics; v.keyboardTap = context.coordinator; v.isUserInteractionEnabled = false; return v
+    }
+    func updateUIView(_ v: ProbeView, context: Context) {
+        v.metrics = metrics
+        context.coordinator.dockTop = dockTop
+        context.coordinator.headerBottom = headerBottom
+    }
+    func makeCoordinator() -> ThreadKeyboardTap { ThreadKeyboardTap() }
+    static func dismantleUIView(_ v: ProbeView, coordinator: ThreadKeyboardTap) { coordinator.detach() }
     final class ProbeView: UIView {
         var metrics: ScrollMetrics?
+        weak var keyboardTap: ThreadKeyboardTap?
         override func didMoveToWindow() {
             super.didMoveToWindow()
             var s = superview
             while let x = s, !(x is UIScrollView) { s = x.superview }
             metrics?.scrollView = s as? UIScrollView
+            if window != nil, let sv = s as? UIScrollView { keyboardTap?.attach(to: sv) } else { keyboardTap?.detach() }
         }
     }
 }
@@ -1011,6 +1208,14 @@ private struct ScrollViewProbe: UIViewRepresentable {
 #endif
 
 /// The figures a scroll changes every frame. Not observable on purpose (see `TranscriptView.metrics`).
+/// The thread's scroll geometry as one reading (#453): its content height, its window's height, and how far its end is
+/// below the window's bottom, insets included.
+struct ThreadGeometry: Equatable {
+    var height: CGFloat
+    var container: CGFloat
+    var distance: CGFloat
+}
+
 final class ScrollMetrics {
     #if os(iOS)
     /// The UIKit scroll view under the SwiftUI one, for a scroll by a measured distance: its
@@ -1028,6 +1233,21 @@ final class ScrollMetrics {
     var contentHeight: CGFloat = 0
     var containerHeight: CGFloat = 0
     var reportedInsetBottom: CGFloat = 0
+    /// The scroll view's top inset (the header's room), with `offsetY`: a scroll to an offset goes to `offsetY` plus it,
+    /// as `ScrollPosition.scrollTo(y:)` counts from the content's top under the inset, not from the scroll view's edge.
+    var insetTop: CGFloat = 0
+    /// The thread's landings past its end while out of sight since its history came, and the height at the last one
+    /// (#453, `revealIfLanded`).
+    var landings = 0
+    var landedHeight: CGFloat = 0
+    /// The out-of-sight scroll that makes the lazy stack measure a history before it is shown (#468, `probeMeasuring`):
+    /// done once per history, under way, and its task.
+    var probed = false
+    var probing = false
+    var probeTask: Task<Void, Never>?
+    /// The chat's item count when the thread was last shown (or opened): a history arriving under it hides the thread in
+    /// the same update (`historyArriving`).
+    var shownItems = 0
 }
 
 /// Drag the thread left to peek at each message's time, as in Messages: one transform on the
@@ -1155,6 +1375,9 @@ enum ChatStyle {
     /// The on-screen keyboard's Return sends (as it did before 1.4) instead of adding a line; off
     /// by default. A hardware keyboard's Return sends and Shift-Return adds a line either way.
     static let returnSends = "chat.returnSends"
+    /// A send puts the on-screen keyboard away (#350); off by default, so a quick follow-up needs no tap. The demo's
+    /// and the tour's chats put it away either way (`ComposerFocusRule`).
+    static let closeKeyboardAfterSend = "chat.closeKeyboardAfterSend"
     static let showReasoning = "chat.showReasoning"
     static let showTurnStats = "chat.showTurnStats"
     /// The message bar's context figure as tokens ("18/200K") instead of a percentage.
@@ -1188,6 +1411,17 @@ enum ChatStyle {
     static let bubbleStyle = "chat.bubbleStyle"
     /// Reply bubbles take a wash of the bot's own colour instead of grey.
     static let botTint = "chat.botTint"
+
+    /// The hex a reply bubble is washed with, or nil for the plain grey bubble.
+    ///
+    /// `bot` is the chat's bot, drawn beside the bubble or not (`RowContext.bot`: the same field the
+    /// pictures use, and always there), and `scopeHex` the colour a demo's own look gives it
+    /// (`BotLookScope`). Never the drawn face: "Bot beside replies" is off by default, and reading the
+    /// wash off it made this setting do nothing for most people.
+    static func replyTintHex(on: Bool, bot: String?, scopeHex: String?) -> String? {
+        guard on, let bot else { return nil }
+        return scopeHex ?? BotColors.hex(for: bot)
+    }
 
     /// The thread's type size for a `textSize` choice, relative to the phone's own setting.
     static func stepped(_ base: DynamicTypeSize, _ choice: String) -> DynamicTypeSize {
@@ -1352,6 +1586,7 @@ struct SelectTextItem: Identifiable {
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
         a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.botShown == b.botShown && a.typingTool == b.typingTool
+            && a.resendable == b.resendable
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen == b.reasoningOpen && a.toolOpen == b.toolOpen
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
@@ -1367,9 +1602,12 @@ struct TranscriptRow: View, Equatable {
     /// While the reply has no text yet: nil = a grey typing bubble, a name = the dark one with
     /// the tool badge.
     var typingTool: String? = nil
+    /// The person's own message that Edit & resend is offered on: the chat's last of theirs (`RowContext.resendableID`).
+    /// Their other bubbles offer Copy to message.
+    var resendable = false
     var showReasoning = true
     var showStats = true
-    var onEdit: (String) -> Void = { _ in }
+    var onEdit: (String, String?) -> Void = { _, _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onChooseModel: () -> Void = {}
@@ -1378,10 +1616,16 @@ struct TranscriptRow: View, Equatable {
     var onKeepRunning: () -> Void = {}
     @AppStorage(ChatStyle.bubbleStyle) private var bubbleStyle = "tailed"
     @AppStorage(ChatStyle.botTint) private var botTint = false
-    /// The reply bubble's fill: grey, or the bot's colour at a wash.
+    /// The looks of the chat this row is in, where it has its own (`BotLookScope`: the tour's demo over a gateway in use).
+    @Environment(\.botLookScope) private var lookScope
+    /// The reply bubble's fill: grey, or the bot's colour at a wash. The bot's identity here is the
+    /// chat's bot, not the face beside the bubble: with bots hidden a tinted reply is the only sign of
+    /// whose words they are, so the setting has to work there too.
     private var replyFill: Color {
-        if botTint, let profile { return BotColors.color(for: profile).opacity(scheme == .dark ? 0.22 : 0.16) }
-        return Color(.systemGray5)
+        let owner = bot ?? profile
+        guard let hex = ChatStyle.replyTintHex(on: botTint, bot: owner, scopeHex: owner.flatMap { lookScope?.color(for: $0) }),
+              let color = Color(hex: hex) else { return Color(.systemGray5) }
+        return color.opacity(scheme == .dark ? 0.22 : 0.16)
     }
     /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
     /// a new value every evaluation, and SwiftUI re-ran every visible row for it on each frame
@@ -1464,7 +1708,12 @@ struct TranscriptRow: View, Equatable {
                             .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
-                                Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                // The last message can be edited and sent in its own place, since only the last turn can be
+                                // taken back; any message's words can be copied into a new one (#556).
+                                if resendable {
+                                    Button { onEdit(text, item.id) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                }
+                                Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }
                                 Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                                 ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                             }
@@ -1481,8 +1730,13 @@ struct TranscriptRow: View, Equatable {
                         Color.clear.frame(width: 28, height: 1)
                     } else if botShown {
                         // A finished reply keeps a painted bot: a live one per row is what stuttered.
-                        Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: scheme))
-                            .resizable().frame(width: 28, height: 28)
+                        if let scope = lookScope, let raw = scope.avatar(for: profile), let hex = scope.color(for: profile) {
+                            Image(uiImage: BotAvatarImage.cached(spec: BotAvatarChoice(raw: raw).spec(hex: hex), size: 28, scheme: scheme, closed: false, keep: true))
+                                .resizable().frame(width: 28, height: 28)
+                        } else {
+                            Image(uiImage: BotAvatarImage.cached(profile: profile, size: 28, scheme: scheme))
+                                .resizable().frame(width: 28, height: 28)
+                        }
                     } else {
                         Color.clear.frame(width: 28, height: 1)
                     }
@@ -1564,7 +1818,8 @@ struct TranscriptRow: View, Equatable {
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .bubble(Color(.systemGray4), side: .trailing) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                            Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                            // A steer isn't a turn the gateway can take back: its words go into a new message.
+                            Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }
                         }
                     Label(status == "queued" ? "Steered · queued" : "Steered", systemImage: "arrow.turn.down.right")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -1706,9 +1961,9 @@ struct InjectedNoteRow: View {
     var onShowAll: ((_ title: String, _ text: String) -> Void)? = nil
     @State private var open = false
     /// The pill's own width and the row's: the glass animates between the two. The row's is the width the list
-    /// offers the note, measured on an empty view beside it, never on the note: measured on the note, a note
-    /// that came out wider than its row once kept that width as the width to lay its details out at, and the
-    /// whole chat stayed wider than the screen (#433, after a notice whose output had lines with nowhere to break).
+    /// offers the note, measured on an empty view the row places at that width (`OfferedWidthRow`), never on the
+    /// note or on anything the note can widen: a note that came out wider than its row once kept that width as the
+    /// width to lay its details out at, and the whole chat stayed wider than the screen (#433, #440).
     @State private var pillWidth: CGFloat = 0
     @State private var rowWidth: CGFloat = 0
     var body: some View {
@@ -1727,9 +1982,9 @@ struct InjectedNoteRow: View {
         // Its own width, wrapping only where the row is narrower than the title (the largest text sizes).
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pillWidth = $0 }
-        // The offered width, from a sibling with nothing in it: the stack proposes it the same width as the note,
-        // and an empty view takes exactly that, whatever the note's own size (a background would get the note's).
-        ZStack(alignment: .top) {
+        // The offered width, from a view with nothing in it that the row places at exactly that width (`OfferedWidthRow`),
+        // whatever the note's own size (a background would get the note's).
+        OfferedWidthRow {
             Color.clear.frame(height: 0).frame(maxWidth: .infinity)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
                 .accessibilityHidden(true)
@@ -1756,6 +2011,27 @@ struct InjectedNoteRow: View {
             .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// A background process's note in its row, as wide as the row is offered whatever the note's own width (#440). The
+/// first view, empty, is placed at exactly the width offered, and the note measures it as the width to lay its details
+/// out at; the second, the note, goes on top, centred. A ZStack placed both at its own size: a note laid out wider than
+/// its row (its details still at an older row's width, an iPad turned back to portrait with a note open) made the stack
+/// that wide, the empty view measured that, and the width held, the thread and then the whole chat wider than their
+/// column. Here a note wider than its row lasts one pass: the measure is the row's, and the details follow it.
+private struct OfferedWidthRow: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let note = subviews.count > 1 ? subviews[1].sizeThatFits(proposal) : .zero
+        guard let width = proposal.width, width.isFinite else { return note }
+        return CGSize(width: width, height: note.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: 0))
+        guard subviews.count > 1 else { return }
+        subviews[1].place(at: CGPoint(x: bounds.midX, y: bounds.minY), anchor: .top,
+                          proposal: ProposedViewSize(width: bounds.width, height: proposal.height))
     }
 }
 
@@ -1800,6 +2076,50 @@ struct Folded: ViewModifier {
 
 extension View {
     func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
+}
+
+/// The tapped card's place while the thread holds it (#437, #473). The thread's hold anchors its size changes at its top,
+/// which keeps a card where it is as it grows, unless rows above it are measured in the same pass (the lazy stack's
+/// estimate for rows not yet measured, right after an open or far up a long chat): then the card moved by their
+/// correction. Each card keeps its top on screen in a box (`Top`, no redraw; a number stored and a flag read per move, so
+/// a long chat's cards cost next to nothing while it scrolls); the one tapped is armed with its top before its toggle;
+/// while the thread holds it, a move of its top is answered by scrolling the thread to the offset that puts it back,
+/// counted from the offset of the pass that reported it (`TranscriptView.holdCard`), so a move reported again before
+/// the scroll has landed asks for the same place, once. The thread's other scrolls wait meanwhile (`holding`). The hold's
+/// end, or a finger on the thread, ends it.
+@MainActor final class CardHold {
+    static let shared = CardHold()
+    /// A card's last top on screen, and the top it is held at while armed.
+    final class Top {
+        var y: CGFloat?
+        fileprivate(set) var heldAt: CGFloat?
+        var armed: Bool { heldAt != nil }
+    }
+    private weak var held: Top?
+    private var correct: ((CGFloat) -> Void)?
+    /// A hold under way: the thread's other scrolls (landing past the end, the overscroll fix) wait for its end.
+    var holding: Bool { correct != nil }
+
+    func arm(_ card: Top) {
+        held?.heldAt = nil
+        card.heldAt = card.y
+        held = card
+        correct = nil
+    }
+    func begin(_ correct: @escaping (CGFloat) -> Void) {
+        guard held?.heldAt != nil else { return }
+        self.correct = correct
+    }
+    func end() {
+        held?.heldAt = nil
+        held = nil
+        correct = nil
+    }
+    func moved(_ card: Top, to y: CGFloat) {
+        guard card === held, let top = card.heldAt, let correct else { return }
+        let delta = y - top
+        if abs(delta) >= 0.5 { correct(delta) }
+    }
 }
 
 #if DEBUG
@@ -2023,6 +2343,8 @@ struct ReasoningDisclosure: View {
     /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
     var onShowAll: ((String) -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Its top on screen, kept without redrawing it, for the thread's hold of it (`CardHold`).
+    @State private var top = CardHold.Top()
     #if DEBUG
     @State private var probeUntil = Date.distantPast
     #endif
@@ -2054,6 +2376,10 @@ struct ReasoningDisclosure: View {
         // One width, open or closed: the closed card was as wide as its header and the open one as wide as its text, so
         // the width grew with the height and the text, laid out at its final width, showed cut on the right (#437).
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { _, y in
+            top.y = y
+            if top.armed { CardHold.shared.moved(top, to: y) }
+        }
         #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("reasoning-\(abs(text.hashValue) % 100_000)", f, until: probeUntil) }
         #endif
@@ -2065,6 +2391,7 @@ struct ReasoningDisclosure: View {
         #if DEBUG
         probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
         #endif
+        CardHold.shared.arm(top)
         withAnimation(reduceMotion ? nil : .snappy) { open.toggle() }
     }
 }
@@ -2492,6 +2819,8 @@ struct ToolCardView: View {
     var compact = false
     @State private var showFull = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Its top on screen, kept without redrawing it, for the thread's hold of it (`CardHold`).
+    @State private var top = CardHold.Top()
     #if DEBUG
     @State private var probeUntil = Date.distantPast
     #endif
@@ -2573,7 +2902,12 @@ struct ToolCardView: View {
             #if DEBUG
             probeUntil = Date().addingTimeInterval(1); CardMotionProbe.begin()
             #endif
+            CardHold.shared.arm(top)
             withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { _, y in
+            top.y = y
+            if top.armed { CardHold.shared.moved(top, to: y) }
         }
         #if DEBUG
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in CardMotionProbe.note("tool-\(activity.id)", f, until: probeUntil) }
@@ -2581,7 +2915,10 @@ struct ToolCardView: View {
         .accessibilityElement(children: .combine)
         // A tap gesture alone gives assistive tech nothing to press (on the Mac the card was plain text).
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() } }
+        .accessibilityAction {
+            CardHold.shared.arm(top)
+            withAnimation(reduceMotion ? nil : .snappy) { open.wrappedValue.toggle() }
+        }
         .accessibilityHint(DeviceWords.isMac ? "Expands the tool log" : "Double-tap to expand the tool log")
     }
 

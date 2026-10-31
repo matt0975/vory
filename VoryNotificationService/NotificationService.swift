@@ -124,7 +124,7 @@ enum AvatarRender {
         if choice == "photo", let data = looks.photos[profile] {
             return roundPhoto(data)
         }
-        let spec = BotLookSpec.from(choice: choice, hex: looks.colors[profile] ?? "#7C5CFF")
+        let spec = BotLookSpec.from(choice: choice, hex: looks.color(for: profile))
         let renderer = ImageRenderer(content: BotFaceView(spec: spec, size: 128, active: false).padding(6))
         renderer.scale = 2
         renderer.isOpaque = false

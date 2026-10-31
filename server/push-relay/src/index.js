@@ -26,6 +26,14 @@ export default {
   },
 };
 
+// A registration lasts 180 days from its last write (#499). Two things write it again: the app's own
+// register (at each launch and return to the foreground, at most one write a day), and a push Apple
+// accepts, when the last write is over a week old (`refreshAfterPush`), so an install that lives on its
+// notifications or its complications without the app being opened stays too. Only an install nothing
+// reaches any more (the app deleted, the device gone) expires.
+const REGISTRATION_TTL = 180 * 24 * 3600;
+const REFRESH_AFTER = 7 * 24 * 3600 * 1000;
+
 const SECRET_RE = /^[A-Za-z0-9_-]{32,128}$/;
 const ID_RE = /^[a-z0-9-]{8,80}$/;
 
@@ -75,7 +83,7 @@ async function register(request, env) {
   const same = prev && ["device_token", "platform", "bundle_id", "environment"].every((k) => prev[k] === dev[k]);
   const fresh = prev && typeof prev.updated_at === "number" && Date.now() - prev.updated_at < 24 * 3600 * 1000;
   if (same && fresh) return reply(200, { ok: true, unchanged: true });
-  await env.DEVICES.put("dev:" + install_id, JSON.stringify(dev));
+  await env.DEVICES.put("dev:" + install_id, JSON.stringify(dev), { expirationTtl: REGISTRATION_TTL });
   return reply(200, { ok: true });
 }
 
@@ -146,11 +154,32 @@ async function push(request, env) {
   const res = await fetch(`https://${host}/3/device/${token}`, { method: "POST", headers, body: JSON.stringify(payload) });
   const text = await res.text();
   // A dead device token means the install is gone: drop it so the app re-registers. A dead Live
-  // Activity token only means that activity ended, so the registration stays.
+  // Activity token only means that activity ended, so the registration stays. Only the registration
+  // Apple refused goes: one written since with a new token (a restored device) stays.
   if (type !== "liveactivity" && (res.status === 410 || (res.status === 400 && text.includes("BadDeviceToken")))) {
-    await env.DEVICES.delete("dev:" + b.install_id);
+    const cur = await readStored(env, b.install_id);
+    if (cur && cur.device_token === token) await env.DEVICES.delete("dev:" + b.install_id);
+  } else if (res.ok) {
+    await refreshAfterPush(env, b.install_id, dev);
   }
   return reply(res.ok ? 200 : 502, { ok: res.ok, apns_status: res.status, apns: text.slice(0, 200) });
+}
+
+async function readStored(env, installId) {
+  const raw = await env.DEVICES.get("dev:" + installId);
+  return raw ? JSON.parse(raw) : null;
+}
+
+// A push Apple accepted keeps the registration: the same record written again with the 180 days, when
+// its last write is over a week old (at most one KV write a week per install). Read again first and
+// written only if it is still the record this push was sent with, so a register that landed meanwhile
+// (a new token) is never put back to the old one. KV has no compare-and-set; this narrows the window to
+// the moment between that read and the write.
+async function refreshAfterPush(env, installId, sentWith) {
+  if (typeof sentWith.updated_at === "number" && Date.now() - sentWith.updated_at < REFRESH_AFTER) return;
+  const cur = await readStored(env, installId);
+  if (!cur || cur.device_token !== sentWith.device_token || cur.updated_at !== sentWith.updated_at) return;
+  await env.DEVICES.put("dev:" + installId, JSON.stringify({ ...cur, updated_at: Date.now() }), { expirationTtl: REGISTRATION_TTL });
 }
 
 // ── APNs provider token (ES256), cached for 50 minutes per isolate ───────────────────────────

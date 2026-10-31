@@ -69,7 +69,9 @@ enum BotAvatarStore {
     }
 
     static func choice(for profile: String, overrides: [String: String]? = nil) -> BotAvatarChoice {
-        BotAvatarChoice(raw: effective((overrides ?? stored())[profile] ?? ""))
+        // The demo's bots wear the demo's looks while it runs (`DemoLooks`), whatever is stored.
+        if let demo = DemoLooks.avatar(for: profile) { return BotAvatarChoice(raw: effective(demo)) }
+        return BotAvatarChoice(raw: effective((overrides ?? stored())[profile] ?? ""))
     }
 
     /// Settings › Bots › "Liquid Glass for all bots": every studio bot draws as glass, whatever
@@ -86,6 +88,8 @@ enum BotAvatarStore {
     }
 
     @MainActor static func set(_ choice: BotAvatarChoice, for profile: String) {
+        // A look picked in the demo is the demo's only.
+        if DemoLooks.keep(avatar: choice.raw, for: profile) { return }
         var map = stored()
         map[profile] = choice.raw
         save(map)
