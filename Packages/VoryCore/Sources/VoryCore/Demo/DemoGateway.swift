@@ -366,6 +366,15 @@ extension DemoGateway {
             return .success(["type": "exec", "output": "/\(p["name"] as? String ?? "") ran on the demo gateway."])
         case "session.interrupt":
             return .success(["status": "interrupted", "interrupted": true])
+        case "session.undo":
+            // As Hermes does: the last user turn and everything after it leave the history, never while a turn runs
+            // (Edit & resend, #556).
+            guard let l = live[p["session_id"] as? String ?? ""] else { return .failure(RPCError(code: 4007, message: "session not found")) }
+            if l.running { return .failure(RPCError(code: 4009, message: "session busy: stop the reply before undo")) }
+            guard let cut = l.history.lastIndex(where: { $0["role"] as? String == "user" }) else { return .success(["removed": 0]) }
+            let removed = l.history.count - cut
+            l.history.removeSubrange(cut...)
+            return .success(["removed": removed])
         case "config.set":
             let l = live[p["session_id"] as? String ?? ""]
             var i = info(l?.title ?? "", running: false, bot: l?.bot ?? profile, cwd: DemoContent.home)

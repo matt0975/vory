@@ -5,8 +5,9 @@ import VoryCore
 
 struct TranscriptView: View {
     @Bindable var chat: ChatSession
-    /// Long-press › "Edit & resend" hands the text back to the composer.
-    var onEditMessage: (String) -> Void = { _ in }
+    /// Long-press › "Edit & resend" (with the message's id: the composer edits it in place) or "Copy to message" (nil:
+    /// the words only, for a new message) hands the text to the composer (#556).
+    var onEditMessage: (String, String?) -> Void = { _, _ in }
     /// A "Messaged X" or "Message from X" notice was tapped: open X's chat.
     var onOpenBot: (String) -> Void = { _ in }
     /// Reply on a bubble: the composer quotes it above the next message.
@@ -543,6 +544,7 @@ extension TranscriptView {
         return RowContext(profile: showBots ? chat.profileName : nil, bot: chat.profileName,
                           botLabel: chat.runtime.profiles.first { $0.name == chat.profileName }?.label ?? chat.profileName, typingTool: typingTool, showReasoning: showReasoning, currentStepOnly: currentStepOnly,
                           showStats: showTurnStats, interruptCause: chat.interruptCause, lastID: chat.items.last?.id,
+                          resendableID: chat.runtime.undoUnsupported ? nil : chat.lastResendableID,
                           openReasoning: openReasoning, openTools: openTools, showToolOutput: showToolOutput, compactTools: compactTools,
                           wide: wideReplies, maxBubble: bubbleCap, actions: actions)
     }
@@ -1002,7 +1004,7 @@ enum ChatRowTransition {
 /// What a row does when tapped: one object for the thread's life, so the context that carries
 /// it compares equal from one update to the next (closures never do).
 final class RowActions {
-    var onEdit: (String) -> Void = { _ in }
+    var onEdit: (String, String?) -> Void = { _, _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onChooseModel: () -> Void = {}
@@ -1032,6 +1034,9 @@ struct RowContext: Equatable {
     var showStats: Bool
     var interruptCause: InterruptedTurn.Cause?
     var lastID: String?
+    /// The message Edit & resend is offered on (`ChatSession.lastResendableID`, none where the gateway can't take a
+    /// message back); every other bubble of the person's own offers Copy to message (#556).
+    var resendableID: String?
     var openReasoning: Set<String>
     var openTools: Set<String>
     var showToolOutput: Bool
@@ -1043,6 +1048,7 @@ struct RowContext: Equatable {
     static func == (a: RowContext, b: RowContext) -> Bool {
         a.actions === b.actions && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.typingTool == b.typingTool && a.showReasoning == b.showReasoning
             && a.currentStepOnly == b.currentStepOnly && a.showStats == b.showStats && a.interruptCause == b.interruptCause && a.lastID == b.lastID
+            && a.resendableID == b.resendableID
             && a.openReasoning == b.openReasoning && a.openTools == b.openTools && a.showToolOutput == b.showToolOutput
             && a.compactTools == b.compactTools && a.wide == b.wide && a.maxBubble == b.maxBubble
     }
@@ -1072,6 +1078,9 @@ struct RowContext: Equatable {
         c.typingTool = nil
         c.lastID = nil
         c.interruptCause = nil
+        // The message Edit & resend is on, only when it's one of them: it's usually among the last rows, and the older
+        // rows' context then stays equal as a new message comes and goes.
+        if let r = resendableID, tail.contains(where: { $0.item.id == r }) { c.resendableID = nil }
         if !openReasoning.isEmpty || !openTools.isEmpty {
             let ids = Set(tail.map(\.item.id))
             c.openReasoning = openReasoning.subtracting(ids)
@@ -1091,7 +1100,7 @@ struct RowContext: Equatable {
         let id = row.item.id
         let actions = actions
         TranscriptRow(item: row.item, profile: profile, bot: bot, botShown: row.lastOfRun,
-                      typingTool: bubbleTool(for: row.item),
+                      typingTool: bubbleTool(for: row.item), resendable: id == resendableID,
                       showReasoning: showReasoning && (!currentStepOnly || TranscriptView.isStreaming(row.item)), showStats: showStats,
                       onEdit: actions.onEdit, onOpenBot: actions.onOpenBot, onReply: actions.onReply, onChooseModel: actions.onChooseModel,
                       interruptCause: interruptCause(for: id), onKeepRunning: actions.onKeepRunning,
@@ -1577,6 +1586,7 @@ struct SelectTextItem: Identifiable {
 struct TranscriptRow: View, Equatable {
     static func == (a: TranscriptRow, b: TranscriptRow) -> Bool {
         a.item == b.item && a.profile == b.profile && a.bot == b.bot && a.botLabel == b.botLabel && a.botShown == b.botShown && a.typingTool == b.typingTool
+            && a.resendable == b.resendable
             && a.showReasoning == b.showReasoning && a.showStats == b.showStats
             && a.reasoningOpen == b.reasoningOpen && a.toolOpen == b.toolOpen
             && a.showToolOutput == b.showToolOutput && a.compactTools == b.compactTools && a.wide == b.wide
@@ -1592,9 +1602,12 @@ struct TranscriptRow: View, Equatable {
     /// While the reply has no text yet: nil = a grey typing bubble, a name = the dark one with
     /// the tool badge.
     var typingTool: String? = nil
+    /// The person's own message that Edit & resend is offered on: the chat's last of theirs (`RowContext.resendableID`).
+    /// Their other bubbles offer Copy to message.
+    var resendable = false
     var showReasoning = true
     var showStats = true
-    var onEdit: (String) -> Void = { _ in }
+    var onEdit: (String, String?) -> Void = { _, _ in }
     var onOpenBot: (String) -> Void = { _ in }
     var onReply: (String) -> Void = { _ in }
     var onChooseModel: () -> Void = {}
@@ -1695,7 +1708,12 @@ struct TranscriptRow: View, Equatable {
                             .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
-                                Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                // The last message can be edited and sent in its own place, since only the last turn can be
+                                // taken back; any message's words can be copied into a new one (#556).
+                                if resendable {
+                                    Button { onEdit(text, item.id) } label: { Label("Edit & resend", systemImage: "pencil") }
+                                }
+                                Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }
                                 Button { onReply(text) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
                                 ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
                             }
@@ -1800,7 +1818,8 @@ struct TranscriptRow: View, Equatable {
                         .padding(.horizontal, 14).padding(.vertical, 9)
                         .bubble(Color(.systemGray4), side: .trailing) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
-                            Button { onEdit(text) } label: { Label("Edit & resend", systemImage: "pencil") }
+                            // A steer isn't a turn the gateway can take back: its words go into a new message.
+                            Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }
                         }
                     Label(status == "queued" ? "Steered · queued" : "Steered", systemImage: "arrow.turn.down.right")
                         .font(.caption2).foregroundStyle(.secondary)

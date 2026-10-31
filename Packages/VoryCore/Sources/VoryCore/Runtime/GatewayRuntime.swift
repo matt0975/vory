@@ -125,6 +125,10 @@ public final class GatewayRuntime {
     var registry = ChatRegistry<ChatSession>()
     /// Every open chat, in the order it was opened.
     public var chats: [ChatSession] { registry.all }
+    /// This gateway answered `session.undo` with "unknown method": a Hermes without it, where a sent message can't be
+    /// taken back, so a bubble offers Copy to message instead of Edit & resend (#556). Learnt from that answer, never
+    /// guessed from a version.
+    public var undoUnsupported = false
     private var globalEventTask: Task<Void, Never>?
     /// Platform hooks, set by the app that owns this runtime.
     public var pushRegistrar: (any PushRegistrationSyncing)?

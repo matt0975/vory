@@ -417,6 +417,8 @@ def session_info(title: str, running: bool, profile: str) -> dict:
 # ── REST ──────────────────────────────────────────────────────────────────────────────────────
 
 RESUMES: list[dict] = []
+# Every session.undo answered (Edit & resend, #556), for a test to read back (GET /api/_mock/undos).
+UNDOS: list[dict] = []
 STORED_SESSIONS: list[dict] = [
     {"id": "20260921_154212_a1b2c3", "title": "Disk cleanup on the log host",
      "preview": "I'll look at what's filling the disk on that host, then clean up safely.",
@@ -670,6 +672,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
+    if base == "/api/_mock/undos":
+        # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
+        return 200, {"undos": UNDOS}
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
         return 200, {"triggers": CRON_TRIGGERS}
@@ -1595,7 +1600,7 @@ async def process_request(connection, request):
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
         FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused") else 0
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -3054,6 +3059,28 @@ class Gateway:
             return ok({"status": "streaming"})
         if method == "session.interrupt":
             return ok({"status": "interrupted", "interrupted": True})
+        if method == "session.undo":
+            # Hermes' tui_gateway/methods_session.py: the last user turn and everything after it leave the history, never
+            # while a turn runs (4009). Faults: undo-unknown (a Hermes without it, -32601), undo-busy (4009 at rest).
+            if FAULT["mode"] == "undo-unknown":
+                return err(-32601, f"unknown method: {method}")
+            s = self.sessions.get(p.get("session_id", ""))
+            if s is None:
+                return err(4006, "unknown session")
+            if s.running or FAULT["mode"] == "undo-busy":
+                return err(4009, "session busy: stop the reply before undo")
+            users = [i for i, r in enumerate(s.history) if r.get("role") == "user"]
+            removed = 0
+            if users:
+                cut = users[-1]
+                removed = len(s.history) - cut
+                first_row = s.history[cut].get("row_id") or 0
+                del s.history[cut:]
+                if first_row:
+                    s.db_rows = [r for r in s.db_rows if r["id"] < first_row]
+            UNDOS.append({"session_id": s.sid, "intent": p.get("intent"), "removed": removed, "at": time.time()})
+            print(f"[mock] session.undo {s.sid} intent={p.get('intent')!r}: removed {removed}", flush=True)
+            return ok({"removed": removed})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
             # Voice mode's quick answers set reasoning and fast for the session and put them back.

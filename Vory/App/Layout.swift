@@ -404,6 +404,26 @@ enum FoldSplit {
     }
 }
 
+/// A view as wide as it's offered, whatever its own width, and laid out at that width: what a grid's span is read on when
+/// its fixed columns are worked out from that span (`FoldSplit`, for Home's tiles and the Board's column chips). Fixed
+/// columns add up to the span they're worked out from, so a span read on the grid itself, or on anything a stack placed
+/// beside it (a stack places each child at its widest child's width), held itself: the columns of a turn's first pass, at
+/// the window's full width, stayed in every pass after it, and the page with them (#548 Home, 42 pt left of the window;
+/// #553 the Board's chips, 927 pt wide and partly off its left). Here what's around never sees the grid's own width:
+/// columns wider than the offer last one pass, drawn past it, and the span read on this is the offer. Asked with no width
+/// or an infinite one (a stack's probe), it gives the grid's own answer. As the transcript's `OfferedWidthRow` (#440).
+struct OfferedWidth: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let content = subviews.first?.sizeThatFits(proposal) ?? .zero
+        guard let width = proposal.width, width.isFinite else { return content }
+        return CGSize(width: width, height: content.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: proposal.height))
+    }
+}
+
 /// Voice mode on a column folded across (the Duo half open like a laptop, Duo stage 4): the bot above the fold, the
 /// conversation and the controls below it, so nothing sits on the hinge. The two halves' heights and the fold's between
 /// them, measured in the voice screen's column (inside the safe area, where its content goes), or nil for one column, as

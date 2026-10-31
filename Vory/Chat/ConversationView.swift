@@ -18,6 +18,10 @@ struct ConversationView: View {
     @State private var composerText = ""
     /// A bubble chosen with Reply: quoted above the next message, like a reply in Messages.
     @State private var composerQuote = ""
+    /// A bubble's words waiting for "Replace your draft?" (Edit & resend or Copy to message over words already typed),
+    /// with the message's id for an edit (#556).
+    @State private var replacingDraft: DraftReplacement?
+    struct DraftReplacement { var text: String; var id: String? }
     @State private var dockHeight: CGFloat = 60
     #if os(iOS)
     /// The tab bar's height under the chat, when it is there and runs along the bottom.
@@ -120,6 +124,8 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         Perf.stamp("pop: conversation disappeared")
+                        // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
+                        chat.cancelEdit()
                         if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
                         if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
@@ -129,6 +135,13 @@ struct ConversationView: View {
                     .onChange(of: showProfile) { _, _ in Smooth.animate("botCard") }
                     .onChange(of: chat.isRunning, initial: true) { _, running in if running { Smooth.begin("turn") } else { Smooth.end("turn") } }
                     .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
+                    .alert("Replace your draft?", isPresented: Binding(get: { replacingDraft != nil }, set: { if !$0 { replacingDraft = nil } }),
+                           presenting: replacingDraft) { r in
+                        Button("Replace", role: .destructive) { takeIntoComposer(r.text, r.id) }
+                        Button("Cancel", role: .cancel) {}
+                    } message: { _ in
+                        Text("The words you've typed will be replaced with the message.")
+                    }
                     // A tapped "@bot" opens that bot's card; every other link goes its usual way.
                     .environment(\.openURL, OpenURLAction { url in
                         if let b = Mentions.bot(from: url) { mentionedBot = b; return .handled }
@@ -385,10 +398,6 @@ struct ConversationView: View {
             // rebuild for it (TranscriptRow takes its open states as values), so the thread
             // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
-            // The dock's frame for the UI tests (its own container: an identifier on a plain
-            // view goes to every child, and the composer lost its name).
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat.dock")
     }
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
@@ -441,7 +450,28 @@ struct ConversationView: View {
         }
     }
 
-    private func editMessage(_ text: String) { composerText = text }
+    /// A bubble's Edit & resend (`id`: the chat's last message of the person's own, edited in its place) or Copy to message
+    /// (nil: its words for a new message) puts its words in the composer, asking first when they'd replace a draft (#556).
+    private func editMessage(_ text: String, _ id: String?) {
+        let draft = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.isEmpty || draft == text.trimmingCharacters(in: .whitespacesAndNewlines) { takeIntoComposer(text, id) }
+        else { replacingDraft = DraftReplacement(text: text, id: id) }
+    }
+    private func takeIntoComposer(_ text: String, _ id: String?) {
+        guard let chat else { return }
+        if let id {
+            // Not while a reply runs: the gateway can't take a turn back then, so the banner says to stop it first.
+            guard chat.beginEdit(id) else {
+                chat.banner = chat.isRunning ? "A reply is running. Stop it, then edit your message." : "Only your last message can be edited and sent again."
+                return
+            }
+            // The edited message goes in its own place, not as a reply to another.
+            composerQuote = ""
+        } else {
+            chat.cancelEdit()
+        }
+        composerText = text
+    }
     private func reply(_ text: String) { withAnimation(.snappy) { composerQuote = text } }
     /// A "Messaged X" notice: X's chat opens read-only, or the banner says why it cannot.
     private func openBot(_ handle: String, from chat: ChatSession) {
@@ -509,10 +539,17 @@ struct BottomDock: View {
                 if let banner = chat.banner {
                     HStack {
                         Text(banner).font(.footnote).lineLimit(3)
+                            .padding(.vertical, 12)
                         Spacer()
-                        Button { chat.banner = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                        // A 44 pt square to hit, the glyph its usual size: the audit's smallest target, as Cancel editing's.
+                        Button { chat.banner = nil } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).frame(width: 44, height: 44).contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .padding(12)
+                    // The words keep their padding; the button's square sets the banner's height where it's taller, its
+                    // glyph where it was.
+                    .padding(.leading, 12)
                     .glassEffect(.regular, in: .rect(cornerRadius: 16))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -537,6 +574,15 @@ struct BottomDock: View {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
             }
+            // The dock's frame for the UI tests and the accessibility hit test (its own container: an identifier on a
+            // plain view goes to every child, and the composer lost its name). Without the shape the container's frame
+            // was its top glass element's alone, wherever the modifier sat: the banner, else the queued strip, else the
+            // composer from 10 pt above where it's drawn. With a banner up the composer's controls lay outside the
+            // dock, where the hit test missed Send and the box (#564). The accessibility kind of content shape gives it
+            // the stack's whole rect.
+            .accessibilityElement(children: .contain)
+            .contentShape(.accessibility, Rectangle())
+            .accessibilityIdentifier("chat.dock")
             .padding(.horizontal, 12)
             .padding(.bottom, Self.bottomPadding)
         }

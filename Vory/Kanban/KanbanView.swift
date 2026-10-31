@@ -15,7 +15,8 @@ struct KanbanView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// A window that can fold: the column chips stand either side of the fold (`KanbanChips`).
     @Environment(\.reservedRegions) private var regions
-    /// The chips' span across the window (window space), for where the fold falls.
+    /// The chips' span across the window (window space), the width the strip offers them (`OfferedWidth`), for where the
+    /// fold falls.
     @State private var chipsFrame = CGRect.zero
     @Environment(\.barTab) private var barTab
     @AppStorage("kanban.column") private var columnRaw = KanbanStatus.ready.rawValue
@@ -183,28 +184,30 @@ struct KanbanView: View {
     private func columns(_ board: KanbanBoard) -> some View {
         // Two to a row at the accessibility sizes, where four left only an icon and "…". On a window
         // that can fold up its middle, half each side of the fold (`KanbanChips`, Duo stage 4).
-        LazyVGrid(columns: KanbanChips.items(regions: regions, frame: chipsFrame, count: typeSize.isAccessibilitySize ? 2 : 4, spacing: 6), spacing: 6) {
-            ForEach(KanbanStatus.columns, id: \.self) { s in
-                let n = board.count(s)
-                Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
-                        Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
-                        if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
+        // The span the fold's place is read against is the width the strip offers the chips, whatever their columns add up
+        // to (`OfferedWidth`): read on the grid, a turn's first pass held them at the window's full width (#553).
+        OfferedWidth {
+            LazyVGrid(columns: KanbanChips.items(regions: regions, frame: chipsFrame, count: typeSize.isAccessibilitySize ? 2 : 4, spacing: 6), spacing: 6) {
+                ForEach(KanbanStatus.columns, id: \.self) { s in
+                    let n = board.count(s)
+                    Button { withAnimation(.snappy) { columnRaw = s.rawValue } } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: s.symbol).font(.caption2).accessibilityHidden(true)
+                            Text(s.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.7)
+                            if n > 0 { Text("\(n)").font(.caption2.monospacedDigit()).padding(.horizontal, 5).padding(.vertical, 1).background(.quaternary, in: .capsule) }
+                        }
+                        .padding(.horizontal, 6).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity)
                     }
-                    .padding(.horizontal, 6).padding(.vertical, 7)
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.plain)
+                    .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
+                    .foregroundStyle(column == s ? Color.accentColor : .primary)
+                    .accessibilityLabel("\(s.title), \(n)")
+                    .accessibilityAddTraits(column == s ? .isSelected : [])
                 }
-                .buttonStyle(.plain)
-                .background(column == s ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: .capsule)
-                .foregroundStyle(column == s ? Color.accentColor : .primary)
-                .accessibilityLabel("\(s.title), \(n)")
-                .accessibilityAddTraits(column == s ? .isSelected : [])
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        // The grid's full width, whatever its columns add up to: the frame the fold's place is read against
-        // doesn't move with the columns it decides.
-        .frame(maxWidth: .infinity, alignment: .leading)
         #if os(iOS)
         // Its span across the window only, as Home's tiles read theirs.
         .onGeometryChange(for: CGRect.self) { g in
