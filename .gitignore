@@ -13,3 +13,4 @@ server/push-relay/node_modules/
 # local tooling and notes
 .claude/
 docs/agent-memory/
+docs/superpowers/
