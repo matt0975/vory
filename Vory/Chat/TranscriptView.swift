@@ -2685,13 +2685,12 @@ struct MarkdownTableView: View {
             .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
     }
 
+    /// Full screen, beside the wrap switch and built as it is: a caption glyph in a 44 pt square.
     private var openTableButton: some View {
         Button { full = true } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.caption2.weight(.semibold))
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
@@ -2700,25 +2699,17 @@ struct MarkdownTableView: View {
         .help("Open Table")
     }
 
-    /// The card's top header strip: an anchored title on the leading edge and compact 28 pt action
-    /// discs on the trailing edge. Sitting here rather than overlaying the table cells prevents
-    /// narrow rightmost columns from having their headers squeezed by the buttons.
+    /// The card's header, built as a code block's: the title where a code block names its language,
+    /// in the same type, and the wrap switch and full screen at the trailing end. Above the grid
+    /// rather than over its cells, so a narrow last column keeps its header's room.
     private var controls: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 5) {
-                Image(systemName: "tablecells")
-                    .font(.caption2)
-                Text("Table")
-                    .font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(.secondary)
-            .padding(.leading, 12)
-
+        HStack {
+            Text("Table").font(.caption2).foregroundStyle(.secondary)
             Spacer(minLength: 0)
-
-            TableWrapToggle()
+            TableWrapToggle().padding(.trailing, 2)
             openTableButton
         }
+        .padding(.horizontal, 10).padding(.top, 2)
     }
 
     private var card: some View {

@@ -151,19 +151,19 @@ extension MarkdownTable {
     }
 }
 
-/// The wrap/scroll switch in a table card's corner. The glyph is the change it will make: a
-/// scrolling table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the
-/// two switches on a screen never disagree.
+/// The wrap/scroll switch in a table card's header, built as a code block's (`CodeWrapToggle`): the
+/// same glyphs, caption-sized and secondary, in a 44 pt square with nothing drawn behind them, so the
+/// two switches in one reply read as one feature. The glyph is the change it will make: a scrolling
+/// table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the two
+/// switches on a screen never disagree.
 struct TableWrapToggle: View {
     @AppStorage(MarkdownTableMetrics.wrapKey) private var wrap = true
 
     var body: some View {
         Button { withAnimation(.snappy) { wrap.toggle() } } label: {
             Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
-                .font(.caption2.weight(.semibold))
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
