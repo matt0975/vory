@@ -139,6 +139,13 @@ enum TopBarRoom {
         size.height > size.width && safeTop >= bandRowTop + bandRowHeight
             && regions.reported.contains { $0.kind == .fold && $0.frame.width > $0.frame.height }
     }
+    /// `barUp` through a launch's first second (#554): the fold is reported about a second after the window is, and the bar
+    /// stood under the band until then and stepped up (60 pt) and sideways (122) when it came. Until the regions are read,
+    /// the bar stands as it last stood for this window's shape (`SystemBarItems.up`); once they are, the live verdict.
+    /// A shape never seen (a phone, an iPad, a first launch) has nothing remembered: the live verdict, as before.
+    static func barUpAtLaunch(live: Bool, regionsRead: Bool, remembered: Bool?) -> Bool {
+        regionsRead ? live : (remembered ?? live)
+    }
     /// Whether the pages get the room under a status in a top corner (`statusInCorner`): where the bar isn't up, the
     /// regions report one, and the window is taller than wide, as only the open Duo upright is with its status in a corner.
     /// A turn on its side keeps reporting the upright's corner for about 0.75 s after the window is wide, and the room
@@ -508,7 +515,13 @@ struct StatusCornerEnvironment: ViewModifier {
     @Environment(\.windowGeometry) private var windowGeometry
     func body(content: Content) -> some View {
         let g = windowGeometry
-        let up = TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        let live = TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        #if os(iOS)
+        let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
+        let up = TopBarRoom.barUpAtLaunch(live: live, regionsRead: !regions.reported.isEmpty, remembered: SystemBarItems.shared.up(for: key))
+        #else
+        let up = live
+        #endif
         content
             .environment(\.statusInCorner, TopBarRoom.statusCorner(barUp: up, regions: regions, size: g.bounds.size))
             .environment(\.barLift, TopBarRoom.lift(barUp: up, safeTop: g.safeArea.top))

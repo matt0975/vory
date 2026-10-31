@@ -606,10 +606,11 @@ final class BarUpUITests: XCTestCase {
         let step = (edges.max() ?? 0) - (edges.min() ?? 0)
         print("LAUNCH \(pose.rawValue) trail \(trail.count) frames, right edge \(edges.min().map { String(format: "%.1f", $0) } ?? "-") to \(edges.max().map { String(format: "%.1f", $0) } ?? "-"), last \(edges.last.map { String(format: "%.1f", $0) } ?? "-"), system \(system.map { "\($0)" } ?? "none")")
         if step > 1 { for (t, f) in trail.prefix(40) { print(String(format: "LAUNCH RAW trail %.3f %.1f %.1f %.1f %.1f", t, f.minX, f.minY, f.width, f.height)) } }
-        // The launch probe (#554): what the bar placed its row from, and UIKit's item as it was read, from launch.
+        // The launch probe (#554): what the bar placed its row from, UIKit's item as it was read, and the bar's own frame,
+        // from launch.
         for line in ((log.value as? String) ?? "").split(separator: "\n") {
             let f = line.split(separator: " ", maxSplits: 2)
-            guard f.count == 3, f[1] == "barstate" || f[1] == "sysitem", let t = Double(f[0]), t >= t0 else { continue }
+            guard f.count == 3, ["barstate", "sysitem", "barhost"].contains(f[1]), let t = Double(f[0]), t >= t0 else { continue }
             print(String(format: "LAUNCH STATE %.3f ", t - t0) + "\(f[1]) \(f[2])")
         }
         if e["HERMES_E2E_LAUNCH_STRICT"] == "1" {

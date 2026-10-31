@@ -20,8 +20,9 @@ struct RootView: View {
     /// that is only inactive (the switcher, an unfocused window still on screen) is never held.
     @State private var shownWide: Bool?
     /// The window's geometry for this scene, read from the window on every layout (see
-    /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
-    @State private var windowGeometry = WindowGeometry()
+    /// `WindowGeometry`); every view that lays out against the window reads it from the environment. On the Duo a launch
+    /// starts from the last settled window until the first read (`SystemBarItems.launchGeometry`, #554).
+    @State private var windowGeometry = SystemBarItems.shared.launchGeometry()
     /// DEBUG: `-vory-show-tour` shows the first-run tour over a configured app.
     static let forceTour: Bool = {
         #if DEBUG

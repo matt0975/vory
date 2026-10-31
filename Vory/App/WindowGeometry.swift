@@ -23,6 +23,9 @@ final class WindowGeometry {
     /// Whether the reader is holding back a turn's passing window (`passing`): what else is read from the window holds
     /// with it, so nothing moves before the window settles (#548: the bars' edge).
     var holding = false
+    /// A launch's first frames on the Duo, before the window is measured: the bounds and safe area are the last settled
+    /// window's (`SystemBarItems.launchGeometry`, #554), until the reader's first measure replaces them.
+    var seeded = false
 
     /// Nonisolated so the environment's default (an empty geometry, what the Mac's views see)
     /// can be made anywhere; every read and write after that is on the main actor.
@@ -145,13 +148,14 @@ struct WindowGeometryReader: UIViewRepresentable {
         private var passingSince: Date?
         private func publish() {
             guard let geometry, let window else { return }
-            guard WindowGeometry.publishes(window.windowScene?.activationState, measured: geometry.bounds != .zero) else { return }
+            guard WindowGeometry.publishes(window.windowScene?.activationState, measured: geometry.bounds != .zero && !geometry.seeded) else { return }
             let bounds = window.bounds
             let insets = window.safeAreaInsets
             // A turn's passing window: the last published measure stays until the window settles (`passing`), a second at
-            // most.
+            // most. Never against a launch's seeded window, which no measure has published yet.
             let measured = EdgeInsets(top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right)
-            if WindowGeometry.passing(size: bounds.size, safeArea: measured, published: geometry.bounds.size, publishedSafeArea: geometry.safeArea) {
+            if !geometry.seeded,
+               WindowGeometry.passing(size: bounds.size, safeArea: measured, published: geometry.bounds.size, publishedSafeArea: geometry.safeArea) {
                 let since = passingSince ?? .now
                 if passingSince == nil {
                     passingSince = since
@@ -175,6 +179,7 @@ struct WindowGeometryReader: UIViewRepresentable {
             if geometry.safeArea != measured { geometry.safeArea = measured }
             if geometry.keyboard != keyboard { geometry.keyboard = keyboard }
             if geometry.holding { geometry.holding = false }
+            if geometry.seeded { geometry.seeded = false }
         }
     }
 }

@@ -484,10 +484,13 @@ struct MorphTopBar: View {
         let g = windowGeometry
         let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
         let item = SystemBarItems.shared.trailing(for: key)
-        MorphFramesProbe.noteBarState(String(format: "key=%@ safe=%.0f,%.0f,%.0f,%.0f holding=%@ lift=%.0f closed=%@ vertical=%@ item=%@ clear=%.1f",
+        MorphFramesProbe.noteBarState(String(format: "key=%@ safe=%.0f,%.0f,%.0f,%.0f holding=%@ lift=%.0f closed=%@ vertical=%@ item=%@ clear=%.1f seeded=%@ regions=%d up=%@",
             key.replacingOccurrences(of: " ", with: "_"), g.safeArea.top, g.safeArea.leading, g.safeArea.bottom, g.safeArea.trailing,
-            "\(g.holding)", lift, "\(stripClosed)", "\(model.tabBarVertical)", item.map { String(format: "%.0f", $0.maxX) } ?? "none", statusClear))
+            "\(g.holding)", lift, "\(stripClosed)", "\(model.tabBarVertical)", item.map { String(format: "%.0f", $0.maxX) } ?? "none", statusClear,
+            "\(g.seeded)", probeRegions.reported.count, SystemBarItems.shared.up(for: key).map { "\($0)" } ?? "none"))
     }
+    /// The regions as the bar sees them, for the launch probe's line only.
+    @Environment(\.reservedRegions) private var probeRegions
     #endif
     /// The bar's padding over its row: the closed Duo's even row (#558), 4 elsewhere (`TopBarRoom.barPadding`).
     private var topPadding: CGFloat { TopBarRoom.barPadding(closed: stripClosed && !inBand) }
@@ -585,6 +588,10 @@ struct MorphTopBar: View {
             .coordinateSpace(.named("morph"))
             .padding(.horizontal, Self.sideInset).padding(.top, topPadding)
         }
+        #if DEBUG
+        // The launch probe (#554): the bar's own frame as it changes, the room its rows have.
+        .modifier(MorphFramesProbe.LogFrame(name: "barhost"))
+        #endif
         // The seated face rides above the middle capsule in the chat state: outside the glass
         // container, which composites its glass over anything drawn inside it (the face sat
         // behind its pill, Matt 2026-10-12). Same inset as the measured space.
@@ -1409,6 +1416,17 @@ enum MorphFramesProbe {
         return (MorphSlot.allCases.compactMap { s in frames[s].map { f("\(s)", $0) } } + [face.map { f("face", $0) }].compactMap { $0 }
                 + marks.keys.sorted().compactMap { k in marks[k].map { f(k, $0) } })
             .joined(separator: ";")
+    }
+    /// With `-vory-morph-log`: a view's frame (global) in the log each time it changes, "<wall time> <name> x y w h".
+    struct LogFrame: ViewModifier {
+        let name: String
+        @ViewBuilder func body(content: Content) -> some View {
+            if logs {
+                content.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { f in MorphFramesProbe.note(name, f) }
+            } else {
+                content
+            }
+        }
     }
     /// A named frame for the readout (`marks`) while the view is drawn.
     struct Mark: ViewModifier {

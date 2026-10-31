@@ -22,6 +22,7 @@ import UIKit
         self.defaults = defaults
         let stored = defaults.dictionary(forKey: Self.storeKey) as? [String: [Double]] ?? [:]
         trailingByShape = stored.compactMapValues { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
+        loadLaunchState()
     }
 
     /// A window shape: its size, and the safe area's top and trailing, which tell the Duo's postures apart.
@@ -37,6 +38,53 @@ import UIKit
         trailingByShape[shape] = frame
         defaults.set(trailingByShape.mapValues { [$0.minX, $0.minY, $0.width, $0.height] }, forKey: Self.storeKey)
     }
+
+    // A launch's first second (#554): the window is read about 0.2 s in and the fold about a second in, and until then the
+    // rows stood as on a phone, then stepped up and sideways (122 pt upright, 88 closed; the launch probe, 2026-10-31).
+    // So the Duo's last settled window, and whether the bar stood up in the band for each shape, are kept too, and a
+    // launch lays out in them until the live ones come. A Duo turned while the app was closed takes one step, as before.
+
+    /// Whether the bar stood up in the status band (`TopBarRoom.barUp`), by window shape, as the fold last said.
+    private(set) var upByShape: [String: Bool] = [:]
+    /// The Duo's window as last settled: its size and safe area.
+    private(set) var lastWindow: (size: CGSize, safeArea: EdgeInsets)?
+    private static let upKey = "vory.systemBarItems.up"
+    private static let windowKey = "vory.systemBarItems.window"
+
+    func up(for shape: String) -> Bool? { upByShape[shape] }
+
+    /// The fold's verdict for a shape, kept for the next launch.
+    func noteUp(_ up: Bool, for shape: String) {
+        guard upByShape[shape] != up else { return }
+        upByShape[shape] = up
+        defaults.set(upByShape, forKey: Self.upKey)
+    }
+
+    /// A settled window on the Duo, kept for the next launch.
+    func settled(size: CGSize, safeArea s: EdgeInsets) {
+        guard size.width > 0, size.height > 0, lastWindow?.size != size || lastWindow?.safeArea != s else { return }
+        lastWindow = (size, s)
+        defaults.set([size.width, size.height, s.top, s.leading, s.bottom, s.trailing].map { Double($0) }, forKey: Self.windowKey)
+    }
+
+    private func loadLaunchState() {
+        upByShape = defaults.dictionary(forKey: Self.upKey) as? [String: Bool] ?? [:]
+        if let w = defaults.array(forKey: Self.windowKey) as? [Double], w.count == 6 {
+            lastWindow = (CGSize(width: w[0], height: w[1]), EdgeInsets(top: w[2], leading: w[3], bottom: w[4], trailing: w[5]))
+        }
+    }
+
+    /// The window's geometry for a launch's first frames: on the Duo, its last settled window, marked `seeded` until the
+    /// reader measures the live one; elsewhere (never seen on the Duo) empty, as before.
+    func launchGeometry() -> WindowGeometry {
+        let g = WindowGeometry()
+        if let w = lastWindow {
+            g.bounds = CGRect(origin: .zero, size: w.size)
+            g.safeArea = w.safeArea
+            g.seeded = true
+        }
+        return g
+    }
 }
 
 /// The bar the items are read off, from the first time the window is one of the Duo's (the bar up in the status band,
@@ -50,7 +98,10 @@ struct SystemBarItemsHost: View {
 
     var body: some View {
         let g = windowGeometry
-        let now = VoryTabBar.statusStrip(g.safeArea) != nil || TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        let key = SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing)
+        let read = !regions.reported.isEmpty, live = TopBarRoom.barUp(regions: regions, size: g.bounds.size, safeTop: g.safeArea.top)
+        let up = TopBarRoom.barUpAtLaunch(live: live, regionsRead: read, remembered: SystemBarItems.shared.up(for: key))
+        let now = VoryTabBar.statusStrip(g.safeArea) != nil || up
         ZStack {
             if duo || now {
                 SystemBarItemsSensor(geometry: g, size: g.bounds.size, safeArea: g.safeArea, active: scenePhase == .active, holding: g.holding)
@@ -58,6 +109,18 @@ struct SystemBarItemsHost: View {
             }
         }
         .onChange(of: now, initial: true) { _, d in if d { duo = true } }
+        // What a launch lays out in before the live window and fold come (`SystemBarItems.launchGeometry`,
+        // `TopBarRoom.barUpAtLaunch`): only what was read live, settled and in front, and only on the Duo.
+        .onChange(of: Settled(key: key, safe: g.safeArea, read: read, live: live, measured: !g.seeded && !g.holding && g.bounds.width > 0,
+                              front: scenePhase == .active, duo: duo || now), initial: true) { _, s in
+            guard s.measured, s.front, s.duo else { return }
+            SystemBarItems.shared.settled(size: g.bounds.size, safeArea: g.safeArea)
+            if s.read { SystemBarItems.shared.noteUp(s.live, for: s.key) }
+        }
+    }
+
+    private struct Settled: Equatable {
+        var key: String, safe: EdgeInsets, read: Bool, live: Bool, measured: Bool, front: Bool, duo: Bool
     }
 }
 
@@ -119,7 +182,7 @@ private struct SystemBarItemsSensor: UIViewControllerRepresentable {
         }
 
         private func read() {
-            guard let geometry, !geometry.holding, let window, window.bounds.size == geometry.bounds.size,
+            guard let geometry, !geometry.holding, !geometry.seeded, let window, window.bounds.size == geometry.bounds.size,
                   let view = topItem?.rightBarButtonItem?.customView, view.window != nil else { return }
             let frame = view.convert(view.bounds, to: nil)
             guard frame.width > 0 else { return }

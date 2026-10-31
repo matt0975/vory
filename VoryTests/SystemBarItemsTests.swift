@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import SwiftUI
 import Testing
 @testable import Vory
 
@@ -40,6 +41,20 @@ import Testing
         #expect(TopBarRoom.lift(barUp: true, safeTop: 82) == 60)
         // The pages' room beside the strip moves with it: the row's bottom (44) + 11 + the 8 pt gap.
         #expect(TopBarRoom.inset(barsVertical: true, statusInCorner: false, barOn: true, rowBottom: 44) == 63)
+    }
+
+    @Test func untilTheFoldIsReadTheBarStandsAsItLastStood() {
+        // The launch probe (2026-10-31): the fold came about a second after the window, and the bar stepped up when it did.
+        #expect(TopBarRoom.barUpAtLaunch(live: false, regionsRead: false, remembered: true))
+        #expect(!TopBarRoom.barUpAtLaunch(live: false, regionsRead: false, remembered: false))
+        // A shape never seen (a phone, an iPad, a first launch): the live verdict, as before.
+        #expect(!TopBarRoom.barUpAtLaunch(live: false, regionsRead: false, remembered: nil))
+    }
+
+    @Test func onceTheFoldIsReadTheLiveVerdictStands() {
+        #expect(!TopBarRoom.barUpAtLaunch(live: false, regionsRead: true, remembered: true))
+        #expect(TopBarRoom.barUpAtLaunch(live: true, regionsRead: true, remembered: false))
+        #expect(TopBarRoom.barUpAtLaunch(live: true, regionsRead: true, remembered: nil))
     }
 }
 
@@ -84,6 +99,37 @@ import Testing
                                                     systemItemMaxX: items.trailing(for: upright)?.maxX, fallback: TopBarRoom.statusReserve - 16)
             #expect(669 - 16 - clear == 443)
             #expect(items.trailing(for: closed)?.maxX == 378)
+        }
+    }
+
+    @Test func aLaunchStartsInTheLastSettledWindow() {
+        withStore { d in
+            let items = SystemBarItems(defaults: d)
+            items.settled(size: CGSize(width: 466, height: 678), safeArea: EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84))
+            items.noteUp(true, for: upright)
+            items.noteUp(false, for: closed)
+            let next = SystemBarItems(defaults: d)
+            let g = next.launchGeometry()
+            #expect(g.seeded)
+            #expect(g.bounds == CGRect(x: 0, y: 0, width: 466, height: 678))
+            #expect(g.safeArea == EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84))
+            // Seeded, the closed window's key is there from the first frame, and with it the strip and UIKit's place.
+            #expect(SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing) == closed)
+            #expect(next.up(for: upright) == true)
+            #expect(next.up(for: closed) == false)
+            #expect(next.up(for: side) == nil)
+        }
+    }
+
+    @Test func aWindowNeverSettledOnTheDuoLaunchesEmpty() {
+        withStore { d in
+            let g = SystemBarItems(defaults: d).launchGeometry()
+            #expect(!g.seeded)
+            #expect(g.bounds == .zero)
+            // An empty window is never kept.
+            let items = SystemBarItems(defaults: d)
+            items.settled(size: .zero, safeArea: EdgeInsets())
+            #expect(SystemBarItems(defaults: d).lastWindow == nil)
         }
     }
 }
