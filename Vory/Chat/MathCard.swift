@@ -113,8 +113,17 @@ enum MathCard {
             .replacingOccurrences(of: "'", with: "&#39;")
     }
 
+    /// Whether a math card's web view may follow a navigation: only the load of its own document,
+    /// which `loadHTMLString(_:baseURL: nil)` makes as about:blank in the main frame, and one per
+    /// load the card itself started. A link in the maths, a frame or any other navigation is cancelled.
+    static func allowsNavigation(to url: URL?, isMainFrame: Bool, pendingLoads: Int) -> Bool {
+        pendingLoads > 0 && isMainFrame && (url == nil || url?.absoluteString == "about:blank")
+    }
+
     /// Generates a self-contained HTML page containing pre-rendered 2D KaTeX + MathML math
-    /// with embedded KaTeX CSS. Requires zero network requests and zero client-side scripts.
+    /// with embedded KaTeX CSS. Requires zero network requests, and the page runs no script: its
+    /// web view has page JavaScript off. The one script is the app's own size measurement,
+    /// which the app runs from outside (`evaluateJavaScript` still works with page JavaScript off).
     static func document(mathMarkup: String, dark: Bool) -> String {
         return """
         <!doctype html>
@@ -180,13 +189,29 @@ struct MathWebView {
         var parent: MathWebView
         var loadedDocument = ""
         var measuring: Task<Void, Never>?
+        /// Loads this card started and WebKit has not asked about yet: each lets one navigation through.
+        var pendingLoads = 0
 
         init(_ parent: MathWebView) { self.parent = parent }
 
         func load(into web: WKWebView) {
             guard loadedDocument != parent.document else { return }
             loadedDocument = parent.document
+            pendingLoads += 1
             web.loadHTMLString(parent.document, baseURL: nil)
+        }
+
+        // The async form, as in HTMLWebView: the closure form only "nearly matches" the requirement
+        // unless its closure carries the main-actor mark, and WebKit then never calls it.
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+            let url = navigationAction.request.url
+            guard MathCard.allowsNavigation(to: url, isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true,
+                                            pendingLoads: pendingLoads) else {
+                MathCard.log.notice("math card navigation cancelled: \(url?.absoluteString ?? "nil", privacy: .public) type \(navigationAction.navigationType.rawValue)")
+                return .cancel
+            }
+            pendingLoads -= 1
+            return .allow
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -233,7 +258,8 @@ struct MathWebView {
     @MainActor func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
-        config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // The page is pre-rendered markup: it needs no script, so none of its own may run.
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
         config.mediaTypesRequiringUserActionForPlayback = .all
 
         let web = WKWebView(frame: .zero, configuration: config)
