@@ -44,19 +44,36 @@ final class TableCardAuditUITests: XCTestCase {
         app.buttons["composer.send"].firstMatch.tap()
         let end = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Say the word")).firstMatch
         XCTAssertTrue(end.waitForExistence(timeout: 60), "the reply never finished")
-        // The keyboard down, so the reply has the screen (the thread dismisses it on a drag into it).
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
-            .press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.98)))
-        pause(2)
-        // The first table's header on screen (the thread ends at the reply's last words, under the tables): back up the
-        // thread a slow swipe at a time, six at most.
+        // The keyboard down, so the reply has the screen: a tap on the thread just above the composer, at the leading
+        // margin (clear of the cards and their own sideways scroll views); if it's still up, a drag from there down into
+        // it. Still up after both: no header can be audited, so the run fails here (on the open Duo the drag from the
+        // window's middle started on a card and the keyboard stayed up).
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let margin = { origin.withOffset(CGVector(dx: 10, dy: composer.frame.minY - 40)) }
+        if app.keyboards.firstMatch.exists { margin().tap(); pause(1) }
+        if app.keyboards.firstMatch.exists {
+            margin().press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.maxY - 4))); pause(1)
+        }
+        let keyboardUp = app.keyboards.firstMatch.exists
+        Self.note("TABLES keyboard \(keyboardUp ? "still up" : "down")")
+        guard !keyboardUp else { XCTFail("VOID: the keyboard stayed up, so no table header can be audited"); app.terminate(); return }
+        // The first table's header wholly on screen, under the top bar (Back's bottom) and above the composer: the thread
+        // dragged at the leading margin a step at a time (back when the header is above, on when it's under the composer),
+        // eight at most; else the run fails before any audit, since an audit with no header in sight passes on nothing.
         let firstTitle = app.staticTexts.matching(NSPredicate(format: "label == 'Table'")).firstMatch
         let window = app.windows.firstMatch.frame
-        for _ in 0..<6 {
-            if firstTitle.exists, firstTitle.frame.minY >= window.minY + 60, firstTitle.frame.maxY <= window.maxY - 60 { break }
-            app.swipeDown(velocity: .slow); pause(1)
+        let back = app.buttons["chat.back"].firstMatch
+        let barBottom = back.exists ? back.frame.maxY : window.minY + 100
+        // The header stands about 16 pt above its title's top, in a 44 pt row.
+        let headerTop = { firstTitle.frame.minY - 16 }, headerBottom = { firstTitle.frame.minY + 28 }
+        let onScreen = { firstTitle.exists && headerTop() >= barBottom + 8 && headerBottom() <= composer.frame.minY - 8 }
+        for _ in 0..<8 where !onScreen() {
+            let step = window.height * 0.3, from = origin.withOffset(CGVector(dx: 10, dy: window.height * 0.5))
+            let down = !firstTitle.exists || headerTop() < barBottom + 8
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: down ? step : -step))); pause(1)
         }
-        Self.note("TABLES first title \(firstTitle.exists ? "\(firstTitle.frame)" : "-") in the window \(window)")
+        Self.note("TABLES first title \(firstTitle.exists ? "\(firstTitle.frame)" : "-") in the window \(window), bar bottom \(barBottom), composer top \(composer.frame.minY)")
+        guard onScreen() else { XCTFail("header not on screen: the first table's header isn't wholly under the top bar and above the composer"); app.terminate(); return }
 
         // Each header: its switch, its full screen and its title, level with each other.
         let switches = app.buttons.matching(NSPredicate(format: "label IN %@", Self.switchLabels)).allElementsBoundByIndex.filter(\.exists)
@@ -65,6 +82,7 @@ final class TableCardAuditUITests: XCTestCase {
         Self.note("TABLES wrap \(wrap ? "on" : "off"): \(switches.count) switches, \(opens.count) full screens, \(titles.count) titles")
         XCTAssertGreaterThanOrEqual(switches.count, 1, "no table card's switch")
         var headers: [CGRect] = []
+        let side = { (r: CGRect) in (min(r.width, r.height) * 1000).rounded() / 1000 }
         for s in switches {
             let f = s.frame
             let level = { (g: CGRect) in abs(g.midY - f.midY) <= 12 }
@@ -73,8 +91,8 @@ final class TableCardAuditUITests: XCTestCase {
             headers.append(header)
             Self.note("TABLES header \(header): switch '\(s.label)' \(f), full screen \(o.map { "\($0)" } ?? "-"), title \(t.map { "\($0)" } ?? "-")")
             XCTAssertEqual(s.label, wrap ? "Unwrap wide columns" : "Wrap columns to fit", "the switch doesn't offer the change its mode allows")
-            XCTAssertGreaterThanOrEqual(min(f.width, f.height), 44, "the switch \(f) under 44 pt")
-            if let o { XCTAssertGreaterThanOrEqual(min(o.width, o.height), 44, "full screen \(o) under 44 pt") } else { XCTFail("no full screen level with the switch at \(f)") }
+            XCTAssertGreaterThanOrEqual(side(f), 44, "the switch \(f) under 44 pt")
+            if let o { XCTAssertGreaterThanOrEqual(side(o), 44, "full screen \(o) under 44 pt") } else { XCTFail("no full screen level with the switch at \(f)") }
             if t == nil { XCTFail("no 'Table' title level with the switch at \(f)") }
         }
 
