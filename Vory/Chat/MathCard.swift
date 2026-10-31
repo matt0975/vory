@@ -201,6 +201,24 @@ struct MathWebView {
             web.loadHTMLString(parent.document, baseURL: nil)
         }
 
+        /// Times this card has loaded its page again after its web content process ended.
+        var reloads = 0
+
+        // WebKit ends a page's process under memory pressure, or when it crashes, and the card stayed blank until
+        // SwiftUI rebuilt it: its own document is loaded again, a load of its own, so the navigation rule lets it in.
+        // Twice at most: a page that ends its process every time would otherwise start a new one forever.
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard reloads < 2 else {
+                if reloads == 2 { MathCard.log.notice("math card: its web content process ended again; not loading it a third time") }
+                reloads = 3
+                return
+            }
+            reloads += 1
+            MathCard.log.notice("math card: its web content process ended; loading its page again")
+            loadedDocument = ""
+            load(into: webView)
+        }
+
         // The async form, as in HTMLWebView: the closure form only "nearly matches" the requirement
         // unless its closure carries the main-actor mark, and WebKit then never calls it.
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
