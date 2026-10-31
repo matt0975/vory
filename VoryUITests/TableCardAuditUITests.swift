@@ -44,15 +44,21 @@ final class TableCardAuditUITests: XCTestCase {
         app.buttons["composer.send"].firstMatch.tap()
         let end = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Say the word")).firstMatch
         XCTAssertTrue(end.waitForExistence(timeout: 60), "the reply never finished")
-        // The keyboard down, so the reply has the screen: a tap on the thread just above the composer, at the leading
-        // margin (clear of the cards and their own sideways scroll views); if it's still up, a drag from there down into
-        // it. Still up after both: no header can be audited, so the run fails here (on the open Duo the drag from the
-        // window's middle started on a card and the keyboard stayed up).
+        // The keyboard down, so the reply has the screen: a tap on the thread at the leading margin (clear of the cards and
+        // their own sideways scroll views), 40% down the window: under the header and above the dock, which both float over
+        // the thread and keep its tap from closing the keyboard (the open Duo's dock stands taller than a phone's, and a
+        // tap just above the composer landed on it). If it's still up, a drag from there down into it. Still up after
+        // both: no header can be audited, so the run fails here.
+        // Noted for a run where it stays up: the spot, the composer, Back's bottom, and the keyboards before and after each
+        // step (none to close at all, against a tap that missed).
         let origin = app.coordinate(withNormalizedOffset: .zero)
-        let margin = { origin.withOffset(CGVector(dx: 10, dy: composer.frame.minY - 40)) }
-        if app.keyboards.firstMatch.exists { margin().tap(); pause(1) }
+        let spot = origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.minY + app.windows.firstMatch.frame.height * 0.4))
+        let backBottom = app.buttons["chat.back"].firstMatch.exists ? "\(app.buttons["chat.back"].firstMatch.frame.maxY)" : "-"
+        Self.note("TABLES keyboard before: \(app.keyboards.count) keyboard(s); spot \(spot.screenPoint), composer \(composer.frame), Back's bottom \(backBottom)")
+        if app.keyboards.firstMatch.exists { spot.tap(); pause(1); Self.note("TABLES keyboard after the tap: \(app.keyboards.count)") }
         if app.keyboards.firstMatch.exists {
-            margin().press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.maxY - 4))); pause(1)
+            spot.press(forDuration: 0.05, thenDragTo: origin.withOffset(CGVector(dx: 10, dy: app.windows.firstMatch.frame.maxY - 4))); pause(1)
+            Self.note("TABLES keyboard after the drag: \(app.keyboards.count)")
         }
         let keyboardUp = app.keyboards.firstMatch.exists
         Self.note("TABLES keyboard \(keyboardUp ? "still up" : "down")")
