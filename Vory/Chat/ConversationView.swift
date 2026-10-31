@@ -96,8 +96,18 @@ struct ConversationView: View {
             if let chat {
                 framed(chat)
                     .handsOff(chat)
+                    #if os(iOS)
+                    // The Duo's side strip (#555; the system's bars vertical there, `model.tabBarVertical`): the page's own
+                    // bar shows, with no title and no system back, to carry the markers the system lays out under the
+                    // status (`StripMarkerReader`; no Back beside the list). Everywhere else hidden, as ever.
+                    .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
+                    .navigationBarBackButtonHidden(model.tabBarVertical)
+                    .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
+                    .background { if model.tabBarVertical { StripMarkerReader().frame(width: 0, height: 0) } }
+                    #else
                     .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
+                    #endif
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
                     .onChange(of: model.modelChooser?.id) { _, _ in
@@ -712,31 +722,27 @@ struct ChatHeader: View {
 
     #if os(iOS)
     /// The Duo on its side, like Messages there (Matt, 2026-10-28, #542): the face (no glass behind it) and the name at the
-    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; More in the row, where UIKit
-    /// stands its own trailing item beside the strip (`SystemBarItems`, #555: never in the strip under the time and Wi-Fi,
-    /// which another app's Live Activity pushes down); Messages' band behind the row (`ChatBand`). Back only while the list
-    /// isn't beside the chat (its column hidden), at the top left. VoiceOver: Back, Chat info, More, the group after the
-    /// thread as everywhere (`ConversationView.header`).
+    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; Back and More in the status
+    /// strip under the status, each centred on the marker the system lays out there for it (`StripMarkers`, #555: they move
+    /// down with the status as Live Activities arrive); Messages' band behind the row (`ChatBand`). Back only while the list
+    /// isn't beside the chat (its column hidden); beside it, More stands in Back's place, as the system's own item does.
+    /// VoiceOver: Back, Chat info, More, the group after the thread as everywhere (`ConversationView.header`).
     private var messagesSide: some View {
         // Once the pane's place is known, so Back never shows for a frame beside the list.
         let back = showBack && sideFrame.width > 0 && !listBeside
         let g = windowGeometry
-        // More's leading edge, window space: UIKit's trailing item's; before that has ever been read for this shape, 4 pt
-        // short of the strip, as UIKit leaves it (the probe, 2026-10-29: 819 to 863 on the 951 pt window, the strip from 867).
-        let item = SystemBarItems.shared.trailing(for: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing))
-        let moreX = item?.minX ?? g.bounds.width - g.safeArea.trailing - 4 - 44
+        // Each one's middle, window space: its marker's (or the last one read for this shape, with Back's marker there or
+        // not, as the list says); before any, where 44 stood them, the status column's middle and their tops at
+        // `TopBarRoom.statusColumnTops`.
+        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing),
+                                   withBack: !listBeside)
+        let columnX = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
+        let tops = TopBarRoom.statusColumnTops(closed: false)
+        let place = { (kind: StripMarkers.Kind, top: CGFloat) in
+            StripMarkers.shared.frame(kind, for: key).map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: columnX, y: top + 22)
+        }
+        let backAt = place(.back, tops[0]), more = place(.more, listBeside ? tops[0] : tops[1])
         return HStack(spacing: 0) {
-            if back {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
-                }
-                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
-                .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
-                .accessibilityFocused($backFocused)
-                .accessibilitySortPriority(3)
-                .padding(.trailing, 8)
-            }
             sideChatInfo
             Spacer(minLength: 0)
         }
@@ -748,7 +754,7 @@ struct ChatHeader: View {
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { sideFrame = $0 }
         .background(alignment: .topLeading) {
             // From the window's top, out to its trailing edge and a quarter of the face under the row (the header's own
-            // bottom, less the band's soft foot); not down the column, where nothing of the chat's stands. It waits for
+            // bottom, less the band's soft foot); not down the column, where More stands on its own glass. It waits for
             // the header's place in the window.
             if sideFrame.width > 0 {
                 ChatBand(width: g.bounds.width - sideFrame.minX, bottom: sideFrame.maxY - ChatBand.foot)
@@ -759,9 +765,23 @@ struct ChatHeader: View {
         // band. Behind the controls and out of VoiceOver's tree.
         .background { Color.clear.contentShape(.rect).onTapGesture {}.accessibilityHidden(true) }
         .overlay(alignment: .topLeading) {
+            if back {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+                .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
+                .accessibilityFocused($backFocused)
+                .accessibilitySortPriority(3)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .offset(x: backAt.x - 22 - sideFrame.minX, y: backAt.y - 22 - sideFrame.minY)
+            }
+        }
+        .overlay(alignment: .topLeading) {
             if showsActions, sideFrame.width > 0 {
                 moreMenu.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                    .offset(x: moreX - sideFrame.minX, y: TopBarRoom.bandRowTop)
+                    .offset(x: more.x - 22 - sideFrame.minX, y: more.y - 22 - sideFrame.minY)
             }
         }
         // Once the pane's place is known: before it, Back isn't shown yet, and the focus went to Chat info with the list

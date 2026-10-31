@@ -393,11 +393,11 @@ final class BarUpUITests: XCTestCase {
     /// Up in the band (upright, laptop): Back, the face's slot and More in the band's row (26 to 70, 1 pt either way; at
     /// XXXL bottoms by 78), More ending where UIKit ends its own trailing item (the readout's "system", #554); Chat info
     /// between Back and More, 4 pt clear of each.
-    /// Closed: the same row (#555: nothing of the chat's in the strip), 11 pt from the window's top (#558: Back, the face's
-    /// slot, More and the face from 11 to 55), More ending at UIKit's item, beside the strip; Chat info between Back and
-    /// More. On its side and as a book: Chat info at the pane's top left, centred on y 48; More in the row, centred on y 48
-    /// and ending at UIKit's item, clear of the strip; no Back while the list is beside the chat, and with the list hidden
-    /// Back at the top left, which pops the chat. Elsewhere it only prints. Always printed: the frames (CHATFRAMES) and the stops (CHATAX); with
+    /// Closed: the face and the name at the top left, 11 pt from the window's top (#558), clear of the strip; Back over More
+    /// in the strip (#555), each centred on the marker the system laid out for it there under the status (the readout's
+    /// markerBack and markerMore), nothing of the band below More (#549). On its side and as a book: Chat info at the pane's
+    /// top left, centred on y 48; More in the strip on its marker; no Back (and no Back marker) while the list is beside the
+    /// chat, and with the list hidden Back in the strip on its own marker over More, which pops the chat. Elsewhere it only prints. Always printed: the frames (CHATFRAMES) and the stops (CHATAX); with
     /// HERMES_E2E_AUDIT=1 the chat screen's audit (AUDIT lines); a hold for a still (BARUP HOLD chat).
     func testTheChatsBarIsLikeMessages() throws {
         let e = ProcessInfo.processInfo.environment
@@ -440,6 +440,24 @@ final class BarUpUITests: XCTestCase {
             let clearOfStrip = { (name: String, f: CGRect) in
                 XCTAssertLessThanOrEqual(f.maxX, window.maxX - Self.stripWidth + Self.slack, "\(name) \(f) in the strip")
             }
+            // #555: in the strip, centred on the marker the system laid out for it there (the readout's markerBack or
+            // markerMore), under the status and moving down with it as Live Activities arrive.
+            let atMarker = { (name: String, f: CGRect, key: String) in
+                XCTAssertGreaterThanOrEqual(f.minX, window.maxX - Self.stripWidth - Self.slack, "\(name) \(f) not in the strip")
+                if let m = c[key] {
+                    XCTAssertEqual(f.midX, m.midX, accuracy: Self.slack, "\(name) \(f) not centred on its marker \(m)")
+                    XCTAssertEqual(f.midY, m.midY, accuracy: Self.slack, "\(name) \(f) not centred on its marker \(m)")
+                } else { XCTFail("VOID: the readout has no \(key)") }
+            }
+            // #549: nothing of the band hangs below More in the column; its column part, where there is one, ends by More's
+            // own bottom, its soft foot and all (the readout's bandColumn).
+            let bandColumnCheck = {
+                let bandColumn = c["bandColumn"]
+                print("CHATFRAMES column band \(bandColumn.map { "\($0)" } ?? "none") More \(more.frame)")
+                if let bandColumn {
+                    XCTAssertLessThanOrEqual(bandColumn.maxY, more.frame.maxY + 0.5, "the column's band \(bandColumn) hangs below More \(more.frame)")
+                }
+            }
             switch pose {
             case .upright, .laptop:
                 guard let lead = c["lead"], let mid = c["mid"], let trail = c["trail"], let face = c["face"] else {
@@ -455,38 +473,31 @@ final class BarUpUITests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
                 XCTAssertGreaterThanOrEqual(more.frame.minX - info.frame.maxX, 4, "More \(more.frame) within 4 pt of Chat info \(info.frame)")
             case .closed:
-                guard let lead = c["lead"], let mid = c["mid"], let trail = c["trail"], let face = c["face"] else {
-                    XCTFail("capsules or the face missing: \(c.keys.sorted())"); break
-                }
-                // #558: 11 over the face, as the band reaches 11 under it (checked above).
+                guard let face = c["face"] else { XCTFail("the face missing: \(c.keys.sorted())"); break }
+                // #558: 11 over the face, as the band reaches 11 under it (checked above); the face and the name at the top
+                // left, clear of the strip.
                 XCTAssertEqual(face.minY, Self.closedRowTop, accuracy: Self.slack, "the face \(face) isn't \(Self.closedRowTop) pt from the top")
-                for (name, f) in [("Back", lead), ("the face's slot", mid), ("More", trail), ("the face", face)] {
-                    XCTAssertGreaterThanOrEqual(f.minY, Self.closedRowTop - Self.slack, "\(name) \(f) above the row")
-                    XCTAssertLessThanOrEqual(f.maxY, Self.closedRowTop + 44 + Self.slack, "\(name) \(f) below the row")
-                    clearOfStrip(name, f)
-                }
-                atSystem("More", trail)
+                clearOfStrip("Chat info", info.frame)
+                // #555: Back over More in the strip, each on its marker.
                 XCTAssertTrue(back.exists, "no Back")
-                XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
-                XCTAssertGreaterThanOrEqual(more.frame.minX - info.frame.maxX, 4, "More \(more.frame) within 4 pt of Chat info \(info.frame)")
+                atMarker("Back", back.frame, "markerBack")
+                atMarker("More", more.frame, "markerMore")
+                XCTAssertLessThanOrEqual(back.frame.maxY, more.frame.minY, "Back \(back.frame) not over More \(more.frame)")
+                bandColumnCheck()
             case .side, .book:
-                // #555: More in the row, beside the strip, never under the status in it.
-                XCTAssertEqual(more.frame.midY, Self.sideRowMiddle, accuracy: 1, "More \(more.frame) not on the row")
-                atSystem("More", more.frame)
-                clearOfStrip("More", more.frame)
+                // #555: More in the strip, on its marker, under the status; with the list hidden Back over it on its own
+                // marker, and beside the list no Back and no Back marker (More stands in Back's place, as the system's does).
+                atMarker("More", more.frame, "markerMore")
                 XCTAssertFalse(info.frame.intersects(more.frame), "Chat info \(info.frame) runs into More \(more.frame)")
-                // #549: nothing of the band hangs below More in the column. Its column part, where there is one, ends by
-                // More's own bottom, its soft foot and all (the readout's bandColumn).
-                let bandColumn = c["bandColumn"]
-                print("CHATFRAMES column band \(bandColumn.map { "\($0)" } ?? "none") More \(more.frame)")
-                if let bandColumn {
-                    XCTAssertLessThanOrEqual(bandColumn.maxY, more.frame.maxY + 0.5, "the column's band \(bandColumn) hangs below More \(more.frame)")
-                }
+                bandColumnCheck()
                 do {
                     XCTAssertEqual(info.frame.midY, Self.sideRowMiddle, accuracy: 1, "Chat info \(info.frame) not on the status's middle")
                     XCTAssertEqual(back.exists, listHidden, listHidden ? "no Back with the list hidden" : "Back beside the list")
                     if listHidden, back.exists {
-                        XCTAssertGreaterThanOrEqual(info.frame.minX - back.frame.maxX, 4, "Chat info \(info.frame) within 4 pt of Back \(back.frame)")
+                        atMarker("Back", back.frame, "markerBack")
+                        XCTAssertLessThanOrEqual(back.frame.maxY, more.frame.minY, "Back \(back.frame) not over More \(more.frame)")
+                    } else if !listHidden {
+                        XCTAssertNil(c["markerBack"], "a Back marker beside the list: \(c["markerBack"].map { "\($0)" } ?? "")")
                     }
                     // Every element named Chat info, so a second one can't stand behind `firstMatch`.
                     let infos = app.descendants(matching: .any).matching(identifier: "chat.titlePill").allElementsBoundByIndex.filter(\.exists)

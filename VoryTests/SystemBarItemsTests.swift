@@ -135,6 +135,99 @@ import Testing
         }
     }
 
+    @Test func aMarkerIsTakenOnlyInTheStrip() {
+        // Closed (466 wide, the strip the safe area's right 84, from 382): the probe's markers (399, 238 and 298) stand in it;
+        // UIKit's row item (334 to 378) and the 9398bcbe row's More don't.
+        #expect(StripMarkers.inStrip(CGRect(x: 399, y: 238, width: 38, height: 38), windowWidth: 466, safeLeading: 0, safeTrailing: 84))
+        #expect(!StripMarkers.inStrip(CGRect(x: 334, y: 28, width: 44, height: 40), windowWidth: 466, safeLeading: 0, safeTrailing: 84))
+        // On its side (951 wide, the strip from 867): 884.
+        #expect(StripMarkers.inStrip(CGRect(x: 884, y: 125, width: 38, height: 38), windowWidth: 951, safeLeading: 0, safeTrailing: 84))
+        // A strip on the leading side, and nothing laid out yet.
+        #expect(StripMarkers.inStrip(CGRect(x: 23, y: 125, width: 38, height: 38), windowWidth: 951, safeLeading: 84, safeTrailing: 0))
+        #expect(!StripMarkers.inStrip(.zero, windowWidth: 466, safeLeading: 0, safeTrailing: 84))
+    }
+
+    @Test func theMarkersAreKeptPerShapeAcrossLaunches() {
+        withStore { d in
+            // The probe's hidden markers closed (38 by 48, Back over More 70 pt apart), then an activity: 80 pt down.
+            let markers = StripMarkers(defaults: d), key = StripMarkers.key(shape: closed, withBack: true)
+            markers.settled(.back, CGRect(x: 399, y: 238, width: 38, height: 48), for: key)
+            markers.settled(.more, CGRect(x: 399, y: 308, width: 38, height: 48), for: key)
+            markers.settled(.more, CGRect(x: 399, y: 388, width: 38, height: 48), for: key)
+            let next = StripMarkers(defaults: d)
+            #expect(next.frame(.back, for: key) == CGRect(x: 399, y: 238, width: 38, height: 48))
+            #expect(next.frame(.more, for: key) == CGRect(x: 399, y: 388, width: 38, height: 48))
+            #expect(next.frame(.more, for: StripMarkers.key(shape: side, withBack: true)) == nil)
+        }
+    }
+
+    @Test func onItsSideBesideTheListMoreIsKeptOnItsOwn() {
+        withStore { d in
+            // With the list beside the chat there's no Back marker and More takes its place (884, 125); with the list
+            // hidden, Back stands there and More under it (195). The same window, two keys.
+            let markers = StripMarkers(defaults: d)
+            let solo = StripMarkers.key(shape: side, withBack: false), both = StripMarkers.key(shape: side, withBack: true)
+            #expect(solo != both)
+            markers.settled(.more, CGRect(x: 884, y: 125, width: 38, height: 48), for: solo)
+            markers.settled(.back, CGRect(x: 884, y: 125, width: 38, height: 48), for: both)
+            markers.settled(.more, CGRect(x: 884, y: 195, width: 38, height: 48), for: both)
+            #expect(markers.frame(.more, for: solo)?.minY == 125)
+            #expect(markers.frame(.more, for: both)?.minY == 195)
+            #expect(markers.frame(.back, for: solo) == nil)
+        }
+    }
+
+    /// The settled place (`StripMarkers.Settle`): taken once it has stood 250 ms with no change.
+    private let a0 = CGRect(x: 399, y: 238, width: 38, height: 48), transient = CGRect(x: 399, y: 175, width: 38, height: 48)
+
+    @Test func closingThePassingPlaceIsNeverTaken() {
+        // The probe's close (2026-10-31): nothing laid out, then a frame off the strip (nil), 175 at 0.18 s, 238 at 0.32 s.
+        var s = StripMarkers.Settle()
+        do { let changed = s.note(nil, at: 0); #expect(!changed) }
+        do { let changed = s.note(nil, at: 0.07); #expect(!changed) }
+        do { let changed = s.note(transient, at: 0.18); #expect(changed) }
+        #expect(s.due(at: 0.32) == nil)
+        do { let changed = s.note(a0, at: 0.32); #expect(changed) }
+        // 250 ms after 175 it's long gone; 238 isn't due until 250 ms after it came.
+        #expect(s.due(at: 0.43) == nil)
+        #expect(s.due(at: 0.56) == nil)
+        #expect(s.due(at: 0.57) == a0)
+    }
+
+    @Test func aPlaceTheSystemStopsAtIsTaken() {
+        // From its side to closed the system's items stayed at 175: ours stand there too.
+        var s = StripMarkers.Settle()
+        do { let changed = s.note(transient, at: 10); #expect(changed) }
+        #expect(s.due(at: 10.2) == nil)
+        #expect(s.due(at: 10.25) == transient)
+        // Read again there, nothing changes and it stays due.
+        do { let changed = s.note(transient, at: 10.25); #expect(!changed) }
+        #expect(s.due(at: 11) == transient)
+    }
+
+    @Test func anActivityMovesThePlaceOnce() {
+        // One activity arrives: 238 to 318, taken once it has stood.
+        var s = StripMarkers.Settle()
+        do { let changed = s.note(a0, at: 0); #expect(changed) }
+        #expect(s.due(at: 0.25) == a0)
+        let p1 = a0.offsetBy(dx: 0, dy: 80)
+        do { let changed = s.note(p1, at: 5); #expect(changed) }
+        #expect(s.due(at: 5.1) == nil)
+        #expect(s.due(at: 5.25) == p1)
+        do { let changed = s.note(p1, at: 5.3); #expect(!changed) }
+    }
+
+    @Test func aReadOffTheStripStartsTheWaitAgain() {
+        // Off the strip (to overflow, or not laid out) is never a place: the last kept one stands, and the wait starts over.
+        var s = StripMarkers.Settle()
+        do { let changed = s.note(a0, at: 0); #expect(changed) }
+        do { let changed = s.note(nil, at: 0.1); #expect(changed) }
+        #expect(s.due(at: 0.3) == nil)
+        do { let changed = s.note(a0, at: 0.4); #expect(changed) }
+        #expect(s.due(at: 0.6) == nil)
+        #expect(s.due(at: 0.65) == a0)
+    }
+
     @Test func aWindowNeverSettledOnTheDuoLaunchesEmpty() {
         withStore { d in
             let g = SystemBarItems(defaults: d).launchGeometry()

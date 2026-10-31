@@ -168,6 +168,10 @@ enum TopBarRoom {
     /// its widest in Matt's two 38 readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
     /// Focus) and an 8 pt gap. The row ends at 443 on the 669 pt window.
     static let statusReserve: CGFloat = 226
+    /// The Duo's status column (closed, and on its side), for a shape whose markers were never read (`StripMarkers`, #555):
+    /// where 44 stood a chat's Back and More under the time and Wi-Fi, in window points, the column's centre
+    /// `VoryTabBar.stripCentreFromEdge` from the window's edge and 44 pt items with their tops at these, Back then More.
+    static func statusColumnTops(closed: Bool) -> [CGFloat] { closed ? [176, 236] : [126, 186] }
     /// How far a row of the bar ends short of its trailing end, for its last control to end where UIKit ends its own
     /// trailing navigation item (`SystemBarItems`, window space): beside the status up in the band, and moved with it when
     /// another app's Live Activity widens it (#554); beside the strip closed (#555). Negative where that is past the bar's
