@@ -99,7 +99,7 @@ final class MathAuditUITests: XCTestCase {
     /// the window's edge where none of them is found. Noted with the elements that set it, so a bar not found shows.
     private func region(_ screen: Int, top: [String], bottom: [String]) -> CGRect {
         let win = app.windows.firstMatch.frame
-        let find = { (id: String) in app.descendants(matching: .any).matching(identifier: id).firstMatch }
+        let find = { (id: String) in self.app.descendants(matching: .any).matching(identifier: id).firstMatch }
         let tops = top.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.maxY) }
         let bottoms = bottom.map { ($0, find($0)) }.filter { $0.1.exists }.map { ($0.0, $0.1.frame.minY) }
         let t = tops.max { $0.1 < $1.1 } ?? ("window", win.minY)
