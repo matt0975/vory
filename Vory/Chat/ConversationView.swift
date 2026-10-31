@@ -610,7 +610,8 @@ struct QueueStrip: View {
                     // on the tint: the accent is the person's, and white on orange, green or teal reads far worse.
                     if chat.isRunning {
                         Button { Task { await chat.steerQueued(q.id) } } label: {
-                            Text("Steer").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            // One line at every size: squeezed at the largest it broke into "Stee" and "r".
+                            Text("Steer").font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
                                 .padding(.horizontal, 12).frame(minHeight: 30)
                                 .background { Capsule().fill(.background).overlay(Capsule().fill(.tint.opacity(0.2))) }
                                 .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
