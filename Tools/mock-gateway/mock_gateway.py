@@ -292,6 +292,71 @@ log-2 | 48%
 
 Say the word and I'll run it."""
 
+# Mathematics as a model writes it (#550): inline maths in both delimiters, display blocks ($$…$$, \[…\] and an
+# aligned one), a table with maths in its cells, and a price whose dollar sign must stay text.
+MATH_REPLY = r"""## Sizing the log volume
+
+Each day adds about $r = \frac{\Delta s}{\Delta t}$ to the volume, so after $n$ days it holds $s_n = s_0 + n r$.
+The rotation keeps $k$ files, and the error in the estimate falls as \(\epsilon_k = 2^{-k}\).
+With weights where $\alpha + \beta = \gamma$, the blend stays under the limit.
+
+The total over a month is
+
+$$
+S = \sum_{d=1}^{30} r_d = 30\,\bar{r}
+$$
+
+and the share each host takes is
+
+\[
+p_i = \frac{s_i}{\sum_j s_j}
+\]
+
+The two rules side by side:
+
+$$
+\begin{aligned}
+s_{n+1} &= s_n + r \\
+s_n &= s_0 + n r
+\end{aligned}
+$$
+
+| Host | Growth | Share |
+|---|---|---|
+| log-1 | $r_1 = 1.2$ GB | $p_1 = 0.6$ |
+| log-2 | $r_2 = 0.8$ GB | $p_2 = 0.4$ |
+
+The bigger volume costs $5 more a month.
+
+That is the whole derivation."""
+
+
+def math_examples(n: int, cards: bool = True) -> str:
+    """`math N`: N worked examples, each a sentence and a display card (four kinds in turn, each formula its own, so
+    no two cards share a cached rendering); with `cards` off the same sentences with the formula said in words, as
+    the long reply without cards that a chat full of cards is measured against."""
+    parts = ["## Worked examples"]
+    for i in range(1, n + 1):
+        m = i + 2
+        parts.append(f"**Example {i}.** The running total of the first {m} counts comes to {m * (m + 1) // 2}, "
+                     f"and the check below confirms it.")
+        if not cards:
+            parts.append(f"In words: the sum of the first {m} counts is half of {m} times {m + 1}.")
+            continue
+        kind = i % 4
+        if kind == 1:
+            eq = r"\sum_{k=1}^{%d} k = \frac{%d \cdot %d}{2} = %d" % (m, m, m + 1, m * (m + 1) // 2)
+        elif kind == 2:
+            eq = r"\int_0^{%d} x\,dx = \frac{%d^2}{2}" % (m, m)
+        elif kind == 3:
+            eq = r"\begin{aligned} a_{%d} &= a_{%d} + %d \\ a_{0} &= 0 \end{aligned}" % (i, i - 1, m)
+        else:
+            eq = r"\lim_{x \to 0} \frac{\sin %d x}{x} = %d" % (m, m)
+        parts.append("$$\n" + eq + "\n$$")
+    parts.append("That is the end of the worked examples.")
+    return "\n\n".join(parts)
+
+
 # A table wider than a phone's bubble (six columns, emoji, bold, star ratings), with markdown
 # in the reasoning before it: what the app's scrolling table card and Reasoning card are
 # checked against.
@@ -2152,6 +2217,21 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _math_turn(self, s: Session, prompt: str) -> None:
+        """Mathematics (#550): `math` streams MATH_REPLY; `math 40` streams forty worked examples, each with a display
+        card, for a long chat of cards; `math 40 plain` the same examples with no cards, to measure against."""
+        m = re.search(r"\d+", prompt)
+        if m:
+            text = math_examples(max(1, min(400, int(m.group()))), cards="plain" not in prompt.lower())
+        else:
+            text = MATH_REPLY
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, text, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _morph_turn(self, s: Session, prompt: str) -> None:
         """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
         later while the toolbox is still forming, an approval is asked; the tool completes once
@@ -2496,6 +2576,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("table"):
             await self._table_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("math"):
+            await self._math_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("think"):
             # A long first think, as a real model has before its first word: the prompt sits
