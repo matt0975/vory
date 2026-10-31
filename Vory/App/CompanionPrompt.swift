@@ -33,7 +33,7 @@ struct CompanionPromptSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: 10) {
                     Button(action: allow) { Text("Allow notifications").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6) }
-                        .buttonStyle(.glassProminent)
+                        .voryGlassButtonStyle(prominent: true)
                     Button(action: later) { Text("Not now").font(.subheadline) }
                         .foregroundStyle(.secondary)
                 }
@@ -46,7 +46,7 @@ struct CompanionPromptSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: 10) {
                     Button(action: install) { Text("Install now").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6) }
-                        .buttonStyle(.glassProminent)
+                        .voryGlassButtonStyle(prominent: true)
                     Button(action: later) { Text("Later").font(.subheadline) }
                         .foregroundStyle(.secondary)
                 }

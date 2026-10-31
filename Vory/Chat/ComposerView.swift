@@ -327,7 +327,7 @@ struct ComposerView: View {
         // One glass container for the composer: the card's glass carries the "dock" id the
         // chat morphs with. The + panel used to morph out of the button's glass here (#285);
         // it now grows out of the button by a scale and fade (see the overlay below).
-        GlassEffectContainer(spacing: 0) { composerStack }
+        VoryGlassEffectContainer(spacing: 0) { composerStack }
             // The panels above the card are measured against this view (the stack's own size).
             .coordinateSpace(.named("composerStack"))
             // Each panel in a glass container of its own, outside the card's: a glass shape
@@ -335,9 +335,9 @@ struct ComposerView: View {
             // view lost the keyboard every time a panel opened (Matt, 2026-10-11). Behind the
             // card, not over it: a panel folding away ends behind the + (or the field) instead
             // of as a last shape drawn over it (Matt: "have it go behind the existing +").
-            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { attachOverlay } }
+            .background(alignment: .topLeading) { VoryGlassEffectContainer(spacing: 0) { attachOverlay } }
             #if os(iOS)
-            .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { slashOverlay } }
+            .background(alignment: .topLeading) { VoryGlassEffectContainer(spacing: 0) { slashOverlay } }
             #endif
             // Anything tapped outside the + panel closes it: a clear catcher far larger than
             // the composer, behind the panels.
@@ -589,7 +589,7 @@ struct ComposerView: View {
                     Text("That's a lot of text.").font(.subheadline)
                     Spacer(minLength: 0)
                     Button("Keep") { withAnimation(.snappy) { longTextOffer = false } }.font(.subheadline)
-                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).buttonStyle(.glassProminent)
+                    Button("Attach as file") { attachTextAsFile() }.font(.subheadline.weight(.semibold)).voryGlassButtonStyle(prominent: true)
                 }
                 .padding(.horizontal, 6).padding(.vertical, 4)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -630,8 +630,8 @@ struct ComposerView: View {
         // phone that swallowed the taps meant for the text field's Paste menu.
         // While a drag is over the card (the Mac) the glass itself takes the tint: an overlay
         // alone came through the glass as a faint rim.
-        .glassEffect(.regular.tint(dropTargeted ? Color.vory.opacity(0.35) : nil), in: .rect(cornerRadius: 22))
-        .glassEffectID("dock", in: namespace)
+        .voryGlassEffect(.regular.tint(dropTargeted ? Color.vory.opacity(0.35) : nil), in: .rect(cornerRadius: 22))
+        .voryGlassEffectID("dock", in: namespace)
         // The Mac's drop outline: drawn on the card's own shape while a drag is over it.
         .overlay {
             if dropTargeted {
@@ -890,7 +890,7 @@ struct ComposerView: View {
                 // The whole circle takes the tap and is the control's frame: on iOS 26 the button was its 14 pt glyph
                 // (the audit's "hit area is too small" on 26.5), and a tap near the circle's edge missed.
                 .contentShape(.circle)
-                .glassEffect(.regular.interactive(), in: .circle)
+                .voryGlassEffect(.regular.interactive(), in: .circle)
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("composerStack")) } action: { attachButtonFrame = $0 }
         }
         .buttonStyle(.plain)

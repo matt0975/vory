@@ -44,10 +44,10 @@ struct RestartRequiredBanner: View {
             }
             HStack(spacing: 8) {
                 Button { confirmUpdate = true } label: { Text(m.isBusy ? "Updating…" : "Update Hermes").font(.subheadline.weight(.semibold)) }
-                    .buttonStyle(.glassProminent).disabled(m.isBusy)
+                    .voryGlassButtonStyle(prominent: true).disabled(m.isBusy)
                     .accessibilityIdentifier("banner.update")
                 Button { showDetail.toggle() } label: { Text(showDetail ? "Hide details" : "Details").font(.subheadline) }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                 Spacer(minLength: 0)
                 if m.isBusy { ProgressView().controlSize(.small) }
             }
@@ -55,7 +55,7 @@ struct RestartRequiredBanner: View {
             if case .failed(let why) = m.phase { Text(why).font(.caption2).foregroundStyle(.red) }
         }
         .padding(14)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 18))
         .alert("Update Hermes?", isPresented: $confirmUpdate) {
             Button("Update", role: .destructive) { Task { await m.update(runtime: runtime) } }
             Button("Cancel", role: .cancel) {}

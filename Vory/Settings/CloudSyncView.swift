@@ -195,7 +195,7 @@ struct CloudRestoreSheet: View {
              : "\(DeviceWords.This) does not appear to be signed in to iCloud, or iCloud Drive is off for it. Sign in in \(DeviceWords.settings), or set Vory up fresh.")
             .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
         Button { dismiss() } label: { Text("OK").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6) }
-            .buttonStyle(.glass)
+            .voryGlassButtonStyle()
             .accessibilityIdentifier("restore.none")
     }
 
@@ -222,7 +222,7 @@ struct CloudRestoreSheet: View {
                 dismiss()
                 onRestored(r)
             } label: { Text("Restore").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6) }
-                .buttonStyle(.glassProminent)
+                .voryGlassButtonStyle(prominent: true)
                 .accessibilityIdentifier("restore.confirm")
             Button("Not now") { dismiss() }
                 .font(.subheadline).foregroundStyle(.secondary)

@@ -324,6 +324,7 @@ struct DashboardView: View {
     private func freshenGreeting() async {
         let key = "\(dayPart)|\(userName)|\(Calendar.current.component(.day, from: Date()))"
         guard cachedGreetingKey != key, aiOn, ChatSummarizer.isAvailable else { return }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         let who = userName.trimmingCharacters(in: .whitespaces)
         do {
             let ai = LanguageModelSession(instructions: "You write one short, warm greeting for the home screen of an app. At most eight words. No emoji, no exclamation marks, no quotes. Use the person's name if given.")
@@ -735,6 +736,7 @@ struct DashboardView: View {
     private func summarizeSince(force: Bool) async {
         let changed = changedSinceVisit
         guard !changed.isEmpty, aiOn, ChatSummarizer.isAvailable, !summarizing else { if changed.isEmpty { sinceSummary = nil }; return }
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         if !force, sinceSummary != nil { return }
         summarizing = true; defer { summarizing = false }
         let lines = changed.prefix(8).map { "- \($0.displayTitle) (\($0.profile ?? "bot")): \(($0.preview ?? "").prefix(200))" }

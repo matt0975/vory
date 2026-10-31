@@ -56,10 +56,17 @@ public final class VoiceEngine {
                 }
             }
         }
-        #if os(iOS) || os(macOS)
+        #if os(iOS)
         let text = try await DeviceTranscriber.transcribe(file: url)
         noteSTT(VoiceRouting.label(route: .device, provider: nil))
         return text
+        #elseif os(macOS)
+        if #available(macOS 26.0, *) {
+            let text = try await DeviceTranscriber.transcribe(file: url)
+            noteSTT(VoiceRouting.label(route: .device, provider: nil))
+            return text
+        }
+        throw HermesAPIError.transport("On-device dictation requires macOS Tahoe 26; choose gateway speech on Sequoia.")
         #else
         throw HermesAPIError.transport("Dictation on this device is not available here.")
         #endif

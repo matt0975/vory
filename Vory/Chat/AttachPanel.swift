@@ -101,7 +101,7 @@ struct PanelSurface: ViewModifier {
         } else if Self.plain {
             content.background(on ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear), in: shape)
         } else {
-            content.glassEffect(on ? .regular : .identity, in: shape)
+            content.voryGlassEffect(on ? .regular : .identity, in: shape)
         }
     }
 }

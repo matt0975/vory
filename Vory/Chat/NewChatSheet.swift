@@ -69,7 +69,7 @@ struct NewChatSheet: View {
                     Spacer()
                     Button { dismiss() } label: {
                         Image(systemName: "xmark").font(.body.weight(.semibold))
-                            .frame(width: 40, height: 40).glassEffect(.regular.interactive(), in: .circle)
+                            .frame(width: 40, height: 40).voryGlassEffect(.regular.interactive(), in: .circle)
                     }
                     .buttonStyle(.plain).accessibilityLabel("Close")
                 }
@@ -117,12 +117,12 @@ struct NewChatSheet: View {
                 }
                 Button { focus = .to } label: {
                     Image(systemName: "plus").font(.body.weight(.semibold))
-                        .frame(width: 32, height: 32).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 32, height: 32).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Add a bot")
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
-            .glassEffect(.regular, in: .rect(cornerRadius: 22))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: 22))
             .padding(.horizontal, 16)
 
             // The bots that match, as cards; a tap adds one to To:.

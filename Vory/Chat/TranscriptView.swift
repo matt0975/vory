@@ -199,7 +199,10 @@ struct TranscriptView: View {
 
     var body: some View {
         let _ = Perf.tick("transcript")
-        return Group {
+        return transcriptLifecycle
+    }
+
+    @ViewBuilder private var transcriptBase: some View {
             ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
@@ -281,6 +284,10 @@ struct TranscriptView: View {
                 .background(ScrollViewProbe(metrics: metrics, dockTop: dockTop, headerBottom: headerBottom))
                 }
             }
+    }
+
+    private var transcriptObserved: some View {
+            transcriptBase
             .scrollPosition($scrollPosition)
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
@@ -379,6 +386,10 @@ struct TranscriptView: View {
                 BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
+    }
+
+    private var transcriptPresented: some View {
+            transcriptObserved
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
             // beside whichever row was live and hopped between them as the turn went on.
@@ -435,6 +446,10 @@ struct TranscriptView: View {
             // that write ran the transcript's body a second time on every token. A new message
             // fades in where it belongs and the thread eases up to it (`followRows`).
             .onChange(of: rows.count) { old, new in historyLanding(from: old, to: new); followRows(from: old, to: new) }
+    }
+
+    private var transcriptLifecycle: some View {
+            transcriptPresented
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [rows.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear {
@@ -482,7 +497,6 @@ struct TranscriptView: View {
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
             }
-        }
     }
 }
 
@@ -1944,7 +1958,7 @@ struct SubagentRow: View {
         }
         .font(.footnote)
         .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
         // The detail line changes as the helper reports in, without an animation of its own: one
@@ -2007,7 +2021,7 @@ struct InjectedNoteRow: View {
             .clipShape(.rect(cornerRadius: open ? 14 : 20))
             // Plain glass, not interactive: the button inside takes the tap, and interactive glass
             // on the wrapper hid that button from accessibility (and the UI test).
-            .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
             .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 2)
@@ -2310,7 +2324,7 @@ struct BotMessageNotice: View {
                     if pending { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .voryGlassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(headline). Opens \(label)'s chat")
@@ -2978,7 +2992,7 @@ struct AttachmentStrip: View {
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
                             .font(.caption).lineLimit(1)
-                            .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 10))
+                            .padding(8).voryGlassEffect(.regular, in: .rect(cornerRadius: 10))
                     }
                 }
                 .buttonStyle(.plain)

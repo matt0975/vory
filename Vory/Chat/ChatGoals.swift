@@ -207,6 +207,7 @@ final class ChatGoals {
 
     // MARK: The model
 
+    @available(iOS 26.0, macOS 26.0, *)
     @Generable
     struct Line {
         @Guide(description: "What the assistant is working on right now, as one phrase of three to seven words that starts with a verb ending in -ing. It names the task, not the tool. No period, no quotes.")
@@ -214,6 +215,7 @@ final class ChatGoals {
     }
 
     nonisolated static func onDevice(_ input: Input) async -> String? {
+        guard #available(iOS 26.0, macOS 26.0, *) else { return nil }
         guard case .available = SystemLanguageModel.default.availability else { return nil }
         var parts = ["The user asked: \(input.prompt.isEmpty ? "(nothing typed)" : input.prompt)"]
         if !input.steps.isEmpty { parts.append("Steps the assistant has taken, oldest first:\n" + input.steps.map { "- \($0)" }.joined(separator: "\n")) }
