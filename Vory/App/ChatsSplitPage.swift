@@ -54,15 +54,17 @@ struct ChatsSplitPage: View {
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
                     .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
+                    #if os(iOS)
+                    // On the Duo's side (or as a book) with a chat open and the list hidden, the split's sidebar toggle
+                    // stood in the chat page's bar over its face (Back, or the split's edge swipe, brings the list back,
+                    // as before). It's this column's own item, shown in the chat's bar while the list is hidden: taken
+                    // off the chat's page or the detail column it stayed (2026-10-31), so it comes off here, and only
+                    // then. Beside the chat the list keeps its "Hide Sidebar", after Back the empty detail keeps "Show
+                    // Sidebar", and the iPad keeps both (#555).
+                    .toolbar(removing: model.tabBarVertical && !model.chatPath.isEmpty && columns == .detailOnly ? .sidebarToggle : nil)
+                    #endif
             } detail: {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
-                    #if os(iOS)
-                    // On the Duo's side (or as a book) with a chat open, the split's own sidebar toggle stood in the
-                    // page's bar over the chat's face with the list hidden (Back, or the split's edge swipe, brings the
-                    // list back, as before). It's the split's item, in this column's bar, so it comes off here; the
-                    // list's own "Hide Sidebar", the empty detail's toggle and the iPad's are kept (#555).
-                    .toolbar(removing: model.tabBarVertical && !model.chatPath.isEmpty ? .sidebarToggle : nil)
-                    #endif
             }
             .navigationSplitViewStyle(.balanced)
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { leading = $0 }
