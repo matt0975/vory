@@ -856,8 +856,10 @@ final class BarUpUITests: XCTestCase {
     }
 
     /// #555: another app's Live Activity starting and ending while a chat is open, closed or on its side (HERMES_E2E_POSE),
-    /// with the bar's frame log. The full app (com.vorantx.vory, the script's build whose extension draws one) comes to the
-    /// front to start it, then the copy back to the same chat; then the same to end it. Read at rest (A0), with the activity
+    /// with the bar's frame log. At "BARUP HOLD la-start" the script brings the full app (com.vorantx.vory, its build whose
+    /// extension draws one) to the front to start it and quits it; the test waits for it to come and go, then brings the
+    /// copy back to the same chat; then the same at "BARUP HOLD la-end" to end it. (The full app launched from the test
+    /// itself never asked for one, 2026-11-01.) Read at rest (A0), with the activity
     /// (A1) and after it (A2): the system's markers lower by the activity's push in A1 and back in A2, Back and More on them
     /// within 1 pt each time, and at A1 More's menu opens and its Rename gives one dialog. From the log, each control takes
     /// one step each way with nothing drawn between, at its new place within 1.5 s of the copy's return (printed). The copy
@@ -887,12 +889,15 @@ final class BarUpUITests: XCTestCase {
         let a0 = read("A0")
         onMarkers("A0", a0)
         let full = XCUIApplication(bundleIdentifier: "com.vorantx.vory")
-        // The full app to the front to start or end its activity, then the copy back: the wall times of the full app's
-        // launch and of the copy's return.
-        let viaFullApp = { (what: String) -> (launched: Double, back: Double) in
+        // The script brings the full app to the front to start or end its activity and quits it; once it has come and
+        // gone, the copy back: the wall times of the hold and of the copy's return. The full app never seen is VOID.
+        let viaFullApp = { (what: String) throws -> (launched: Double, back: Double) in
             let launched = Date().timeIntervalSince1970
-            full.launchArguments = ["-vory-navitem-probe", "-vory-navitem-probe-activity", what]
-            full.launch(); self.pause(5); full.terminate()
+            print("BARUP HOLD la-\(what)")
+            var came = false
+            for _ in 0..<60 where !came { self.pause(0.5); came = full.state == .runningForeground }
+            guard came else { print("LAMID VOID la-\(what): the full app didn't come"); throw XCTSkip("VOID: the full app didn't come") }
+            for _ in 0..<60 where full.state != .notRunning { self.pause(0.5) }
             let back = Date().timeIntervalSince1970
             self.app.activate()
             return (launched, back)
@@ -905,7 +910,7 @@ final class BarUpUITests: XCTestCase {
                 throw XCTSkip("VOID: the copy didn't come back to the same chat")
             }
         }
-        let start = viaFullApp("start")
+        let start = try viaFullApp("start")
         try sameChat("A1", start.launched)
         pause(3)
         let a1 = read("A1")
@@ -916,7 +921,7 @@ final class BarUpUITests: XCTestCase {
         print(String(format: "LAMID push %.1f", m1.minY - m0.minY))
         onMarkers("A1", a1)
         moreMenuOnce(more, "A1")
-        let end = viaFullApp("end")
+        let end = try viaFullApp("end")
         try sameChat("A2", end.launched)
         pause(3)
         let a2 = read("A2")
@@ -935,10 +940,13 @@ final class BarUpUITests: XCTestCase {
     }
 
     /// #555: on its side to closed with a chat open, with the bar's frame log: the script closes the Duo at the hold
-    /// ("BARUP HOLD fold-closed"). The system's Back marker passes a place it doesn't keep (175, before 238; every read is in
-    /// the log as "markerReadBack"); the column's Back and More never draw there: every frame after the fold centred on 262
-    /// and 332, within 1 pt. Then More's menu opens and its Rename gives one dialog. No fold, the chat not open after it, or
-    /// no read at 175 (no transient to hold through) is VOID ("FOLD VOID …"), not a failure.
+    /// ("BARUP HOLD fold-closed"). The system's places for Back and More after the fold are their last reads in the log
+    /// ("markerReadBack", "markerReadMore"): after a pose change it can keep 175 (and 245) rather than pass it on to 238
+    /// (and 308) (seen 2026-10-31), and which it did is printed. The column follows the system: after the last read, every
+    /// frame centred on the kept place within 1 pt; before it, at most one step, from where it first stood to the kept
+    /// place, nothing between; and where the system passed 175 on to 238, never drawn at the passed place. Then More's menu
+    /// opens and its Rename gives one dialog. No fold, the chat not open after it, or no read after it is VOID ("FOLD VOID
+    /// …"), not a failure.
     func testTheColumnHoldsThroughAFold() throws {
         let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
         guard pose == .side else { throw XCTSkip("on its side only (HERMES_E2E_POSE=side)") }
@@ -952,17 +960,34 @@ final class BarUpUITests: XCTestCase {
         pause(3)
         guard element("chat.titlePill").exists else { print("FOLD VOID: the chat isn't open after the fold"); throw XCTSkip("VOID: no chat after the fold") }
         let log = frameLog().filter { $0.t >= folding }
-        let reads = log.filter { $0.name == "markerReadBack" && $0.f.width > 0 }
-        print("FOLD markerReadBack: " + reads.map { String(format: "%+.3f %.0f,%.0f", $0.t - folding, $0.f.minX, $0.f.minY) }.joined(separator: "; "))
-        guard reads.contains(where: { abs($0.f.minY - 175) <= 3 }) else {
-            print("FOLD VOID: no transient seen (no read at 175)"); throw XCTSkip("VOID: no transient seen")
-        }
-        for (slot, mid) in [("columnBack", CGFloat(262)), ("columnMore", CGFloat(332))] {
+        // Back and More: the system's reads, its kept place (the last read), and the column's frames against it.
+        for (name, read, slot, passed) in [("Back", "markerReadBack", "columnBack", CGFloat(175)), ("More", "markerReadMore", "columnMore", CGFloat(245))] {
+            let reads = log.filter { $0.name == read && $0.f.width > 0 }
+            print("FOLD \(read): " + reads.map { String(format: "%+.3f %.0f,%.0f", $0.t - folding, $0.f.minX, $0.f.minY) }.joined(separator: "; "))
+            guard let kept = reads.last else { print("FOLD VOID: no \(read) after the fold"); throw XCTSkip("VOID: no read after the fold") }
+            let sawPassed = reads.contains { abs($0.f.minY - passed) <= 3 }
+            if abs(kept.f.minY - passed) <= 3 { print("FOLD \(name): the system kept \(Int(passed))") }
+            else if sawPassed { print("FOLD \(name): the system passed \(Int(passed)) to \(Int(kept.f.minY))") }
+            else { print("FOLD \(name): the system kept \(Int(kept.f.minY))") }
             let drawn = log.filter { $0.name == slot && $0.f.width > 0 }
-            let ys = drawn.map(\.f.midY)
-            print("FOLD \(slot): \(drawn.count) frames, middle y \(ys.min().map { String(format: "%.1f", $0) } ?? "-") to \(ys.max().map { String(format: "%.1f", $0) } ?? "-")")
+            print("FOLD \(slot): \(drawn.count) frames, middles "
+                  + drawn.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - folding) }.joined(separator: " "))
             XCTAssertFalse(drawn.isEmpty, "\(slot): never drawn after the fold")
-            for y in ys { XCTAssertEqual(y, mid, accuracy: 1, "\(slot): drawn at middle \(y) after the fold, not \(mid)") }
+            let mid = kept.f.midY
+            // After the last read, once it has settled (250 ms) and the reader's 1 s read again has come: on the kept place.
+            for d in drawn where d.t >= kept.t + 1.0 {
+                XCTAssertEqual(d.f.midY, mid, accuracy: 1, "\(slot): drawn at middle \(d.f.midY) after the system's last read, not \(mid)")
+            }
+            // In all: at most one step, ending on the kept place.
+            var runs: [CGFloat] = []
+            for d in drawn where runs.last.map({ abs($0 - d.f.midY) > 1 }) ?? true { runs.append(d.f.midY) }
+            XCTAssertLessThanOrEqual(runs.count, 2, "\(slot): more than one step after the fold: \(runs)")
+            if let last = runs.last { XCTAssertEqual(last, mid, accuracy: 1, "\(slot): ended at \(last), not on the kept place \(mid)") }
+            // Where the system passed its transient on, never at it.
+            if sawPassed && abs(kept.f.minY - passed) > 3 {
+                let at = passed + 24
+                XCTAssertFalse(drawn.contains { abs($0.f.midY - at) <= 1 }, "\(slot): drawn at the passed place \(at)")
+            }
         }
         moreMenuOnce(more, "after the fold")
         app.terminate()
