@@ -831,8 +831,9 @@ struct ChatHeader: View {
                 .modifier(StripPressMirror(kind: .back))
                 .offset(x: backAt.x - 22 - sideFrame.minX, y: backAt.y - 22 - sideFrame.minY)
                 #if DEBUG
-                // Its frame as drawn, in the frame log (`-vory-morph-log`).
-                .modifier(MorphFramesProbe.LogFrame(name: "sideBack"))
+                // Where it's drawn, window space, in the frame log (`-vory-morph-log`) as it changes: the offset doesn't
+                // move the frame a geometry reader sees, so the place it's put at is noted instead.
+                .onChange(of: backAt, initial: true) { _, p in MorphFramesProbe.note("sideBack", CGRect(x: p.x - 22, y: p.y - 22, width: 44, height: 44)) }
                 #endif
             }
         }
@@ -842,8 +843,8 @@ struct ChatHeader: View {
                     .modifier(StripPressMirror(kind: .more))
                     .offset(x: more.x - 22 - sideFrame.minX, y: more.y - 22 - sideFrame.minY)
                     #if DEBUG
-                    // Its frame as drawn, in the frame log (`-vory-morph-log`).
-                    .modifier(MorphFramesProbe.LogFrame(name: "sideMore"))
+                    // Where it's drawn, window space, in the frame log (`-vory-morph-log`) as it changes.
+                    .onChange(of: more, initial: true) { _, p in MorphFramesProbe.note("sideMore", CGRect(x: p.x - 22, y: p.y - 22, width: 44, height: 44)) }
                     #endif
             }
         }

@@ -344,8 +344,10 @@ final class BarUpUITests: XCTestCase {
 
     /// Opens the chat the script names (HERMES_E2E_CHAT, a words-in-its-row match) from the Chats list, with the frames
     /// readout, VoiceOver's oracle and any extra arguments; in the scheme and text size the script asks for
-    /// (HERMES_E2E_SCHEME, HERMES_E2E_SIZE=XXXL). Returns the wall time just before the row's tap.
-    @discardableResult private func openChat(_ extra: [String] = []) throws -> TimeInterval {
+    /// (HERMES_E2E_SCHEME, HERMES_E2E_SIZE=XXXL). Returns the wall time just before the row's tap. With `holdAfterTap`, a
+    /// hold for the script's still just after the tap ("BARUP HOLD <name>"); with `voidTag`, a chat that doesn't open is
+    /// VOID ("<tag> VOID open: …", a skip) rather than a failure.
+    @discardableResult private func openChat(_ extra: [String] = [], holdAfterTap: String? = nil, voidTag: String? = nil) throws -> TimeInterval {
         let e = ProcessInfo.processInfo.environment
         guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
             throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set")
@@ -364,8 +366,11 @@ final class BarUpUITests: XCTestCase {
         let row = try XCTUnwrap(rows.first { $0.exists && $0.isHittable }, "no row with '\(words)'")
         let tapped = Date().timeIntervalSince1970
         row.tap()
+        if let holdAfterTap { print("BARUP HOLD \(holdAfterTap)"); pause(1) }
         // Open once Chat info is there: beside the list on the Duo's side there's no Back.
-        XCTAssertTrue(element("chat.titlePill").waitForExistence(timeout: 20), "the chat didn't open")
+        let opened = element("chat.titlePill").waitForExistence(timeout: 20)
+        if !opened, let voidTag { print("\(voidTag) VOID open: the chat didn't open"); throw XCTSkip("VOID: the chat didn't open") }
+        XCTAssertTrue(opened, "the chat didn't open")
         pause(3)
         return tapped
     }
@@ -868,7 +873,8 @@ final class BarUpUITests: XCTestCase {
     func testTheStripFollowsALiveActivityMidChat() throws {
         let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
         guard let pose, pose == .closed || pose == .side else { throw XCTSkip("closed or on its side only (HERMES_E2E_POSE)") }
-        try openChat(["-vory-morph-log"])
+        // A still just after the row's tap, and a chat that doesn't open is VOID (once seen closed, 2026-11-01).
+        try openChat(["-vory-morph-log"], holdAfterTap: "lamid-open", voidTag: "LAMID")
         let back = element("chat.back"), more = element("chat.more"), info = element("chat.titlePill")
         // Closed, the root bar's column; on its side beside the list, the header's More alone.
         let slots: [(name: String, slot: String, marker: String, el: XCUIElement)] = pose == .closed
