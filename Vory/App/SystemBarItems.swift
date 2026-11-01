@@ -163,6 +163,20 @@ import UIKit
         return frame.midX > 0 && frame.midX < safeLeading
     }
 
+    /// Whether the markers are read: only with the window's scene in front and active. On its way out the app lays its
+    /// window out again in other shapes for the switcher's picture, and on its side reads in closed's strip came then; one
+    /// standing a quarter second would have been kept for that shape (the diagnosis, 2026-11-01).
+    nonisolated static func reads(_ state: UIScene.ActivationState?) -> Bool { state == .foregroundActive }
+
+    /// How often the markers are read on the Duo's side or as a book with a chat on show (`ticks`).
+    nonisolated static let tickEvery: TimeInterval = 0.5
+
+    /// Whether the reader's tick runs (`StripMarkerReader.Reader`): on the Duo's side or as a book with its chat on show,
+    /// the reader on screen and the app in front. There the system moves its floating bar's items, a Live Activity
+    /// arriving or ending, with no event of ours: only its own views lay out (the diagnosis, 2026-11-01). Closed the bar's
+    /// own passes follow them, and upright there's no reader, so neither ticks.
+    nonisolated static func ticks(_ state: UIScene.ActivationState?, onSide: Bool, shown: Bool) -> Bool { onSide && shown && reads(state) }
+
     /// A marker's settled place, kept for its key and the next launch. A move while the app runs (an activity arriving or
     /// leaving, a turn) is animated, as the system moves its own items.
     func settled(_ kind: Kind, _ frame: CGRect, for key: String) {
@@ -211,18 +225,23 @@ import UIKit
 /// diagnosis, 2026-10-31). Each is read in the window (`frame(in:)`) on the layout, safe-area and margin passes of the
 /// page, its navigation controller, its bar, the split view and the window, and on the strip's trait changes, and kept
 /// once settled; after the items change or Back comes or goes they're read again a moment later, as the split lays its
-/// strip out again with no event of ours (the diagnosis).
+/// strip out again with no event of ours (the diagnosis). On its side, where the system moves the floating bar's items
+/// with no event of ours at all, they're read every half second too (`StripMarkers.ticks`), and again a moment after the
+/// app comes back to the front. Only ever in front (`StripMarkers.reads`).
 struct StripMarkerReader: UIViewControllerRepresentable {
     /// Whether Back's marker is there: not while the list stands beside the chat. The chat page says so from where its
     /// pane starts, as the header does (`ChatHeader.listBeside`): the page controller spans the window there, the list a
     /// safe-area inset beside the pane, so its own frame can't tell.
     var back: Bool
+    /// On the Duo's side or as a book with the chat on show and its tab in front, as the chat publishes `StripMarkers.side`.
+    var onSide: Bool
 
     func makeUIViewController(context: Context) -> Reader { Reader() }
 
     func updateUIViewController(_ reader: Reader, context: Context) {
         reader.geometry = context.environment.windowGeometry
         reader.back = back
+        reader.onSide = onSide
         reader.read()
     }
 
@@ -297,6 +316,9 @@ struct StripMarkerReader: UIViewControllerRepresentable {
     final class Reader: UIViewController {
         weak var geometry: WindowGeometry?
         var back = true
+        var onSide = false { didSet { if onSide != oldValue { tickIfDue() } } }
+        /// The tick, while it runs (`runTick`).
+        private(set) var tick: Task<Void, Never>?
         private let backItem = Reader.item("Back", "chevron.left"), moreItem = Reader.item("Chat options", "ellipsis")
         private var settles: [StripMarkers.Kind: StripMarkers.Settle] = [:]
         private var checks: [StripMarkers.Kind: Task<Void, Never>] = [:]
@@ -339,16 +361,22 @@ struct StripMarkerReader: UIViewControllerRepresentable {
                 host.insertSubview(w, at: 0)
                 watchers.append(w)
             }
+            if let scene = view.window?.windowScene {
+                NotificationCenter.default.addObserver(self, selector: #selector(sceneActivated), name: UIScene.didActivateNotification, object: scene)
+                NotificationCenter.default.addObserver(self, selector: #selector(sceneDeactivating), name: UIScene.willDeactivateNotification, object: scene)
+            }
             read()
+            tickIfDue()
         }
 
         override func viewDidDisappear(_ animated: Bool) {
             super.viewDidDisappear(animated)
             watchers.forEach { $0.removeFromSuperview() }
             watchers = []
-            checks.values.forEach { $0.cancel() }
-            checks = [:]
-            settles = [:]
+            NotificationCenter.default.removeObserver(self, name: UIScene.didActivateNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: UIScene.willDeactivateNotification, object: nil)
+            runTick(false)
+            letGo()
             again?.cancel()
             again = nil
             StripMarkerReader.giveAccessibility(axTaken)
@@ -381,16 +409,68 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             if !back, MorphFramesProbe.isOn { MorphFramesProbe.marks["markerBack"] = nil }
             #endif
             if changed || flipped { readAgain() }
-            guard let key = key(back: back, in: window) else { return }
+            // Our items are put back whenever; their places are read only in front (`StripMarkers.reads`).
+            guard StripMarkers.reads(window.windowScene?.activationState), let key = key(back: back, in: window) else { return }
             if key != lastKey {
                 lastKey = key
-                checks.values.forEach { $0.cancel() }
-                checks = [:]
-                settles = [:]
+                letGo()
             }
             for kind in [StripMarkers.Kind.back, .more] where kind == .more || back {
                 if settles[kind, default: .init()].note(place(kind, in: window), at: ProcessInfo.processInfo.systemUptime) { check(kind) }
             }
+        }
+
+        /// What was settling let go: its checks cancelled and its places forgotten, so the next read starts afresh.
+        private func letGo() {
+            checks.values.forEach { $0.cancel() }
+            checks = [:]
+            settles = [:]
+        }
+
+        /// The tick on or off as `StripMarkers.ticks` says.
+        func tickIfDue() {
+            let window = viewIfLoaded?.window
+            runTick(StripMarkers.ticks(window?.windowScene?.activationState, onSide: onSide, shown: window != nil))
+        }
+
+        /// The tick: on the Duo's side, the same read as every event's every half second (`StripMarkers.tickEvery`), while
+        /// `StripMarkers.ticks` holds; it ends itself when it no longer does. A read that finds the markers where they were
+        /// changes nothing: `install` sets nothing, `Settle.note` reports no change, so no check and nothing kept.
+        func runTick(_ on: Bool) {
+            guard on != (tick != nil) else { return }
+            #if DEBUG
+            // For the bar's checks: when the tick starts and stops, in the frame log (`-vory-morph-log`).
+            MorphFramesProbe.note(on ? "stripTickOn" : "stripTickOff", .zero)
+            #endif
+            tick?.cancel()
+            tick = nil
+            guard on else { return }
+            tick = Task { @MainActor [weak self] in
+                while true {
+                    try? await Task.sleep(for: .seconds(StripMarkers.tickEvery))
+                    guard !Task.isCancelled, let self else { return }
+                    let window = self.viewIfLoaded?.window
+                    guard StripMarkers.ticks(window?.windowScene?.activationState, onSide: self.onSide, shown: window != nil) else {
+                        self.runTick(false)
+                        return
+                    }
+                    self.read()
+                }
+            }
+        }
+
+        /// The app back in front: read again a moment later (`readAgain`), as the system may have moved its items while it
+        /// was away (a Live Activity started from another app), and the tick again on its side. Called as it becomes active.
+        @objc private func sceneActivated() {
+            readAgain()
+            runTick(StripMarkers.ticks(.foregroundActive, onSide: onSide, shown: viewIfLoaded?.window != nil))
+        }
+
+        /// The app leaving the front: the tick stops, and what was settling is let go, so nothing read on the way out is
+        /// kept and the return reads afresh.
+        @objc private func sceneDeactivating() {
+            runTick(false)
+            letGo()
         }
 
         /// The items changed, or Back came or went: read again, and hide the markers' views, a quarter second and a second
@@ -454,6 +534,8 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             checks[kind] = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(StripMarkers.Settle.delay))
                 guard !Task.isCancelled, let self, let window = self.view.window else { return }
+                // Out of front nothing is kept, and the place is let go, so the return reads it afresh.
+                guard StripMarkers.reads(window.windowScene?.activationState) else { self.settles[kind] = nil; return }
                 guard let key = self.key(back: self.back, in: window), key == self.lastKey else { return }
                 let now = ProcessInfo.processInfo.systemUptime
                 if self.settles[kind, default: .init()].note(self.place(kind, in: window), at: now) { self.check(kind); return }

@@ -126,7 +126,8 @@ struct ConversationView: View {
                     .onDisappear { onScreen = false; publishStripSide(nil, chat: chat) }
                     .background {
                         if model.tabBarVertical {
-                            StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1).frame(width: 0, height: 0)
+                            StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1, onSide: stripSide(chat) != nil)
+                                .frame(width: 0, height: 0)
                         }
                     }
                     #else

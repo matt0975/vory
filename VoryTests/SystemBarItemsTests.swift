@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import os
 import SwiftUI
 import Testing
 @testable import Vory
@@ -370,6 +371,90 @@ import Testing
             items.settled(size: .zero, safeArea: EdgeInsets())
             #expect(SystemBarItems(defaults: d).lastWindow == nil)
         }
+    }
+
+    @Test func theMarkersAreReadOnlyInFront() {
+        // Never on the way out (the switcher's picture), in the background, or before a scene is there.
+        #expect(StripMarkers.reads(.foregroundActive))
+        #expect(!StripMarkers.reads(.foregroundInactive))
+        #expect(!StripMarkers.reads(.background))
+        #expect(!StripMarkers.reads(.unattached))
+        #expect(!StripMarkers.reads(nil))
+        // The tick: on its side with the chat on show, the reader on screen and the app in front; closed and upright
+        // (not on its side), off screen or out of front, never.
+        #expect(StripMarkers.ticks(.foregroundActive, onSide: true, shown: true))
+        #expect(!StripMarkers.ticks(.foregroundActive, onSide: false, shown: true))
+        #expect(!StripMarkers.ticks(.foregroundActive, onSide: true, shown: false))
+        #expect(!StripMarkers.ticks(.foregroundInactive, onSide: true, shown: true))
+        #expect(!StripMarkers.ticks(.background, onSide: true, shown: true))
+    }
+
+    @Test func aTickThatFindsTheSamePlaceChangesNothing() {
+        // On its side the tick reads twice a second. One that finds More where it was kept writes nothing: not the page's
+        // items, not the store, not the places SwiftUI draws from (a write there would draw the bar again).
+        let name = "SystemBarItemsMemoryTests-\(UUID().uuidString)"
+        let d = CountingDefaults(suiteName: name)!
+        defer { d.removePersistentDomain(forName: name) }
+        let markers = StripMarkers(defaults: d), key = StripMarkers.key(shape: side, withBack: false)
+        let i = UINavigationItem(), back = UIBarButtonItem(title: "Back", image: nil), more = UIBarButtonItem(title: "Chat options", image: nil)
+        let p = CGRect(x: 884, y: 125, width: 38, height: 48)
+        var s = StripMarkers.Settle()
+        StripMarkerReader.install(on: i, back: false, backItem: back, moreItem: more)
+        do { let changed = s.note(p, at: 0); #expect(changed) }
+        if let f = s.due(at: 0.25) { markers.settled(.more, f, for: key) }
+        #expect(d.writes == 1)
+        let changes = OSAllocatedUnfairLock(initialState: 0)
+        withObservationTracking { _ = (markers.byShape, markers.side, markers.pressed) } onChange: { changes.withLock { $0 += 1 } }
+        // Ten seconds of ticks with More where it was: nothing set, no change noted (so no check follows), nothing kept
+        // (even a check that came anyway).
+        for n in 1...20 {
+            let at = 0.25 + Double(n) * StripMarkers.tickEvery
+            #expect(!StripMarkerReader.install(on: i, back: false, backItem: back, moreItem: more))
+            do { let changed = s.note(p, at: at); #expect(!changed) }
+            #expect(s.due(at: at) == p)
+            markers.settled(.more, p, for: key)
+        }
+        #expect(d.writes == 1)
+        #expect(changes.withLock { $0 } == 0)
+        // An activity moves it 92 pt: that place is kept once it has stood, and written once.
+        let moved = p.offsetBy(dx: 0, dy: 92)
+        do { let changed = s.note(moved, at: 11); #expect(changed) }
+        #expect(s.due(at: 11.1) == nil)
+        if let f = s.due(at: 11.25) { markers.settled(.more, f, for: key) }
+        #expect(d.writes == 2)
+        #expect(changes.withLock { $0 } == 1)
+        #expect(markers.frame(.more, for: key) == moved)
+    }
+
+    @Test func noTickOutlivesItsChatOnTheSide() {
+        let reader = StripMarkerReader.Reader()
+        // Off screen it never starts.
+        reader.onSide = true
+        #expect(reader.tick == nil)
+        // Running, it stops when the chat leaves the side (closed, upright, another tab)...
+        reader.runTick(true)
+        let first = reader.tick
+        #expect(first != nil)
+        reader.onSide = false
+        #expect(reader.tick == nil)
+        #expect(first?.isCancelled == true)
+        // ...and when the page goes.
+        reader.onSide = true
+        reader.runTick(true)
+        let second = reader.tick
+        #expect(second != nil)
+        reader.viewDidDisappear(false)
+        #expect(reader.tick == nil)
+        #expect(second?.isCancelled == true)
+    }
+}
+
+/// A store that counts its writes.
+private final class CountingDefaults: UserDefaults {
+    var writes = 0
+    override func set(_ value: Any?, forKey defaultName: String) {
+        writes += 1
+        super.set(value, forKey: defaultName)
     }
 }
 #endif
