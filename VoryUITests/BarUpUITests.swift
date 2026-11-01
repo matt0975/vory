@@ -842,34 +842,51 @@ final class BarUpUITests: XCTestCase {
         pause(1)
     }
 
-    /// One step from `from` to `to` (middles, 1 pt either way) in a control's logged frames since `since`: nothing drawn
-    /// between, once at `to` it stays there, and the first frame there within 1.5 s of `back`, the copy's return (printed).
-    private func oneStep(_ name: String, _ frames: [(t: Double, name: String, f: CGRect)], from: CGFloat, to: CGFloat,
-                         back: Double, _ stage: String) {
-        print("LAMID \(stage) \(name): \(frames.count) frames, middles "
-              + frames.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - back) }.joined(separator: " "))
-        for m in frames.map(\.f.midY) where abs(m - from) > 1 && abs(m - to) > 1 {
-            XCTFail("\(stage): \(name) drawn between \(from) and \(to), at \(m)")
+    /// A control following the system's own move, from `from` to `to` (the marker's places at rest and with the activity,
+    /// window space), in its logged frames. The event is the system's first read at the new place (`reads`, the marker's
+    /// reads in the log, its top at `to`'s within 1 pt); the control's first frame off its place comes within 0.5 s of it
+    /// and its arrival within 1.1 s (the 250 ms settle, and slack; both printed). It may animate: between the two places
+    /// every frame lies between them and only moves toward `to`, at most 0.6 s from its first frame off its place to its
+    /// arrival, and once there it stays.
+    private func followsSystem(_ name: String, _ frames: [(t: Double, name: String, f: CGRect)], reads: [(t: Double, name: String, f: CGRect)],
+                               from: CGRect, to: CGRect, _ stage: String) {
+        guard let event = reads.first(where: { abs($0.f.minY - to.minY) <= 1 }) else {
+            print("LAMID \(stage) \(name): no read of the system's place at \(to.minY): " + reads.map { String(format: "%.0f", $0.f.minY) }.joined(separator: " "))
+            XCTFail("\(stage): no read of the system's \(name) at \(to.minY)"); return
         }
-        guard let i = frames.firstIndex(where: { abs($0.f.midY - to) <= 1 }) else {
-            XCTFail("\(stage): \(name) never drawn at \(to)"); return
+        let fromMid = from.midY, toMid = to.midY
+        print("LAMID \(stage) \(name): \(frames.count) frames, middles (s from the system's read) "
+              + frames.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - event.t) }.joined(separator: " "))
+        guard let off = frames.firstIndex(where: { abs($0.f.midY - fromMid) > 1 }) else { XCTFail("\(stage): \(name) never left \(fromMid)"); return }
+        guard let there = frames.firstIndex(where: { abs($0.f.midY - toMid) <= 1 }) else { XCTFail("\(stage): \(name) never reached \(toMid)"); return }
+        let leaves = frames[off].t - event.t, arrives = frames[there].t - event.t
+        print(String(format: "LAMID %@ %@: off its place %+.3f s and at the new one %+.3f s after the system's read", stage, name, leaves, arrives))
+        XCTAssertGreaterThanOrEqual(leaves, -0.1, "\(stage): \(name) moved \(leaves) s before the system's read")
+        XCTAssertLessThanOrEqual(leaves, 0.5, "\(stage): \(name) off its place \(leaves) s after the system's read")
+        XCTAssertLessThanOrEqual(arrives, 1.1, "\(stage): \(name) at its new place \(arrives) s after the system's read")
+        XCTAssertLessThanOrEqual(frames[there].t - frames[off].t, 0.6, "\(stage): \(name) took \(frames[there].t - frames[off].t) s to move")
+        // In between: within the two places, only toward `to` (1 pt of noise), no overshoot.
+        let lo = min(fromMid, toMid) - 1, hi = max(fromMid, toMid) + 1
+        var gap = abs(fromMid - toMid)
+        for f in frames[off...there] {
+            let m = f.f.midY, d = abs(m - toMid)
+            XCTAssertTrue(m >= lo && m <= hi, "\(stage): \(name) drawn at \(m), outside \(fromMid) to \(toMid)")
+            XCTAssertLessThanOrEqual(d, gap + 1, "\(stage): \(name) went back, at \(m)")
+            gap = min(gap, d)
         }
-        let delay = frames[i].t - back
-        print(String(format: "LAMID %@ %@: at its new place %.3f s after the copy's return", stage, name, delay))
-        XCTAssertLessThanOrEqual(delay, 1.5, "\(stage): \(name) at its new place \(delay) s after the copy's return")
-        XCTAssertTrue(frames[i...].allSatisfy { abs($0.f.midY - to) <= 1 }, "\(stage): \(name) left \(to) again")
+        XCTAssertTrue(frames[there...].allSatisfy { abs($0.f.midY - toMid) <= 1 }, "\(stage): \(name) left \(toMid) again")
     }
 
     /// #555: another app's Live Activity starting and ending while a chat is open, closed or on its side (HERMES_E2E_POSE),
     /// with the bar's frame log. At "BARUP HOLD la-start" the script brings the full app (com.vorantx.vory, its build whose
     /// extension draws one) to the front to start it and quits it; the test waits for it to come and go, then brings the
     /// copy back to the same chat; then the same at "BARUP HOLD la-end" to end it. (The full app launched from the test
-    /// itself never asked for one, 2026-11-01.) Read at rest (A0), with the activity
-    /// (A1) and after it (A2): the system's markers lower by the activity's push in A1 and back in A2, Back and More on them
-    /// within 1 pt each time, and at A1 More's menu opens and its Rename gives one dialog. From the log, each control takes
-    /// one step each way with nothing drawn between, at its new place within 1.5 s of the copy's return (printed). The copy
-    /// not back on the same chat (relaunched, or the chat gone), or the markers not moved by the activity, is VOID
-    /// ("LAMID VOID …"), not a failure.
+    /// itself never asked for one, 2026-11-01.) Read at rest (A0), with the activity (A1) and after it (A2), each once the
+    /// system's marker has moved (up to 10 s): the markers lower by the activity's push in A1 and back in A2, Back and More
+    /// on them within 1 pt each time, and at A1 More's menu opens and its Rename gives one dialog. From the log, each
+    /// control follows the system's own move (`followsSystem`): timed from the system's first read at its new place, it
+    /// may animate. The copy's return is printed, for information. The copy not back on the same chat (relaunched, or the
+    /// chat gone), or the markers not moved by the activity, is VOID ("LAMID VOID …"), not a failure.
     func testTheStripFollowsALiveActivityMidChat() throws {
         let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
         guard let pose, pose == .closed || pose == .side else { throw XCTSkip("closed or on its side only (HERMES_E2E_POSE)") }
@@ -877,9 +894,9 @@ final class BarUpUITests: XCTestCase {
         try openChat(["-vory-morph-log"], holdAfterTap: "lamid-open", voidTag: "LAMID")
         let back = element("chat.back"), more = element("chat.more"), info = element("chat.titlePill")
         // Closed, the root bar's column; on its side beside the list, the header's More alone.
-        let slots: [(name: String, slot: String, marker: String, el: XCUIElement)] = pose == .closed
-            ? [("Back", "columnBack", "markerBack", back), ("More", "columnMore", "markerMore", more)]
-            : [("More", "sideMore", "markerMore", more)]
+        let slots: [(name: String, slot: String, marker: String, read: String, el: XCUIElement)] = pose == .closed
+            ? [("Back", "columnBack", "markerBack", "markerReadBack", back), ("More", "columnMore", "markerMore", "markerReadMore", more)]
+            : [("More", "sideMore", "markerMore", "markerReadMore", more)]
         let read = { (stage: String) -> [String: CGRect] in
             let c = self.caps()
             for s in slots { print("LAMID \(stage) \(s.name) \(s.el.exists ? "\(s.el.frame)" : "none") marker \(c[s.marker].map { "\($0)" } ?? "none")") }
@@ -892,11 +909,20 @@ final class BarUpUITests: XCTestCase {
                 XCTAssertEqual(s.el.frame.midY, m.midY, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
             }
         }
+        // Up to 10 s for the first marker to stand where `ok` says, then 1.5 s for the controls to follow; whether it did.
+        let waitForSystem = { (ok: (CGRect) -> Bool) -> Bool in
+            for _ in 0..<20 {
+                if let m = self.caps()[slots[0].marker], ok(m) { self.pause(1.5); return true }
+                self.pause(0.5)
+            }
+            return false
+        }
         let a0 = read("A0")
         onMarkers("A0", a0)
+        guard let m0 = a0[slots[0].marker] else { print("LAMID VOID A0: no marker"); throw XCTSkip("VOID: no marker at rest") }
         let full = XCUIApplication(bundleIdentifier: "com.vorantx.vory")
         // The script brings the full app to the front to start or end its activity and quits it; once it has come and
-        // gone, the copy back: the wall times of the hold and of the copy's return. The full app never seen is VOID.
+        // gone, the copy back. The wall times of the hold, and of the copy's return once `activate` has (for information).
         let viaFullApp = { (what: String) throws -> (launched: Double, back: Double) in
             let launched = Date().timeIntervalSince1970
             print("BARUP HOLD la-\(what)")
@@ -904,8 +930,9 @@ final class BarUpUITests: XCTestCase {
             for _ in 0..<60 where !came { self.pause(0.5); came = full.state == .runningForeground }
             guard came else { print("LAMID VOID la-\(what): the full app didn't come"); throw XCTSkip("VOID: the full app didn't come") }
             for _ in 0..<60 where full.state != .notRunning { self.pause(0.5) }
-            let back = Date().timeIntervalSince1970
             self.app.activate()
+            let back = Date().timeIntervalSince1970
+            print(String(format: "LAMID la-%@: the copy back at %.3f", what, back))
             return (launched, back)
         }
         // The same chat, in the same process: its log runs from before the full app came.
@@ -918,18 +945,17 @@ final class BarUpUITests: XCTestCase {
         }
         let start = try viaFullApp("start")
         try sameChat("A1", start.launched)
-        pause(3)
-        let a1 = read("A1")
-        guard let m0 = a0[slots[0].marker], let m1 = a1[slots[0].marker], m1.minY - m0.minY > 20 else {
-            print("LAMID VOID A1: the markers didn't move: \(a0[slots[0].marker].map { "\($0)" } ?? "none") to \(a1[slots[0].marker].map { "\($0)" } ?? "none")")
+        guard waitForSystem({ $0.minY - m0.minY > 20 }) else {
+            print("LAMID VOID A1: the markers didn't move in 10 s: \(m0) to \(self.caps()[slots[0].marker].map { "\($0)" } ?? "none")")
             throw XCTSkip("VOID: no activity seen")
         }
-        print(String(format: "LAMID push %.1f", m1.minY - m0.minY))
+        let a1 = read("A1")
+        print(String(format: "LAMID push %.1f", (a1[slots[0].marker]?.minY ?? m0.minY) - m0.minY))
         onMarkers("A1", a1)
         moreMenuOnce(more, "A1")
         let end = try viaFullApp("end")
         try sameChat("A2", end.launched)
-        pause(3)
+        XCTAssertTrue(waitForSystem({ abs($0.minY - m0.minY) <= 1 }), "A2: the markers didn't come back in 10 s")
         let a2 = read("A2")
         for s in slots {
             if let x = a0[s.marker], let y = a2[s.marker] { XCTAssertEqual(y.minY, x.minY, accuracy: 1, "A2: \(s.marker) \(y) not back at \(x)") }
@@ -937,10 +963,11 @@ final class BarUpUITests: XCTestCase {
         onMarkers("A2", a2)
         let log = frameLog()
         for s in slots {
-            guard let from = a0[s.marker]?.midY, let to = a1[s.marker]?.midY else { continue }
-            let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }
-            oneStep(s.name, drawn.filter { $0.t >= start.launched && $0.t < end.launched }, from: from, to: to, back: start.back, "start")
-            oneStep(s.name, drawn.filter { $0.t >= end.launched }, from: to, to: from, back: end.back, "end")
+            guard let from = a0[s.marker], let to = a1[s.marker] else { continue }
+            let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }, reads = log.filter { $0.name == s.read && $0.f.width > 0 }
+            let w1 = { (x: (t: Double, name: String, f: CGRect)) in x.t >= start.launched && x.t < end.launched }
+            followsSystem(s.name, drawn.filter(w1), reads: reads.filter(w1), from: from, to: to, "start")
+            followsSystem(s.name, drawn.filter { $0.t >= end.launched }, reads: reads.filter { $0.t >= end.launched }, from: to, to: from, "end")
         }
         app.terminate()
     }
