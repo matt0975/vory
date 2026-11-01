@@ -106,12 +106,20 @@ import UIKit
 /// items 80 closed; no safe area, margin or status bar frame says where the status ends). A chat's Back and More are drawn
 /// centred on them (`MorphTopBar.columnFrame`, `ChatHeader.messagesSide`). Kept per window shape, and whether Back is
 /// there (beside the list on its side it isn't, and More takes Back's place), and across launches, so a launch, or a turn
-/// into a shape seen before, draws them where they last stood. Only a settled place is kept (`Settle`).
+/// into a shape seen before, draws them where they last stood; before any, where the system stood them when measured
+/// (`fallbackTops`). Only a settled place is kept (`Settle`).
 @MainActor @Observable final class StripMarkers {
     static let shared = StripMarkers()
     enum Kind: String { case back, more }
     /// The markers' frames, window space, by `key`, then kind.
     private(set) var byShape: [String: [String: CGRect]]
+    /// On the Duo's side or as a book, the chat on show and whether Back's marker is there (`ConversationView`), for the
+    /// touch catchers over the system's floating bar (`SideStripCatchers`); nil anywhere else.
+    struct Side: Equatable { let chat: ObjectIdentifier; var withBack: Bool }
+    var side: Side?
+    /// The catcher being pressed, so the page's Back or More under it shows the press, as closed's controls press
+    /// (`StripPressMirror`).
+    var pressed: Kind?
     @ObservationIgnored private let defaults: UserDefaults
     private static let storeKey = "vory.stripMarkers"
 
@@ -125,6 +133,27 @@ import UIKit
     nonisolated static func key(shape: String, withBack: Bool) -> String { withBack ? shape : shape + " solo" }
 
     func frame(_ kind: Kind, for key: String) -> CGRect? { byShape[key]?[kind.rawValue] }
+
+    /// Where the system stands the markers, for a shape none is read for yet: our 44 pt capsules' tops, centred on the
+    /// system's own items (38 by 48) as measured on the Duo (2026-10-31) at default text with no Live Activity. Closed,
+    /// the items at 238 and 308, so 240 and 310; at XXXL at 244 and 314, so 246 and 316. On its side with Back, 125 and
+    /// 195, so 127 and 197; More alone beside the list at 125 (at XXXL too), so 127. Nothing else is measured (on its
+    /// side with Back at XXXL, the other text sizes): those take the default. A first open with a Live Activity already
+    /// up still steps once, 80 pt closed and 92 on its side, as no inset follows the status.
+    nonisolated static func fallbackTops(closed: Bool, withBack: Bool, xxxl: Bool) -> [CGFloat] {
+        if closed { return xxxl ? [246, 316] : [240, 310] }
+        return withBack ? [127, 197] : [127]
+    }
+
+    /// A marker's middle, window space: its settled place for the window's shape (with Back's marker there or not), else
+    /// where the system stood it when measured (`fallbackTops`), in the strip's middle line.
+    func centre(_ kind: Kind, in g: WindowGeometry, withBack: Bool, closed: Bool, xxxl: Bool) -> CGPoint {
+        let key = Self.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: withBack)
+        if let f = frame(kind, for: key) { return CGPoint(x: f.midX, y: f.midY) }
+        let tops = Self.fallbackTops(closed: closed, withBack: withBack, xxxl: xxxl)
+        let x = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
+        return CGPoint(x: x, y: (kind == .more && withBack ? tops[1] : tops[0]) + 22)
+    }
 
     /// Whether a frame (window space) stands in the window's side strip: its middle inside the safe area's inset on the
     /// strip's side.
@@ -175,13 +204,14 @@ import UIKit
 /// while the list stands beside the chat on its side) and Chat options, each an icon and a title, as Apple's iPhone Duo
 /// notes ask (a custom view never goes vertical, and SwiftUI's toolbar items report no window frame: the probes,
 /// 2026-10-31). They're the chat page's own item groups, put back whenever the page's navigation item is rebuilt (a turn
-/// rebuilds it). Never seen and never a control: no tint, no glass, out of VoiceOver, no action, and their views at alpha 0
-/// and out of the hit test (`markerViews`): on its side they stand in the split view's strip, over the page, and took the
-/// taps meant for our Back and More (the diagnosis, 2026-10-31); the bar that carries them takes no touches while it does
-/// (with the split's sidebar toggle taken off the chat's page, nothing in it is a control). Each is read in the window
-/// (`frame(in:)`) on the layout, safe-area and margin passes of the page, its navigation controller, its bar, the split
-/// view and the window, and on the strip's trait changes, and kept once settled; after the items change or Back comes or
-/// goes they're read again a moment later, as the split lays its strip out again with no event of ours (the diagnosis).
+/// rebuilds it). Never seen and never a control: no tint, no glass, out of VoiceOver, no action, and their views at
+/// alpha 0, out of the hit test and, with everything under them, out of accessibility (`markerViews`,
+/// `takeAccessibility`). On its side the system draws them in the split view's floating bar, over the page, where they
+/// still took the taps meant for our Back and More; the catchers above it take those (`SideStripCatchers`, the
+/// diagnosis, 2026-10-31). Each is read in the window (`frame(in:)`) on the layout, safe-area and margin passes of the
+/// page, its navigation controller, its bar, the split view and the window, and on the strip's trait changes, and kept
+/// once settled; after the items change or Back comes or goes they're read again a moment later, as the split lays its
+/// strip out again with no event of ours (the diagnosis).
 struct StripMarkerReader: UIViewControllerRepresentable {
     /// Whether Back's marker is there: not while the list stands beside the chat. The chat page says so from where its
     /// pane starts, as the header does (`ChatHeader.listBeside`): the page controller spans the window there, the list a
@@ -195,8 +225,6 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         reader.back = back
         reader.read()
     }
-
-    static func dismantleUIViewController(_ reader: Reader, coordinator: ()) { releaseBars() }
 
     /// Our items as a page's groups (Back only when asked), set again only if anything replaced them, so a read never
     /// lays the bar out again by itself. True when it set them.
@@ -235,11 +263,35 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         return found
     }
 
-    /// The bars that carry markers and take no touches for it, given back when their page goes (`releaseBars`).
-    @MainActor private static let dimmed = NSHashTable<UINavigationBar>.weakObjects()
-    @MainActor static func releaseBars() {
-        dimmed.allObjects.forEach { $0.isUserInteractionEnabled = true }
-        dimmed.removeAllObjects()
+    /// A view's accessibility as it stood before the markers' rule took it, to give back (`giveAccessibility`).
+    struct TakenAccessibility { weak var view: UIView?; let element: Bool; let hidden: Bool }
+
+    /// The markers' views and everything under them out of accessibility. The item's own settings don't reach its
+    /// views: the label inside each ('Back', 'More') stood as an element, the likely source of an audit finding with no
+    /// element the markers brought (the accessibility audit, 2026-10-31). Set every time, as the system can rebuild
+    /// them; each view's settings as they were are returned the first time it's taken (`taken` holds those already
+    /// recorded).
+    @MainActor static func takeAccessibility(from views: [UIView], taken: [TakenAccessibility] = []) -> [TakenAccessibility] {
+        var out: [TakenAccessibility] = []
+        func walk(_ v: UIView) {
+            if !taken.contains(where: { $0.view === v }), !out.contains(where: { $0.view === v }) {
+                out.append(TakenAccessibility(view: v, element: v.isAccessibilityElement, hidden: v.accessibilityElementsHidden))
+            }
+            v.isAccessibilityElement = false
+            v.accessibilityElementsHidden = true
+            v.subviews.forEach(walk)
+        }
+        views.forEach(walk)
+        return out
+    }
+
+    /// The views' accessibility given back as it stood.
+    @MainActor static func giveAccessibility(_ taken: [TakenAccessibility]) {
+        for t in taken {
+            guard let v = t.view else { continue }
+            v.isAccessibilityElement = t.element
+            v.accessibilityElementsHidden = t.hidden
+        }
     }
 
     final class Reader: UIViewController {
@@ -252,6 +304,7 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         private var lastKey: String?
         private var lastBack: Bool?
         private var again: Task<Void, Never>?
+        private var axTaken: [StripMarkerReader.TakenAccessibility] = []
 
         private func item(_ kind: StripMarkers.Kind) -> UIBarButtonItem { kind == .back ? backItem : moreItem }
 
@@ -294,7 +347,8 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             settles = [:]
             again?.cancel()
             again = nil
-            StripMarkerReader.releaseBars()
+            StripMarkerReader.giveAccessibility(axTaken)
+            axTaken = []
             if let i = page()?.navigationItem {
                 if i.leadingItemGroups.flatMap(\.barButtonItems).contains(where: { $0 === backItem }) { i.leadingItemGroups = [] }
                 if i.trailingItemGroups.flatMap(\.barButtonItems).contains(where: { $0 === moreItem }) { i.trailingItemGroups = [] }
@@ -319,10 +373,6 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             let changed = StripMarkerReader.install(on: page.navigationItem, back: back, backItem: backItem, moreItem: moreItem)
             let flipped = lastBack.map { $0 != back } ?? false
             lastBack = back
-            if let bar = page.navigationController?.navigationBar, bar.isUserInteractionEnabled {
-                bar.isUserInteractionEnabled = false
-                StripMarkerReader.dimmed.add(bar)
-            }
             #if DEBUG
             if !back, MorphFramesProbe.isOn { MorphFramesProbe.marks["markerBack"] = nil }
             #endif
@@ -353,14 +403,16 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             }
         }
 
-        /// Our markers' views at alpha 0 and out of the hit test, found under the split view (or the navigation
-        /// controller's view) by `markerViews`. Only after the items change, Back comes or goes, or a place is kept.
+        /// Our markers' views at alpha 0, out of the hit test and out of accessibility, found under the split view (or the
+        /// navigation controller's view) by `markerViews`. Only after the items change, Back comes or goes, or a place is kept.
         private func hideViews(in window: UIWindow) {
             guard let root = splitViewController?.view ?? navigationController?.view else { return }
             let kinds: [StripMarkers.Kind] = back ? [.back, .more] : [.more]
             let targets = kinds.compactMap { k in item(k).frame(in: window).flatMap { $0.width > 0 ? (item(k).title ?? "", $0) : nil } }
             let views = StripMarkerReader.markerViews(in: root, targets: targets)
             views.forEach { $0.alpha = 0; $0.isUserInteractionEnabled = false }
+            axTaken.removeAll { $0.view == nil }
+            axTaken += StripMarkerReader.takeAccessibility(from: views, taken: axTaken)
             #if DEBUG
             // For the bar's checks: how many of the laid-out markers' views were found and hidden (the readout's "stripHide":
             // found, then laid out).
@@ -421,6 +473,76 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         override func layoutSubviews() { super.layoutSubviews(); onEvent?() }
         override func safeAreaInsetsDidChange() { super.safeAreaInsetsDidChange(); onEvent?() }
         override func layoutMarginsDidChange() { super.layoutMarginsDidChange(); onEvent?() }
+    }
+}
+
+/// Touch catchers over the system's floating bar on the Duo's side and as a book (#555): there the strip's markers stand in
+/// the split view's own floating bar, over the chat's page, and its views took the taps meant for our Back and More, which
+/// the page draws under it (the diagnosis, 2026-10-31). Two clear 44 pt targets at their places, above the bar: Back's sends
+/// the chat its back request, as the page's own Back does; More's is the same menu sending the chat its requests, so it
+/// opens where More stands. Never seen and out of VoiceOver: the page's Back and More stay the elements, in 44's order, and
+/// show the press (`StripPressMirror`). Only while a chat shows there (`StripMarkers.side`).
+struct SideStripCatchers: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        if let side = StripMarkers.shared.side, let chat = model.visibleChat, ObjectIdentifier(chat) == side.chat {
+            GeometryReader { proxy in
+                let o = proxy.frame(in: .global).origin, g = windowGeometry, xxxl = typeSize == .xxxLarge
+                let more = StripMarkers.shared.centre(.more, in: g, withBack: side.withBack, closed: false, xxxl: xxxl)
+                ZStack(alignment: .topLeading) {
+                    if side.withBack {
+                        let back = StripMarkers.shared.centre(.back, in: g, withBack: true, closed: false, xxxl: xxxl)
+                        Button { model.chatRequest = .init(.back) } label: { Self.target }
+                            .buttonStyle(StripCatcherStyle(kind: .back))
+                            .position(x: back.x - o.x, y: back.y - o.y)
+                    }
+                    Menu {
+                        ChatMenuItems(chat: chat, onProfile: { model.chatRequest = .init(.profile) }, onRename: { model.chatRequest = .init(.rename) },
+                                      onContext: { model.chatRequest = .init(.context) }, onNewChat: { model.chatRequest = .init(.newChat) },
+                                      onClose: { model.chatRequest = .init(.close) })
+                    } label: { Self.target }
+                    .menuStyle(.button).buttonStyle(StripCatcherStyle(kind: .more))
+                    .position(x: more.x - o.x, y: more.y - o.y)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            }
+            .accessibilityHidden(true)
+            // A press the catchers' going cut short leaves no control grown.
+            .onDisappear { StripMarkers.shared.pressed = nil }
+        }
+    }
+
+    /// A 44 pt round target, clear: its shape takes the touch.
+    private static var target: some View { Color.clear.frame(width: 44, height: 44).contentShape(.circle) }
+}
+
+/// A catcher's press, passed to the page's control under it (`StripMarkers.pressed`); the catcher itself draws nothing.
+struct StripCatcherStyle: ButtonStyle {
+    let kind: StripMarkers.Kind
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.onChange(of: configuration.isPressed) { _, pressed in
+            if pressed { StripMarkers.shared.pressed = kind } else if StripMarkers.shared.pressed == kind { StripMarkers.shared.pressed = nil }
+        }
+    }
+}
+
+/// The press of the catcher over this control (`SideStripCatchers`), in our bar's press look (`MorphPressStyle`: the fill
+/// and the grow, Reduce Motion the fill alone, none with `-vory-press-style-off`), as closed's controls press.
+struct StripPressMirror: ViewModifier {
+    let kind: StripMarkers.Kind
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let pressed = StripMarkers.shared.pressed == kind && !MorphPressStyle.off
+        content
+            .scaleEffect(pressed && !reduceMotion ? MorphPressStyle.pressedScale : 1)
+            .background { Circle().fill(MorphPressStyle.fill(scheme)).padding(3).opacity(pressed ? 1 : 0) }
+            .animation(.easeOut(duration: pressed ? 0.08 : 0.2), value: pressed)
     }
 }
 

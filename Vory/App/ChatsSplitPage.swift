@@ -56,6 +56,13 @@ struct ChatsSplitPage: View {
                     .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
             } detail: {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
+                    #if os(iOS)
+                    // On the Duo's side (or as a book) with a chat open, the split's own sidebar toggle stood in the
+                    // page's bar over the chat's face with the list hidden (Back, or the split's edge swipe, brings the
+                    // list back, as before). It's the split's item, in this column's bar, so it comes off here; the
+                    // list's own "Hide Sidebar", the empty detail's toggle and the iPad's are kept (#555).
+                    .toolbar(removing: model.tabBarVertical && !model.chatPath.isEmpty ? .sidebarToggle : nil)
+                    #endif
             }
             .navigationSplitViewStyle(.balanced)
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { leading = $0 }

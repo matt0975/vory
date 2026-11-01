@@ -230,6 +230,85 @@ import Testing
         withExtendedLifetime(window) {}
     }
 
+    @Test func theMarkersViewsLeaveAccessibilityAndNothingElse() {
+        // The system's marker: a control with the label inside it standing as an element (the accessibility audit,
+        // 2026-10-31), and beside it in the strip a view of someone else's that is one. In a window, found as the app finds
+        // them.
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+        let root = UIView(frame: window.bounds), strip = UIView(frame: CGRect(x: 382, y: 0, width: 84, height: 678))
+        window.addSubview(root)
+        root.addSubview(strip)
+        let marker = UIControl(frame: CGRect(x: 17, y: 238, width: 38, height: 48))
+        marker.accessibilityLabel = "Back"
+        strip.addSubview(marker)
+        let label = UILabel(frame: marker.bounds), glyph = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 10))
+        label.text = "Back"
+        label.isAccessibilityElement = true
+        marker.addSubview(label)
+        label.addSubview(glyph)
+        let other = UILabel(frame: CGRect(x: 17, y: 400, width: 38, height: 20))
+        other.isAccessibilityElement = true
+        strip.addSubview(other)
+        let views = StripMarkerReader.markerViews(in: root, targets: [("Back", CGRect(x: 399, y: 238, width: 38, height: 48))])
+        #expect(same(views, [marker]))
+        let before = [marker, label, glyph].map { ($0.isAccessibilityElement, $0.accessibilityElementsHidden) }
+
+        let taken = StripMarkerReader.takeAccessibility(from: views)
+        #expect(taken.count == 3)
+        for v in [marker, label, glyph] {
+            #expect(!v.isAccessibilityElement)
+            #expect(v.accessibilityElementsHidden)
+        }
+        // Nothing above or beside them changes.
+        #expect(!strip.accessibilityElementsHidden)
+        #expect(!root.accessibilityElementsHidden)
+        #expect(other.isAccessibilityElement && !other.accessibilityElementsHidden)
+
+        // The system sets the label back up: the next read takes it again, and records nothing twice.
+        label.isAccessibilityElement = true
+        #expect(StripMarkerReader.takeAccessibility(from: views, taken: taken).isEmpty)
+        #expect(!label.isAccessibilityElement)
+
+        // Given back as they stood.
+        StripMarkerReader.giveAccessibility(taken)
+        let after = [marker, label, glyph].map { ($0.isAccessibilityElement, $0.accessibilityElementsHidden) }
+        #expect(after.elementsEqual(before, by: ==))
+        withExtendedLifetime(window) {}
+    }
+
+    @Test func beforeAnyPlaceIsReadTheMeasuredOnesStand() {
+        // The system's own places at default text with no Live Activity (measured on the Duo, 2026-10-31): our 44 pt tops,
+        // centred on its 48 pt items. At XXXL closed it stood them 6 pt lower; on its side More alone stood where it does
+        // at default.
+        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: false) == [240, 310])
+        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: true) == [246, 316])
+        #expect(StripMarkers.fallbackTops(closed: false, withBack: true, xxxl: false) == [127, 197])
+        #expect(StripMarkers.fallbackTops(closed: false, withBack: false, xxxl: false) == [127])
+        #expect(StripMarkers.fallbackTops(closed: false, withBack: false, xxxl: true) == [127])
+        // On its side with Back at XXXL wasn't measured: the default.
+        #expect(StripMarkers.fallbackTops(closed: false, withBack: true, xxxl: true) == [127, 197])
+        withStore { d in
+            let markers = StripMarkers(defaults: d), g = WindowGeometry()
+            // Closed (the strip on the right, its middle 48 from the edge, where the system's 38 pt items stood at 399).
+            g.bounds = CGRect(x: 0, y: 0, width: 466, height: 678)
+            g.safeArea = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 84)
+            #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 262))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 332))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: true) == CGPoint(x: 418, y: 338))
+            // A settled place wins, for its own shape only.
+            markers.settled(.more, CGRect(x: 399, y: 388, width: 38, height: 48), for: StripMarkers.key(shape: closed, withBack: true))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 412))
+            // On its side: Back over More with the list hidden, More alone in Back's place beside it.
+            g.bounds = CGRect(x: 0, y: 0, width: 951, height: 669)
+            #expect(markers.centre(.back, in: g, withBack: true, closed: false, xxxl: false) == CGPoint(x: 903, y: 149))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: false, xxxl: false) == CGPoint(x: 903, y: 219))
+            #expect(markers.centre(.more, in: g, withBack: false, closed: false, xxxl: false) == CGPoint(x: 903, y: 149))
+            // The strip on the left: its middle 48 from the left edge.
+            g.safeArea = EdgeInsets(top: 0, leading: 84, bottom: 0, trailing: 0)
+            #expect(markers.centre(.more, in: g, withBack: false, closed: false, xxxl: false).x == 48)
+        }
+    }
+
     /// The settled place (`StripMarkers.Settle`): taken once it has stood 250 ms with no change.
     private let a0 = CGRect(x: 399, y: 238, width: 38, height: 48), transient = CGRect(x: 399, y: 175, width: 38, height: 48)
 

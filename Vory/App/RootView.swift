@@ -308,6 +308,10 @@ struct MainTabView: View {
             }
             // The morph prototype's top controls, over every page and outside the stacks.
             .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphBarHost() } }
+            // On the Duo's side and as a book, the open chat's Back and More take their taps here, above the split's
+            // floating bar that stands over the strip (#555). The page's header still draws them and holds them for
+            // VoiceOver.
+            .overlay { SideStripCatchers().ignoresSafeArea() }
             // Reserves the bar's height (or width) so lists end before it; the bar itself is
             // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
             // use the full height. The bar is never removed from the tree: an insert/remove

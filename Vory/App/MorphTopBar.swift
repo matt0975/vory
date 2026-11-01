@@ -544,17 +544,12 @@ struct MorphTopBar: View {
     /// A chat's Back or More in the closed Duo's status strip, in the bar's space: 44 pt, centred on the marker the system
     /// laid out there for it (`StripMarkers`: under the status, and moved down with it as Live Activities arrive, which
     /// nothing else the app can read follows, #555); before a marker is read for this window's shape, the one last read
-    /// for it; before any, where 44 stood them, centred `VoryTabBar.stripCentreFromEdge` from the window's edge with their
-    /// tops at `TopBarRoom.statusColumnTops`. The bar's space starts at the safe area's leading edge and top, inside the
-    /// bar's side inset and padding.
+    /// for it; before any, where the system stood it when measured (`StripMarkers.fallbackTops`). The bar's space
+    /// starts at the safe area's leading edge and top, inside the bar's side inset and padding.
     private func columnFrame(_ slot: MorphSlot) -> CGRect? {
         guard slot.inColumn, stripClosed, !inBand else { return nil }
-        let g = windowGeometry, tops = TopBarRoom.statusColumnTops(closed: true)
-        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: true)
-        let onTrailing = g.safeArea.trailing >= g.safeArea.leading
-        let fixed = CGPoint(x: onTrailing ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge,
-                            y: (slot == .columnBack ? tops[0] : tops[1]) + 22)
-        let centre = StripMarkers.shared.frame(slot == .columnBack ? .back : .more, for: key).map { CGPoint(x: $0.midX, y: $0.midY) } ?? fixed
+        let g = windowGeometry
+        let centre = StripMarkers.shared.centre(slot == .columnBack ? .back : .more, in: g, withBack: true, closed: true, xxxl: typeSize == .xxxLarge)
         return CGRect(x: centre.x - 22 - g.safeArea.leading - Self.sideInset, y: centre.y - 22 - g.safeArea.top - topPadding, width: 44, height: 44)
     }
     /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
@@ -1366,12 +1361,14 @@ struct MorphPressStyle: ButtonStyle {
     /// The pressed control's size, the one number to change the look by.
     static let pressedScale: CGFloat = 1.05
     static let off = ProcessInfo.processInfo.arguments.contains("-vory-press-style-off")
+    /// The fill behind a pressed control.
+    static func fill(_ scheme: ColorScheme) -> Color { scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12) }
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         let pressed = configuration.isPressed && !Self.off
-        let fill = scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12)
+        let fill = Self.fill(scheme)
         configuration.label
             .scaleEffect(pressed && !reduceMotion ? Self.pressedScale : 1)
             .background {

@@ -551,6 +551,12 @@ final class BarUpUITests: XCTestCase {
                     } else { XCTFail("no thread row to read before the header tap") }
                 }
             }
+        } else {
+            // #555's toggle comes off only on the Duo's side. Off it, which one stands is printed on every run (a phone in
+            // landscape included, the base's beside the fix's), and the iPad's split keeps its own.
+            let show = app.buttons["Show Sidebar"].exists, hide = app.buttons["Hide Sidebar"].exists
+            print("CHATFRAMES toggle: \(show && hide ? "Show and Hide" : show ? "Show" : hide ? "Hide" : "none")")
+            if UIDevice.current.userInterfaceIdiom == .pad { XCTAssertTrue(show || hide, "the iPad's split lost its sidebar toggle") }
         }
         // VoiceOver: Back, Chat info, More, in that order wherever they stand.
         if let stops = voiceOverStops() {
@@ -590,6 +596,32 @@ final class BarUpUITests: XCTestCase {
             print("CHATFRAMES thread start \(first.map { "\($0.identifier) \($0.frame)" } ?? "none") row bottom \(rowBottom)")
             if let first { XCTAssertGreaterThanOrEqual(first.frame.minY, rowBottom - 1, "the thread's start \(first.frame) under the band (bottom \(rowBottom))") }
         }
+        // #555: on its side and as a book, beside the list and with it hidden: More, taken by the catcher over the system's
+        // floating bar, opens its menu where the page's More stands (its first item's frame printed, and a still), and
+        // Rename from it opens one dialog; a long press on Chat info (no catcher there) opens its own menu, whose Rename
+        // opens one dialog too.
+        if pose == .side || pose == .book, more.exists {
+            let rename = app.buttons["Rename chat"].firstMatch
+            let renameOnce = { (from: String) in
+                rename.tap()
+                let fields = self.app.textFields.matching(identifier: "rename.name")
+                XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 3), "\(from) opened no Rename dialog")
+                XCTAssertEqual(fields.count, 1, "\(from) opened \(fields.count) Rename dialogs")
+                self.app.buttons["Cancel"].firstMatch.tap()
+                XCTAssertTrue(fields.firstMatch.waitForNonExistence(timeout: 3), "\(from)'s Rename dialog didn't close")
+                self.pause(1)
+            }
+            more.tap()
+            if rename.waitForExistence(timeout: 3) {
+                let first = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Model:'")).firstMatch
+                print("CHATFRAMES more menu \(listHidden ? "list hidden" : "beside the list"): More \(more.frame), first item "
+                      + (first.exists ? "\(first.label) \(first.frame)" : "not found") + ", Rename chat \(rename.frame)")
+                print("BARUP HOLD more-menu"); pause(2)
+                renameOnce("More's Rename")
+            } else { XCTFail("More didn't open its menu") }
+            info.press(forDuration: 0.8)
+            if rename.waitForExistence(timeout: 3) { renameOnce("Chat info's Rename") } else { XCTFail("a long press on Chat info didn't open its menu") }
+        }
         // With the list hidden, Back pops the chat (the split's empty detail).
         if listHidden, back.exists {
             back.tap(); pause(2)
@@ -601,12 +633,6 @@ final class BarUpUITests: XCTestCase {
                 show.tap(); pause(1.5)
                 XCTAssertTrue(app.buttons["Hide Sidebar"].firstMatch.waitForExistence(timeout: 3), "the list didn't come back after the pop")
             } else { print("CHATFRAMES no Show Sidebar on the empty detail") }
-        }
-        // #555: on its side beside the list, our More opens its menu (not the marker under it), and closes again.
-        if (pose == .side || pose == .book) && !listHidden, more.exists {
-            more.tap(); pause(1)
-            XCTAssertTrue(app.buttons["Rename chat"].firstMatch.waitForExistence(timeout: 3), "More didn't open its menu")
-            more.tap(); pause(1)
         }
         // #555: closed, after Back pops the chat the list's own bar takes touches again (the markers' bar gave them up while
         // the chat showed): its search field takes the tap.

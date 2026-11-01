@@ -75,6 +75,10 @@ struct ConversationView: View {
     /// Where the chat's pane starts in the window: past the window's leading safe edge, the list stands beside the chat
     /// (on the Duo's side), and the strip's markers have no Back (`StripMarkerReader`), as the header has none.
     @State private var paneMinX: CGFloat = 0
+    /// Whether this page is on show (between its appearing and its going): with its tab in front (`botsLive`), it's the
+    /// chat the side strip's catchers act for (`StripMarkers.side`).
+    @State private var onScreen = false
+    @Environment(\.botsLive) private var tabLive
     #endif
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
@@ -115,12 +119,11 @@ struct ConversationView: View {
                     .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
                     .navigationBarBackButtonHidden(model.tabBarVertical)
                     .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
-                    // Not the split's sidebar toggle on the chat's page: with the bar shown on its side and the list hidden,
-                    // it drew over the face (the list column keeps its own; Back, or the split's edge swipe, brings the list
-                    // back, as before). Elsewhere the page's bar is hidden, so nothing else changes.
-                    .toolbar(removing: .sidebarToggle)
-                    // The bar the markers took touches from gets them back as the page goes, a pop mid-way included.
-                    .onDisappear { StripMarkerReader.releaseBars() }
+                    // On the Duo's side and as a book, this chat for the catchers over the system's floating bar
+                    // (`SideStripCatchers`), while it's on show with its tab in front.
+                    .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side, chat: chat) }
+                    .onAppear { onScreen = true }
+                    .onDisappear { onScreen = false; publishStripSide(nil, chat: chat) }
                     .background {
                         if model.tabBarVertical {
                             StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1).frame(width: 0, height: 0)
@@ -189,7 +192,14 @@ struct ConversationView: View {
                     // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
                     // here; only the chat the bar shows answers.
                     .onChange(of: model.chatRequest) { _, r in
-                        guard let r, MorphState.shared.chat === chat else { return }
+                        // On the Duo's side and as a book, the chat the catchers act for, and no other; elsewhere the
+                        // morph's.
+                        #if os(iOS)
+                        let mine = StripMarkers.shared.side.map { $0.chat == ObjectIdentifier(chat) } ?? (MorphState.shared.chat === chat)
+                        #else
+                        let mine = MorphState.shared.chat === chat
+                        #endif
+                        guard let r, mine else { return }
                         model.chatRequest = nil
                         switch r.kind {
                         case .back: dismiss()
@@ -326,6 +336,31 @@ struct ConversationView: View {
         #endif
     }
 
+    #if os(iOS)
+    /// On the Duo's side or as a book, with this page on show and its tab in front: this chat, and whether Back's marker is
+    /// there (not while the list stands beside it). Nil anywhere else.
+    private func stripSide(_ chat: ChatSession) -> StripMarkers.Side? {
+        guard model.tabBarVertical, model.wideLayout, onScreen, tabLive else { return nil }
+        return StripMarkers.Side(chat: ObjectIdentifier(chat), withBack: paneMinX <= windowGeometry.safeArea.leading + 1)
+    }
+
+    /// This chat's side state for the catchers; cleared only when it's this chat's, so a page going doesn't clear the next,
+    /// and a press cleared with it, so a pop or a turn mid-press leaves no control grown.
+    private func publishStripSide(_ side: StripMarkers.Side?, chat: ChatSession) {
+        if let side { StripMarkers.shared.side = side }
+        else if StripMarkers.shared.side?.chat == ObjectIdentifier(chat) { StripMarkers.shared.side = nil; StripMarkers.shared.pressed = nil }
+    }
+    #endif
+
+    /// The header's Back: where the side strip's catchers act for this chat, the same back request their Back sends (one
+    /// handler, `chatRequest`); elsewhere, as ever, the page goes.
+    private func backFromHeader(_ chat: ChatSession) {
+        #if os(iOS)
+        if StripMarkers.shared.side?.chat == ObjectIdentifier(chat) { model.chatRequest = .init(.back); return }
+        #endif
+        dismiss()
+    }
+
     private func open() async {
         guard let runtime = model.runtime else { loadError = "No gateway connected."; return }
         do {
@@ -438,7 +473,7 @@ struct ConversationView: View {
         FoldReader { fold in
             // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
             ChatHeader(chat: chat, fold: fold, showBack: true,
-                       onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
+                       onBack: { backFromHeader(chat) }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                        onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                 // The header's own size and bottom edge (the reader around it is thread-sized):
                 // its height, and its bottom in window space for the thread's top margin.
@@ -754,16 +789,10 @@ struct ChatHeader: View {
         let back = showBack && sideFrame.width > 0 && !listBeside
         let g = windowGeometry
         // Each one's middle, window space: its marker's (or the last one read for this shape, with Back's marker there or
-        // not, as the list says); before any, where 44 stood them, the status column's middle and their tops at
-        // `TopBarRoom.statusColumnTops`.
-        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing),
-                                   withBack: !listBeside)
-        let columnX = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
-        let tops = TopBarRoom.statusColumnTops(closed: false)
-        let place = { (kind: StripMarkers.Kind, top: CGFloat) in
-            StripMarkers.shared.frame(kind, for: key).map { CGPoint(x: $0.midX, y: $0.midY) } ?? CGPoint(x: columnX, y: top + 22)
-        }
-        let backAt = place(.back, tops[0]), more = place(.more, listBeside ? tops[0] : tops[1])
+        // not, as the list says); before any, where the system stood it when measured (`StripMarkers.fallbackTops`).
+        let xxxl = typeSize == .xxxLarge
+        let backAt = StripMarkers.shared.centre(.back, in: g, withBack: true, closed: false, xxxl: xxxl)
+        let more = StripMarkers.shared.centre(.more, in: g, withBack: !listBeside, closed: false, xxxl: xxxl)
         return HStack(spacing: 0) {
             sideChatInfo
             Spacer(minLength: 0)
@@ -797,12 +826,16 @@ struct ChatHeader: View {
                 .accessibilityFocused($backFocused)
                 .accessibilitySortPriority(3)
                 .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                // Touched through the catcher over it (`SideStripCatchers`): its press shows here, as closed's
+                // controls press.
+                .modifier(StripPressMirror(kind: .back))
                 .offset(x: backAt.x - 22 - sideFrame.minX, y: backAt.y - 22 - sideFrame.minY)
             }
         }
         .overlay(alignment: .topLeading) {
             if showsActions, sideFrame.width > 0 {
                 moreMenu.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .modifier(StripPressMirror(kind: .more))
                     .offset(x: more.x - 22 - sideFrame.minX, y: more.y - 22 - sideFrame.minY)
             }
         }
