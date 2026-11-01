@@ -1045,7 +1045,10 @@ struct AboutView: View {
                 }
                 .accessibilityHint("Copies the address")
                 Link(destination: URL(string: "https://vory.dev/privacy/")!) { Label("Privacy policy", systemImage: "hand.raised") }
+                // The site's name for VoiceOver, not its bare address read out letter by letter (#587).
                 Link(destination: URL(string: "https://vory.dev")!) { Label("vory.dev", systemImage: "safari") }
+                    .accessibilityLabel("Vory website")
+                    .accessibilityIdentifier("about.website")
                 // Vory is open source: the code anyone can read, and the licence it is under.
                 Link(destination: Self.sourceURL) {
                     LabeledContent { Text("MIT licence").foregroundStyle(.secondary) }

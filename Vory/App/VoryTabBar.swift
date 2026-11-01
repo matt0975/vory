@@ -274,6 +274,10 @@ struct VoryTabBar: View {
             if let b = badge(for: tab) { b.offset(x: 14, y: 4) }
         }
         .accessibilityElement(children: .ignore)
+        // The whole slot is the tab's for VoiceOver and the accessibility audit, not just its icon, which was all the
+        // element took without a shape of its own (#588; as the chat's dock, #564). Accessibility only: a touch still goes
+        // through the bar's gesture.
+        .contentShape(.accessibility, Rectangle())
         .accessibilityLabel(tab.title)
         .accessibilityIdentifier("tab.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
