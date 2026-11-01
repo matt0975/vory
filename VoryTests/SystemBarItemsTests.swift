@@ -374,19 +374,20 @@ import Testing
     }
 
     @Test func theMarkersAreReadOnlyInFront() {
+        // Read into values first: inside #expect, `.background` alone led the macro to a call whose result it dropped
+        // (the units, 2026-11-01).
+        let states: [UIScene.ActivationState?] = [.foregroundActive, .foregroundInactive, .background, .unattached, nil]
         // Never on the way out (the switcher's picture), in the background, or before a scene is there.
-        #expect(StripMarkers.reads(.foregroundActive))
-        #expect(!StripMarkers.reads(.foregroundInactive))
-        #expect(!StripMarkers.reads(.background))
-        #expect(!StripMarkers.reads(.unattached))
-        #expect(!StripMarkers.reads(nil))
+        let reads = states.map { StripMarkers.reads($0) }
+        #expect(reads == [true, false, false, false, false])
         // The tick: on its side with the chat on show, the reader on screen and the app in front; closed and upright
         // (not on its side), off screen or out of front, never.
-        #expect(StripMarkers.ticks(.foregroundActive, onSide: true, shown: true))
-        #expect(!StripMarkers.ticks(.foregroundActive, onSide: false, shown: true))
-        #expect(!StripMarkers.ticks(.foregroundActive, onSide: true, shown: false))
-        #expect(!StripMarkers.ticks(.foregroundInactive, onSide: true, shown: true))
-        #expect(!StripMarkers.ticks(.background, onSide: true, shown: true))
+        let ticks = states.map { StripMarkers.ticks($0, onSide: true, shown: true) }
+        #expect(ticks == [true, false, false, false, false])
+        let offSide = StripMarkers.ticks(.foregroundActive, onSide: false, shown: true)
+        let offScreen = StripMarkers.ticks(.foregroundActive, onSide: true, shown: false)
+        #expect(offSide == false)
+        #expect(offScreen == false)
     }
 
     @Test func aTickThatFindsTheSamePlaceChangesNothing() {
