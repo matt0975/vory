@@ -719,6 +719,18 @@ struct MorphTopBar: View {
 
     // MARK: The capsules
 
+    /// Whether the slot's control is a button across the slot (`CapsuleFrame.squareHit`, #584), for the set the bar is
+    /// heading to, as the slot's controls follow it: a chat's Back (but not the face's empty slot), a page's Back where the
+    /// title was, Files' Home. A menu (More, the bot menu) and the title are not.
+    private func squareHit(_ slot: MorphSlot) -> Bool {
+        if shownTarget < 0.5 {
+            if state.chat != nil, chatHas(slot) { return (slot == .lead || slot == .columnBack) && !(messagesBar && slot == faceSlot) }
+            return slot == .mid && (state.pushedTab != nil || state.opening)
+        }
+        if slot == .lead, selecting == nil, case .filesHome = tabChrome(model.selectedTab).lead { return true }
+        return false
+    }
+
     @ViewBuilder private func capsule(_ slot: MorphSlot) -> some View {
         // Whether this page (or the chat) has the slot at all: from the page's chrome, not from
         // the measured frames (a slot that went away left a faint empty capsule on Settings).
@@ -785,7 +797,8 @@ struct MorphTopBar: View {
             // Absent on this page: shrunk to nothing where it was (a view's opacity does not
             // fade glass, so the capsule also drops its glass there, in the one modifier).
             .modifier(CapsuleFrame(frame: f, present: present, pull: slot == .mid ? model.pullStates[model.selectedTab] : nil, widen: shown, slot: slot,
-                                   inPlace: slot.inColumn, bare: messagesBar && slot == faceSlot && state.chat != nil && shownTarget < 0.5))
+                                   inPlace: slot.inColumn, bare: messagesBar && slot == faceSlot && state.chat != nil && shownTarget < 0.5,
+                                   squareHit: squareHit(slot)))
             .opacity(present ? 1 : 0)
             .animation(.snappy(duration: 0.22), value: model.selectedTab)
             .animation(.snappy(duration: 0.22), value: selecting)
@@ -901,13 +914,13 @@ struct MorphTopBar: View {
         switch slot {
         case .lead, .columnBack:
             Button { model.chatRequest = .init(.back) } label: {
-                Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
+                Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.rect)
             }
             .buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Back").accessibilityIdentifier("chat.back").accessibilityAddTraits(.isButton)
-            // Activation through accessibility (VoiceOver, XCTest's element tap) did not reach
-            // the button on the device; a touch did. The action is offered to both.
+            // A touch takes it across its 44 pt square (its slot's `squareHit`, #584); VoiceOver activates it through the
+            // action.
             .accessibilityAction { model.chatRequest = .init(.back) }
             .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
         case .mid:
@@ -1032,7 +1045,7 @@ struct MorphTopBar: View {
 
     /// A circle button in a leading or trailing slot, with the accessibility it needs.
     private func circleButton(_ symbol: String, label: String, id: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(.body.weight(.medium)).foregroundStyle(.tint).frame(width: 44, height: 44).contentShape(.circle) }
+        Button(action: action) { Image(systemName: symbol).font(.body.weight(.medium)).foregroundStyle(.tint).frame(width: 44, height: 44).contentShape(.rect) }
             .buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityElement(children: .ignore).accessibilityLabel(label).accessibilityAddTraits(.isButton)
             .accessibilityAction { action() }
@@ -1185,7 +1198,7 @@ struct MorphTopBar: View {
             else { model.popOne[tab, default: 0] += 1 }
         }
         return Button { back() } label: {
-            Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.circle)
+            Image(systemName: "chevron.left").font(.title3.weight(.semibold)).frame(width: 44, height: 44).contentShape(.rect)
         }
         .buttonStyle(MorphPressStyle(kind: .circle))
         .accessibilityElement(children: .ignore)
@@ -1305,6 +1318,9 @@ private struct CapsuleFrame: ViewModifier {
     /// The face's slot while a chat shows on the Duo: its frame as ever, so nothing in the morph moves, but no glass, so
     /// the face stands on nothing, as a contact's photo does in Messages (Matt, 2026-10-28, #542).
     var bare = false
+    /// The slot's control is a button across the slot (a chat's Back, a page's Back, Files' Home): it takes touches across
+    /// the slot's whole frame, as the system's bar buttons do, and the shield covers that frame (#584).
+    var squareHit = false
     /// The wheel's side, as PullRefreshWheel's: it grows with the title's type.
     @ScaledMetric(relativeTo: .headline) private var side: CGFloat = 15
     func body(content: Content) -> some View {
@@ -1316,9 +1332,14 @@ private struct CapsuleFrame: ViewModifier {
             .modifier(MorphFramesProbe.Record(slot: slot, present: present))
             #endif
             // The page's glass under the capsule stays still when it is touched (#344).
-            .barShieldShape()
+            .barShieldShape(square: squareHit)
             .clipShape(.capsule)
             .glassEffect(present && !bare ? .regular : .identity, in: .capsule)
+            // The glass's capsule is its hit shape as well: on a 44 pt slot a circle, so a touch at a corner went to what's
+            // under the bar. A button's slot takes the whole square (#584). A menu's slot (More, the bot menu) keeps the
+            // circle: its own button is round, and a square around it would take touches it doesn't answer. The empty set
+            // of kinds leaves every other slot as it was, without a second view for the capsule.
+            .contentShape(squareHit ? ContentShapeKinds.interaction : [], .rect)
             .scaleEffect(inPlace && !present ? 0.01 : 1)
             .position(x: present || inPlace ? frame.minX + width / 2 : frame.midX, y: frame.midY)
             // With the wheel's own slot: one snappy step open, and closed after the refresh.
