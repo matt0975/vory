@@ -14,7 +14,7 @@ final class FilesRootAuditUITests: XCTestCase {
         }
         let app = XCUIApplication(bundleIdentifier: e["HERMES_E2E_BUNDLE"].flatMap { $0.isEmpty ? nil : $0 } ?? "com.vorantx.vory.demo")
         app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "files",
-                               "-colorSchemePreference", "light"]
+                               "-tabLayout", "chats,files,bots,settings", "-tabLayout.homeFirstApplied", "YES", "-colorSchemePreference", "light"]
         app.launch()
         let any = { (id: String) in app.descendants(matching: .any).matching(identifier: id).firstMatch }
         let tab = any("tab.files")
