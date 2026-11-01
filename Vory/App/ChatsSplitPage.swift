@@ -53,7 +53,6 @@ struct ChatsSplitPage: View {
                     .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
-                    .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
                     #if os(iOS)
                     // On the Duo's side (or as a book) with a chat open and the list hidden, the split's sidebar toggle
                     // stood in the chat page's bar over its face (Back, or the split's edge swipe, brings the list back,
@@ -63,6 +62,9 @@ struct ChatsSplitPage: View {
                     // Sidebar", and the iPad keeps both (#555).
                     .toolbar(removing: model.tabBarVertical && !model.chatPath.isEmpty && columns == .detailOnly ? .sidebarToggle : nil)
                     #endif
+                    // The column's width last, outside everything else on the column: put inside the toolbar's
+                    // removal, the split no longer read it and gave the list its own 320 pt (2026-11-01).
+                    .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
             } detail: {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
             }

@@ -503,6 +503,10 @@ struct SideStripCatchers: View {
                         ChatMenuItems(chat: chat, onProfile: { model.chatRequest = .init(.profile) }, onRename: { model.chatRequest = .init(.rename) },
                                       onContext: { model.chatRequest = .init(.context) }, onNewChat: { model.chatRequest = .init(.newChat) },
                                       onClose: { model.chatRequest = .init(.close) })
+                            // The menu showing ends the press, as closed's More shows none while its menu is up; the
+                            // catcher's own press wasn't let go then (2026-10-31). Its going clears it too.
+                            .onAppear { StripMarkers.shared.pressed = nil }
+                            .onDisappear { StripMarkers.shared.pressed = nil }
                     } label: { Self.target }
                     .menuStyle(.button).buttonStyle(StripCatcherStyle(kind: .more))
                     .position(x: more.x - o.x, y: more.y - o.y)

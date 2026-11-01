@@ -516,6 +516,11 @@ final class BarUpUITests: XCTestCase {
                         XCTAssertNil(c["markerBack"], "a Back marker beside the list: \(c["markerBack"].map { "\($0)" } ?? "")")
                         // The list's own toggle stays beside the chat (#555 takes it off only while the list is hidden).
                         XCTAssertTrue(app.buttons["Hide Sidebar"].exists, "no Hide Sidebar beside the list with a chat open")
+                        // And its own width: 380 on its side, so Chat info starts at 396, as before the toggle's move
+                        // (once lost to the system's 320, 2026-11-01). As a book the list ends at the fold instead.
+                        if pose == .side {
+                            XCTAssertEqual(info.frame.minX, 396, accuracy: 1, "Chat info \(info.frame): the list beside it isn't 380 wide")
+                        }
                     }
                     // Every element named Chat info, so a second one can't stand behind `firstMatch`.
                     let infos = app.descendants(matching: .any).matching(identifier: "chat.titlePill").allElementsBoundByIndex.filter(\.exists)
@@ -558,7 +563,14 @@ final class BarUpUITests: XCTestCase {
             // landscape included, the base's beside the fix's), and the iPad's split keeps its own.
             let show = app.buttons["Show Sidebar"].exists, hide = app.buttons["Hide Sidebar"].exists
             print("CHATFRAMES toggle: \(show && hide ? "Show and Hide" : show ? "Show" : hide ? "Hide" : "none")")
-            if UIDevice.current.userInterfaceIdiom == .pad { XCTAssertTrue(show || hide, "the iPad's split lost its sidebar toggle") }
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                XCTAssertTrue(show || hide, "the iPad's split lost its sidebar toggle")
+                // The list keeps its own width beside the chat: 344 on the 820 pt window, so Back starts at 360 (once lost to
+                // the system's 320, 2026-11-01).
+                if window.width == 820 {
+                    XCTAssertEqual(back.frame.minX, 360, accuracy: 1, "Back \(back.frame): the list beside it isn't 344 wide")
+                }
+            }
         }
         // VoiceOver: Back, Chat info, More, in that order wherever they stand.
         if let stops = voiceOverStops() {
@@ -619,12 +631,20 @@ final class BarUpUITests: XCTestCase {
             print("CHATFRAMES more menu \(how): More \(more.frame), first item "
                   + (first.exists ? "\(first.label) \(first.frame)" : "not found") + ", Rename chat \(rename.frame)")
             print("BARUP HOLD more-menu"); self.pause(2)
+            // No press look while the menu shows, closed and on its side alike: More at its 44 pt, not grown.
+            XCTAssertEqual(more.frame.width, 44, accuracy: 0.5, "More \(more.frame) grown while its menu shows (\(how))")
+        }
+        // More after its menu has gone (Rename's dialog and Cancel): at its 44 pt again.
+        let moreAfter = { (how: String) in
+            print("CHATFRAMES More after its menu: \(more.frame)")
+            XCTAssertEqual(more.frame.width, 44, accuracy: 0.5, "More \(more.frame) grown after its menu (\(how))")
         }
         if pose == .side || pose == .book, more.exists {
             more.tap()
             if rename.waitForExistence(timeout: 3) {
                 moreMenu(listHidden ? "list hidden" : "beside the list")
                 renameOnce("More's Rename")
+                moreAfter(listHidden ? "list hidden" : "beside the list")
             } else { XCTFail("More didn't open its menu") }
             // Chat info's long press opens its menu (nothing covers Chat info), and a Rename dialog that comes is exactly one.
             // A Rename tap that's lost, the menu staying open with the tap's selection gone ("System gesture gate timed out"
@@ -654,6 +674,7 @@ final class BarUpUITests: XCTestCase {
             if rename.waitForExistence(timeout: 3) {
                 moreMenu("closed")
                 renameOnce("More's Rename")
+                moreAfter("closed")
             } else { XCTFail("More didn't open its menu") }
         }
         // With the list hidden, Back pops the chat (the split's empty detail).
