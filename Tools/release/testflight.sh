@@ -104,9 +104,16 @@ fi
 echo "==> Exporting with manual distribution signing"
 EXPORT_DIR="$ARCHIVE_DIR/export-$ARCHIVE_PREFIX-$BUILD_NUMBER"
 rm -rf "$EXPORT_DIR"
+# The plist names its certificate "Apple Distribution", which picks the newest such identity in the keychain: on a Mac
+# holding two, one the App Store profiles don't include. So the export signs with the one identity every profile it uses
+# holds, by SHA-1, from a copy of the plist kept beside the archive (export-identity.py; the installer certificate stays
+# by name). Where two qualify, EXPORT_SIGNING_SHA1=<hash> picks one of them.
+EXPORT_PLIST="$ARCHIVE_DIR/ExportOptions-$ARCHIVE_PREFIX-$BUILD_NUMBER.plist"
+python3 Tools/release/export-identity.py "$EXPORT_OPTIONS" "$EXPORT_PLIST" \
+    || fail "No single distribution identity fits the profiles the export uses (above)."
 xcodebuild -exportArchive \
     -archivePath "$ARCHIVE" \
-    -exportOptionsPlist "$EXPORT_OPTIONS" \
+    -exportOptionsPlist "$EXPORT_PLIST" \
     -exportPath "$EXPORT_DIR" \
     "${AUTH[@]}"
 
