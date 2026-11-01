@@ -305,6 +305,10 @@ struct StripMarkerReader: UIViewControllerRepresentable {
         private var lastBack: Bool?
         private var again: Task<Void, Never>?
         private var axTaken: [StripMarkerReader.TakenAccessibility] = []
+        #if DEBUG
+        /// The last read of each marker put in the frame log (`place`), so only a change is logged.
+        private var lastReadLogged: [StripMarkers.Kind: CGRect] = [:]
+        #endif
 
         private func item(_ kind: StripMarkers.Kind) -> UIBarButtonItem { kind == .back ? backItem : moreItem }
 
@@ -434,6 +438,12 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             #if DEBUG
             // For the bar's checks: where the system laid the marker out (the frames readout's "markerBack", "markerMore").
             if MorphFramesProbe.isOn { MorphFramesProbe.marks[kind == .back ? "markerBack" : "markerMore"] = f.width > 0 ? f : nil }
+            // Every read that differs from the last, in the frame log (`-vory-morph-log`): the system's own places as they
+            // pass, the ones the settle skips included.
+            if MorphFramesProbe.logs, lastReadLogged[kind] != f {
+                lastReadLogged[kind] = f
+                MorphFramesProbe.note(kind == .back ? "markerReadBack" : "markerReadMore", f)
+            }
             #endif
             return StripMarkers.inStrip(f, windowWidth: g.bounds.width, safeLeading: g.safeArea.leading, safeTrailing: g.safeArea.trailing) ? f : nil
         }

@@ -810,4 +810,161 @@ final class BarUpUITests: XCTestCase {
         }
         app.terminate()
     }
+
+    /// The bar's frame log (`-vory-morph-log`, "debug.morphlog"): each "<wall time> <name> x y w h" line, in order.
+    private func frameLog() -> [(t: Double, name: String, f: CGRect)] {
+        let log = element("debug.morphlog")
+        guard log.waitForExistence(timeout: 5) else { return [] }
+        return ((log.value as? String) ?? "").split(separator: "\n").compactMap { line in
+            let f = line.split(separator: " ")
+            guard f.count == 6, let t = Double(f[0]), let x = Double(f[2]), let y = Double(f[3]), let w = Double(f[4]),
+                  let h = Double(f[5]) else { return nil }
+            return (t, String(f[1]), CGRect(x: x, y: y, width: w, height: h))
+        }
+    }
+
+    /// More's menu opens with Rename, whose dialog comes once and goes again (`how`, for the messages).
+    private func moreMenuOnce(_ more: XCUIElement, _ how: String) {
+        more.tap()
+        let rename = app.buttons["Rename chat"].firstMatch
+        guard rename.waitForExistence(timeout: 3) else { XCTFail("\(how): More didn't open its menu"); return }
+        rename.tap()
+        let fields = app.textFields.matching(identifier: "rename.name")
+        XCTAssertTrue(fields.firstMatch.waitForExistence(timeout: 3), "\(how): More's Rename opened no dialog")
+        XCTAssertEqual(fields.count, 1, "\(how): More's Rename opened \(fields.count) dialogs")
+        app.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(fields.firstMatch.waitForNonExistence(timeout: 3), "\(how): the Rename dialog didn't close")
+        pause(1)
+    }
+
+    /// One step from `from` to `to` (middles, 1 pt either way) in a control's logged frames since `since`: nothing drawn
+    /// between, once at `to` it stays there, and the first frame there within 1.5 s of `back`, the copy's return (printed).
+    private func oneStep(_ name: String, _ frames: [(t: Double, name: String, f: CGRect)], from: CGFloat, to: CGFloat,
+                         back: Double, _ stage: String) {
+        print("LAMID \(stage) \(name): \(frames.count) frames, middles "
+              + frames.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - back) }.joined(separator: " "))
+        for m in frames.map(\.f.midY) where abs(m - from) > 1 && abs(m - to) > 1 {
+            XCTFail("\(stage): \(name) drawn between \(from) and \(to), at \(m)")
+        }
+        guard let i = frames.firstIndex(where: { abs($0.f.midY - to) <= 1 }) else {
+            XCTFail("\(stage): \(name) never drawn at \(to)"); return
+        }
+        let delay = frames[i].t - back
+        print(String(format: "LAMID %@ %@: at its new place %.3f s after the copy's return", stage, name, delay))
+        XCTAssertLessThanOrEqual(delay, 1.5, "\(stage): \(name) at its new place \(delay) s after the copy's return")
+        XCTAssertTrue(frames[i...].allSatisfy { abs($0.f.midY - to) <= 1 }, "\(stage): \(name) left \(to) again")
+    }
+
+    /// #555: another app's Live Activity starting and ending while a chat is open, closed or on its side (HERMES_E2E_POSE),
+    /// with the bar's frame log. The full app (com.vorantx.vory, the script's build whose extension draws one) comes to the
+    /// front to start it, then the copy back to the same chat; then the same to end it. Read at rest (A0), with the activity
+    /// (A1) and after it (A2): the system's markers lower by the activity's push in A1 and back in A2, Back and More on them
+    /// within 1 pt each time, and at A1 More's menu opens and its Rename gives one dialog. From the log, each control takes
+    /// one step each way with nothing drawn between, at its new place within 1.5 s of the copy's return (printed). The copy
+    /// not back on the same chat (relaunched, or the chat gone), or the markers not moved by the activity, is VOID
+    /// ("LAMID VOID …"), not a failure.
+    func testTheStripFollowsALiveActivityMidChat() throws {
+        let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
+        guard let pose, pose == .closed || pose == .side else { throw XCTSkip("closed or on its side only (HERMES_E2E_POSE)") }
+        try openChat(["-vory-morph-log"])
+        let back = element("chat.back"), more = element("chat.more"), info = element("chat.titlePill")
+        // Closed, the root bar's column; on its side beside the list, the header's More alone.
+        let slots: [(name: String, slot: String, marker: String, el: XCUIElement)] = pose == .closed
+            ? [("Back", "columnBack", "markerBack", back), ("More", "columnMore", "markerMore", more)]
+            : [("More", "sideMore", "markerMore", more)]
+        let read = { (stage: String) -> [String: CGRect] in
+            let c = self.caps()
+            for s in slots { print("LAMID \(stage) \(s.name) \(s.el.exists ? "\(s.el.frame)" : "none") marker \(c[s.marker].map { "\($0)" } ?? "none")") }
+            return c
+        }
+        let onMarkers = { (stage: String, c: [String: CGRect]) in
+            for s in slots {
+                guard let m = c[s.marker], s.el.exists else { XCTFail("\(stage): \(s.name) or its marker missing"); continue }
+                XCTAssertEqual(s.el.frame.midX, m.midX, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
+                XCTAssertEqual(s.el.frame.midY, m.midY, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
+            }
+        }
+        let a0 = read("A0")
+        onMarkers("A0", a0)
+        let full = XCUIApplication(bundleIdentifier: "com.vorantx.vory")
+        // The full app to the front to start or end its activity, then the copy back: the wall times of the full app's
+        // launch and of the copy's return.
+        let viaFullApp = { (what: String) -> (launched: Double, back: Double) in
+            let launched = Date().timeIntervalSince1970
+            full.launchArguments = ["-vory-navitem-probe", "-vory-navitem-probe-activity", what]
+            full.launch(); self.pause(5); full.terminate()
+            let back = Date().timeIntervalSince1970
+            self.app.activate()
+            return (launched, back)
+        }
+        // The same chat, in the same process: its log runs from before the full app came.
+        let sameChat = { (stage: String, launched: Double) throws in
+            let first = self.frameLog().first?.t ?? .infinity
+            guard self.app.state == .runningForeground, info.waitForExistence(timeout: 5), first < launched else {
+                print("LAMID VOID \(stage): the copy didn't come back to the same chat (log from \(first), the full app at \(launched))")
+                throw XCTSkip("VOID: the copy didn't come back to the same chat")
+            }
+        }
+        let start = viaFullApp("start")
+        try sameChat("A1", start.launched)
+        pause(3)
+        let a1 = read("A1")
+        guard let m0 = a0[slots[0].marker], let m1 = a1[slots[0].marker], m1.minY - m0.minY > 20 else {
+            print("LAMID VOID A1: the markers didn't move: \(a0[slots[0].marker].map { "\($0)" } ?? "none") to \(a1[slots[0].marker].map { "\($0)" } ?? "none")")
+            throw XCTSkip("VOID: no activity seen")
+        }
+        print(String(format: "LAMID push %.1f", m1.minY - m0.minY))
+        onMarkers("A1", a1)
+        moreMenuOnce(more, "A1")
+        let end = viaFullApp("end")
+        try sameChat("A2", end.launched)
+        pause(3)
+        let a2 = read("A2")
+        for s in slots {
+            if let x = a0[s.marker], let y = a2[s.marker] { XCTAssertEqual(y.minY, x.minY, accuracy: 1, "A2: \(s.marker) \(y) not back at \(x)") }
+        }
+        onMarkers("A2", a2)
+        let log = frameLog()
+        for s in slots {
+            guard let from = a0[s.marker]?.midY, let to = a1[s.marker]?.midY else { continue }
+            let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }
+            oneStep(s.name, drawn.filter { $0.t >= start.launched && $0.t < end.launched }, from: from, to: to, back: start.back, "start")
+            oneStep(s.name, drawn.filter { $0.t >= end.launched }, from: to, to: from, back: end.back, "end")
+        }
+        app.terminate()
+    }
+
+    /// #555: on its side to closed with a chat open, with the bar's frame log: the script closes the Duo at the hold
+    /// ("BARUP HOLD fold-closed"). The system's Back marker passes a place it doesn't keep (175, before 238; every read is in
+    /// the log as "markerReadBack"); the column's Back and More never draw there: every frame after the fold centred on 262
+    /// and 332, within 1 pt. Then More's menu opens and its Rename gives one dialog. No fold, the chat not open after it, or
+    /// no read at 175 (no transient to hold through) is VOID ("FOLD VOID …"), not a failure.
+    func testTheColumnHoldsThroughAFold() throws {
+        let pose = Pose(rawValue: ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] ?? "")
+        guard pose == .side else { throw XCTSkip("on its side only (HERMES_E2E_POSE=side)") }
+        try openChat(["-vory-morph-log"])
+        let more = element("chat.more")
+        let folding = Date().timeIntervalSince1970
+        print("BARUP HOLD fold-closed")
+        var folded = false
+        for _ in 0..<60 where !folded { pause(0.5); folded = app.windows.firstMatch.frame.width < 600 }
+        guard folded else { print("FOLD VOID: the Duo didn't close"); throw XCTSkip("VOID: no fold") }
+        pause(3)
+        guard element("chat.titlePill").exists else { print("FOLD VOID: the chat isn't open after the fold"); throw XCTSkip("VOID: no chat after the fold") }
+        let log = frameLog().filter { $0.t >= folding }
+        let reads = log.filter { $0.name == "markerReadBack" && $0.f.width > 0 }
+        print("FOLD markerReadBack: " + reads.map { String(format: "%+.3f %.0f,%.0f", $0.t - folding, $0.f.minX, $0.f.minY) }.joined(separator: "; "))
+        guard reads.contains(where: { abs($0.f.minY - 175) <= 3 }) else {
+            print("FOLD VOID: no transient seen (no read at 175)"); throw XCTSkip("VOID: no transient seen")
+        }
+        for (slot, mid) in [("columnBack", CGFloat(262)), ("columnMore", CGFloat(332))] {
+            let drawn = log.filter { $0.name == slot && $0.f.width > 0 }
+            let ys = drawn.map(\.f.midY)
+            print("FOLD \(slot): \(drawn.count) frames, middle y \(ys.min().map { String(format: "%.1f", $0) } ?? "-") to \(ys.max().map { String(format: "%.1f", $0) } ?? "-")")
+            XCTAssertFalse(drawn.isEmpty, "\(slot): never drawn after the fold")
+            for y in ys { XCTAssertEqual(y, mid, accuracy: 1, "\(slot): drawn at middle \(y) after the fold, not \(mid)") }
+        }
+        moreMenuOnce(more, "after the fold")
+        app.terminate()
+    }
 }

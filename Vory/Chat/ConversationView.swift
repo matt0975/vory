@@ -830,6 +830,10 @@ struct ChatHeader: View {
                 // controls press.
                 .modifier(StripPressMirror(kind: .back))
                 .offset(x: backAt.x - 22 - sideFrame.minX, y: backAt.y - 22 - sideFrame.minY)
+                #if DEBUG
+                // Its frame as drawn, in the frame log (`-vory-morph-log`).
+                .modifier(MorphFramesProbe.LogFrame(name: "sideBack"))
+                #endif
             }
         }
         .overlay(alignment: .topLeading) {
@@ -837,6 +841,10 @@ struct ChatHeader: View {
                 moreMenu.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     .modifier(StripPressMirror(kind: .more))
                     .offset(x: more.x - 22 - sideFrame.minX, y: more.y - 22 - sideFrame.minY)
+                    #if DEBUG
+                    // Its frame as drawn, in the frame log (`-vory-morph-log`).
+                    .modifier(MorphFramesProbe.LogFrame(name: "sideMore"))
+                    #endif
             }
         }
         // Once the pane's place is known: before it, Back isn't shown yet, and the focus went to Chat info with the list
