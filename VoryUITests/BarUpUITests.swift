@@ -31,6 +31,13 @@ final class BarUpUITests: XCTestCase {
     private func pause(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
     private func element(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
 
+    /// A tap at the element's centre in the window, where a finger taps. XCTest's own element tap goes to the element's
+    /// corner when another element covers its centre in XCTest's snapshot: with #551's taller code block the reply under
+    /// the bar covers Back's, and Back's slot takes touches only in its circle, so the corner missed (2026-11-01).
+    private func tapCentre(_ e: XCUIElement) {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: e.frame.midX, dy: e.frame.midY)).tap()
+    }
+
     private func launch(_ tab: String, _ extra: [String] = []) throws {
         let e = ProcessInfo.processInfo.environment
         guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
@@ -247,7 +254,7 @@ final class BarUpUITests: XCTestCase {
         XCTAssertTrue(back.waitForExistence(timeout: 10), "the chat didn't open")
         // The chat's row stays under the band (its seated face needs the room above the pill): printed, not held.
         print("BARUP chat capsules \(caps().sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
-        mark("chat back"); back.tap(); pause(3)
+        mark("chat back"); tapCentre(back); pause(3)
         XCTAssertTrue(element("tab.chats").isHittable, "Back didn't close the chat")
         element("tab.settings").coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(2); mark("settings")
         let t = element("settings.row.troubleshooting")
@@ -684,7 +691,7 @@ final class BarUpUITests: XCTestCase {
         }
         // With the list hidden, Back pops the chat (the split's empty detail).
         if listHidden, back.exists {
-            back.tap(); pause(2)
+            tapCentre(back); pause(2)
             XCTAssertTrue(element("chats.noChat").waitForExistence(timeout: 5), "Back didn't pop the chat")
             XCTAssertFalse(info.exists, "Chat info still there after Back")
             // #555: the list's own controls answer after the pop: the empty detail's Show Sidebar brings it back.
@@ -778,8 +785,10 @@ final class BarUpUITests: XCTestCase {
         let t0 = try openChat(["-vory-morph-log"])
         let back = element("chat.back")
         XCTAssertTrue(back.exists, "no Back")
-        back.tap(); pause(3)
+        tapCentre(back); pause(3)
         let t1 = Date().timeIntervalSince1970
+        // Back popped the chat: a Back that missed leaves fewer frames than the morph's and could pass as still.
+        XCTAssertFalse(element("chat.back").exists || element("chat.titlePill").exists, "Back didn't pop the chat")
         let log = element("debug.morphlog")
         XCTAssertTrue(log.waitForExistence(timeout: 5), "no frame log")
         var frames: [String: [CGRect]] = [:], times: [String: [Double]] = [:]
