@@ -177,6 +177,34 @@ import UIKit
     /// own passes follow them, and upright there's no reader, so neither ticks.
     nonisolated static func ticks(_ state: UIScene.ActivationState?, onSide: Bool, shown: Bool) -> Bool { onSide && shown && reads(state) }
 
+    /// What a marker's check does, `Settle.delay` after its place changed (`StripMarkerReader.Reader`).
+    enum Check: Equatable {
+        /// The place has stood: keep it.
+        case keep(CGRect)
+        /// It changed again: check again a delay later.
+        case again
+        /// Nothing to keep: off the strip.
+        case off
+        /// Out of front and not yet due: forgotten, so the return reads it afresh.
+        case forget
+    }
+
+    /// In front the marker is read again (`read`): a changed place waits again, the same one is kept. Out of front nothing
+    /// is read (the window may be laid out for the switcher's picture): the place noted in front is kept if due, else
+    /// forgotten. So a place read in front just before the app leaves is kept on that one read, without the settle's
+    /// confirming second one, and the return's read again corrects it if it was a place the system passed through (the
+    /// diagnosis, 2026-11-01: closed, the system moved its items back 170 ms before the app left, and dropping that read
+    /// left Back and More where they were for 6 s).
+    nonisolated static func check(_ settle: inout Settle, state: UIScene.ActivationState?, at time: TimeInterval, read: () -> CGRect?) -> Check {
+        guard reads(state) else {
+            if let f = settle.due(at: time) { return .keep(f) }
+            settle = Settle()
+            return .forget
+        }
+        if settle.note(read(), at: time) { return .again }
+        return settle.due(at: time).map { .keep($0) } ?? .off
+    }
+
     /// A marker's settled place, kept for its key and the next launch. A move while the app runs (an activity arriving or
     /// leaving, a turn) is animated, as the system moves its own items.
     func settled(_ kind: Kind, _ frame: CGRect, for key: String) {
@@ -466,11 +494,10 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             runTick(StripMarkers.ticks(.foregroundActive, onSide: onSide, shown: viewIfLoaded?.window != nil))
         }
 
-        /// The app leaving the front: the tick stops, and what was settling is let go, so nothing read on the way out is
-        /// kept and the return reads afresh.
+        /// The app leaving the front: the tick stops. A place read in front just before is still kept by its check
+        /// (`StripMarkers.check`), and nothing is read until the app is back.
         @objc private func sceneDeactivating() {
             runTick(false)
-            letGo()
         }
 
         /// The items changed, or Back came or went: read again, and hide the markers' views, a quarter second and a second
@@ -528,18 +555,20 @@ struct StripMarkerReader: UIViewControllerRepresentable {
             return StripMarkers.inStrip(f, windowWidth: g.bounds.width, safeLeading: g.safeArea.leading, safeTrailing: g.safeArea.trailing) ? f : nil
         }
 
-        /// `delay` after a change, the marker read again: the same place is kept; a new one waits again.
+        /// `delay` after a change, the marker's check (`StripMarkers.check`): the same place is kept; a new one waits again.
         private func check(_ kind: StripMarkers.Kind) {
             checks[kind]?.cancel()
             checks[kind] = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(StripMarkers.Settle.delay))
                 guard !Task.isCancelled, let self, let window = self.view.window else { return }
-                // Out of front nothing is kept, and the place is let go, so the return reads it afresh.
-                guard StripMarkers.reads(window.windowScene?.activationState) else { self.settles[kind] = nil; return }
-                guard let key = self.key(back: self.back, in: window), key == self.lastKey else { return }
-                let now = ProcessInfo.processInfo.systemUptime
-                if self.settles[kind, default: .init()].note(self.place(kind, in: window), at: now) { self.check(kind); return }
-                guard let f = self.settles[kind]?.due(at: now) else { return }
+                // Out of front the window may be laid out in another shape: the place noted in front is kept for its own key.
+                let state = window.windowScene?.activationState
+                guard let key = StripMarkers.reads(state) ? self.key(back: self.back, in: window) : self.lastKey, key == self.lastKey else { return }
+                var settle = self.settles[kind, default: .init()]
+                let outcome = StripMarkers.check(&settle, state: state, at: ProcessInfo.processInfo.systemUptime) { self.place(kind, in: window) }
+                self.settles[kind] = settle
+                if outcome == .again { self.check(kind); return }
+                guard case .keep(let f) = outcome else { return }
                 #if DEBUG
                 MorphFramesProbe.note(kind == .back ? "markerBack" : "markerMore", f)
                 #endif

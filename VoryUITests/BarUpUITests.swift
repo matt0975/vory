@@ -732,7 +732,7 @@ final class BarUpUITests: XCTestCase {
         var trail: [(t: Double, f: CGRect)] = []
         for line in ((log.value as? String) ?? "").split(separator: "\n") {
             let f = line.split(separator: " ")
-            guard f.count == 6, f[1] == "trail", let t = Double(f[0]), t >= t0, let x = Double(f[2]), let y = Double(f[3]),
+            guard f.count >= 6, f[1] == "trail", let t = Double(f[0]), t >= t0, let x = Double(f[2]), let y = Double(f[3]),
                   let w = Double(f[4]), let h = Double(f[5]), w > 0 else { continue }
             trail.append((t - t0, CGRect(x: x, y: y, width: w, height: h)))
         }
@@ -785,7 +785,7 @@ final class BarUpUITests: XCTestCase {
         var frames: [String: [CGRect]] = [:], times: [String: [Double]] = [:]
         for line in ((log.value as? String) ?? "").split(separator: "\n") {
             let f = line.split(separator: " ")
-            guard f.count == 6, let t = Double(f[0]), t >= t0, t <= t1, let x = Double(f[2]), let y = Double(f[3]),
+            guard f.count >= 6, let t = Double(f[0]), t >= t0, t <= t1, let x = Double(f[2]), let y = Double(f[3]),
                   let w = Double(f[4]), let h = Double(f[5]) else { continue }
             frames[String(f[1]), default: []].append(CGRect(x: x, y: y, width: w, height: h))
             times[String(f[1]), default: []].append(t - t0)
@@ -816,14 +816,16 @@ final class BarUpUITests: XCTestCase {
         app.terminate()
     }
 
-    /// The bar's frame log (`-vory-morph-log`, "debug.morphlog"): each "<wall time> <name> x y w h" line, in order.
-    private func frameLog() -> [(t: Double, name: String, f: CGRect)] {
+    /// The bar's frame log (`-vory-morph-log`, "debug.morphlog"): each "<wall time> <name> x y w h <scene>" line, in order.
+    /// `inFront`: without the lines drawn with the scene in the background (the switcher's picture and other layouts while
+    /// the app is away, 2026-11-01); those drawn on the way in or out still count.
+    private func frameLog(inFront: Bool = false) -> [(t: Double, name: String, f: CGRect)] {
         let log = element("debug.morphlog")
         guard log.waitForExistence(timeout: 5) else { return [] }
         return ((log.value as? String) ?? "").split(separator: "\n").compactMap { line in
             let f = line.split(separator: " ")
-            guard f.count == 6, let t = Double(f[0]), let x = Double(f[2]), let y = Double(f[3]), let w = Double(f[4]),
-                  let h = Double(f[5]) else { return nil }
+            guard f.count >= 6, let t = Double(f[0]), let x = Double(f[2]), let y = Double(f[3]), let w = Double(f[4]),
+                  let h = Double(f[5]), !(inFront && f.count > 6 && f[6] == "background") else { return nil }
             return (t, String(f[1]), CGRect(x: x, y: y, width: w, height: h))
         }
     }
@@ -961,7 +963,8 @@ final class BarUpUITests: XCTestCase {
             if let x = a0[s.marker], let y = a2[s.marker] { XCTAssertEqual(y.minY, x.minY, accuracy: 1, "A2: \(s.marker) \(y) not back at \(x)") }
         }
         onMarkers("A2", a2)
-        let log = frameLog()
+        // Only what was drawn in front, or on the way in or out: not the background's layouts for the switcher's picture.
+        let log = frameLog(inFront: true)
         for s in slots {
             guard let from = a0[s.marker], let to = a1[s.marker] else { continue }
             let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }, reads = log.filter { $0.name == s.read && $0.f.width > 0 }

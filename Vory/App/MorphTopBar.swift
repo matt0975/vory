@@ -1441,16 +1441,26 @@ enum MorphFramesProbe {
     @MainActor static var frames: [MorphSlot: CGRect] = [:]
     /// The chat's face (its tap area, where the face is drawn), while the chat is at rest; nil otherwise.
     @MainActor static var face: CGRect?
-    /// With `-vory-morph-log` too: every drawn frame of every capsule and of the face, "<wall time> <slot> x y w h", as
-    /// they change (a push's or a pop's every frame), the latest 4,000; read through "debug.morphlog". A capsule that
+    /// With `-vory-morph-log` too: every drawn frame of every capsule and of the face, "<wall time> <slot> x y w h <scene>",
+    /// as they change (a push's or a pop's every frame), the latest 4,000; read through "debug.morphlog". A capsule that
     /// goes logs a zero frame under its name, so a capsule that vanishes reads as travel there; one that stands still
-    /// logs nothing.
+    /// logs nothing. The last word is the scene's state as it was drawn (`sceneState`).
     nonisolated static let logs = ProcessInfo.processInfo.arguments.contains("-vory-morph-log")
     @MainActor static var log: [String] = []
     @MainActor static func note(_ name: String, _ f: CGRect) {
         guard logs else { return }
-        log.append(String(format: "%.3f %@ %.1f %.1f %.1f %.1f", Date().timeIntervalSince1970, name, f.minX, f.minY, f.width, f.height))
+        log.append(String(format: "%.3f %@ %.1f %.1f %.1f %.1f %@", Date().timeIntervalSince1970, name, f.minX, f.minY, f.width, f.height, sceneState))
         if log.count > 4000 { log.removeFirst(log.count - 4000) }
+    }
+    /// The app's scene state, for the frame log: "active", "inactive" (on its way in or out), "background" (away, where the
+    /// system lays the window out for the switcher's picture, 2026-11-01) or "unattached".
+    @MainActor private static var sceneState: String {
+        switch UIApplication.shared.connectedScenes.first(where: { $0 is UIWindowScene })?.activationState {
+        case .foregroundActive: "active"
+        case .foregroundInactive: "inactive"
+        case .background: "background"
+        default: "unattached"
+        }
     }
     /// With `-vory-morph-log` too: the bar's state as it changes, "<wall time> barstate key=… safe=… holding=… lift=…
     /// closed=… vertical=… item=… clear=…" (`MorphTopBar.noteBarState`), for the first frames after a launch (#554).

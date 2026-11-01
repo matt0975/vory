@@ -448,6 +448,38 @@ import Testing
         #expect(reader.tick == nil)
         #expect(second?.isCancelled == true)
     }
+
+    @Test func outOfFrontACheckKeepsWhatWasReadInFront() {
+        // Closed, the system moved Back back to 238 while the app was in front, and the app left 170 ms later, inside the
+        // settle (2026-11-01). Its check comes with the app inactive: the place read in front is kept, and nothing is read.
+        let p = CGRect(x: 399, y: 238, width: 38, height: 48)
+        var reads = 0
+        var s = StripMarkers.Settle()
+        do { let changed = s.note(p, at: 0); #expect(changed) }
+        let inactive = StripMarkers.check(&s, state: UIScene.ActivationState.foregroundInactive, at: 0.25) { reads += 1; return nil }
+        #expect(inactive == StripMarkers.Check.keep(p))
+        // Not yet due, it's forgotten, so the return's read starts the wait again.
+        var early = StripMarkers.Settle()
+        do { let changed = early.note(p, at: 0); #expect(changed) }
+        let away = StripMarkers.check(&early, state: UIScene.ActivationState.background, at: 0.1) { reads += 1; return nil }
+        #expect(away == StripMarkers.Check.forget)
+        #expect(early.place == nil)
+        do { let changed = early.note(p, at: 5); #expect(changed) }
+        // Out of front, the check never read the marker.
+        #expect(reads == 0)
+        // In front it reads again: the same place is kept; a new one waits again; off the strip, nothing is kept.
+        var front = StripMarkers.Settle()
+        do { let changed = front.note(p, at: 0); #expect(changed) }
+        let same = StripMarkers.check(&front, state: UIScene.ActivationState.foregroundActive, at: 0.25) { reads += 1; return p }
+        #expect(same == StripMarkers.Check.keep(p))
+        let moved = StripMarkers.check(&front, state: UIScene.ActivationState.foregroundActive, at: 0.5) { reads += 1; return p.offsetBy(dx: 0, dy: 80) }
+        #expect(moved == StripMarkers.Check.again)
+        let off = StripMarkers.check(&front, state: UIScene.ActivationState.foregroundActive, at: 0.75) { reads += 1; return nil }
+        #expect(off == StripMarkers.Check.again)
+        let gone = StripMarkers.check(&front, state: UIScene.ActivationState.foregroundActive, at: 1.0) { reads += 1; return nil }
+        #expect(gone == StripMarkers.Check.off)
+        #expect(reads == 4)
+    }
 }
 
 /// A store that counts its writes.
