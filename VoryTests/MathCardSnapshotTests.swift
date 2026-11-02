@@ -82,6 +82,8 @@ import SwiftUI
         #expect(receivedSnapshot != nil || cached != nil)
         if let received = receivedSnapshot {
             #expect(cached === received)
+            #expect(abs(received.size.height - height) <= 1)
+            #expect(received.size.height < 100)
         }
 
         MathWebView.dismantleUIView(web, coordinator: coordinator)

@@ -62,16 +62,30 @@ import Testing
             let markup = await KaTeXEngine.shared.render(latex: formula)
             #expect(!markup.isEmpty)
 
-            // Prime snapshot in cache and render display card
+            // Render a primed snapshot representing KaTeX 2D output
+            let mathView = Text(MathNotation.format(formula))
+                .font(.system(.title3, design: .serif))
+                .italic()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            let mathRenderer = ImageRenderer(content: mathView)
+            mathRenderer.scale = 3.0
+            let sampleImage = mathRenderer.uiImage ?? UIImage()
+
+            KaTeXCache.setSnapshot(sampleImage, for: formula, dark: true)
+
+            // Render display card with primed snapshot
             let cardView = MathCardView(equation: formula, closed: true)
-            let renderer = ImageRenderer(content: cardView.environment(\.colorScheme, .dark))
+            let renderer = ImageRenderer(content: cardView.environment(\.colorScheme, .dark).frame(width: 350))
             renderer.scale = 3.0
             guard let image = renderer.uiImage, let data = image.pngData() else {
                 Issue.record("no rendered card image for \(name)")
                 continue
             }
             try data.write(to: dir.appendingPathComponent("\(name).png"))
-            #expect(image.size.width > 0 && image.size.height > 0)
+            #expect(image.size.width >= 350 && image.size.height >= 36)
+            print("wrote display card \(name).png (\(Int(image.size.width))x\(Int(image.size.height))) for: \(formula)")
         }
     }
 }

@@ -296,10 +296,14 @@ struct MathWebView {
                     if !parent.loaded { parent.loaded = true }
 
                     if measuredWidth > 0 && measuredHeight > 0 {
-                        if web.bounds.width < measuredWidth || web.bounds.height < measuredHeight {
-                            web.frame = CGRect(x: 0, y: 0, width: max(web.bounds.width, measuredWidth), height: max(web.bounds.height, measuredHeight))
+                        let captureWidth = max(web.bounds.width, measuredWidth)
+                        let targetFrame = CGRect(x: 0, y: 0, width: captureWidth, height: measuredHeight)
+                        if web.frame != targetFrame {
+                            web.frame = targetFrame
+                            try? await Task.sleep(for: .milliseconds(30))
                         }
                         let config = WKSnapshotConfiguration()
+                        config.rect = CGRect(origin: .zero, size: CGSize(width: captureWidth, height: measuredHeight))
                         if let snapshot = try? await web.takeSnapshot(configuration: config) {
                             KaTeXCache.setSnapshot(snapshot, for: parent.equation, dark: parent.dark)
                             parent.onSnapshot?(snapshot)
@@ -409,8 +413,8 @@ struct MathCardView: View {
     var body: some View {
         let currentSnapshot = snapshotImage ?? KaTeXCache.snapshot(for: equation, dark: scheme == .dark)
         let viewWidth = availableWidth > 40 ? availableWidth - 40 : 0
-        let effectiveWidth = max(contentWidth, currentSnapshot?.size.width ?? 0)
-        let effectiveHeight = max(height, currentSnapshot?.size.height ?? 0)
+        let effectiveWidth = currentSnapshot?.size.width ?? contentWidth
+        let effectiveHeight = currentSnapshot?.size.height ?? height
         let targetWidth = max(effectiveWidth, viewWidth)
         let displayHeight = min(max(effectiveHeight, 36), 360)
 
@@ -495,12 +499,10 @@ struct MathCardView: View {
         .onChange(of: equation) { _, newEq in
             snapshotImage = KaTeXCache.snapshot(for: newEq, dark: scheme == .dark)
         }
-        .task(id: "\(equation):\(closed)") {
+        .task(id: "\(equation):\(closed):\(scheme == .dark)") {
             if closed {
-                if KaTeXCache.snapshot(for: equation, dark: scheme == .dark) == nil {
-                    let markup = await KaTeXEngine.shared.render(latex: equation)
-                    mathMarkup = markup
-                }
+                let markup = await KaTeXEngine.shared.render(latex: equation)
+                mathMarkup = markup
             }
         }
     }

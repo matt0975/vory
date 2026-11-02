@@ -53,4 +53,26 @@ import AppKit
         #expect(KaTeXCache.snapshot(for: equation, dark: false) === lightImg)
         #expect(KaTeXCache.snapshot(for: equation, dark: true) === darkImg)
     }
+
+    @Test @MainActor func snapshotDimensionsDetermineCardHeight() {
+        let equation = "y = mx + b"
+        #if os(iOS)
+        let size = CGSize(width: 120, height: 38)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 2.0
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let sampleImage = renderer.image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }
+        KaTeXCache.setSnapshot(sampleImage, for: equation, dark: true)
+
+        let view = MathCardView(equation: equation, closed: true)
+        let viewRenderer = ImageRenderer(content: view.environment(\.colorScheme, .dark).frame(width: 300))
+        viewRenderer.scale = 2.0
+        let rendered = viewRenderer.uiImage
+        #expect(rendered != nil)
+        #expect(sampleImage.size.height == 38)
+        #endif
+    }
 }
