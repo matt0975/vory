@@ -702,13 +702,19 @@ final class BarUpUITests: XCTestCase {
             } else { print("CHATFRAMES no Show Sidebar on the empty detail") }
         }
         // #555: closed, after Back pops the chat the list's own bar takes touches again (the markers' bar gave them up while
-        // the chat showed): its search field takes the tap.
+        // the chat showed): its search takes the tap. With no search field on the list (the closed Duo since #591), the
+        // system's Search button at the strip's foot takes it and opens the field.
         if pose == .closed, back.exists {
             back.tap(); pause(2)
+            let button = app.buttons.matching(NSPredicate(format: "label ==[c] 'Search'")).firstMatch
+            if !app.searchFields.firstMatch.waitForExistence(timeout: 2) {
+                XCTAssertTrue(button.waitForExistence(timeout: 5), "no search field and no Search button on the list after Back")
+                button.tap(); pause(1)
+            }
             let search = app.searchFields.firstMatch
             XCTAssertTrue(search.waitForExistence(timeout: 5), "no search field on the list after Back")
-            search.tap(); pause(1)
-            XCTAssertTrue(app.keyboards.firstMatch.exists, "the list's search field didn't take the tap after Back")
+            if !app.keyboards.firstMatch.exists { search.tap(); pause(1) }
+            XCTAssertTrue(app.keyboards.firstMatch.exists, "the list's search didn't take the tap after Back")
         }
         app.terminate()
     }

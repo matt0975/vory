@@ -90,7 +90,7 @@ struct ChatsSplitPage: View {
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
                     .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true).closedChatsRoom() }
                     // The bar follows a chat's push and pop in this stack (`MorphState.follow`).
                     .chatsStackProbe()
             }
@@ -144,6 +144,16 @@ struct CountsChatOnScreen: ViewModifier {
 
 extension View {
     func countsChatOnScreen(room: Bool = false) -> some View { modifier(CountsChatOnScreen(room: room)) }
+
+    /// A group chat on the Chats stack keeps its place on the closed Duo, where the stack has no room (`ClosedChatsRoom`;
+    /// iPhone only).
+    @ViewBuilder func closedChatsRoom() -> some View {
+        #if os(iOS)
+        modifier(ClosedChatsRoom())
+        #else
+        self
+        #endif
+    }
 
     /// Hands the Chats stack to the morph bar (iPhone only; the Mac has no bar).
     @ViewBuilder func chatsStackProbe() -> some View {

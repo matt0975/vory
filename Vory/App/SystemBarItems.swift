@@ -121,7 +121,9 @@ import UIKit
     /// (`StripPressMirror`).
     var pressed: Kind?
     @ObservationIgnored private let defaults: UserDefaults
-    private static let storeKey = "vory.stripMarkers"
+    /// Readings kept from 1.5.1 (48): the ones before were read with a room on the closed Duo's Chats stack, which moved
+    /// the system's items 63 pt down the strip (#591).
+    private static let storeKey = "vory.stripMarkers.2"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -136,12 +138,12 @@ import UIKit
 
     /// Where the system stands the markers, for a shape none is read for yet: our 44 pt capsules' tops, centred on the
     /// system's own items (38 by 48) as measured on the Duo (2026-10-31) at default text with no Live Activity. Closed,
-    /// the items at 238 and 308, so 240 and 310; at XXXL at 244 and 314, so 246 and 316. On its side with Back, 125 and
-    /// 195, so 127 and 197; More alone beside the list at 125 (at XXXL too), so 127. Nothing else is measured (on its
-    /// side with Back at XXXL, the other text sizes): those take the default. A first open with a Live Activity already
-    /// up still steps once, 80 pt closed and 92 on its side, as no inset follows the status.
+    /// with no room on the Chats stack (#591), the items at 175 and 245, so 177 and 247, at XXXL too (2026-11-02). On its
+    /// side with Back, 125 and 195, so 127 and 197; More alone beside the list at 125 (at XXXL too), so 127. Nothing else
+    /// is measured (on its side with Back at XXXL, the other text sizes): those take the default. A first open with a Live
+    /// Activity already up still steps once, 80 pt closed and 92 on its side, as no inset follows the status.
     nonisolated static func fallbackTops(closed: Bool, withBack: Bool, xxxl: Bool) -> [CGFloat] {
-        if closed { return xxxl ? [246, 316] : [240, 310] }
+        if closed { return [177, 247] }
         return withBack ? [127, 197] : [127]
     }
 

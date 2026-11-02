@@ -116,6 +116,15 @@ enum TopBarRoom {
         if barsVertical { return (rowBottom + barPadding(closed: true) + gap).rounded() }
         return statusInCorner ? cornerRoom : 0
     }
+    /// The closed iPhone Duo (#591): the system's bars stand in the side strip and the window is taller than wide. On its
+    /// side and as a book they stand in a strip too, in a window wider than tall. There the Chats list has no search drawer
+    /// (the system's search button stands in the side column, as Messages' does) and keeps the row's room itself.
+    static func closedStrip(barsVertical: Bool, size: CGSize) -> Bool { barsVertical && size.height > size.width }
+    /// The system's search drawer under a navigation bar, as it stands at rest. ASSUMPTION (iOS 27.1 to 27.2, measured on the
+    /// closed Duo: the drawer's search bar 54 pt high under the room): the closed Duo's Chats list, with no drawer, keeps
+    /// this much more room over its first row, so its rows stand where the drawer left them, clear of the status in the
+    /// strip (#591, 2026-11-02). UIKit gives no value for it without a live search bar.
+    static let drawerHeight: CGFloat = 54
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
     /// (.avoidHidingContent)`): under a status in a top corner, and with the bar up in the status band (#516). There the
     /// field stands at the safe area's top under the row; with the bar's band hidden by an active search the field and its

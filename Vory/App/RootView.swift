@@ -368,6 +368,8 @@ struct MainTabView: View {
                             // pushed the stack up until its first tab touched the page's own
                             // strip items (the list's filter met Home, Matt).
                             .padding(.bottom, VoryTabBar.stripGroupGap)
+                            // On the closed Duo the foot slot is left to Chats' search, on every tab (`stripSearchSlot`).
+                            .padding(.bottom, TopBarRoom.closedStrip(barsVertical: vertical, size: windowGeometry.bounds.size) ? VoryTabBar.stripSearchSlot : 0)
                             .ignoresSafeArea(.container, edges: side == .leading ? .leading : .trailing)
                     }
                 }

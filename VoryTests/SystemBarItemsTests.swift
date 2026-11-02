@@ -279,10 +279,10 @@ import Testing
 
     @Test func beforeAnyPlaceIsReadTheMeasuredOnesStand() {
         // The system's own places at default text with no Live Activity (measured on the Duo, 2026-10-31): our 44 pt tops,
-        // centred on its 48 pt items. At XXXL closed it stood them 6 pt lower; on its side More alone stood where it does
-        // at default.
-        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: false) == [240, 310])
-        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: true) == [246, 316])
+        // centred on its 48 pt items. Closed, with no room on the Chats stack (#591, 2026-11-02), at XXXL as at default; on
+        // its side More alone stood where it does at default.
+        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: false) == [177, 247])
+        #expect(StripMarkers.fallbackTops(closed: true, withBack: true, xxxl: true) == [177, 247])
         #expect(StripMarkers.fallbackTops(closed: false, withBack: true, xxxl: false) == [127, 197])
         #expect(StripMarkers.fallbackTops(closed: false, withBack: false, xxxl: false) == [127])
         #expect(StripMarkers.fallbackTops(closed: false, withBack: false, xxxl: true) == [127])
@@ -293,9 +293,9 @@ import Testing
             // Closed (the strip on the right, its middle 48 from the edge, where the system's 38 pt items stood at 399).
             g.bounds = CGRect(x: 0, y: 0, width: 466, height: 678)
             g.safeArea = EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 84)
-            #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 262))
-            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 332))
-            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: true) == CGPoint(x: 418, y: 338))
+            #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 199))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 269))
+            #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: true) == CGPoint(x: 418, y: 269))
             // A settled place wins, for its own shape only.
             markers.settled(.more, CGRect(x: 399, y: 388, width: 38, height: 48), for: StripMarkers.key(shape: closed, withBack: true))
             #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 412))
