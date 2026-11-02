@@ -183,16 +183,19 @@ import Testing
 
     @Test func wrappingStartsAtTheFloorsAndSpendsTheSpare() {
         typealias M = MarkdownTableMetrics
-        // Floors already past the bubble: they stand, and the card scrolls instead of breaking words.
-        #expect(M.wrapWidths(natural: [200, 300, 100], floors: [180, 200, 90], hi: 220, fill: 320) == [180, 200, 90])
-        // No bounded width to fill (inside a scroll view): the floors stand.
+        // Floors past the bubble: columns compress proportionally so the table wraps fully without scrolling.
+        let compressed = M.wrapWidths(natural: [200, 300, 100], floors: [180, 200, 90], hi: 220, fill: 320)
+        #expect(abs(compressed.reduce(0, +) - 320) < 0.001)
+        #expect(compressed[0] >= 24 && compressed[1] >= 24 && compressed[2] >= 24)
+        #expect(compressed[0] < 180 && compressed[1] < 200 && compressed[2] < 90)
+        // No bounded width to fill (inside an unconstrained layout): the floors stand.
         #expect(M.wrapWidths(natural: [200, 300], floors: [60, 40], hi: 220, fill: nil) == [60, 40])
         // Room to spare: the columns grow back toward their one-line widths, to exactly the bubble.
         let roomy = M.wrapWidths(natural: [200, 100, 60], floors: [60, 40, 24], hi: 220, fill: 320)
         #expect(abs(roomy.reduce(0, +) - 320) < 0.001)
         #expect(roomy[0] > 60 && roomy[0] <= 220)
         #expect(roomy[1] >= 40 && roomy[2] >= 24)
-        // A floor past `hi` is kept: never clamped down into a broken word.
+        // A floor past `hi` is kept: never clamped down into a broken word when room permits.
         #expect(M.wrapWidths(natural: [400, 40], floors: [400, 40], hi: 220, fill: 1000)[0] >= 400)
         // The scroll-mode arithmetic is untouched: its own suite below still holds.
         #expect(M.columnWidths(natural: [20, 100, 500], fill: 300, min: 64, max: 220) == [64, 100, 220])

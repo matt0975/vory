@@ -2701,11 +2701,10 @@ struct MarkdownTableView: View {
     }
 
     private var grid: some View {
-        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
+        MarkdownTableGrid(table: shownTable, lineLimit: nil, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
     }
 
-    /// The same table with its columns held at their longest-word floors, every line of every cell
-    /// drawn: what a reader who would rather not drag asks for.
+    /// The table wrapped fully to fit the bubble, drawing every line of every cell without horizontal scrolling.
     private var wrappedGrid: some View {
         MarkdownTableGrid(table: shownTable, lineLimit: nil, wraps: true,
                           maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
@@ -2737,8 +2736,7 @@ struct MarkdownTableView: View {
     }
 
     /// The card's top header strip: an anchored title on the leading edge and compact 28 pt action
-    /// discs on the trailing edge. Sitting here rather than overlaying the table cells prevents
-    /// narrow rightmost columns from having their headers squeezed by the buttons.
+    /// discs on the trailing edge (wrap toggle and full-screen sheet).
     private var controls: some View {
         HStack(spacing: 0) {
             HStack(spacing: 5) {
@@ -2758,19 +2756,13 @@ struct MarkdownTableView: View {
     }
 
     private var card: some View {
-        // The grid alone when its columns fit (it then stretches to the bubble's width), else
-        // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
-        // keeps a narrow table free of a scroll view that would catch the thread's drags. Wrapped,
-        // the first candidate is the word-floor grid: when the words cannot fit, it reports more
-        // than the bubble and this falls through to the scroll that keeps a wide table readable.
+        // Wrapped, the table wraps fully to the bubble's width; unwrapped, the card scrolls sideways.
         VStack(spacing: 0) {
             controls
-            Group {
-                if wrap {
-                    ViewThatFits(in: .horizontal) { wrappedGrid; scrollingGrid }
-                } else {
-                    ViewThatFits(in: .horizontal) { grid; scrollingGrid }
-                }
+            if wrap {
+                wrappedGrid
+            } else {
+                ViewThatFits(in: .horizontal) { grid; scrollingGrid }
             }
         }
         .background(Color(.systemBackground).opacity(0.5))

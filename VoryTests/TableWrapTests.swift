@@ -55,10 +55,10 @@ import Vision
         #expect(abs(capped.height - open.height) < 1, "a cap of 3 drew \(capped.height) pt, no cap \(open.height) pt")
     }
 
-    @Test @MainActor func aTableWhoseWordsDoNotFitReportsMoreThanTheBubble() throws {
-        // Six columns of real words: 333 pt of word floors plus 120 pt of padding cannot fit 320.
+    @Test @MainActor func aTableWhoseWordsDoNotFitWrapsFullyToTheBubble() throws {
+        // Six columns of real words: 333 pt of word floors plus 120 pt of padding compress to 320 pt.
         let wide = Self.draw(try grid(MarkdownTableTests.wide, wraps: true))
-        #expect(wide.width > 320, "the wrapped grid reported \(wide.width) pt, so ViewThatFits falls back")
+        #expect(abs(wide.width - 320) < 1, "the fully wrapped grid took \(wide.width) pt of a 320 pt bubble")
     }
 
     @Test @MainActor func anEmptyColumnKeepsASliver() throws {
@@ -72,12 +72,12 @@ import Vision
                 "the empty column took \(wide.width - narrow.width) pt")
     }
 
-    @Test @MainActor func aTokenTooWideForTheBubbleIsNotSqueezedLetterByLetter() throws {
+    @Test @MainActor func aTokenTooWideForTheBubbleWrapsAcrossLinesToFitBubble() throws {
         let token = String(repeating: "9f2c7ab4", count: 8)   // 64 characters, one unbreakable word
         let t = try #require(Self.table("| hash |\n|---|\n| \(token) |"))
         let size = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 320))
-        #expect(size.width > 320, "the column must hold its token and scroll, but took \(size.width) pt")
-        #expect(size.height < 80, "the cell stacked into \(size.height) pt instead of staying one line")
+        #expect(abs(size.width - 320) < 1, "the column wraps to fit 320 pt, took \(size.width) pt")
+        #expect(size.height > 80, "the cell stacked into \(size.height) pt instead of overflowing")
     }
 
     // The switch, the preference, and the card that carries them
@@ -129,22 +129,16 @@ import Vision
         // If the floor ignores that, this token breaks mid-character at the floor width.
         let token = String(repeating: "i", count: 20)
         let t = try #require(Self.table("| cmd |\n|---|\n| `\(token)` |"))
-        let tight = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 120))
+        let tight = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 240))
         let roomy = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 900))
         #expect(tight.height == roomy.height, "the token broke: tight \(tight.height) pt vs roomy \(roomy.height) pt")
     }
 
-    @Test @MainActor func aTokenTooWideForTheBubbleFallsBackToTheCardScroll() throws {
+    @Test @MainActor func aTokenTooWideForTheBubbleWrapsInsideTheCard() throws {
         let token = String(repeating: "9f2c7ab4", count: 8)
         let t = try #require(Self.table("| hash |\n|---|\n| \(token) |"))
-        defer { UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey) }
-        UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey)
-        let wrapped = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        UserDefaults.standard.set(false, forKey: MarkdownTableMetrics.wrapKey)
-        let scrolling = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        // Falling back draws the same three-line scroll card. A wrapped candidate that was accepted
-        // instead would draw the token on one line, and be *shorter* than the scroll card.
-        #expect(wrapped.height >= scrolling.height, "no fallback: wrapped \(wrapped.height) pt vs scroll \(scrolling.height) pt")
+        let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))
+        #expect(abs(card.width - 320) < 1, "the card wraps fully without scrolling: took \(card.width) pt")
     }
 
     @Test @MainActor func theStripIsInsetFromTheCardsEdge() throws {

@@ -45,28 +45,44 @@ enum MarkdownTableMetrics {
         return widths.map { $0 + extra * $0 / total }
     }
 
-    /// A wrapped table's widths: every column starts at its longest-word floor, then the spare in
-    /// `fill` goes back to the columns that can use it — their one-line widths first, the rest in
-    /// proportion. Floors that already exceed `fill` stand as they are, so the card falls back to
-    /// its sideways scroll rather than breaking a word to fit.
+    /// A wrapped table's widths: when the columns' word floors fit within `fill`, the spare
+    /// goes back to the columns that can use it — their one-line widths first, the rest in
+    /// proportion. When the word floors exceed `fill`, the columns compress proportionally
+    /// (above a minimum floor sliver) so the table fits the bubble fully without scrolling.
     static func wrapWidths(natural: [CGFloat], floors: [CGFloat], hi: CGFloat, fill: CGFloat?) -> [CGFloat] {
         var widths = floors
-        guard let fill, fill.isFinite, !widths.isEmpty, natural.count == widths.count else { return widths }
-        var extra = fill - widths.reduce(0, +)
-        guard extra > 0.5 else { return widths }
-        // What each column would grow to if the bubble allowed it: its one-line width, capped at `hi`.
-        let wanted = natural.indices.map { i in
-            Swift.max(0, Swift.min(natural[i], Swift.max(hi, floors[i])) - floors[i])
+        guard let fill, fill.isFinite, fill > 0, !widths.isEmpty, natural.count == widths.count else { return widths }
+        let totalFloors = widths.reduce(0, +)
+        var extra = fill - totalFloors
+        if extra > 0.5 {
+            // What each column would grow to if the bubble allowed it: its one-line width, capped at `hi`.
+            let wanted = natural.indices.map { i in
+                Swift.max(0, Swift.min(natural[i], Swift.max(hi, floors[i])) - floors[i])
+            }
+            let totalWanted = wanted.reduce(0, +)
+            if totalWanted > 0 {
+                let share = Swift.min(1, extra / totalWanted)
+                for i in widths.indices { widths[i] += wanted[i] * share }
+                extra -= totalWanted * share
+            }
+            guard extra > 0.5 else { return widths }
+            let total = widths.reduce(0, +)
+            return widths.map { $0 + extra * $0 / total }
         }
-        let totalWanted = wanted.reduce(0, +)
-        if totalWanted > 0 {
-            let share = Swift.min(1, extra / totalWanted)
-            for i in widths.indices { widths[i] += wanted[i] * share }
-            extra -= totalWanted * share
+        // When floors exceed the bubble: compress each column proportionally above minColumnFloor
+        // so the table wraps fully to the bubble width without sideways scrolling.
+        let count = CGFloat(widths.count)
+        let minFloor = Swift.min(minColumnFloor, fill / count)
+        let base = count * minFloor
+        let surplus = fill - base
+        if surplus > 0.5 {
+            let excessFloors = floors.map { Swift.max(0, $0 - minFloor) }
+            let totalExcess = excessFloors.reduce(0, +)
+            if totalExcess > 0.5 {
+                return floors.indices.map { minFloor + (excessFloors[$0] / totalExcess) * surplus }
+            }
         }
-        guard extra > 0.5 else { return widths }
-        let total = widths.reduce(0, +)
-        return widths.map { $0 + extra * $0 / total }
+        return Array(repeating: fill / count, count: widths.count)
     }
 
     /// The words a column's floor is measured from: every cell's plain text, deduped, one per line.
@@ -358,7 +374,7 @@ struct MarkdownTableGrid: View {
     var table: MarkdownTable
     var font: Font = .footnote
     /// Lines a cell may take before it is cut short; nil for all of them.
-    var lineLimit: Int? = 3
+    var lineLimit: Int? = nil
     /// Wrap the cells inside their columns' word floors instead of holding their one-line widths.
     /// A wrapped cell is never cut short: every line of it is drawn.
     var wraps = false
