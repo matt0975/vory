@@ -106,7 +106,7 @@ final class PushRegistrar: PushRegistrationSyncing {
 
     func requestAuthorization() async -> Bool {
         do {
-            let ok = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge, .timeSensitive])
+            let ok = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             await refreshAuthorization()
             if ok { registerForRemote() }
             return ok

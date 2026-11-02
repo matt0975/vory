@@ -180,9 +180,16 @@ struct HTMLCardView: View {
     /// The thread's Show Source, for the card's own menu.
     var onShowSource: (() -> Void)? = nil
     @Environment(\.colorScheme) private var scheme
-    @State private var height: CGFloat = 96
+    @MainActor static var measuredHeights: [Int: CGFloat] = [:]
+    @State private var height: CGFloat
     @State private var loaded = false
     @State private var full = false
+
+    init(html: String, onShowSource: (() -> Void)? = nil) {
+        self.html = html
+        self.onShowSource = onShowSource
+        _height = State(initialValue: Self.measuredHeights[html.hashValue] ?? 96)
+    }
     /// Whether the card is near the screen: its web view (a web process each) lives only then.
     /// A thread of cards kept every one alive wherever the reader was; a card that has been off
     /// the screen for a while is its measured height of nothing until it comes back, when it
@@ -240,6 +247,9 @@ struct HTMLCardView: View {
             }
         }
         .animation(.snappy, value: loaded)
+        .onChange(of: height) { _, newHeight in
+            Self.measuredHeights[html.hashValue] = newHeight
+        }
         .sheet(isPresented: $full) { HTMLCardSheet(html: html).sheetFrame(.wide).withAppModel() }
     }
 }

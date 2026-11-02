@@ -63,7 +63,8 @@ final class WindowGeometry {
 }
 
 extension EnvironmentValues {
-    @Entry var windowGeometry: WindowGeometry = WindowGeometry()
+    private static let defaultWindowGeometry = WindowGeometry()
+    @Entry var windowGeometry: WindowGeometry = defaultWindowGeometry
 }
 
 #if os(iOS)

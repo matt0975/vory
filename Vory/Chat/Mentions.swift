@@ -148,16 +148,18 @@ extension Mentions {
                 out = out + math(slice)
                 continue
             }
-            guard let link = run.link, let bot = bot(from: link) else { out = out + Text(slice); continue }
+            guard let link = run.link, let bot = bot(from: link) else { out = Text("\(out)\(Text(slice))"); continue }
             let color = BotColors.color(for: bot)
             var name = slice
             if name.characters.first == "@" { name = AttributedString(name[name.index(afterCharacter: name.startIndex)...]) }
             var chip = Text(name)
             if let face = face(for: bot) {
                 // A narrow no-break space: the face and the name never part at a line's end.
-                chip = Text(face).baselineOffset(-3) + Text("\u{202F}") + Text(name)
+                let faceText = Text(face).baselineOffset(-3)
+                chip = Text("\(faceText)\u{202F}\(Text(name))")
             }
-            out = out + Text("\u{2009}") + chip.foregroundStyle(color).customAttribute(MentionChipAttribute(color: color)) + Text("\u{2009}")
+            let styledChip = chip.foregroundStyle(color).customAttribute(MentionChipAttribute(color: color))
+            out = Text("\(out)\u{2009}\(styledChip)\u{2009}")
         }
         return out
     }

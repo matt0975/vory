@@ -273,7 +273,13 @@ public final class LockedFlag: @unchecked Sendable {
 extension NativeAuthClient: ASWebAuthenticationPresentationContextProviding {
     public func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         #if canImport(UIKit)
-        UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? ASPresentationAnchor()
+        if let keyWindow = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first {
+            return keyWindow
+        }
+        if let scene = (UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene) ?? (UIApplication.shared.connectedScenes.first as? UIWindowScene) {
+            return UIWindow(windowScene: scene)
+        }
+        return ASPresentationAnchor()
         #else
         NSApplication.shared.keyWindow ?? ASPresentationAnchor()
         #endif

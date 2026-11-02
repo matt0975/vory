@@ -1318,7 +1318,9 @@ struct ChatListView: View {
         if case .bool(let v)? = body["archived"] { archived = v }
         if afterClose { heldRows[s.id] = was }
         // Fenced on a newer Hermes (#467): the chat's revision with the edit.
-        async let sent: Void = SessionMutation.patch(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile, fields: body)
+        let targetProfile = s.profile ?? runtime.selectedProfile
+        let api = runtime.api
+        async let sent: Void = SessionMutation.patch(api, id: s.id, profile: targetProfile, fields: body)
         if afterClose { try? await Task.sleep(for: Self.closeBeforeMove) }
         // Shown now, by the row's id (a reload in the wait may have reordered the list); the
         // gateway's answer decides whether it stays that way.

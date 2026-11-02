@@ -1,4 +1,3 @@
-import Combine
 import QuickLook
 import SwiftUI
 import VoryCore
@@ -961,13 +960,6 @@ extension TranscriptView {
                 return
             }
             withAnimation(.easeOut(duration: 0.35)) { scrollPosition.scrollTo(edge: .bottom) }
-            // If it did not land (a lazy row laid out late, an older iOS), finish the job flat.
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, metrics.distanceFromBottom > 24 else { return }
-            scrollPosition.scrollTo(edge: .bottom)
-            try? await Task.sleep(for: .milliseconds(60))
-            guard !Task.isCancelled, metrics.distanceFromBottom > 24 else { return }
-            scrollPosition.scrollTo(id: "bottom", anchor: .bottom)
         }
     }
 }
