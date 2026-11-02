@@ -52,6 +52,15 @@ import UIKit
 
     func closed(for shape: String) -> Bool? { closedByShape[shape] }
 
+    /// The strip's verdict for a window: whether the system's bars run vertical beside a status strip, or nil while the bars
+    /// and the window disagree. As the Duo opens the bars go along the bottom a beat before the window leaves the closed
+    /// shape; noted then, the closed shape was kept as no strip, and the next launch closed drew the phone's top bar until
+    /// the regions were read (#617).
+    static func closedVerdict(barsVertical: Bool, safeArea: EdgeInsets) -> Bool? {
+        let strip = VoryTabBar.statusStrip(safeArea) != nil
+        return barsVertical == strip ? strip : nil
+    }
+
     /// The strip's verdict for a shape, kept for the next launch.
     func noteClosed(_ closed: Bool, for shape: String) {
         guard closedByShape[shape] != closed else { return }
@@ -713,7 +722,7 @@ struct SystemBarItemsHost: View {
         // What a launch lays out in before the live window and fold come (`SystemBarItems.launchGeometry`,
         // `TopBarRoom.barUpAtLaunch`): only what was read live, settled and in front, and only on the Duo.
         .onChange(of: Settled(key: key, safe: g.safeArea, read: read, live: live,
-                              closed: model.tabBarVertical && VoryTabBar.statusStrip(g.safeArea) != nil,
+                              closed: SystemBarItems.closedVerdict(barsVertical: model.tabBarVertical, safeArea: g.safeArea),
                               measured: !g.seeded && !g.holding && g.bounds.width > 0, front: scenePhase == .active, duo: duo || now),
                   initial: true) { _, s in
             guard s.measured, s.front, s.duo else { return }
@@ -721,13 +730,13 @@ struct SystemBarItemsHost: View {
             // By the time the regions are read the system has said where its bars stand (0.1 s in, against about a second).
             if s.read {
                 SystemBarItems.shared.noteUp(s.live, for: s.key)
-                SystemBarItems.shared.noteClosed(s.closed, for: s.key)
+                if let closed = s.closed { SystemBarItems.shared.noteClosed(closed, for: s.key) }
             }
         }
     }
 
     private struct Settled: Equatable {
-        var key: String, safe: EdgeInsets, read: Bool, live: Bool, closed: Bool, measured: Bool, front: Bool, duo: Bool
+        var key: String, safe: EdgeInsets, read: Bool, live: Bool, closed: Bool?, measured: Bool, front: Bool, duo: Bool
     }
 }
 

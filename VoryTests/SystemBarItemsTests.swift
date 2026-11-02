@@ -136,6 +136,16 @@ import Testing
         }
     }
 
+    /// #617: the moment between, as the Duo opens, says nothing, so the closed shape keeps its strip for the next launch.
+    @Test func theMomentBetweenTheBarsAndTheWindowSaysNothing() {
+        let strip = EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84), band = EdgeInsets(top: 82, leading: 0, bottom: 34, trailing: 0)
+        #expect(SystemBarItems.closedVerdict(barsVertical: true, safeArea: strip) == true)
+        #expect(SystemBarItems.closedVerdict(barsVertical: false, safeArea: band) == false)
+        // The look at #617 (2026-11-02), every open from closed: the closed window's strip, the bars already along the bottom.
+        #expect(SystemBarItems.closedVerdict(barsVertical: false, safeArea: strip) == nil)
+        #expect(SystemBarItems.closedVerdict(barsVertical: true, safeArea: band) == nil)
+    }
+
     @Test func aMarkerIsTakenOnlyInTheStrip() {
         // Closed (466 wide, the strip the safe area's right 84, from 382): the probe's markers (399, 238 and 298) stand in it;
         // UIKit's row item (334 to 378) and the 9398bcbe row's More don't.
