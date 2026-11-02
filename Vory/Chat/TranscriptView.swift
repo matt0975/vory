@@ -556,11 +556,13 @@ extension TranscriptView {
     /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
     /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
     /// thread is shorter after it, so the rows above come down, in the same animation as the close.
-    /// Once the hold ends, a thread still locked to its end follows a running turn again, eased as `followRows` does
-    /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
-    /// thread following it. With no turn running, nothing moves after the toggle.
+    /// Once the hold ends, the thread follows its end again only if the reader was at its very end as the card was toggled
+    /// (`CardFollow`): a turn still running, or rows that arrived meanwhile (held back), eased as `followRows` does. A
+    /// reader up the thread is left where they are, even while the thread is still locked to its end, so a card opened
+    /// there never ends with a jump to the bottom. With no turn running and no rows in, nothing moves after the toggle.
     private func holdCard(opening: Bool) {
         guard opening || metrics.distanceFromBottom >= 4 else { CardHold.shared.end(); return }
+        let atEnd = metrics.distanceFromBottom < 4
         cardHold += 1
         let hold = cardHold
         holdingCard = true
@@ -603,9 +605,9 @@ extension TranscriptView {
             #if DEBUG
             CardMotionProbe.holding = false
             #endif
-            // A turn running under a thread locked to its end goes on being followed (eased, as `followRows` does); with
-            // no turn running the thread stays where the card left it.
-            let follow = followAfterHold
+            // Followed again only if the reader was at the very end as the card was toggled (`CardFollow`); a reader up
+            // the thread stays where the card left them.
+            let follow = CardFollow.afterHold(atEndWhenToggled: atEnd, rowsArrived: followAfterHold, turnRunning: chat.isRunning)
             followAfterHold = false
             if follow, mayFollow(), metrics.distanceFromBottom > 4 { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
@@ -2080,6 +2082,16 @@ struct Folded: ViewModifier {
 
 extension View {
     func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
+}
+
+/// After a card's hold (`TranscriptView.holdCard`), whether the thread follows its end again: only for a reader who was at
+/// its very end as the card was toggled, and then for a turn still running or rows that came in during the hold. A reader
+/// up the thread is left where they are, even while the thread is still locked to its end, so a card opened there never
+/// ends with a jump to the bottom.
+enum CardFollow {
+    static func afterHold(atEndWhenToggled: Bool, rowsArrived: Bool, turnRunning: Bool) -> Bool {
+        atEndWhenToggled && (rowsArrived || turnRunning)
+    }
 }
 
 /// The tapped card's place while the thread holds it (#437, #473). The thread's hold anchors its size changes at its top,

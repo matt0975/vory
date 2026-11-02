@@ -270,6 +270,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
     public var queue: [QueuedMessage] = []
     public var staged: [AttachmentPreview] = []
+    /// Stagings under way (`stagingBegan`): a send waits for them (`stagingSettled`), so a file dropped, pasted or picked
+    /// just before Return goes with that message, not after it.
+    private var stagingInFlight = 0
     public var composerHistory: [String] = []
     public var lastSubmitStatus: String?
     public var stale = false
@@ -993,6 +996,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// then answers in short plain sentences, with the recent spoken exchange in mind.
     public func send(_ rawText: String, voice: VoiceTurn? = nil) async -> String? {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A file still staging is part of this message: waited for before anything is decided, so a message of only
+        // that file is not taken for an empty one.
+        await stagingSettled()
         guard !text.isEmpty || !staged.isEmpty else { return nil }
         await awaitResume()
         if let e = resumeError { return "This chat could not be opened on the gateway: \(e)" }
@@ -1105,6 +1111,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     @discardableResult private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async -> Bool {
+        await stagingSettled()
         interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
@@ -1204,8 +1211,11 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     public func stageAttachment(data: Data, name: String, kind: AttachmentPreview.Kind) {
         if data.count > 512 * 1024 {
+            // Counted now, not when the task gets to run: a send right after this waits for it.
+            stagingBegan()
             Task { [weak self] in
-                await self?.stageAttachmentAsync(data: data, name: name, kind: kind)
+                await self?.stageOffMain(data: data, name: name, kind: kind)
+                self?.stagingEnded()
             }
             return
         }
@@ -1223,8 +1233,30 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
-    /// Asynchronous staging for large payloads off @MainActor
+    /// Asynchronous staging for large payloads off @MainActor. A send made meanwhile waits for it.
     public func stageAttachmentAsync(data: Data, name: String, kind: AttachmentPreview.Kind) async {
+        stagingBegan()
+        await stageOffMain(data: data, name: name, kind: kind)
+        stagingEnded()
+    }
+
+    /// A staging that starts before its bytes are in hand (a drop, a file being read, photos loading): counted from
+    /// now, so a send made meanwhile waits for it. Each `stagingBegan` is matched by one `stagingEnded`, when the
+    /// file is staged or given up.
+    public func stagingBegan() { stagingInFlight += 1 }
+
+    public func stagingEnded() { stagingInFlight = max(0, stagingInFlight - 1) }
+
+    /// Returns once no staging is under way, or after `seconds` at most: a staging that never ends (a drop whose
+    /// provider never answers) holds one message up for that long, never every message after it, since what is still
+    /// counted then is given up (an end that comes later finds nothing to take away).
+    func stagingSettled(upTo seconds: Double = 60) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while stagingInFlight > 0, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        stagingInFlight = 0
+    }
+
+    private func stageOffMain(data: Data, name: String, kind: AttachmentPreview.Kind) async {
         let dir = runtime.scratchDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
         let transcoder = Self.imageTranscoder
         let result: Result<AttachmentPreview, Error> = await Task.detached(priority: .userInitiated) {

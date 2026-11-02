@@ -476,10 +476,12 @@ struct ComposerView: View {
             for p in providers {
                 let pdf = p.hasItemConformingToTypeIdentifier(UTType.pdf.identifier)
                 let type = pdf ? UTType.pdf : UTType.image
+                // Counted from here, while the phone's picture comes over: a send meanwhile waits for it.
+                chat.stagingBegan()
                 _ = p.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
-                    guard let data else { return }
+                    guard let data else { Task { @MainActor in chat.stagingEnded() }; return }
                     let name = (p.suggestedName ?? (pdf ? "Scan" : "Photo")) + (pdf ? ".pdf" : ".jpg")
-                    Task { await chat.stageAttachmentAsync(data: data, name: name, kind: pdf ? .pdf : .image) }
+                    Task { @MainActor in chat.stageAttachment(data: data, name: name, kind: pdf ? .pdf : .image); chat.stagingEnded() }
                 }
             }
             return !providers.isEmpty
@@ -502,10 +504,11 @@ struct ComposerView: View {
         .onAppear { if chat.items.isEmpty, !chat.isDraft { focused = true } }
         #endif
         .photosPicker(isPresented: $showPhotos, selection: $photoItems, maxSelectionCount: 6, matching: .any(of: [.images, .videos]))
-        .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
+        // Counted while the photos load: a send meanwhile waits for them.
+        .onChange(of: photoItems) { _, items in chat.stagingBegan(); Task { await importPhotos(items); chat.stagingEnded() } }
         #if os(iOS)
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in Task { await chat.stageAttachmentAsync(data: data, name: name, kind: .image) } }.ignoresSafeArea().withAppModel() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
         #endif
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -1028,25 +1031,29 @@ struct ComposerView: View {
         photoItems = []
     }
 
-    private func importFile(_ url: URL, kind: AttachmentPreview.Kind? = nil) {
+    /// A picked or dropped file, read off the main thread and staged. Counted from the pick (or, with `counted`, by the
+    /// drop that brought it): a send made while it is read waits for it.
+    private func importFile(_ url: URL, kind: AttachmentPreview.Kind? = nil, counted: Bool = false) {
+        if !counted { chat.stagingBegan() }
         let scoped = url.startAccessingSecurityScopedResource()
+        enum Read: Sendable { case file(Data, AttachmentPreview.Kind), problem(String) }
         Task.detached(priority: .userInitiated) {
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 200 * 1024 * 1024 {
-                await MainActor.run { chat.banner = "\(url.lastPathComponent) is larger than 200 MB." }
-                return
+            let read: Read = {
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 200 * 1024 * 1024 {
+                    return .problem("\(url.lastPathComponent) is larger than 200 MB.")
+                }
+                guard let data = try? Data(contentsOf: url) else { return .problem("Could not read \(url.lastPathComponent)") }
+                if data.count > 200 * 1024 * 1024 { return .problem("\(url.lastPathComponent) is larger than 200 MB.") }
+                let type = UTType(filenameExtension: url.pathExtension)
+                let k: AttachmentPreview.Kind = kind ?? (type?.conforms(to: .image) == true ? .image : type?.conforms(to: .pdf) == true ? .pdf : type?.conforms(to: .audio) == true ? .audio : type?.conforms(to: .movie) == true ? .video : .file)
+                return .file(data, k)
+            }()
+            switch read {
+            case .file(let data, let k): await chat.stageAttachmentAsync(data: data, name: url.lastPathComponent, kind: k)
+            case .problem(let message): await MainActor.run { chat.banner = message }
             }
-            guard let data = try? Data(contentsOf: url) else {
-                await MainActor.run { chat.banner = "Could not read \(url.lastPathComponent)" }
-                return
-            }
-            if data.count > 200 * 1024 * 1024 {
-                await MainActor.run { chat.banner = "\(url.lastPathComponent) is larger than 200 MB." }
-                return
-            }
-            let type = UTType(filenameExtension: url.pathExtension)
-            let k: AttachmentPreview.Kind = kind ?? (type?.conforms(to: .image) == true ? .image : type?.conforms(to: .pdf) == true ? .pdf : type?.conforms(to: .audio) == true ? .audio : type?.conforms(to: .movie) == true ? .video : .file)
-            await chat.stageAttachmentAsync(data: data, name: url.lastPathComponent, kind: k)
+            await MainActor.run { chat.stagingEnded() }
         }
     }
 
@@ -1054,7 +1061,7 @@ struct ComposerView: View {
     private func paste() {
         let pb = UIPasteboard.general
         if pb.hasImages, let img = pb.image, let data = img.jpegData(compressionQuality: 0.9) {
-            Task { await chat.stageAttachmentAsync(data: data, name: "photo-\(Int(Date().timeIntervalSince1970)).jpg", kind: .image) }
+            chat.stageAttachment(data: data, name: "photo-\(Int(Date().timeIntervalSince1970)).jpg", kind: .image)
         } else if let s = pb.string {
             text += s
         } else if let items = pb.items.first, let (type, value) = items.first, let data = value as? Data {
@@ -1073,10 +1080,12 @@ struct ComposerView: View {
         for p in providers {
             if p.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
                 took = true
+                // Counted from the drop, while the file comes over and is read: a send meanwhile waits for it.
+                chat.stagingBegan()
                 p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
                     let url = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
-                    guard let url else { return }
-                    Task { @MainActor in importFile(url) }
+                    guard let url else { Task { @MainActor in chat.stagingEnded() }; return }
+                    Task { @MainActor in importFile(url, counted: true) }
                 }
             } else if let type = p.registeredTypeIdentifiers.compactMap({ UTType($0) }).first(where: { $0.conforms(to: .content) }) {
                 // A card dragged out of a chat (any file: a PDF, a CSV, a log), or a picture, PDF
@@ -1087,14 +1096,17 @@ struct ComposerView: View {
                 let family = [UTType.image, .pdf, .movie, .audio].first { type.conforms(to: $0) }
                 guard family != nil || p.hasRepresentationConforming(toTypeIdentifier: type.identifier, fileOptions: []) else { continue }
                 took = true
+                chat.stagingBegan()
                 let fallback = (p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped") + "." + (type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? "bin")
                 _ = p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
-                    guard let url, let data = try? Data(contentsOf: url) else { return }
+                    guard let url, let data = try? Data(contentsOf: url) else { Task { @MainActor in chat.stagingEnded() }; return }
+                    // The representation's file is named after the item and typed again by the
+                    // provider ("report.pdf.pdf"): one extension, the type's.
                     let ext = type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? url.pathExtension
                     var base = url.deletingPathExtension().lastPathComponent
                     if !ext.isEmpty, base.lowercased().hasSuffix("." + ext.lowercased()) { base = String(base.dropLast(ext.count + 1)) }
                     let name = url.pathExtension.isEmpty ? fallback : (ext.isEmpty ? base : base + "." + ext)
-                    Task { @MainActor in stagePasted(data, name: name, type: type) }
+                    Task { @MainActor in stagePasted(data, name: name, type: type); chat.stagingEnded() }
                 }
             }
         }
@@ -1103,12 +1115,11 @@ struct ComposerView: View {
     #endif
 
     /// Something other than text pasted into the field (the edit menu, or the keyboard's
-    /// "Paste from Screenshots"): staged like a picked file.
+    /// "Paste from Screenshots"): staged like a picked file. A large one stages off the main thread and is counted at
+    /// once (`stageAttachment`), so a send right after it waits for it.
     private func stagePasted(_ data: Data, name: String, type: UTType) {
         let kind: AttachmentPreview.Kind = type.conforms(to: .image) ? .image : type.conforms(to: .movie) ? .video : type.conforms(to: .pdf) ? .pdf : type.conforms(to: .audio) ? .audio : .file
-        Task {
-            await chat.stageAttachmentAsync(data: data, name: name, kind: kind)
-        }
+        withAnimation(.snappy) { chat.stageAttachment(data: data, name: name, kind: kind) }
     }
 }
 
