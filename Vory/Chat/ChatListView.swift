@@ -43,15 +43,12 @@ struct ChatListView: View {
     /// strip (#590, #586), and as a pop brought the list in it came late (the field dropped from under the row) or
     /// collapsed the drawer.
     private var closedStrip: Bool { TopBarRoom.closedStrip(barsVertical: model.tabBarVertical, size: windowGeometry.bounds.size) }
-    /// The row's room under the top bar (#340), worked out as the stack's always was. On the closed Duo the list keeps the
-    /// search drawer's height over its rows as well (`listRoom`).
+    /// The row's room under the top bar (#340), worked out as the stack's always was. On the closed Duo the list keeps it
+    /// itself, over its first row.
     private var rowRoom: CGFloat {
         TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner, barOn: MorphTopBar.active(model),
                          rowBottom: MorphState.shared.rootRowBottom)
     }
-    /// The closed Duo's list's room over its first row: the row's room and the drawer's height, so its rows stand where they
-    /// stood under the drawer (`TopBarRoom.drawerHeight`), clear of the status in the strip.
-    private var listRoom: CGFloat { rowRoom + TopBarRoom.drawerHeight }
     #endif
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
@@ -712,11 +709,12 @@ struct ChatListView: View {
         // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
         .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
         // The closed Duo's room under the top bar's row, the list's own (#591): laid out with the list, so it's in place as a
-        // pop brings the list in, on a stack SwiftUI built anew at a fold too: the row's room and the drawer's height, so
-        // the rows stand where they did under the drawer (`listRoom`). The list keeps clear of the page's own bar there as
-        // the chat does (its 24 pt band, and the 58 pt one an animated pop lays out over the coming page, which carried
-        // the list down for the pop and back up after it), so its top is that room alone.
-        .contentMargins(.top, closedStrip ? listRoom : 0, for: .scrollContent)
+        // pop brings the list in, on a stack SwiftUI built anew at a fold too. The row's room alone, so the first row stands
+        // under the bar's row as a group chat's header and every other page do (#616: the search drawer's height, kept
+        // there once search moved into the side column, left an empty band over the rows). The list keeps clear of the
+        // page's own bar there as the chat does (its 24 pt band, and the 58 pt one an animated pop lays out over the coming
+        // page, which carried the list down for the pop and back up after it), so its top is that room alone.
+        .contentMargins(.top, closedStrip ? rowRoom : 0, for: .scrollContent)
         .ignoresSafeArea(.container, edges: closedStrip ? .top : [])
         #endif
         #if os(macOS)
