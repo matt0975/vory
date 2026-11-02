@@ -544,13 +544,22 @@ struct MorphTopBar: View {
     /// A chat's Back or More in the closed Duo's status strip, in the bar's space: 44 pt, centred on the marker the system
     /// laid out there for it (`StripMarkers`: under the status, and moved down with it as Live Activities arrive, which
     /// nothing else the app can read follows, #555); before a marker is read for this window's shape, the one last read
-    /// for it; before any, where the system stood it when measured (`StripMarkers.fallbackTops`). The bar's space
-    /// starts at the safe area's leading edge and top, inside the bar's side inset and padding.
+    /// for it; before any, where the system stood it when measured (`StripMarkers.fallbackTops`). More stands closer
+    /// under Back than its own marker (`columnCentre`, #618). The bar's space starts at the safe area's leading edge and
+    /// top, inside the bar's side inset and padding.
     private func columnFrame(_ slot: MorphSlot) -> CGRect? {
         guard slot.inColumn, stripClosed, !inBand else { return nil }
-        let g = windowGeometry
-        let centre = StripMarkers.shared.centre(slot == .columnBack ? .back : .more, in: g, withBack: true, closed: true, xxxl: typeSize == .xxxLarge)
+        let g = windowGeometry, xxxl = typeSize == .xxxLarge
+        let centre = Self.columnCentre(slot, back: StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: xxxl),
+                                       more: StripMarkers.shared.centre(.more, in: g, withBack: true, closed: true, xxxl: xxxl))
         return CGRect(x: centre.x - 22 - g.safeArea.leading - Self.sideInset, y: centre.y - 22 - g.safeArea.top - topPadding, width: 44, height: 44)
+    }
+    /// A closed column control's middle, window space, from the two markers' (#618): Back on its own; More on its own
+    /// marker's line, `TopBarRoom.stripPitch` under Back, as close as the system stacks two items of one group (it stands
+    /// our two in two groups, 70 apart). Back's marker moves down with the status as Live Activities arrive, and More with
+    /// it.
+    static func columnCentre(_ slot: MorphSlot, back: CGPoint, more: CGPoint) -> CGPoint {
+        slot == .columnBack ? back : CGPoint(x: more.x, y: back.y + TopBarRoom.stripPitch)
     }
     /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
     /// shipped chrome back for a comparison.
@@ -1497,8 +1506,10 @@ enum MorphFramesProbe {
     @MainActor static var marks: [String: CGRect] = [:]
     @MainActor static var summary: String {
         let f = { (n: String, r: CGRect) in "\(n) \(Int(r.minX.rounded())) \(Int(r.minY.rounded())) \(Int(r.width.rounded())) \(Int(r.height.rounded()))" }
+        // The closed column's pitch as its width, for the UI tests' check of More (#618), never a second copy of it there.
         return (MorphSlot.allCases.compactMap { s in frames[s].map { f("\(s)", $0) } } + [face.map { f("face", $0) }].compactMap { $0 }
-                + marks.keys.sorted().compactMap { k in marks[k].map { f(k, $0) } })
+                + marks.keys.sorted().compactMap { k in marks[k].map { f(k, $0) } }
+                + [f("stripPitch", CGRect(x: 0, y: 0, width: TopBarRoom.stripPitch, height: 1))])
             .joined(separator: ";")
     }
     /// With `-vory-morph-log`: a view's frame (global) in the log each time it changes, "<wall time> <name> x y w h".

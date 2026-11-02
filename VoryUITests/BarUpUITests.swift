@@ -461,6 +461,16 @@ final class BarUpUITests: XCTestCase {
                     XCTAssertEqual(f.midY, m.midY, accuracy: Self.slack, "\(name) \(f) not centred on its marker \(m)")
                 } else { XCTFail("VOID: the readout has no \(key)") }
             }
+            // #618: closed, More stands the app's pitch (the readout's stripPitch, its width) under Back's marker, on its own
+            // marker's line: closer than the system's two groups stand them, the 44 pt circles clear of each other.
+            let atPitch = { (name: String, f: CGRect) in
+                guard let mb = c["markerBack"], let mm = c["markerMore"], let p = c["stripPitch"]?.width else {
+                    XCTFail("VOID: the readout has no markerBack, markerMore or stripPitch"); return
+                }
+                XCTAssertTrue(p >= 44 && p < 70, "the pitch \(p) isn't from 44 to under 70")
+                XCTAssertEqual(f.midX, mm.midX, accuracy: Self.slack, "\(name) \(f) not on its marker's line \(mm)")
+                XCTAssertEqual(f.midY, mb.midY + p, accuracy: Self.slack, "\(name) \(f) not \(p) under Back's marker \(mb)")
+            }
             // #555: the markers' own views hidden and out of the hit test, every laid-out one (the readout's stripHide: found,
             // laid out), so the taps reach our Back and More.
             let hiddenCheck = {
@@ -499,10 +509,10 @@ final class BarUpUITests: XCTestCase {
                 // left, clear of the strip.
                 XCTAssertEqual(face.minY, Self.closedRowTop, accuracy: Self.slack, "the face \(face) isn't \(Self.closedRowTop) pt from the top")
                 clearOfStrip("Chat info", info.frame)
-                // #555: Back over More in the strip, each on its marker.
+                // #555: Back over More in the strip, Back on its marker; #618: More the app's pitch under it.
                 XCTAssertTrue(back.exists, "no Back")
                 atMarker("Back", back.frame, "markerBack")
-                atMarker("More", more.frame, "markerMore")
+                atPitch("More", more.frame)
                 XCTAssertLessThanOrEqual(back.frame.maxY, more.frame.minY, "Back \(back.frame) not over More \(more.frame)")
                 bandColumnCheck()
                 hiddenCheck()
@@ -864,14 +874,15 @@ final class BarUpUITests: XCTestCase {
     /// reads in the log, its top at `to`'s within 1 pt); the control's first frame off its place comes within 0.5 s of it
     /// and its arrival within 1.1 s (the 250 ms settle, and slack; both printed). It may animate: between the two places
     /// every frame lies between them and only moves toward `to`, at most 0.6 s from its first frame off its place to its
-    /// arrival, and once there it stays.
+    /// arrival, and once there it stays. A control drawn a fixed distance under the system's place (`shift`: closed More,
+    /// the app's pitch under Back's marker, #618) follows that place's reads, that far under it.
     private func followsSystem(_ name: String, _ frames: [(t: Double, name: String, f: CGRect)], reads: [(t: Double, name: String, f: CGRect)],
-                               from: CGRect, to: CGRect, _ stage: String) {
+                               from: CGRect, to: CGRect, _ stage: String, shift: CGFloat = 0) {
         guard let event = reads.first(where: { abs($0.f.minY - to.minY) <= 1 }) else {
             print("LAMID \(stage) \(name): no read of the system's place at \(to.minY): " + reads.map { String(format: "%.0f", $0.f.minY) }.joined(separator: " "))
             XCTFail("\(stage): no read of the system's \(name) at \(to.minY)"); return
         }
-        let fromMid = from.midY, toMid = to.midY
+        let fromMid = from.midY + shift, toMid = to.midY + shift
         print("LAMID \(stage) \(name): \(frames.count) frames, middles (s from the system's read) "
               + frames.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - event.t) }.joined(separator: " "))
         guard let off = frames.firstIndex(where: { abs($0.f.midY - fromMid) > 1 }) else { XCTFail("\(stage): \(name) never left \(fromMid)"); return }
@@ -900,7 +911,8 @@ final class BarUpUITests: XCTestCase {
     /// copy back to the same chat; then the same at "BARUP HOLD la-end" to end it. (The full app launched from the test
     /// itself never asked for one, 2026-11-01.) Read at rest (A0), with the activity (A1) and after it (A2), each once the
     /// system's marker has moved (up to 10 s): the markers lower by the activity's push in A1 and back in A2, Back and More
-    /// on them within 1 pt each time, and at A1 More's menu opens and its Rename gives one dialog. From the log, each
+    /// on them within 1 pt each time (closed, More the app's pitch under Back's marker, #618), and at A1 More's menu opens
+    /// and its Rename gives one dialog. From the log, each
     /// control follows the system's own move (`followsSystem`): timed from the system's first read at its new place, it
     /// may animate. The copy's return is printed, for information. The copy not back on the same chat (relaunched, or the
     /// chat gone), or the markers not moved by the activity, is VOID ("LAMID VOID …"), not a failure.
@@ -919,11 +931,19 @@ final class BarUpUITests: XCTestCase {
             for s in slots { print("LAMID \(stage) \(s.name) \(s.el.exists ? "\(s.el.frame)" : "none") marker \(c[s.marker].map { "\($0)" } ?? "none")") }
             return c
         }
+        // #618: closed, More stands the app's pitch (the readout's stripPitch) under Back's marker, and follows Back's.
+        let pitch = caps()["stripPitch"]?.width ?? 0
+        if pose == .closed, pitch < 44 { print("LAMID VOID: no stripPitch in the readout"); throw XCTSkip("VOID: no stripPitch") }
         let onMarkers = { (stage: String, c: [String: CGRect]) in
             for s in slots {
                 guard let m = c[s.marker], s.el.exists else { XCTFail("\(stage): \(s.name) or its marker missing"); continue }
                 XCTAssertEqual(s.el.frame.midX, m.midX, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
-                XCTAssertEqual(s.el.frame.midY, m.midY, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
+                if pose == .closed, s.name == "More" {
+                    guard let mb = c["markerBack"] else { XCTFail("\(stage): Back's marker missing"); continue }
+                    XCTAssertEqual(s.el.frame.midY, mb.midY + pitch, accuracy: 1, "\(stage): More \(s.el.frame) not \(pitch) under Back's marker \(mb)")
+                } else {
+                    XCTAssertEqual(s.el.frame.midY, m.midY, accuracy: 1, "\(stage): \(s.name) \(s.el.frame) not centred on its marker \(m)")
+                }
             }
         }
         // Up to 10 s for the first marker to stand where `ok` says, then 1.5 s for the controls to follow; whether it did.
@@ -981,11 +1001,14 @@ final class BarUpUITests: XCTestCase {
         // Only what was drawn in front, or on the way in or out: not the background's layouts for the switcher's picture.
         let log = frameLog(inFront: true)
         for s in slots {
-            guard let from = a0[s.marker], let to = a1[s.marker] else { continue }
-            let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }, reads = log.filter { $0.name == s.read && $0.f.width > 0 }
+            // #618: closed, More follows Back's marker, the pitch under it.
+            let underBack = pose == .closed && s.name == "More"
+            let marker = underBack ? "markerBack" : s.marker, readName = underBack ? "markerReadBack" : s.read, shift = underBack ? pitch : 0
+            guard let from = a0[marker], let to = a1[marker] else { continue }
+            let drawn = log.filter { $0.name == s.slot && $0.f.width > 0 }, reads = log.filter { $0.name == readName && $0.f.width > 0 }
             let w1 = { (x: (t: Double, name: String, f: CGRect)) in x.t >= start.launched && x.t < end.launched }
-            followsSystem(s.name, drawn.filter(w1), reads: reads.filter(w1), from: from, to: to, "start")
-            followsSystem(s.name, drawn.filter { $0.t >= end.launched }, reads: reads.filter { $0.t >= end.launched }, from: to, to: from, "end")
+            followsSystem(s.name, drawn.filter(w1), reads: reads.filter(w1), from: from, to: to, "start", shift: shift)
+            followsSystem(s.name, drawn.filter { $0.t >= end.launched }, reads: reads.filter { $0.t >= end.launched }, from: to, to: from, "end", shift: shift)
         }
         app.terminate()
     }
@@ -994,7 +1017,8 @@ final class BarUpUITests: XCTestCase {
     /// ("BARUP HOLD fold-closed"). The system's places for Back and More after the fold are their last reads in the log
     /// ("markerReadBack", "markerReadMore"): after a pose change it can keep 175 (and 245) rather than pass it on to 238
     /// (and 308) (seen 2026-10-31), and which it did is printed. The column follows the system: after the last read, every
-    /// frame centred on the kept place within 1 pt; before it, at most one step, from where it first stood to the kept
+    /// frame centred on the kept place within 1 pt (More the app's pitch under Back's kept place, #618); before it, at most
+    /// one step, from where it first stood to the kept
     /// place, nothing between; and where the system passed 175 on to 238, never drawn at the passed place. Then More's menu
     /// opens and its Rename gives one dialog. No fold, the chat not open after it, or no read after it is VOID ("FOLD VOID
     /// …"), not a failure.
@@ -1012,7 +1036,14 @@ final class BarUpUITests: XCTestCase {
         guard element("chat.titlePill").exists else { print("FOLD VOID: the chat isn't open after the fold"); throw XCTSkip("VOID: no chat after the fold") }
         let log = frameLog().filter { $0.t >= folding }
         // Back and More: the system's reads, its kept place (the last read), and the column's frames against it.
-        for (name, read, slot, passed) in [("Back", "markerReadBack", "columnBack", CGFloat(175)), ("More", "markerReadMore", "columnMore", CGFloat(245))] {
+        // #618: closed, More stands the app's pitch (the readout's stripPitch) under Back, so it follows Back's reads, that far
+        // under them; More's own reads are printed, for information.
+        let pitch = caps()["stripPitch"]?.width ?? 0
+        guard pitch >= 44 else { print("FOLD VOID: no stripPitch in the readout"); throw XCTSkip("VOID: no stripPitch") }
+        print("FOLD markerReadMore: " + log.filter { $0.name == "markerReadMore" && $0.f.width > 0 }
+            .map { String(format: "%+.3f %.0f,%.0f", $0.t - folding, $0.f.minX, $0.f.minY) }.joined(separator: "; "))
+        for (name, read, slot, passed, shift) in [("Back", "markerReadBack", "columnBack", CGFloat(175), CGFloat(0)),
+                                                  ("More", "markerReadBack", "columnMore", CGFloat(175), pitch)] {
             let reads = log.filter { $0.name == read && $0.f.width > 0 }
             print("FOLD \(read): " + reads.map { String(format: "%+.3f %.0f,%.0f", $0.t - folding, $0.f.minX, $0.f.minY) }.joined(separator: "; "))
             guard let kept = reads.last else { print("FOLD VOID: no \(read) after the fold"); throw XCTSkip("VOID: no read after the fold") }
@@ -1024,7 +1055,7 @@ final class BarUpUITests: XCTestCase {
             print("FOLD \(slot): \(drawn.count) frames, middles "
                   + drawn.map { String(format: "%.1f@%+.3f", $0.f.midY, $0.t - folding) }.joined(separator: " "))
             XCTAssertFalse(drawn.isEmpty, "\(slot): never drawn after the fold")
-            let mid = kept.f.midY
+            let mid = kept.f.midY + shift
             // After the last read, once it has settled (250 ms) and the reader's 1 s read again has come: on the kept place.
             for d in drawn where d.t >= kept.t + 1.0 {
                 XCTAssertEqual(d.f.midY, mid, accuracy: 1, "\(slot): drawn at middle \(d.f.midY) after the system's last read, not \(mid)")
@@ -1036,7 +1067,7 @@ final class BarUpUITests: XCTestCase {
             if let last = runs.last { XCTAssertEqual(last, mid, accuracy: 1, "\(slot): ended at \(last), not on the kept place \(mid)") }
             // Where the system passed its transient on, never at it.
             if sawPassed && abs(kept.f.minY - passed) > 3 {
-                let at = passed + 24
+                let at = passed + 24 + shift
                 XCTAssertFalse(drawn.contains { abs($0.f.midY - at) <= 1 }, "\(slot): drawn at the passed place \(at)")
             }
         }

@@ -120,6 +120,11 @@ enum TopBarRoom {
     /// side and as a book they stand in a strip too, in a window wider than tall. There the Chats list has no search drawer
     /// (the system's search button stands in the side column, as Messages' does) and keeps the row's room itself.
     static func closedStrip(barsVertical: Bool, size: CGSize) -> Bool { barsVertical && size.height > size.width }
+    /// The closed Duo's column (#618): how far under Back, middle to middle, More is drawn. The system stands our two
+    /// markers in two groups, 70 apart, about twice the gap another app's controls have there; two items of one group stand
+    /// closer. ASSUMPTION (the iPhone Duo simulator on iOS 27.1, closed, with Back and More in one group, at default text
+    /// and XXXL, 2026-11-02): 52.
+    static let stripPitch: CGFloat = 52
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
     /// (.avoidHidingContent)`): under a status in a top corner, and with the bar up in the status band (#516). There the
     /// field stands at the safe area's top under the row; with the bar's band hidden by an active search the field and its
