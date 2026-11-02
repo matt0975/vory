@@ -4,6 +4,12 @@ import WebKit
 import JavaScriptCore
 import VoryCore
 
+#if os(iOS)
+public typealias PlatformImage = UIImage
+#else
+public typealias PlatformImage = NSImage
+#endif
+
 // MARK: - KaTeX Synchronous Thread-Safe In-Memory Cache
 
 /// Thread-safe in-memory cache for pre-rendered KaTeX HTML markup and measured card sizes.
@@ -19,6 +25,12 @@ enum KaTeXCache {
     nonisolated(unsafe) private static let sizeCache: NSCache<NSString, NSValue> = {
         let cache = NSCache<NSString, NSValue>()
         cache.countLimit = 500
+        return cache
+    }()
+
+    nonisolated(unsafe) private static let snapshotCache: NSCache<NSString, PlatformImage> = {
+        let cache = NSCache<NSString, PlatformImage>()
+        cache.countLimit = 300
         return cache
     }()
 
@@ -44,6 +56,16 @@ enum KaTeXCache {
         #else
         sizeCache.setObject(NSValue(size: size), forKey: latex as NSString)
         #endif
+    }
+
+    static func snapshot(for latex: String, dark: Bool) -> PlatformImage? {
+        let key = "\(latex):\(dark ? "dark" : "light")" as NSString
+        return snapshotCache.object(forKey: key)
+    }
+
+    static func setSnapshot(_ image: PlatformImage, for latex: String, dark: Bool) {
+        let key = "\(latex):\(dark ? "dark" : "light")" as NSString
+        snapshotCache.setObject(image, forKey: key)
     }
 }
 
