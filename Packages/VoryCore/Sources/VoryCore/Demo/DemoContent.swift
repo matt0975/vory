@@ -111,6 +111,12 @@ enum DemoContent {
         Chat(id: "20261011_090000_sprout", title: "Weekly budget check-in", bot: "default",
              preview: "Groceries came in under plan, but the bike repair went over.", source: "cron", cwd: home,
              pinned: false, started: 260_000, active: 259_000, rows: { budgetRows }),
+        Chat(id: "20261014_093500_sprout", title: "Soil for the raised beds", bot: "default",
+             preview: "About 1.2 m³ for both beds, or 24 bags of 50 litres.", source: "ios", cwd: home,
+             pinned: false, started: 1_500, active: 1_200, rows: { soilRows }),
+        Chat(id: "20261014_091500_gizmo", title: "Rename the lake trip photos by date", bot: "gizmo",
+             preview: "One command renames all 212 by when each was taken.", source: "ios", cwd: "/home/demo/trip",
+             pinned: false, started: 2_700, active: 2_400, rows: { photoRows }),
     ]
 
     // MARK: Histories
@@ -321,6 +327,35 @@ enum DemoContent {
 
             Groceries came in under plan, but the bike repair went over. You're 18 over in total, and next week's lighter plan covers it.
             """, at: 15),
+    ] }
+
+    /// Mathematics as a reply writes it (#550): a formula inline in a sentence, and one on a card of its own.
+    static var soilRows: [Row] { [
+        Row(role: "user", text: "We're building two raised beds, each 2 m long, 0.9 m wide and 30 cm deep. How much soil do we need?"),
+        Row(role: "assistant", text: """
+            A bed holds its length times its width times its depth, $V = l \\times w \\times d$, so each of yours takes 0.54 m³. For both, with a tenth more because soil settles after the first watering:
+
+            $$
+            V = 2 \\times 0.54 \\times 1.1 \\approx 1.19\\ \\text{m}^3
+            $$
+
+            That's 24 bags of 50 litres. Want me to add them to the shopping list?
+            """, at: 25),
+    ] }
+
+    /// A code block whose longest line is wider than any screen it's read on, the open Duo's included, so it wraps (#551).
+    static var photoRows: [Row] { [
+        Row(role: "user", text: "Can you rename the lake trip photos so they sort by when they were taken?"),
+        Row(role: "tool", text: "212 photos", name: "terminal", context: "ls photos | wc -l", at: 4),
+        Row(role: "assistant", text: """
+            There are 212 photos in the trip folder. This renames each one to the date and time it was taken, and adds a number when two were taken in the same second:
+
+            ```bash
+            exiftool -r -ext jpg -ext heic -d '%Y-%m-%d_%H%M%S%%-c.%%e' '-FileName<CreateDate' '-FileName<DateTimeOriginal' photos && ls photos | head -n 5
+            ```
+
+            Want me to run it on a copy of the folder first?
+            """, at: 20),
     ] }
 
     // MARK: A new message's reply
