@@ -1457,9 +1457,21 @@ enum ChatStyle {
 
     func rows(for key: Key, build: () -> [TranscriptRowModel]) -> [TranscriptRowModel] {
         if key != self.key {
-            built = build()
+            let nextBuilt = build()
+            if key.chat == self.key?.chat,
+               let split = olderSplit,
+               nextBuilt.count >= split,
+               older.count == split,
+               nextBuilt[..<split].elementsEqual(older) {
+                // When only tail items change and built[..<split] prefix elements remain identical,
+                // preserve the existing older array storage reference so that OlderRows.==
+                // terminates in O(1) time via buffer pointer equality (baseAddress).
+            } else {
+                olderSplit = nil
+                older = []
+            }
+            built = nextBuilt
             self.key = key
-            olderSplit = nil
             builds += 1
         }
         return built
@@ -1748,7 +1760,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1764,13 +1776,13 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
                     // Other files the bot hands back are cards under the words (#309).
                     let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false, onShowAll: onShowAll).equatable()
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
@@ -2339,6 +2351,7 @@ struct BotMessageNotice: View {
 
 struct ReasoningDisclosure: View {
     var text: String
+    var streaming = false
     @Binding var open: Bool
     /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
     var onShowAll: ((String) -> Void)? = nil
@@ -2368,7 +2381,7 @@ struct ReasoningDisclosure: View {
             // and closes at once rather than staying laid out under the closing edge (#361).
             let shown = TextPieces.capped(text)
             VStack(alignment: .leading, spacing: 6) {
-                MarkdownView(text: shown.text, style: .reasoning, inlineSelection: false).equatable()
+                MarkdownView(text: shown.text, style: .reasoning, streaming: streaming, inlineSelection: false).equatable()
                 if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(text) } }) }
             }
             .folded(open: open, spacing: 4, keep: shown.text.utf8.count <= 6_000)
@@ -2405,6 +2418,7 @@ extension Notification.Name {
 struct MarkdownView: View, Equatable {
     var text: String
     var style: Style = .reply
+    var streaming = false
 
     /// How the blocks are dressed. A reply keeps the thread's own text size and colour; a
     /// Reasoning card is footnote-sized and secondary, with small headings, and its html fences
@@ -2422,10 +2436,10 @@ struct MarkdownView: View, Equatable {
     // thousands that nothing ever read again. By size too (the cost is the text's length): a
     // long report streaming for minutes made hundreds of entries, each the whole reply so far
     // twice over (the key and its blocks), and 400 of those ran to tens of megabytes.
-    private static let blockCache: NSCache<NSString, BlocksBox> = {
+    static let blockCache: NSCache<NSString, BlocksBox> = {
         let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; c.totalCostLimit = 4_000_000; return c
     }()
-    private static let inlineCache: NSCache<NSString, InlineBox> = {
+    static let inlineCache: NSCache<NSString, InlineBox> = {
         let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; c.totalCostLimit = 2_000_000; return c
     }()
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
@@ -2436,7 +2450,7 @@ struct MarkdownView: View, Equatable {
     /// reply was parsed on every token, a long one's growing with its length.
     @MainActor private static var settled: [MarkdownParser.Settled] = []
 
-    @MainActor static func blocks(_ text: String) -> [MarkdownBlock] {
+    @MainActor static func blocks(_ text: String, streaming: Bool = false) -> [MarkdownBlock] {
         let key = text as NSString
         if let hit = blockCache.object(forKey: key) { return hit.blocks }
         let prior = settled.indices.filter { settled[$0].isStart(of: text) }.max { settled[$0].text.utf8.count < settled[$1].text.utf8.count }
@@ -2446,9 +2460,21 @@ struct MarkdownView: View, Equatable {
             settled.append(s)
             if settled.count > 16 { settled.removeFirst() }
         }
-        blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        if !streaming {
+            blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        }
         return parsed.blocks
     }
+
+    @MainActor static func isCachedInBlockCache(_ text: String) -> Bool {
+        blockCache.object(forKey: text as NSString) != nil
+    }
+
+    @MainActor static func clearBlockCache() {
+        blockCache.removeAllObjects()
+        settled.removeAll()
+    }
+
     @MainActor static func inline(_ text: String) -> AttributedString {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.
         // Most paragraphs mention nobody: those skip the walk over their runs, which ran over every
@@ -2481,11 +2507,13 @@ struct MarkdownView: View, Equatable {
         return "Code · \(lang)"
     }
 
-    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool {
+        a.text == b.text && a.style == b.style && a.streaming == b.streaming && a.inlineSelection == b.inlineSelection
+    }
 
     var body: some View {
         let _ = Perf.tick("markdown")
-        let blocks = Self.blocks(text)
+        let blocks = Self.blocks(text, streaming: streaming)
         let stack = VStack(alignment: .leading, spacing: style == .reasoning ? 6 : 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
                 render(block, at: i)
