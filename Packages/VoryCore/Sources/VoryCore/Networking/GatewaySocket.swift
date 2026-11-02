@@ -222,6 +222,10 @@ public actor GatewaySocket {
                 ticketRetried = false
                 addressStepNoAnswer = false
                 if wasReconnect { await onReconnected() } else { await onFirstConnected() }
+                // The hook runs inside this loop, so a socket lost while it ran (the chats' re-attach calls take a
+                // while) found the loop still here and started no other (`connectionLost`): go round again rather than
+                // end with nothing trying, on "Reconnecting (1)…" for good (#592).
+                if task == nil, wantConnected { continue }
                 return
             } catch let e as HermesAPIError where e.isUnauthorized {
                 teardown(reason: "auth")
