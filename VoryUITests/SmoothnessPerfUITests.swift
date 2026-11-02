@@ -1294,7 +1294,7 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// The keyboard dragged down over the thread (interactive dismiss), the drag slow enough for
-    /// the keyboard to track the finger (handoff item 2: 60 to 79 ms frames inside the tracking).
+    /// the keyboard to track the finger (frames of 60 to 79 ms were seen inside the tracking).
     func testKeyboardDrag() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token)

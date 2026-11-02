@@ -106,7 +106,7 @@ final class WatchChatUITests: WatchUITestCase {
         XCTAssertLessThan((widths.max() ?? 0) - (widths.min() ?? 0), 0.5, "the title moves (a marquee): widths \(widths)")
     }
 
-    /// Brief points 1 and 4: at rest the conversation ends above the composer, its last line never under the bar.
+    /// At rest the conversation ends above the composer, its last line never under the bar.
     private func checkEndsAboveTheBar() {
         let field = any("watch.chat.message")
         let bar = app.toolbars.firstMatch
