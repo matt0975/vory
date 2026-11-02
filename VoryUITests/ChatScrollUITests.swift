@@ -169,12 +169,20 @@ final class ChatScrollUITests: XCTestCase {
         XCTAssertEqual(afterEnd.frame.minY, during.y, accuracy: 24, "the thread moved \(Int(afterEnd.frame.minY - during.y)) pt while the reply streamed and ended")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")).firstMatch.exists, "no jump arrow while away from the end")
 
-        // Back to the end by the arrow.
+        // Back to the end by the arrow. The keyboard can still be up here, and the arrow then stands over a row: the
+        // arrow must take the tap itself.
+        let keyboardUp = app.keyboards.firstMatch.exists
         let arrow = try XCTUnwrap(hittable(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")), timeout: 5))
+        print("CHAT-SCROLL arrow at \(arrow.frame), the keyboard \(keyboardUp ? "up" : "down")")
         arrow.tap()
         XCTAssertTrue(end.firstMatch.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         shot("scroll-back-at-end")
+        // The end's words existing doesn't put the thread at its end (the lazy stack keeps rows it has laid out); the
+        // arrow going does.
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: arrow)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 3), .completed,
+                       "the arrow didn't bring the thread to its end (the keyboard \(keyboardUp ? "up" : "down") at the tap): it still shows")
         try assertEndClearsTheDock("after-arrow")
 
         // 2. After the reply: up the thread again, and nothing brings it back.
