@@ -392,6 +392,7 @@ struct MathCardView: View {
     @State private var availableWidth: CGFloat = 0
     @State private var loaded = false
     @State private var mathMarkup: String?
+    @State private var snapshotImage: PlatformImage?
 
     init(equation: String, closed: Bool) {
         self.equation = equation
@@ -402,27 +403,58 @@ struct MathCardView: View {
         _height = State(initialValue: cachedSize?.height ?? 48)
         _contentWidth = State(initialValue: cachedSize?.width ?? 0)
         _loaded = State(initialValue: cachedMarkup != nil)
+        _snapshotImage = State(initialValue: nil)
     }
 
     var body: some View {
+        let currentSnapshot = snapshotImage ?? KaTeXCache.snapshot(for: equation, dark: scheme == .dark)
+        let viewWidth = availableWidth > 40 ? availableWidth - 40 : 0
+        let effectiveWidth = max(contentWidth, currentSnapshot?.size.width ?? 0)
+        let effectiveHeight = max(height, currentSnapshot?.size.height ?? 0)
+        let targetWidth = max(effectiveWidth, viewWidth)
+        let displayHeight = min(max(effectiveHeight, 36), 360)
+
         HStack(spacing: 0) {
-            if closed, let markup = mathMarkup {
-                // Pre-rendered 2D math card: loaded immediately from memory, persistent across scrolling
+            if closed, let snapshot = currentSnapshot {
+                // Cached native image: rendered immediately with zero WKWebView creation
+                ScrollView(.horizontal, showsIndicators: false) {
+                    #if os(iOS)
+                    Image(uiImage: snapshot)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
+                    #else
+                    Image(nsImage: snapshot)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
+                    #endif
+                }
+                .frame(height: displayHeight)
+                .frame(maxWidth: .infinity)
+            } else if closed, let markup = mathMarkup {
+                // Transient pre-rendered 2D math card: mounts only until snapshot is captured and delivered
                 let doc = MathCard.document(mathMarkup: markup, dark: scheme == .dark)
-                let viewWidth = availableWidth > 40 ? availableWidth - 40 : 0
-                let targetWidth = max(contentWidth, viewWidth)
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     MathWebView(
                         equation: equation,
                         document: doc,
+                        dark: scheme == .dark,
                         height: $height,
                         contentWidth: $contentWidth,
-                        loaded: $loaded
+                        loaded: $loaded,
+                        onSnapshot: { img in
+                            withAnimation(.easeOut(duration: 0.15)) {
+                                snapshotImage = img
+                            }
+                        }
                     )
-                    .frame(width: targetWidth > 0 ? targetWidth : nil, height: min(max(height, 36), 360))
+                    .frame(width: targetWidth > 0 ? targetWidth : nil, height: displayHeight)
                 }
-                .frame(height: min(max(height, 36), 360))
+                .frame(height: displayHeight)
                 .frame(maxWidth: .infinity)
             } else {
                 // Streaming active or pre-computing markup: fast Swift text rendering with spinner
@@ -457,10 +489,18 @@ struct MathCardView: View {
                 availableWidth = width
             }
         }
+        .onChange(of: scheme) { _, newScheme in
+            snapshotImage = KaTeXCache.snapshot(for: equation, dark: newScheme == .dark)
+        }
+        .onChange(of: equation) { _, newEq in
+            snapshotImage = KaTeXCache.snapshot(for: newEq, dark: scheme == .dark)
+        }
         .task(id: "\(equation):\(closed)") {
             if closed {
-                let markup = await KaTeXEngine.shared.render(latex: equation)
-                mathMarkup = markup
+                if KaTeXCache.snapshot(for: equation, dark: scheme == .dark) == nil {
+                    let markup = await KaTeXEngine.shared.render(latex: equation)
+                    mathMarkup = markup
+                }
             }
         }
     }
