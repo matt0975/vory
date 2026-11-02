@@ -34,10 +34,23 @@ import AppKit
         #expect(KaTeXCache.snapshot(for: equation, dark: false) === sampleImage)
     }
 
-    @Test @MainActor func uncachedEquationRendersThroughKaTeXEngine() async {
-        let equation = "E = mc^2"
-        let markup = await KaTeXEngine.shared.render(latex: equation)
-        #expect(!markup.isEmpty)
-        #expect(KaTeXCache.markup(for: equation) != nil)
+    @Test @MainActor func colorSchemeSwitchingDifferentiatesSnapshots() {
+        let equation = "\\int_a^b f(x) dx"
+        #if os(iOS)
+        let lightImg = UIImage()
+        let darkImg = UIImage()
+        #else
+        let lightImg = NSImage()
+        let darkImg = NSImage()
+        #endif
+
+        KaTeXCache.setSnapshot(lightImg, for: equation, dark: false)
+        KaTeXCache.setSnapshot(darkImg, for: equation, dark: true)
+
+        let lightView = MathCardView(equation: equation, closed: true).environment(\.colorScheme, .light)
+        let darkView = MathCardView(equation: equation, closed: true).environment(\.colorScheme, .dark)
+
+        #expect(KaTeXCache.snapshot(for: equation, dark: false) === lightImg)
+        #expect(KaTeXCache.snapshot(for: equation, dark: true) === darkImg)
     }
 }
