@@ -88,8 +88,10 @@ final class DemoNotificationsUITests: XCTestCase {
         XCTAssertTrue(shown || counts().most >= 1, "the demo's approval posted no local notification while the app was away (readout \(readout.value as? String ?? "none"))")
 
         // Out of the chat (its bar hides the tabs), then Settings, Leave demo.
+        // A touch at Back's centre, not the element tap: XCTest can't compute Back's activation point
+        // here ("Activation point invalid"), while a touch, the app's hit test and VoiceOver all reach it.
         let back = app.buttons["chat.back"].firstMatch
-        if back.waitForExistence(timeout: 5) { back.tap(); pause(1) }
+        if back.waitForExistence(timeout: 5) { back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1) }
         let settings = app.buttons["tab.settings"].firstMatch
         XCTAssertTrue(settings.waitForExistence(timeout: 10))
         settings.tap()
