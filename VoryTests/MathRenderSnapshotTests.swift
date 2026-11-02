@@ -46,4 +46,32 @@ import Testing
             print("wrote \(name).png  (\(Int(image.size.width))x\(Int(image.size.height)))  from: \(source)")
         }
     }
+
+    static let displayMathSamples: [(String, String)] = [
+        ("fraction", "\\frac{d}{dx}\\left(\\int_0^x f(t)\\,dt\\right) = f(x)"),
+        ("matrix", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}^{-1} = \\frac{1}{ad-bc}\\begin{pmatrix} d & -b \\\\ -c & a \\end{pmatrix}"),
+        ("summation", "\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}"),
+        ("maxwell", "\\nabla \\times \\mathbf{E} = -\\frac{\\partial \\mathbf{B}}{\\partial t}"),
+    ]
+
+    @Test @MainActor func renderDisplayMathCardsToDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mathrender-display", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        for (name, formula) in Self.displayMathSamples {
+            let markup = await KaTeXEngine.shared.render(latex: formula)
+            #expect(!markup.isEmpty)
+
+            // Prime snapshot in cache and render display card
+            let cardView = MathCardView(equation: formula, closed: true)
+            let renderer = ImageRenderer(content: cardView.environment(\.colorScheme, .dark))
+            renderer.scale = 3.0
+            guard let image = renderer.uiImage, let data = image.pngData() else {
+                Issue.record("no rendered card image for \(name)")
+                continue
+            }
+            try data.write(to: dir.appendingPathComponent("\(name).png"))
+            #expect(image.size.width > 0 && image.size.height > 0)
+        }
+    }
 }
