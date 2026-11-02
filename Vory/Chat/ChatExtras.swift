@@ -175,6 +175,9 @@ struct JumpToBottomButton: View {
             Button(action: action) {
                 Image(systemName: "chevron.down").font(.body.weight(.semibold))
                     .frame(width: 38, height: 38)
+                    // The whole circle takes the tap: a frame adds no hit area, and on iOS 26 a tap on the arrow went
+                    // to the thread under it (#614).
+                    .contentShape(Circle())
                     .glassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)
