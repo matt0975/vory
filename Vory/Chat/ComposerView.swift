@@ -479,7 +479,7 @@ struct ComposerView: View {
                 _ = p.loadDataRepresentation(forTypeIdentifier: type.identifier) { data, _ in
                     guard let data else { return }
                     let name = (p.suggestedName ?? (pdf ? "Scan" : "Photo")) + (pdf ? ".pdf" : ".jpg")
-                    Task { @MainActor in chat.stageAttachment(data: data, name: name, kind: pdf ? .pdf : .image) }
+                    Task { await chat.stageAttachmentAsync(data: data, name: name, kind: pdf ? .pdf : .image) }
                 }
             }
             return !providers.isEmpty
@@ -505,7 +505,7 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in Task { await importPhotos(items) } }
         #if os(iOS)
         #if os(iOS)
-        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in chat.stageAttachment(data: data, name: name, kind: .image) }.ignoresSafeArea().withAppModel() }
+        .fullScreenCover(isPresented: $showCamera) { CameraPicker { data, name in Task { await chat.stageAttachmentAsync(data: data, name: name, kind: .image) } }.ignoresSafeArea().withAppModel() }
         #endif
         #endif
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -1023,26 +1023,38 @@ struct ComposerView: View {
             let isVideo = item.supportedContentTypes.contains { $0.conforms(to: .movie) }
             guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
             let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? (isVideo ? "mov" : "jpg")
-            chat.stageAttachment(data: data, name: "\(isVideo ? "video" : "photo")-\(Int(Date().timeIntervalSince1970)).\(ext)", kind: isVideo ? .video : .image)
+            await chat.stageAttachmentAsync(data: data, name: "\(isVideo ? "video" : "photo")-\(Int(Date().timeIntervalSince1970)).\(ext)", kind: isVideo ? .video : .image)
         }
         photoItems = []
     }
 
     private func importFile(_ url: URL, kind: AttachmentPreview.Kind? = nil) {
         let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { chat.banner = "Could not read \(url.lastPathComponent)"; return }
-        if data.count > 200 * 1024 * 1024 { chat.banner = "\(url.lastPathComponent) is larger than 200 MB."; return }
-        let type = UTType(filenameExtension: url.pathExtension)
-        let k: AttachmentPreview.Kind = kind ?? (type?.conforms(to: .image) == true ? .image : type?.conforms(to: .pdf) == true ? .pdf : type?.conforms(to: .audio) == true ? .audio : type?.conforms(to: .movie) == true ? .video : .file)
-        chat.stageAttachment(data: data, name: url.lastPathComponent, kind: k)
+        Task.detached(priority: .userInitiated) {
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 200 * 1024 * 1024 {
+                await MainActor.run { chat.banner = "\(url.lastPathComponent) is larger than 200 MB." }
+                return
+            }
+            guard let data = try? Data(contentsOf: url) else {
+                await MainActor.run { chat.banner = "Could not read \(url.lastPathComponent)" }
+                return
+            }
+            if data.count > 200 * 1024 * 1024 {
+                await MainActor.run { chat.banner = "\(url.lastPathComponent) is larger than 200 MB." }
+                return
+            }
+            let type = UTType(filenameExtension: url.pathExtension)
+            let k: AttachmentPreview.Kind = kind ?? (type?.conforms(to: .image) == true ? .image : type?.conforms(to: .pdf) == true ? .pdf : type?.conforms(to: .audio) == true ? .audio : type?.conforms(to: .movie) == true ? .video : .file)
+            await chat.stageAttachmentAsync(data: data, name: url.lastPathComponent, kind: k)
+        }
     }
 
     /// The attach menu's Paste: images and files become attachments, text lands in the field.
     private func paste() {
         let pb = UIPasteboard.general
         if pb.hasImages, let img = pb.image, let data = img.jpegData(compressionQuality: 0.9) {
-            chat.stageAttachment(data: data, name: "photo-\(Int(Date().timeIntervalSince1970)).jpg", kind: .image)
+            Task { await chat.stageAttachmentAsync(data: data, name: "photo-\(Int(Date().timeIntervalSince1970)).jpg", kind: .image) }
         } else if let s = pb.string {
             text += s
         } else if let items = pb.items.first, let (type, value) = items.first, let data = value as? Data {
@@ -1078,8 +1090,6 @@ struct ComposerView: View {
                 let fallback = (p.suggestedName.map { ($0 as NSString).deletingPathExtension } ?? "Dropped") + "." + (type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? "bin")
                 _ = p.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                     guard let url, let data = try? Data(contentsOf: url) else { return }
-                    // The representation's file is named after the item and typed again by the
-                    // provider ("report.pdf.pdf"): one extension, the type's.
                     let ext = type.preferredFilenameExtension ?? family?.preferredFilenameExtension ?? url.pathExtension
                     var base = url.deletingPathExtension().lastPathComponent
                     if !ext.isEmpty, base.lowercased().hasSuffix("." + ext.lowercased()) { base = String(base.dropLast(ext.count + 1)) }
@@ -1096,7 +1106,9 @@ struct ComposerView: View {
     /// "Paste from Screenshots"): staged like a picked file.
     private func stagePasted(_ data: Data, name: String, type: UTType) {
         let kind: AttachmentPreview.Kind = type.conforms(to: .image) ? .image : type.conforms(to: .movie) ? .video : type.conforms(to: .pdf) ? .pdf : type.conforms(to: .audio) ? .audio : .file
-        withAnimation(.snappy) { chat.stageAttachment(data: data, name: name, kind: kind) }
+        Task {
+            await chat.stageAttachmentAsync(data: data, name: name, kind: kind)
+        }
     }
 }
 

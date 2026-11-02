@@ -429,7 +429,7 @@ struct TranscriptView: View {
             // so the tapped card stays where it is and the rows below glide (#437).
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
-            .defaultScrollAnchor(holdingCard ? .top : .bottom, for: .sizeChanges)
+            .defaultScrollAnchor(awayFromBottom ? .top : (holdingCard ? .top : .bottom), for: .sizeChanges)
             // Streaming text, and the tokens/sec footer landing after it, follow by the anchor for
             // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
             // that write ran the transcript's body a second time on every token. A new message
@@ -606,7 +606,7 @@ extension TranscriptView {
             #endif
             // A turn running under a thread locked to its end goes on being followed (eased, as `followRows` does); with
             // no turn running the thread stays where the card left it.
-            let follow = followAfterHold || chat.isRunning
+            let follow = followAfterHold
             followAfterHold = false
             if follow, mayFollow(), metrics.distanceFromBottom > 4 { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
