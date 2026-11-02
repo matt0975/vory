@@ -116,7 +116,21 @@ import UIKit
     /// On the Duo's side or as a book, the chat on show and whether Back's marker is there (`ConversationView`), for the
     /// touch catchers over the system's floating bar (`SideStripCatchers`); nil anywhere else.
     struct Side: Equatable { let chat: ObjectIdentifier; var withBack: Bool }
-    var side: Side?
+    /// The latest side state a page still publishes (`publish`).
+    private(set) var side: Side?
+    /// Each page's own side state, in the order published. Across a fold the page going and the page coming show the same
+    /// chat, and a clear guarded by the chat let the one going take away what the one coming had set: the catchers went
+    /// and More did nothing until another chat was opened (#615).
+    @ObservationIgnored private var published: [(page: UUID, side: Side)] = []
+    /// A page's side state, or nil when it has none: only that page's own is replaced or taken away, and `side` is the
+    /// latest one left. A press ends when the side it was on goes, so a pop or a turn mid-press leaves no control grown.
+    func publish(_ next: Side?, page: UUID) {
+        published.removeAll { $0.page == page }
+        if let next { published.append((page, next)) }
+        let now = published.last?.side
+        if next == nil, now != side { pressed = nil }
+        if now != side { side = now }
+    }
     /// The catcher being pressed, so the page's Back or More under it shows the press, as closed's controls press
     /// (`StripPressMirror`).
     var pressed: Kind?

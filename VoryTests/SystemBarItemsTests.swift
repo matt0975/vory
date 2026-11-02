@@ -490,4 +490,53 @@ private final class CountingDefaults: UserDefaults {
         super.set(value, forKey: defaultName)
     }
 }
+
+/// #615: across a fold the page going and the page coming show the same chat; each takes away only its own side state.
+@MainActor @Suite struct StripSideTests {
+    private final class Chat {}
+
+    /// Markers with a store of their own, gone after the test.
+    private func withMarkers(_ body: (StripMarkers) -> Void) {
+        let name = "StripSideTests-\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        body(StripMarkers(defaults: d))
+        d.removePersistentDomain(forName: name)
+    }
+
+    @Test func thePageGoingLeavesThePageComing() {
+        let chat = Chat(), id = ObjectIdentifier(chat)
+        withMarkers { m in
+            // The page coming, beside the list; then the page going, full width, last; then the page going goes.
+            let coming = UUID(), going = UUID()
+            m.publish(.init(chat: id, withBack: false), page: coming)
+            m.publish(.init(chat: id, withBack: true), page: going)
+            #expect(m.side == .init(chat: id, withBack: true))
+            m.publish(nil, page: going)
+            #expect(m.side == .init(chat: id, withBack: false))
+            m.publish(nil, page: coming)
+            #expect(m.side == nil)
+        }
+        withMarkers { m in
+            // The other order: the page going first, then the page coming; the page going's nil leaves it.
+            let coming = UUID(), going = UUID()
+            m.publish(.init(chat: id, withBack: true), page: going)
+            m.publish(.init(chat: id, withBack: false), page: coming)
+            m.publish(nil, page: going)
+            #expect(m.side == .init(chat: id, withBack: false))
+        }
+    }
+
+    @Test func aPressEndsWhenItsSideGoes() {
+        let chat = Chat(), id = ObjectIdentifier(chat)
+        withMarkers { m in
+            let page = UUID()
+            m.publish(.init(chat: id, withBack: false), page: page)
+            m.pressed = .more
+            m.publish(.init(chat: id, withBack: false), page: page)
+            #expect(m.pressed == .more)
+            m.publish(nil, page: page)
+            #expect(m.pressed == nil && m.side == nil)
+        }
+    }
+}
 #endif

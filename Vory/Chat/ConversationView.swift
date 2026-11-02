@@ -80,6 +80,9 @@ struct ConversationView: View {
     @State private var onScreen = false
     @Environment(\.botsLive) private var tabLive
     #endif
+    /// This page's own id, for the chat on screen (`AppModel.chatAppeared`, `chatGone`) and on the Duo for its side state
+    /// (`StripMarkers.publish`): across a fold two pages can show the same chat, and each speaks only for itself.
+    @State private var pageID = UUID()
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     /// The Mac keeps the Chats page mounted behind the others (`macPageShown`, MainSplitView).
@@ -121,9 +124,9 @@ struct ConversationView: View {
                     .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
                     // On the Duo's side and as a book, this chat for the catchers over the system's floating bar
                     // (`SideStripCatchers`), while it's on show with its tab in front.
-                    .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side, chat: chat) }
+                    .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side) }
                     .onAppear { onScreen = true }
-                    .onDisappear { onScreen = false; publishStripSide(nil, chat: chat) }
+                    .onDisappear { onScreen = false; publishStripSide(nil) }
                     .background {
                         if model.tabBarVertical {
                             StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1, onSide: stripSide(chat) != nil)
@@ -147,7 +150,7 @@ struct ConversationView: View {
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear {
-                        model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID)
+                        model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
                         Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
                     }
                     // What arrived for this chat while it was away is read now: its notifications
@@ -162,10 +165,10 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         Perf.stamp("pop: conversation disappeared")
+                        // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
+                        guard !model.chatGone(chat, page: pageID) else { return }
                         // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
                         chat.cancelEdit()
-                        if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
-                        if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
@@ -345,11 +348,10 @@ struct ConversationView: View {
         return StripMarkers.Side(chat: ObjectIdentifier(chat), withBack: paneMinX <= windowGeometry.safeArea.leading + 1)
     }
 
-    /// This chat's side state for the catchers; cleared only when it's this chat's, so a page going doesn't clear the next,
-    /// and a press cleared with it, so a pop or a turn mid-press leaves no control grown.
-    private func publishStripSide(_ side: StripMarkers.Side?, chat: ChatSession) {
-        if let side { StripMarkers.shared.side = side }
-        else if StripMarkers.shared.side?.chat == ObjectIdentifier(chat) { StripMarkers.shared.side = nil; StripMarkers.shared.pressed = nil }
+    /// This page's side state for the catchers, as this page's own: a page going takes away only its own, so across a fold
+    /// the page going can't take away what the page coming set for the same chat (#615).
+    private func publishStripSide(_ side: StripMarkers.Side?) {
+        StripMarkers.shared.publish(side, page: pageID)
     }
     #endif
 
