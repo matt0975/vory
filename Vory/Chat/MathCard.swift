@@ -203,9 +203,11 @@ enum MathCard {
 struct MathWebView {
     var equation: String
     var document: String
+    var dark: Bool = false
     @Binding var height: CGFloat
     @Binding var contentWidth: CGFloat
     @Binding var loaded: Bool
+    var onSnapshot: ((PlatformImage) -> Void)? = nil
 
     @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         var parent: MathWebView
@@ -280,14 +282,30 @@ struct MathWebView {
                     """
                     let raw = try? await web.evaluateJavaScript(script)
                     let dims = (raw as? [Double]) ?? (raw as? [NSNumber])?.map(\.doubleValue)
+                    var measuredWidth: CGFloat = 0
+                    var measuredHeight: CGFloat = 0
                     if let dims, dims.count >= 2 {
                         let w = CGFloat(dims[0])
                         let h = CGFloat(min(max(dims[1], 36), 360))
                         if abs(h - parent.height) > 1 { parent.height = h }
                         if w > 0 && abs(w - parent.contentWidth) > 1 { parent.contentWidth = w }
                         KaTeXCache.setSize(CGSize(width: w, height: h), for: parent.equation)
+                        measuredWidth = w
+                        measuredHeight = h
                     }
                     if !parent.loaded { parent.loaded = true }
+
+                    if measuredWidth > 0 && measuredHeight > 0 {
+                        if web.bounds.width < measuredWidth || web.bounds.height < measuredHeight {
+                            web.frame = CGRect(x: 0, y: 0, width: max(web.bounds.width, measuredWidth), height: max(web.bounds.height, measuredHeight))
+                        }
+                        let config = WKSnapshotConfiguration()
+                        if let snapshot = try? await web.takeSnapshot(configuration: config) {
+                            KaTeXCache.setSnapshot(snapshot, for: parent.equation, dark: parent.dark)
+                            parent.onSnapshot?(snapshot)
+                            return
+                        }
+                    }
                 }
             }
         }
@@ -344,6 +362,8 @@ extension MathWebView: UIViewRepresentable {
     static func dismantleUIView(_ web: WKWebView, coordinator: Coordinator) {
         coordinator.measuring?.cancel()
         web.stopLoading()
+        web.navigationDelegate = nil
+        web.removeFromSuperview()
     }
 }
 #else
@@ -353,6 +373,8 @@ extension MathWebView: NSViewRepresentable {
     static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
         coordinator.measuring?.cancel()
         web.stopLoading()
+        web.navigationDelegate = nil
+        web.removeFromSuperview()
     }
 }
 #endif
