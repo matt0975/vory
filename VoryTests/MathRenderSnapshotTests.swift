@@ -5,7 +5,7 @@ import Testing
 @testable import Vory
 
 /// Renders inline maths through the real view layer into PNGs, so a subscript's size and drop
-/// can be looked at rather than guessed. Debug aid: writes to ~/.hermes/cache/scratch/mathrender.
+/// can be looked at rather than guessed. Debug aid: writes to temporary directory under `mathrender/`.
 @Suite struct MathRenderSnapshotTests {
 
     static let samples: [(String, String)] = [
@@ -25,7 +25,7 @@ import Testing
     ]
 
     @Test @MainActor func renderSamplesToDisk() throws {
-        let dir = URL(fileURLWithPath: "/Users/andrew/.hermes/cache/scratch/mathrender", isDirectory: true)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mathrender", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
         for (name, source) in Self.samples {
