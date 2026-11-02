@@ -123,6 +123,11 @@ import Testing
         other = key
         other.bold = true
         #expect(L.SizeStore.shared.cache(for: other).natural == nil)
+        // Floors ride the same key as the widths they feed.
+        kept.floors = [40, 60, 30]
+        L.SizeStore.shared.keep(kept)
+        #expect(L.SizeStore.shared.cache(for: key).floors == [40, 60, 30])
+        #expect(L.SizeStore.shared.cache(for: other).floors == nil)
         #expect(L.SizeStore.shared.cache(for: nil).key == nil)
     }
 
@@ -145,6 +150,65 @@ import Testing
         // A table with no "@" keeps its sizes whatever the names: they cannot change it.
         let plain = try #require(onlyTable(Self.wide))
         #expect(L.SizeKey.names(for: plain, after) == nil)
+    }
+
+    // Words, and the widths a wrapped table takes from them
+
+    @Test func aColumnFloorIsItsLongestWord() throws {
+        let t = try #require(onlyTable(Self.wide))
+        // Every word of the column, one per line: a probe Text's natural width is then its widest line.
+        let words = MarkdownTableMetrics.words(t, column: 4).split(separator: "\n").map(String.init)
+        #expect(Set(words) == ["Superpower", "Agentic", "coding", "at", "scale", "Long-horizon", "tool", "use"])
+        #expect(words.count == Set(words).count, "words are deduped")
+        // Markdown never reaches the probe: it measures words, not markers. "/" is a word of its own.
+        let lab = MarkdownTableMetrics.words(t, column: 1)
+        #expect(!lab.contains("*"))
+        #expect(Set(lab.split(separator: "\n").map(String.init)) == ["Lab", "/", "Model", "A", "—", "One", "B", "Two"],
+                "column 1's words were: \(lab)")
+    }
+
+    @Test func anEmptyColumnHasNoWords() throws {
+        // The header is a word too: a column with no words at all has an empty header and empty cells.
+        let t = try #require(onlyTable("| a |  |\n|---|---|\n| 1 |  |"))
+        #expect(MarkdownTableMetrics.words(t, column: 1) == "", "got: \(MarkdownTableMetrics.words(t, column: 1))")
+        #expect(MarkdownTableMetrics.words(t, column: 0) == "a\n1")
+    }
+
+    @Test func anEmojiRunIsOneWord() throws {
+        let t = try #require(onlyTable(Self.wide))
+        // ⭐⭐⭐⭐⭐ is a single word: a floor of the whole run, not one glyph.
+        let rating = Set(MarkdownTableMetrics.words(t, column: 5).split(separator: "\n").map(String.init))
+        #expect(rating == ["Rating", "⭐⭐⭐⭐⭐", "⭐⭐⭐⭐½"])
+    }
+
+    @Test func wrappingStartsAtTheFloorsAndSpendsTheSpare() {
+        typealias M = MarkdownTableMetrics
+        // Floors already past the bubble: they stand, and the card scrolls instead of breaking words.
+        #expect(M.wrapWidths(natural: [200, 300, 100], floors: [180, 200, 90], hi: 220, fill: 320) == [180, 200, 90])
+        // No bounded width to fill (inside a scroll view): the floors stand.
+        #expect(M.wrapWidths(natural: [200, 300], floors: [60, 40], hi: 220, fill: nil) == [60, 40])
+        // Room to spare: the columns grow back toward their one-line widths, to exactly the bubble.
+        let roomy = M.wrapWidths(natural: [200, 100, 60], floors: [60, 40, 24], hi: 220, fill: 320)
+        #expect(abs(roomy.reduce(0, +) - 320) < 0.001)
+        #expect(roomy[0] > 60 && roomy[0] <= 220)
+        #expect(roomy[1] >= 40 && roomy[2] >= 24)
+        // A floor past `hi` is kept: never clamped down into a broken word.
+        #expect(M.wrapWidths(natural: [400, 40], floors: [400, 40], hi: 220, fill: 1000)[0] >= 400)
+        // The scroll-mode arithmetic is untouched: its own suite below still holds.
+        #expect(M.columnWidths(natural: [20, 100, 500], fill: 300, min: 64, max: 220) == [64, 100, 220])
+    }
+
+    @Test func nonBreakingSpaceKeepsWordsBoundTogether() throws {
+        let t = try #require(onlyTable("| Metric |\n|---|\n| 16\u{00A0}flaps/day |"))
+        let words = MarkdownTableMetrics.words(t, column: 0).split(separator: "\n").map(String.init)
+        #expect(words.contains("16\u{00A0}flaps/day"), "non-breaking spaces must not be split into separate words")
+    }
+
+    @Test func wrapWidthsGuardsMismatchedFloorCount() {
+        typealias M = MarkdownTableMetrics
+        // floors has fewer elements than natural: must return floors defensively without crashing
+        let result = M.wrapWidths(natural: [100, 200, 300], floors: [50, 50], hi: 220, fill: 320)
+        #expect(result == [50, 50])
     }
 }
 
