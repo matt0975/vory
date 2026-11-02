@@ -143,6 +143,32 @@ import Testing
         _ = cache.rows(for: next) { more }
         let rebuilt = cache.older(than: 16)
         #expect(rebuilt == Array(more[..<16]))
-        #expect(storage(rebuilt) != storage(moved), "new rows kept the older rows' array from before")
+        #expect(storage(rebuilt) == storage(moved), "appending rows at the tail should preserve the older rows' array storage buffer pointer")
+
+        // Modifying only the tail preserves the older array buffer pointer
+        var nextModTail = next; nextModTail.items = 3
+        var moreModTail = more
+        moreModTail[moreModTail.count - 1].item.kind = .user(text: "Thanks!", attachments: [])
+        _ = cache.rows(for: nextModTail) { moreModTail }
+        let tailMod = cache.older(than: 16)
+        #expect(storage(tailMod) == storage(moved), "modifying only tail rows preserves the older rows' storage buffer pointer")
+
+        // Modifying an older row (within the split) invalidates the older array and allocates anew
+        var nextModOlder = nextModTail; nextModOlder.items = 4
+        var moreModOlder = moreModTail
+        moreModOlder[0].item.kind = .assistant(text: "Edited prefix", reasoning: nil, streaming: false)
+        _ = cache.rows(for: nextModOlder) { moreModOlder }
+        let olderMod = cache.older(than: 16)
+        #expect(storage(olderMod) != storage(moved), "modifying rows within the older split must allocate a new array")
+
+        // Moving the split allocates a new array
+        let wider = cache.older(than: 24)
+        #expect(storage(wider) != storage(olderMod), "moving the split allocates a new array")
+
+        // Switching chats invalidates older rows
+        var otherChatKey = nextModOlder; otherChatKey.chat = ObjectIdentifier(RowCache())
+        _ = cache.rows(for: otherChatKey) { moreModOlder }
+        let otherChat = cache.older(than: 16)
+        #expect(storage(otherChat) != storage(olderMod), "switching chats must invalidate the older rows' array")
     }
 }
