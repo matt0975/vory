@@ -17,7 +17,7 @@ struct HTMLCardHeightCacheTests {
         HTMLCardView.measuredHeights[hash] = 380
 
         // Create new card view instance
-        let card = HTMLCardView(html: sampleHTML)
+        let _ = HTMLCardView(html: sampleHTML)
 
         #expect(HTMLCardView.measuredHeights[hash] == 380)
 
