@@ -5,7 +5,7 @@ import Testing
 @testable import Vory
 
 /// Renders inline maths through the real view layer into PNGs, so a subscript's size and drop
-/// can be looked at rather than guessed. Debug aid: writes to ~/.hermes/cache/scratch/mathrender.
+/// can be looked at rather than guessed. Each run owns and removes its snapshot directory.
 @Suite struct MathRenderSnapshotTests {
 
     static let samples: [(String, String)] = [
@@ -25,8 +25,11 @@ import Testing
     ]
 
     @Test @MainActor func renderSamplesToDisk() throws {
-        let dir = URL(fileURLWithPath: "/Users/andrew/.hermes/cache/scratch/mathrender", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let outputRoot = ProcessInfo.processInfo.environment["VORY_MATH_SNAPSHOT_DIR"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) } ?? FileManager.default.temporaryDirectory
+        let dir = outputRoot.appendingPathComponent("vory-mathrender-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
 
         for (name, source) in Self.samples {
             let attr = MarkdownParser.inline(source)
