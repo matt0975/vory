@@ -75,11 +75,17 @@ final class VoiceCoordinator {
         observer = NotificationCenter.default.addObserver(forName: .hermesReplyCompleted, object: nil, queue: .main) { [weak self] n in
             guard VoiceSettings.readAloud, let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
             Task { @MainActor in
-                guard AppModel.shared.visibleChatID == id else { return }
-                // Hands-free speaks its own replies: not twice (on the Mac as well, quietly).
-                if HandsFreeSession.shared.isActive { return }
+                guard Self.readsAloud(id, visible: AppModel.shared.visibleChatID, voice: HandsFreeSession.shared) else { return }
                 self?.speak(text)
             }
         }
+    }
+
+    /// Whether "Read replies aloud" says a reply that finished: in the chat in front, and not voice mode's.
+    static func readsAloud(_ storedID: String, visible: String?, voice: HandsFreeSession) -> Bool {
+        guard visible == storedID else { return false }
+        // Hands-free speaks its own replies: not twice (on the Mac as well, quietly). A demo voice turn ended
+        // before its reply came is not said at all: the demo makes no sound (#621).
+        return !voice.isActive && !voice.keepsQuiet(storedID)
     }
 }

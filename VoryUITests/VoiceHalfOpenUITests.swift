@@ -19,7 +19,9 @@ import XCTest
 ///   HERMES_E2E_EXPECT=measure, measuring only; with "split" (the gate, at a size the table splits), checked as "frames".
 /// HERMES_E2E_SIZE sets the text size (L, XL, XXL, XXXL); HERMES_E2E_BASE=1 is the release head's copy, which has no readout.
 /// A launch that can't reach the Chats list fails as "setup", which the legs count as void, never as a pass.
-/// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set (the mock).
+/// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set (the mock), or HERMES_E2E_DEMO=1: the built-in demo
+/// (`-vory-demo`) with its scripted voice (#621), no gateway, no stand-in microphone and no microphone grant; its card
+/// comes after the scripted line, and the cases that pause wait for it first.
 @MainActor
 final class VoiceHalfOpenUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -237,7 +239,9 @@ final class VoiceHalfOpenUITests: XCTestCase {
     }
 
     func testVoiceModeAtTheFold() throws {
-        guard let url = env["HERMES_E2E_URL"], let token = env["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
+        let demo = env["HERMES_E2E_DEMO"] == "1"
+        let url = env["HERMES_E2E_URL"] ?? "", token = env["HERMES_E2E_TOKEN"] ?? ""
+        guard demo || (!url.isEmpty && !token.isEmpty) else {
             throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set")
         }
         continueAfterFailure = true
@@ -247,11 +251,12 @@ final class VoiceHalfOpenUITests: XCTestCase {
         // `-restore.openChat none`: the last open chat isn't reopened (its saved record reads as nothing for this launch,
         // the argument domain only), so every launch starts on the Chats list, in both copies.
         var args = ["-companionPromptShown", "YES", "-launchTab", "chats", "-restore.openChat", "none", "-tabBar.showVoice", "YES",
-                    "-vory-voice-fake-input", "-vory-voice-frames", "-colorSchemePreference", env["HERMES_E2E_SCHEME"] ?? "dark",
+                    "-vory-voice-frames", "-colorSchemePreference", env["HERMES_E2E_SCHEME"] ?? "dark",
                     "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\(size)"]
+        args = (demo ? ["-vory-demo"] : ["-vory-voice-fake-input"]) + args
         if voiceCase == "oracle" { args.append("-vory-ax-oracle") }
         if voiceCase == "worst" { args += ["-vory-voice-worst", env["HERMES_E2E_WORST"] ?? "thinking", "-vory-motion-engine", "<false/>"] }
-        if let bundle = env["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
+        if let bundle = env["HERMES_E2E_BUNDLE"], !bundle.isEmpty, !demo {
             app = XCUIApplication(bundleIdentifier: bundle)
             app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop"] + args
         } else {
@@ -262,6 +267,11 @@ final class VoiceHalfOpenUITests: XCTestCase {
         mic.tap()
         XCTAssertTrue(app.buttons["End voice mode"].firstMatch.waitForExistence(timeout: 30), "the voice screen did not open")
         pause(3)
+        // The demo's card comes after its scripted line: a case that pauses waits for it, as the mock's comes by then.
+        if demo, ["posture", "oracle", "audit"].contains(voiceCase) {
+            XCTAssertTrue(app.buttons["Allow once"].firstMatch.waitForExistence(timeout: 90), "no approval card in the demo's voice mode")
+            pause(1.5)
+        }
         print("VOICE-HALF state \(voiceCase) at \(String(format: "%.1f", Date().timeIntervalSince1970))")
 
         switch voiceCase {
