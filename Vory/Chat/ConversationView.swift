@@ -45,7 +45,9 @@ struct ConversationView: View {
     private var chatHeaderBottom: CGFloat {
         if MorphTopBar.active(model) {
             let row = MorphState.shared.chatRowBottom
-            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding - barLift + row : 0
+            // The closed Duo's row stands lower (#558: `TopBarRoom.barPadding`), as MorphTopBar's `stripClosed` reads it.
+            let closed = model.tabBarVertical && VoryTabBar.statusStrip(windowGeometry.safeArea) != nil && barLift == 0
+            return row > 0 ? windowGeometry.safeArea.top + TopBarRoom.barPadding(closed: closed) - barLift + row : 0
         }
         return headerBottom
     }
@@ -69,6 +71,18 @@ struct ConversationView: View {
     /// The header's bottom edge in window space (0 until measured): the thread's top margin ends
     /// there, whatever safe area or camera strip the header stands in, and it moves with them.
     @State private var headerBottom: CGFloat = 0
+    #if os(iOS)
+    /// Where the chat's pane starts in the window: past the window's leading safe edge, the list stands beside the chat
+    /// (on the Duo's side), and the strip's markers have no Back (`StripMarkerReader`), as the header has none.
+    @State private var paneMinX: CGFloat = 0
+    /// Whether this page is on show (between its appearing and its going): with its tab in front (`botsLive`), it's the
+    /// chat the side strip's catchers act for (`StripMarkers.side`).
+    @State private var onScreen = false
+    @Environment(\.botsLive) private var tabLive
+    #endif
+    /// This page's own id, for the chat on screen (`AppModel.chatAppeared`, `chatGone`) and on the Duo for its side state
+    /// (`StripMarkers.publish`): across a fold two pages can show the same chat, and each speaks only for itself.
+    @State private var pageID = UUID()
     /// The window as it is now, for the keyboard the dock moves up by (see `WindowGeometry`).
     @Environment(\.windowGeometry) private var windowGeometry
     /// The Mac keeps the Chats page mounted behind the others (`macPageShown`, MainSplitView).
@@ -93,9 +107,36 @@ struct ConversationView: View {
         Group {
             if let chat {
                 framed(chat)
+                    #if os(iOS)
+                    // The page's own bar (below) gives the page a top inset of its own there (24 pt on its side, which
+                    // moved the header and the thread down; the window's own top is 0, the status in the strip): the
+                    // chat lays out as with the bar hidden.
+                    .ignoresSafeArea(.container, edges: model.tabBarVertical ? .top : [])
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { paneMinX = $0 }
+                    #endif
                     .handsOff(chat)
+                    #if os(iOS)
+                    // The Duo's side strip (#555; the system's bars vertical there, `model.tabBarVertical`): the page's own
+                    // bar shows, with no title and no system back, to carry the markers the system lays out under the
+                    // status (`StripMarkerReader`; no Back beside the list). Everywhere else hidden, as ever.
+                    .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
+                    .navigationBarBackButtonHidden(model.tabBarVertical)
+                    .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
+                    // On the Duo's side and as a book, this chat for the catchers over the system's floating bar
+                    // (`SideStripCatchers`), while it's on show with its tab in front.
+                    .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side) }
+                    .onAppear { onScreen = true }
+                    .onDisappear { onScreen = false; publishStripSide(nil) }
+                    .background {
+                        if model.tabBarVertical {
+                            StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1, onSide: stripSide(chat) != nil)
+                                .frame(width: 0, height: 0)
+                        }
+                    }
+                    #else
                     .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
                     .toolbar(.hidden, for: .navigationBar)
+                    #endif
                     .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
                     // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
                     .onChange(of: model.modelChooser?.id) { _, _ in
@@ -109,7 +150,7 @@ struct ConversationView: View {
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear {
-                        model.visibleChatID = chat.storedID; model.visibleChat = chat; LocalNotifier.clearDelivered(for: chat.storedID)
+                        model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
                         Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
                     }
                     // What arrived for this chat while it was away is read now: its notifications
@@ -124,10 +165,10 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         Perf.stamp("pop: conversation disappeared")
+                        // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
+                        guard !model.chatGone(chat, page: pageID) else { return }
                         // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
                         chat.cancelEdit()
-                        if model.visibleChatID == chat.storedID { model.visibleChatID = nil }
-                        if model.visibleChat === chat { model.visibleChat = nil }
                         // Leaving a chat: back to the default bot, when one is chosen.
                         model.runtime?.returnToDefaultProfile()
                     }
@@ -155,7 +196,14 @@ struct ConversationView: View {
                     // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
                     // here; only the chat the bar shows answers.
                     .onChange(of: model.chatRequest) { _, r in
-                        guard let r, MorphState.shared.chat === chat else { return }
+                        // On the Duo's side and as a book, the chat the catchers act for, and no other; elsewhere the
+                        // morph's.
+                        #if os(iOS)
+                        let mine = StripMarkers.shared.side.map { $0.chat == ObjectIdentifier(chat) } ?? (MorphState.shared.chat === chat)
+                        #else
+                        let mine = MorphState.shared.chat === chat
+                        #endif
+                        guard let r, mine else { return }
                         model.chatRequest = nil
                         switch r.kind {
                         case .back: dismiss()
@@ -292,6 +340,30 @@ struct ConversationView: View {
         #endif
     }
 
+    #if os(iOS)
+    /// On the Duo's side or as a book, with this page on show and its tab in front: this chat, and whether Back's marker is
+    /// there (not while the list stands beside it). Nil anywhere else.
+    private func stripSide(_ chat: ChatSession) -> StripMarkers.Side? {
+        guard model.tabBarVertical, model.wideLayout, onScreen, tabLive else { return nil }
+        return StripMarkers.Side(chat: ObjectIdentifier(chat), withBack: paneMinX <= windowGeometry.safeArea.leading + 1)
+    }
+
+    /// This page's side state for the catchers, as this page's own: a page going takes away only its own, so across a fold
+    /// the page going can't take away what the page coming set for the same chat (#615).
+    private func publishStripSide(_ side: StripMarkers.Side?) {
+        StripMarkers.shared.publish(side, page: pageID)
+    }
+    #endif
+
+    /// The header's Back: where the side strip's catchers act for this chat, the same back request their Back sends (one
+    /// handler, `chatRequest`); elsewhere, as ever, the page goes.
+    private func backFromHeader(_ chat: ChatSession) {
+        #if os(iOS)
+        if StripMarkers.shared.side?.chat == ObjectIdentifier(chat) { model.chatRequest = .init(.back); return }
+        #endif
+        dismiss()
+    }
+
     private func open() async {
         guard let runtime = model.runtime else { loadError = "No gateway connected."; return }
         do {
@@ -336,9 +408,11 @@ struct ConversationView: View {
             if let chat, !sentInitial, let t = route.initialText, !t.isEmpty || !route.initialAttachments.isEmpty {
                 sentInitial = true
                 for a in route.initialAttachments {
-                    guard let u = a.localURL, let data = try? Data(contentsOf: u) else { continue }
-                    chat.stageAttachment(data: data, name: a.name, kind: a.kind)
-                    try? FileManager.default.removeItem(at: u)
+                    guard let u = a.localURL else { continue }
+                    if let data = await Task.detached(priority: .userInitiated, operation: { try? Data(contentsOf: u) }).value {
+                        await chat.stageAttachmentAsync(data: data, name: a.name, kind: a.kind)
+                        try? FileManager.default.removeItem(at: u)
+                    }
                 }
                 _ = await chat.send(t)
                 NotificationCenter.default.post(name: .hermesSessionsChanged, object: nil)
@@ -404,7 +478,7 @@ struct ConversationView: View {
         FoldReader { fold in
             // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
             ChatHeader(chat: chat, fold: fold, showBack: true,
-                       onBack: { dismiss() }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
+                       onBack: { backFromHeader(chat) }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                        onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
                 // The header's own size and bottom edge (the reader around it is thread-sized):
                 // its height, and its bottom in window space for the thread's top margin.
@@ -600,11 +674,34 @@ struct QueueStrip: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Queued (\(chat.queue.count))").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             ForEach(chat.queue) { q in
-                HStack {
+                HStack(spacing: 0) {
                     Text(q.text).font(.subheadline).lineLimit(2)
                     Spacer()
-                    Button { editing = q; draft = q.text } label: { Image(systemName: "pencil") }.buttonStyle(.plain)
-                    Button(role: .destructive) { chat.removeQueued(q.id) } label: { Image(systemName: "trash") }.buttonStyle(.plain)
+                    // Into the running turn now (#546), as the composer's Steer now: only while a turn runs. Its word in the
+                    // primary colour on a tinted capsule over the page's own background, so the capsule is opaque: the
+                    // tint's own blue as text on the strip's glass fell short of contrast, light and dark, and the tint
+                    // alone on the glass let the reply streaming under the strip through, short of it in dark. Not white
+                    // on the tint: the accent is the person's, and white on orange, green or teal reads far worse.
+                    if chat.isRunning {
+                        Button { Task { await chat.steerQueued(q.id) } } label: {
+                            // One line at every size: squeezed at the largest it broke into "Stee" and "r".
+                            Text("Steer").font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1).fixedSize()
+                                .padding(.horizontal, 12).frame(minHeight: 30)
+                                .background { Capsule().fill(.background).overlay(Capsule().fill(.tint.opacity(0.2))) }
+                                .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityHint("Sends it into the reply now")
+                        .accessibilityIdentifier("queue.steer")
+                    }
+                    Button { editing = q; draft = q.text } label: {
+                        Image(systemName: "pencil").frame(width: 44, height: 44).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Edit").accessibilityIdentifier("queue.edit")
+                    Button(role: .destructive) { chat.removeQueued(q.id) } label: {
+                        Image(systemName: "trash").frame(width: 44, height: 44).contentShape(.rect)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel("Delete").accessibilityIdentifier("queue.delete")
                 }
             }
         }
@@ -687,29 +784,21 @@ struct ChatHeader: View {
 
     #if os(iOS)
     /// The Duo on its side, like Messages there (Matt, 2026-10-28, #542): the face (no glass behind it) and the name at the
-    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; More in the status column
-    /// under the time and Wi-Fi; Messages' band behind the row (`ChatBand`). Back only while the list isn't beside the chat
-    /// (its column hidden), at the top left. VoiceOver: Back, Chat info, More, the group after the thread as everywhere
-    /// (`ConversationView.header`).
+    /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; Back and More in the status
+    /// strip under the status, each centred on the marker the system lays out there for it (`StripMarkers`, #555: they move
+    /// down with the status as Live Activities arrive); Messages' band behind the row (`ChatBand`). Back only while the list
+    /// isn't beside the chat (its column hidden); beside it, More stands in Back's place, as the system's own item does.
+    /// VoiceOver: Back, Chat info, More, the group after the thread as everywhere (`ConversationView.header`).
     private var messagesSide: some View {
         // Once the pane's place is known, so Back never shows for a frame beside the list.
         let back = showBack && sideFrame.width > 0 && !listBeside
         let g = windowGeometry
-        // The status column's middle and More's top, in window points (`TopBarRoom.statusColumnTops`).
-        let columnX = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
-        let moreTop = TopBarRoom.statusColumnTops(closed: false)[0]
+        // Each one's middle, window space: its marker's (or the last one read for this shape, with Back's marker there or
+        // not, as the list says); before any, where the system stood it when measured (`StripMarkers.fallbackTops`).
+        let xxxl = typeSize == .xxxLarge
+        let backAt = StripMarkers.shared.centre(.back, in: g, withBack: true, closed: false, xxxl: xxxl)
+        let more = StripMarkers.shared.centre(.more, in: g, withBack: !listBeside, closed: false, xxxl: xxxl)
         return HStack(spacing: 0) {
-            if back {
-                Button(action: onBack) {
-                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
-                }
-                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
-                .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
-                .accessibilityFocused($backFocused)
-                .accessibilitySortPriority(3)
-                .padding(.trailing, 8)
-            }
             sideChatInfo
             Spacer(minLength: 0)
         }
@@ -732,9 +821,36 @@ struct ChatHeader: View {
         // band. Behind the controls and out of VoiceOver's tree.
         .background { Color.clear.contentShape(.rect).onTapGesture {}.accessibilityHidden(true) }
         .overlay(alignment: .topLeading) {
+            if back {
+                Button(action: onBack) {
+                    Image(systemName: "chevron.left").font(.title3.weight(.semibold))
+                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                }
+                .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
+                .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
+                .accessibilityFocused($backFocused)
+                .accessibilitySortPriority(3)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                // Touched through the catcher over it (`SideStripCatchers`): its press shows here, as closed's
+                // controls press.
+                .modifier(StripPressMirror(kind: .back))
+                .offset(x: backAt.x - 22 - sideFrame.minX, y: backAt.y - 22 - sideFrame.minY)
+                #if DEBUG
+                // Where it's drawn, window space, in the frame log (`-vory-morph-log`) as it changes: the offset doesn't
+                // move the frame a geometry reader sees, so the place it's put at is noted instead.
+                .onChange(of: backAt, initial: true) { _, p in MorphFramesProbe.note("sideBack", CGRect(x: p.x - 22, y: p.y - 22, width: 44, height: 44)) }
+                #endif
+            }
+        }
+        .overlay(alignment: .topLeading) {
             if showsActions, sideFrame.width > 0 {
                 moreMenu.dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                    .offset(x: columnX - 22 - sideFrame.minX, y: moreTop - sideFrame.minY)
+                    .modifier(StripPressMirror(kind: .more))
+                    .offset(x: more.x - 22 - sideFrame.minX, y: more.y - 22 - sideFrame.minY)
+                    #if DEBUG
+                    // Where it's drawn, window space, in the frame log (`-vory-morph-log`) as it changes.
+                    .onChange(of: more, initial: true) { _, p in MorphFramesProbe.note("sideMore", CGRect(x: p.x - 22, y: p.y - 22, width: 44, height: 44)) }
+                    #endif
             }
         }
         // Once the pane's place is known: before it, Back isn't shown yet, and the focus went to Chat info with the list

@@ -63,12 +63,17 @@ final class TableRenderUITests: XCTestCase {
     func testAWideTableScrollsInItsCardAndOpensFullScreen() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         continueAfterFailure = false
-        if let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
+        // HERMES_E2E_TABLE_WRAP (1 or 0) sets the app's own `table.wrap` at launch: with wrap on (the default) a table that
+        // fits a wide window's card wraps instead of scrolling, so the open Duo runs this with wrap off.
+        let e = ProcessInfo.processInfo.environment
+        let wrap = e["HERMES_E2E_TABLE_WRAP"].flatMap { $0 == "1" ? ["-table.wrap", "YES"] : $0 == "0" ? ["-table.wrap", "NO"] : nil } ?? []
+        if let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
             app = XCUIApplication(bundleIdentifier: bundle)
-            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES"]
+            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES"] + wrap
             app.launch()
         } else {
             app = XCUIApplication()
+            app.launchArguments = wrap
             app.launch()
             connectIfNeeded(url: url, token: token)
         }
@@ -90,13 +95,18 @@ final class TableRenderUITests: XCTestCase {
         sleep(2)
         shot("tables-1-bubble")
 
-        // The table is wider than the bubble: its last column starts off the card.
+        // The table is wider than its card: its last column runs past the card's right edge, the card being its own
+        // sideways scroll view (the narrowest scroll view holding the first header; the thread holds it too). A table that
+        // fits its card has no such view, and fails here: the window's edge was the claim before, and on the open Duo's
+        // wider window the card's is the one that holds.
         let first = app.staticTexts["Rank"].firstMatch
         let last = app.staticTexts["Health"].firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10))
-        let window = app.windows.firstMatch.frame
+        let card = app.scrollViews.containing(NSPredicate(format: "label == %@", "Rank")).allElementsBoundByIndex
+            .filter { $0.exists }.min { $0.frame.width < $1.frame.width }
         let lastBefore = last.frame
-        XCTAssertGreaterThan(lastBefore.maxX, window.maxX, "a six-column table should run past the screen")
+        let cardFrame = try XCTUnwrap(card?.frame, "the table has no sideways scroll view of its own: it fits its card")
+        XCTAssertGreaterThan(lastBefore.maxX, cardFrame.maxX, "a six-column table should run past its card \(cardFrame)")
 
         // The whole accessibility tree read (what VoiceOver does): a wide table once took the
         // Mac app down this way.

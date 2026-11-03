@@ -86,6 +86,10 @@ struct VoryTabBar: View {
     static let stripItemWidth: CGFloat = 50
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
+    /// The foot slot the closed Duo's column leaves free on every tab (#591, 2026-11-02): one circle and its gap. Chats fills
+    /// it with the system's own search button, as Messages does there; on the other tabs it stays empty, so the voice and
+    /// Compose circles stand at the same place on every tab.
+    static let stripSearchSlot: CGFloat = 42 + stripGroupGap
     /// The side of a status strip like the Duo's (closed, or open on its side: the safe area 84 on one side, 0 on the
     /// other): one side deep enough for the strip's items, the other none. Nil anywhere else, an iPhone held sideways among
     /// them (its Dynamic Island's inset on both sides) (#542).
@@ -274,6 +278,10 @@ struct VoryTabBar: View {
             if let b = badge(for: tab) { b.offset(x: 14, y: 4) }
         }
         .accessibilityElement(children: .ignore)
+        // The whole slot is the tab's for VoiceOver and the accessibility audit, not just its icon, which was all the
+        // element took without a shape of its own (#588; as the chat's dock, #564). Accessibility only: a touch still goes
+        // through the bar's gesture.
+        .contentShape(.accessibility, Rectangle())
         .accessibilityLabel(tab.title)
         .accessibilityIdentifier("tab.\(tab.rawValue)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
@@ -908,6 +916,20 @@ struct TopBarRoomProbe: UIViewControllerRepresentable {
             guard nav.additionalSafeAreaInsets.top != room else { return }
             nav.additionalSafeAreaInsets.top = room
         }
+    }
+}
+
+/// A group chat on the Chats stack on the closed Duo (`TopBarRoom.closedStrip`, #591): the stack has no room there (the
+/// list keeps its own), so the group's header keeps its place under the top bar's row with a top margin of that room.
+struct ClosedChatsRoom: ViewModifier {
+    @Environment(AppModel.self) private var model
+    @Environment(\.windowGeometry) private var windowGeometry
+    @Environment(\.statusInCorner) private var statusInCorner
+
+    func body(content: Content) -> some View {
+        let closed = TopBarRoom.closedStrip(barsVertical: model.tabBarVertical, size: windowGeometry.bounds.size)
+        content.safeAreaPadding(.top, closed ? TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
+                                                               barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom) : 0)
     }
 }
 

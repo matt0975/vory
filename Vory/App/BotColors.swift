@@ -44,9 +44,11 @@ enum BotColors {
         BotLooksMirror.mirror()
     }
 
-    static func hex(for profile: String, overrides: [String: String]? = nil) -> String {
+    /// A bot's colour on a gateway (#573: the gateway in use unless one is named): its own, else the one from before,
+    /// else the palette's by its name. An empty one is "the default", and doesn't fall back.
+    static func hex(for profile: String, overrides: [String: String]? = nil, gateway: UUID? = BotLookGateway.current) -> String {
         if let h = DemoLooks.color(for: profile) { return h }
-        if let h = (overrides ?? stored())[profile], !h.isEmpty { return h }
+        if let h = BotLookGateway.value(in: overrides ?? stored(), for: profile, gateway: gateway), !h.isEmpty { return h }
         return defaultHex(for: profile)
     }
 
@@ -57,10 +59,34 @@ enum BotColors {
         Color(hex: hex(for: profile, overrides: overrides)) ?? .accentColor
     }
 
-    @MainActor static func set(_ color: Color, for profile: String) {
-        if DemoLooks.keep(color: color.hexString, for: profile) { return }
+    @MainActor static func set(_ color: Color, for profile: String) { set(hex: color.hexString, for: profile) }
+
+    /// A colour picked for a bot (the look editor's colour row too): the gateway in use's own (#573); the demo's, in
+    /// memory, while it runs.
+    @MainActor static func set(hex: String, for profile: String) {
+        if DemoLooks.keep(color: hex, for: profile) { return }
         var map = stored()
-        map[profile] = color.hexString
+        map[BotLookGateway.key(profile)] = hex
+        save(map)
+    }
+
+    /// "Reset to default": the gateway in use's own colour goes (#573). Where the bot has a colour from before, which other
+    /// gateways may show, an empty one of its own stands in, so that one neither changes nor shows here. In the demo, the
+    /// demo bot's own colour comes back.
+    @MainActor static func reset(for profile: String) {
+        if DemoLooks.keep(color: DemoBots.all.first { $0.name == profile }?.hex ?? defaultHex(for: profile), for: profile) { return }
+        var map = stored()
+        let own = BotLookGateway.key(profile)
+        map[own] = own != profile && map[profile] != nil ? "" : nil
+        save(map)
+    }
+
+    /// A new bot's colour, picked under its draft name in the new-bot sheet, goes to its name on the gateway in use.
+    @MainActor static func moveDraft(from draft: String, to name: String) {
+        var map = stored()
+        let from = BotLookGateway.key(draft), to = BotLookGateway.key(name)
+        if let c = map[from] { map[to] = c }
+        map[from] = nil
         save(map)
     }
 }
@@ -115,7 +141,7 @@ struct BotAvatar: View {
         // demo's colour, and a bot changed shape as it started work.
         if let demo = DemoLooks.avatar(for: profile) { return BotAvatarChoice(raw: BotAvatarStore.effective(demo, glassAll: glassAll)) }
         let m = BotLookMaps.map(avatarsRaw)
-        return BotAvatarChoice(raw: BotAvatarStore.effective(m[profile] ?? "", glassAll: glassAll))
+        return BotAvatarChoice(raw: BotAvatarStore.effective(BotLookGateway.value(in: m, for: profile) ?? "", glassAll: glassAll))
     }
 
     @Environment(\.colorScheme) private var colorScheme
@@ -338,31 +364,51 @@ private struct StillBlink: ViewModifier {
 enum BotLooksMirror {
     static func mirror() {
         guard !DemoLooks.isOn else { owedAfterDemo = true; return }
-        // The all-bots glass setting is baked in here, for every profile the gateway knows, so
-        // the extensions (which only read this mirror) draw the same bot as the app.
-        var avatars = BotAvatarStore.stored()
-        var colors = BotColors.stored()
-        let profiles = AppModel.shared.runtime?.profiles ?? []
-        let known = Set(avatars.keys).union(profiles.map(\.name))
-        for profile in known {
-            avatars[profile] = BotAvatarStore.effective(avatars[profile] ?? "")
-            if colors[profile] == nil { colors[profile] = BotColors.hex(for: profile) }
-        }
-        var photos: [String: Data] = [:]
-        for (profile, choice) in avatars where choice == "photo" {
-            if let image = BotAvatarStore.photo(for: profile), let data = thumbnail(image) { photos[profile] = data }
-        }
-        // The push names a bot by its profile name; a companion that only knows the label still
-        // finds it, so every look is stored under both.
-        for p in profiles where p.label != p.name && !p.label.isEmpty {
-            avatars[p.label] = avatars[p.name]; colors[p.label] = colors[p.name]; photos[p.label] = photos[p.name]
-        }
-        BotLooks(colors: colors, avatars: avatars, photos: photos).save()
+        build().save()
         #if os(iOS)
         WatchSync.shared.refresh()
         #endif
         // A look changed (a photo replaced leaves no setting behind to notice): iCloud gets it.
         CloudSync.shared.looksChanged()
+    }
+
+    /// The copy itself, as `mirror` saves it.
+    static func build() -> BotLooks {
+        let rawAvatars = BotAvatarStore.stored(), rawColors = BotColors.stored()
+        let current = BotLookGateway.current
+        let profiles = AppModel.shared.runtime?.profiles ?? []
+        // The looks a gateway's bots wear (#573): its own where it has them, else the ones from before, for every name
+        // the maps know (and, for the gateway in use, every profile it has). The all-bots glass setting is baked in, so
+        // the extensions (which only read this copy) draw the same bot as the app.
+        func looks(for gateway: UUID?) -> BotLooks.Gateway {
+            var names = Set((Array(rawAvatars.keys) + Array(rawColors.keys)).compactMap { key -> String? in
+                guard let own = BotLookGateway.split(key) else { return key }
+                return own.gateway == gateway ? own.name : nil
+            })
+            if gateway == current { names.formUnion(profiles.map(\.name)) }
+            var avatars: [String: String] = [:], colors: [String: String] = [:], photos: [String: Data] = [:]
+            for name in names {
+                avatars[name] = BotAvatarStore.effective(BotLookGateway.value(in: rawAvatars, for: name, gateway: gateway) ?? "")
+                colors[name] = BotColors.hex(for: name, overrides: rawColors, gateway: gateway)
+                if avatars[name] == "photo", let image = BotAvatarStore.photo(forKey: BotLookGateway.readKey(in: rawAvatars, for: name, gateway: gateway)),
+                   let data = thumbnail(image) { photos[name] = data }
+            }
+            // The push names a bot by its profile name; a companion that only knows the label still finds it, so
+            // every look of the gateway in use is stored under both.
+            if gateway == current {
+                for p in profiles where p.label != p.name && !p.label.isEmpty {
+                    avatars[p.label] = avatars[p.name]; colors[p.label] = colors[p.name]; photos[p.label] = photos[p.name]
+                }
+            }
+            return BotLooks.Gateway(colors: colors, avatars: avatars, photos: photos)
+        }
+        // The top level is the gateway in use's, as before; each gateway with looks of its own, and the ones from before,
+        // go beside it, for a push from a gateway that isn't in use (it names its connection).
+        let inUse = looks(for: current)
+        var gateways: [String: BotLooks.Gateway] = [:]
+        let ids = Set((Array(rawAvatars.keys) + Array(rawColors.keys)).compactMap { BotLookGateway.split($0)?.gateway })
+        for id in ids.union(current.map { [$0] } ?? []) { gateways[id.uuidString] = id == current ? inUse : looks(for: id) }
+        return BotLooks(colors: inUse.colors, avatars: inUse.avatars, photos: inUse.photos, gateways: gateways, shared: looks(for: nil))
     }
 
     /// A copy asked for while the demo ran, and so not made (#494): made when the demo ends (`mirrorIfOwed`).

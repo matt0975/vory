@@ -97,6 +97,8 @@ public enum MarkdownBlock: Hashable, Identifiable, Sendable {
     case paragraph(String)
     case heading(level: Int, text: String)
     case code(language: String?, text: String, closed: Bool)
+    /// A display math equation block ($$...$$ or \[...\]), closed when terminated.
+    case math(equation: String, closed: Bool)
     /// A bullet, numbered or task list. Nesting is carried by each item's `depth`.
     case list([MarkdownListItem])
     case quote(String)
@@ -160,6 +162,8 @@ public enum MarkdownParser {
         var code: [String]? = nil
         var codeLang: String? = nil
         var fence = ""
+        var math: [String]? = nil
+        var mathFence = ""
 
         func flushParagraph() {
             if !paragraph.isEmpty { out.append(.paragraph(paragraph.joined(separator: "\n"))); paragraph = [] }
@@ -225,6 +229,79 @@ public enum MarkdownParser {
                 }
                 continue
             }
+            if math != nil {
+                if mathFence == "$$", let closeRange = trimmed.range(of: "$$") {
+                    let before = String(trimmed[..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if !before.isEmpty { math!.append(before) }
+                    out.append(.math(equation: math!.joined(separator: "\n"), closed: true))
+                    math = nil; mathFence = ""
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                } else if mathFence == "\\[", let closeRange = trimmed.range(of: "\\]") {
+                    let before = String(trimmed[..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if !before.isEmpty { math!.append(before) }
+                    out.append(.math(equation: math!.joined(separator: "\n"), closed: true))
+                    math = nil; mathFence = ""
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                } else if !mathFence.isEmpty && mathFence.hasPrefix("\\end{"), let closeRange = trimmed.range(of: mathFence) {
+                    let before = String(trimmed[..<closeRange.upperBound])
+                    math!.append(before)
+                    out.append(.math(equation: math!.joined(separator: "\n"), closed: true))
+                    math = nil; mathFence = ""
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                } else {
+                    math!.append(line)
+                }
+                continue
+            }
+            // LaTeX math environments: \begin{equation} ... \end{equation}, \begin{align} ... \end{align}, etc.
+            if let envMatch = trimmed.firstMatch(of: /^\\begin\{(equation\*?|align\*?|alignat\*?|gather\*?|gathered|aligned|alignedat|matrix\*?|pmatrix\*?|bmatrix\*?|Bmatrix\*?|vmatrix\*?|Vmatrix\*?|cases|dcases|rcases|split|array)\}/) {
+                let env = String(envMatch.1)
+                let endTag = "\\end{\(env)}"
+                flushAll()
+                if let closeRange = trimmed.range(of: endTag) {
+                    let eq = String(trimmed[..<closeRange.upperBound]).trimmingCharacters(in: .whitespaces)
+                    out.append(.math(equation: eq, closed: true))
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                } else {
+                    mathFence = endTag
+                    math = [line]
+                }
+                continue
+            }
+            if trimmed.hasPrefix("$$") {
+                if let closeRange = trimmed.dropFirst(2).range(of: "$$") {
+                    flushAll()
+                    let eq = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    out.append(.math(equation: eq, closed: true))
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                    continue
+                }
+                flushAll()
+                mathFence = "$$"
+                let rem = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                math = rem.isEmpty ? [] : [rem]
+                continue
+            }
+            if trimmed.hasPrefix("\\[") {
+                if let closeRange = trimmed.dropFirst(2).range(of: "\\]") {
+                    flushAll()
+                    let eq = String(trimmed[trimmed.index(trimmed.startIndex, offsetBy: 2)..<closeRange.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    out.append(.math(equation: eq, closed: true))
+                    let rem = String(trimmed[closeRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                    if !rem.isEmpty { paragraph.append(rem) }
+                    continue
+                }
+                flushAll()
+                mathFence = "\\["
+                let rem = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                math = rem.isEmpty ? [] : [rem]
+                continue
+            }
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 flushAll()
                 fence = String(trimmed.prefix(3))
@@ -287,13 +364,91 @@ public enum MarkdownParser {
             flushLists()
             paragraph.append(line)
         }
+        if let mathLines = math { out.append(.math(equation: mathLines.joined(separator: "\n"), closed: false)) }
         if let codeLines = code { out.append(.code(language: codeLang, text: codeLines.joined(separator: "\n"), closed: false)) }
         flushAll()
         return (out, settledLines, settledBlocks)
     }
 
     /// Inline markdown → AttributedString, falling back to plain text.
+    /// Preserves and formats inline LaTeX math ($...$, \(...\), and display delimiters written
+    /// inside a paragraph) without markdown syntax conflicts.
     public static func inline(_ text: String) -> AttributedString {
+        guard MathNotation.mayContainMath(text) else {
+            return parseMarkdown(text)
+        }
+
+        let spans = MathNotation.findInlineMath(in: text)
+        guard !spans.isEmpty else {
+            // No delimited math: only the LaTeX loose in the prose needs reading.
+            return parseMarkdown(MathNotation.formatNakedCommands(in: text))
+        }
+
+        // Each span is lifted out of the text before the markdown parse, so `_` and `*` inside a
+        // formula cannot be read as emphasis, and put back afterwards from the attribute token.
+        var sanitized = ""
+        sanitized.reserveCapacity(text.count)
+        var equations: [String: String] = [:]
+        equations.reserveCapacity(spans.count)
+        // One run id per call: a token only has to be unique within this string.
+        let run = UUID().uuidString.prefix(8)
+        var lastIndex = text.startIndex
+        for (index, span) in spans.enumerated() {
+            sanitized.append(contentsOf: text[lastIndex..<span.range.lowerBound])
+            let token = "\u{FFFC}MATH\(run)\(index)\u{FFFC}"
+            sanitized.append(token)
+            equations[token] = span.equation
+            lastIndex = span.range.upperBound
+        }
+        sanitized.append(contentsOf: text[lastIndex...])
+
+        // Format any naked LaTeX commands outside code blocks (e.g. \LaTeX, \theta, \rightarrow, M_ (ghost))
+        if MathNotation.mayContainMath(sanitized) {
+            sanitized = MathNotation.formatNakedCommands(in: sanitized)
+        }
+
+        return restoreMath(in: parseMarkdown(sanitized), equations: equations)
+    }
+
+    /// Puts the formulas back where their tokens are, in one pass over the parsed string. (A
+    /// `String(attr.characters)` rebuild per span made a paragraph with N formulas cost N
+    /// reparses of the whole paragraph, on the main thread, at every streaming redraw.)
+    private static func restoreMath(in attr: AttributedString, equations: [String: String]) -> AttributedString {
+        let marker: Character = "\u{FFFC}"
+        let chars = attr.characters
+        guard chars.contains(marker) else { return attr }
+
+        var out = AttributedString()
+        var pieceStart = chars.startIndex
+        var i = chars.startIndex
+        while i < chars.endIndex {
+            guard chars[i] == marker else {
+                i = chars.index(after: i)
+                continue
+            }
+            var close = chars.index(after: i)
+            while close < chars.endIndex, chars[close] != marker { close = chars.index(after: close) }
+            guard close < chars.endIndex else { break } // an unterminated token: keep the rest as it came
+            let tokenEnd = chars.index(after: close)
+
+            if pieceStart < i { out.append(attr[pieceStart..<i]) }
+            let token = String(chars[i..<tokenEnd])
+            if let equation = equations[token] {
+                var mathPiece = AttributedString(MathNotation.format(equation))
+                mathPiece.math = equation
+                out.append(mathPiece)
+            } else {
+                // Not one of ours: hand the characters straight through.
+                out.append(attr[i..<tokenEnd])
+            }
+            pieceStart = tokenEnd
+            i = tokenEnd
+        }
+        if pieceStart < chars.endIndex { out.append(attr[pieceStart..<chars.endIndex]) }
+        return out
+    }
+
+    private static func parseMarkdown(_ text: String) -> AttributedString {
         if let a = try? AttributedString(markdown: text, options: .init(allowsExtendedAttributes: true, interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)) {
             return a
         }
@@ -360,23 +515,46 @@ public enum MarkdownParser {
                 hasLink ? ns.substring(with: m.range(at: 4)) : nil)
     }
 
-    /// Splits a table row into cells. `\|` and pipes inside inline code spans do not split.
+    /// Splits a table row into cells. `\|` and pipes inside inline code spans or inline math do not split.
     static func tableCells(_ row: String) -> [String] {
         let t = row.trimmingCharacters(in: .whitespaces)
+        let mathSpans = MathNotation.findInlineMath(in: t)
         var cells: [String] = []
         var cur = ""
         var inCode = false
         var escaped = false
-        for ch in t {
-            if escaped {
-                // The escape is consumed only for the pipe; any other escape is kept for inline parsing.
-                if ch != "|" { cur.append("\\") }
-                cur.append(ch); escaped = false; continue
+        var spanIndex = 0
+
+        var i = t.startIndex
+        while i < t.endIndex {
+            if !inCode && spanIndex < mathSpans.count && i == mathSpans[spanIndex].range.lowerBound {
+                let span = mathSpans[spanIndex]
+                cur.append(contentsOf: t[span.range])
+                i = span.range.upperBound
+                spanIndex += 1
+                continue
             }
-            if ch == "\\" { escaped = true; continue }
+            let ch = t[i]
+            if escaped {
+                if ch != "|" { cur.append("\\") }
+                cur.append(ch); escaped = false
+                i = t.index(after: i)
+                continue
+            }
+            if ch == "\\" {
+                escaped = true
+                i = t.index(after: i)
+                continue
+            }
             if ch == "`" { inCode.toggle() }
-            if ch == "|", !inCode { cells.append(cur); cur = ""; continue }
+            if ch == "|", !inCode {
+                cells.append(cur)
+                cur = ""
+                i = t.index(after: i)
+                continue
+            }
             cur.append(ch)
+            i = t.index(after: i)
         }
         if escaped { cur.append("\\") }
         cells.append(cur)
@@ -420,6 +598,8 @@ public enum MarkdownPlainText {
                 out.append(MarkdownTable.plain(t))
             case .code(_, let t, _):
                 out.append(t)
+            case .math(let eq, _):
+                out.append(MathNotation.format(eq))
             case .list(let items):
                 out.append(items.map { item in
                     let marker: String

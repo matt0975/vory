@@ -58,7 +58,7 @@ struct GatewayFormView: View {
             }
         }
 
-        var help: String {
+        @MainActor var help: String {
             switch self {
             case .local: return "Same Wi‑Fi as the gateway machine. Use its LAN address and the port hermes serve prints (9119 by default). Plain http is fine here; it only works at home."
             case .tailscale: return "Reach the gateway from anywhere over your tailnet. Install Tailscale on \(GatewayFormView.thisDevice) and the gateway machine, then use the machine's MagicDNS name or its 100.x address. No port forwarding, no public exposure; plain http is safe inside the tailnet."

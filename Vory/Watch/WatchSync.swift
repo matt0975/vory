@@ -35,7 +35,9 @@ final class WatchSync: NSObject, WCSessionDelegate {
         if let a = store.activeConnectionID, a != GatewayConnection.demoID { ctx["active"] = a.uuidString }
         // The bots as this phone draws them (shape, eyes, colour, photo thumbnail): the watch
         // draws the same faces from this, static.
-        if let looks = try? JSONEncoder().encode(BotLooks.load()) { ctx["looks"] = looks }
+        // The gateway in use's only (#573): the watch draws those, and every gateway's photos would not fit the context.
+        var looks = BotLooks.load(); looks.gateways = nil; looks.shared = nil
+        if let data = try? JSONEncoder().encode(looks) { ctx["looks"] = data }
         // Vory Summaries, made here by Apple Intelligence, so the watch shows them without
         // running a model of its own.
         if Self.summariesToWatch, let s = try? JSONEncoder().encode(ChatSummarizer.shared.summaries) { ctx["summaries"] = s }

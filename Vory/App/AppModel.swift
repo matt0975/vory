@@ -82,6 +82,27 @@ final class AppModel {
     /// The chat on screen itself (a fresh one has no stored id yet), for the Mac's Chat menu:
     /// Stop, Approve, Deny.
     var visibleChat: ChatSession?
+    /// Each chat page on show, by the page's own id, in the order they appeared (`chatAppeared`, `chatGone`).
+    @ObservationIgnored private var shownPages: [ShownPage] = []
+    private struct ShownPage { let page: UUID; weak var chat: ChatSession? }
+    /// A chat page appearing: its chat is the one on screen.
+    func chatAppeared(_ chat: ChatSession, page: UUID) {
+        shownPages.removeAll { $0.page == page || $0.chat == nil }
+        shownPages.append(ShownPage(page: page, chat: chat))
+        visibleChatID = chat.storedID
+        visibleChat = chat
+    }
+    /// A chat page going. Across a fold the page going and the page coming can show the same chat, in either order: while
+    /// another page still shows it, it stays the chat on screen and this returns true. Cleared by the page going, the side
+    /// strip's catchers went with it and More did nothing until another chat was opened (#615).
+    @discardableResult
+    func chatGone(_ chat: ChatSession, page: UUID) -> Bool {
+        shownPages.removeAll { $0.page == page || $0.chat == nil }
+        if shownPages.contains(where: { $0.chat === chat }) { return true }
+        if visibleChatID == chat.storedID { visibleChatID = nil }
+        if visibleChat === chat { visibleChat = nil }
+        return false
+    }
     /// ⌘F on the Mac: put the cursor in the chat list's search field.
     var focusSearchRequest: UUID?
     /// An Approve/Deny that came from the Live Activity or a notification while "Confirm
@@ -512,6 +533,8 @@ final class AppModel {
         store.activeConnectionID = connection.id
         // The demo's bots wear its looks while it runs, in memory only.
         DemoLooks.set(on: connection.isDemo)
+        // Bots' looks are this gateway's own from here, else the ones from before (#573).
+        BotLookGateway.current = connection.id
         ChatListPrefs.shared.inDemo = connection.isDemo
         // The demo (#392) runs on its own gateway inside the app, and registers nowhere for push.
         let rt = GatewayRuntime(connection: connection, store: store, transport: connection.isDemo ? .demo(DemoGateway()) : .network)
@@ -620,6 +643,7 @@ final class AppModel {
         await runtime?.stop()
         runtime = nil
         DemoLooks.set(on: false)
+        BotLookGateway.current = nil
         ChatListPrefs.shared.inDemo = false
         ChatGoals.shared.attach(nil)
     }
@@ -644,6 +668,7 @@ final class AppModel {
         lock.isEnabled = false
         selectedTab = .chats
         pendingRoute = nil
+        shownPages.removeAll()
         visibleChat = nil
         visibleChatID = nil
         companionUpdateAvailable = false

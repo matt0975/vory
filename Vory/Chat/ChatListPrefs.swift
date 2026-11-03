@@ -1,5 +1,4 @@
 import SwiftUI
-import Combine
 
 /// The chat list's settings, backed by UserDefaults under the same keys the rest of the app
 /// uses (Settings toggles some of them): read once, written on change, and refreshed from the

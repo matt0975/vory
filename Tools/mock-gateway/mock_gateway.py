@@ -292,6 +292,71 @@ log-2 | 48%
 
 Say the word and I'll run it."""
 
+# Mathematics as a model writes it (#550): inline maths in both delimiters, display blocks ($$…$$, \[…\] and an
+# aligned one), a table with maths in its cells, and a price whose dollar sign must stay text.
+MATH_REPLY = r"""## Sizing the log volume
+
+Each day adds about $r = \frac{\Delta s}{\Delta t}$ to the volume, so after $n$ days it holds $s_n = s_0 + n r$.
+The rotation keeps $k$ files, and the error in the estimate falls as \(\epsilon_k = 2^{-k}\).
+With weights where $\alpha + \beta = \gamma$, the blend stays under the limit.
+
+The total over a month is
+
+$$
+S = \sum_{d=1}^{30} r_d = 30\,\bar{r}
+$$
+
+and the share each host takes is
+
+\[
+p_i = \frac{s_i}{\sum_j s_j}
+\]
+
+The two rules side by side:
+
+$$
+\begin{aligned}
+s_{n+1} &= s_n + r \\
+s_n &= s_0 + n r
+\end{aligned}
+$$
+
+| Host | Growth | Share |
+|---|---|---|
+| log-1 | $r_1 = 1.2$ GB | $p_1 = 0.6$ |
+| log-2 | $r_2 = 0.8$ GB | $p_2 = 0.4$ |
+
+The bigger volume costs $5 more a month.
+
+That is the whole derivation."""
+
+
+def math_examples(n: int, cards: bool = True) -> str:
+    """`math N`: N worked examples, each a sentence and a display card (four kinds in turn, each formula its own, so
+    no two cards share a cached rendering); with `cards` off the same sentences with the formula said in words, as
+    the long reply without cards that a chat full of cards is measured against."""
+    parts = ["## Worked examples"]
+    for i in range(1, n + 1):
+        m = i + 2
+        parts.append(f"**Example {i}.** The running total of the first {m} counts comes to {m * (m + 1) // 2}, "
+                     f"and the check below confirms it.")
+        if not cards:
+            parts.append(f"In words: the sum of the first {m} counts is half of {m} times {m + 1}.")
+            continue
+        kind = i % 4
+        if kind == 1:
+            eq = r"\sum_{k=1}^{%d} k = \frac{%d \cdot %d}{2} = %d" % (m, m, m + 1, m * (m + 1) // 2)
+        elif kind == 2:
+            eq = r"\int_0^{%d} x\,dx = \frac{%d^2}{2}" % (m, m)
+        elif kind == 3:
+            eq = r"\begin{aligned} a_{%d} &= a_{%d} + %d \\ a_{0} &= 0 \end{aligned}" % (i, i - 1, m)
+        else:
+            eq = r"\lim_{x \to 0} \frac{\sin %d x}{x} = %d" % (m, m)
+        parts.append("$$\n" + eq + "\n$$")
+    parts.append("That is the end of the worked examples.")
+    return "\n\n".join(parts)
+
+
 # A table wider than a phone's bubble (six columns, emoji, bold, star ratings), with markdown
 # in the reasoning before it: what the app's scrolling table card and Reasoning card are
 # checked against.
@@ -1539,6 +1604,8 @@ def model_options() -> dict:
 #                   (#449: a chat's history slow to come, its stored rows shown meanwhile)
 #   resume-refused  the next N session.resume calls (default 1) answer an error, then all is well; no socket is dropped
 #                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
+#   steer-rejected  session.steer answers "rejected" even while a turn runs, as the gateway does when its turn ended a
+#                   moment before the client knew; no socket is dropped (#546: the words go as the next message)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
 
@@ -1600,7 +1667,7 @@ async def process_request(connection, request):
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
         FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown") else 0
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown", "steer-rejected") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -2150,6 +2217,21 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
+    async def _math_turn(self, s: Session, prompt: str) -> None:
+        """Mathematics (#550): `math` streams MATH_REPLY; `math 40` streams forty worked examples, each with a display
+        card, for a long chat of cards; `math 40 plain` the same examples with no cards, to measure against."""
+        m = re.search(r"\d+", prompt)
+        if m:
+            text = math_examples(max(1, min(400, int(m.group()))), cards="plain" not in prompt.lower())
+        else:
+            text = MATH_REPLY
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, text, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [text])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _morph_turn(self, s: Session, prompt: str) -> None:
         """A staged interrupted change for the bot's motion (1.5 #304): a tool starts and, 0.15 s
         later while the toolbox is still forming, an approval is asked; the tool completes once
@@ -2494,6 +2576,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("table"):
             await self._table_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("math"):
+            await self._math_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("think"):
             # A long first think, as a real model has before its first word: the prompt sits
@@ -3081,6 +3166,23 @@ class Gateway:
             UNDOS.append({"session_id": s.sid, "intent": p.get("intent"), "removed": removed, "at": time.time()})
             print(f"[mock] session.undo {s.sid} intent={p.get('intent')!r}: removed {removed}", flush=True)
             return ok({"removed": removed})
+        if method == "session.steer":
+            # As the real gateway answers it (tui_gateway/methods_session.py, _correction_method and _apply_correction):
+            # no text, 4002; no live turn, "rejected", which the client sends as its next prompt; a live turn takes the
+            # words ("queued": the agent adds them as their own user row after its current tool calls, nothing streamed)
+            # and keeps them on the inflight turn for a resume ("corrections").
+            text = str(p.get("text") or "").strip()
+            if not text:
+                return err(4002, "text is required")
+            s = self.sessions.get(p.get("session_id", ""))
+            if s is None:
+                return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
+            if not s.running or FAULT["mode"] == "steer-rejected":
+                return ok({"status": "rejected", "text": text})
+            if s.inflight is not None:
+                s.inflight["corrections"] = [*(s.inflight.get("corrections") or []), text]
+            print(f"session.steer {text!r} session={s.sid}", flush=True)
+            return ok({"status": "queued", "text": text})
         if method == "config.set":
             s = self.sessions.get(p.get("session_id", ""))
             # Voice mode's quick answers set reasoning and fast for the session and put them back.

@@ -75,13 +75,23 @@ final class PageOwnButtonsUITests: XCTestCase {
         }
     }
 
+    /// One drag on Settings in window coordinates, the finger up the window's middle (`up`, toward the list's end) or down
+    /// it, held at its end so the list doesn't fling. `app.swipeUp` didn't move the list on the open Duo, where the first
+    /// screen ends at Skills, so the Board's row was never built.
+    private func drag(up: Bool) {
+        let w = app.windows.firstMatch
+        let (from, to) = up ? (0.75, 0.3) : (0.3, 0.75)
+        w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: from))
+            .press(forDuration: 0.05, thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: to)), withVelocity: .slow, thenHoldForDuration: 0.2)
+    }
+
     /// Settings' row `id`, scrolled to and opened.
     private func openSettingsRow(_ id: String) {
         let row = any("settings.row.\(id)")
         XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 20), "no Settings rows")
         // Clear of the tab bar: a row behind it reads as hittable, and the tap goes to the bar.
         let limit = app.windows.firstMatch.frame.maxY - 150
-        for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { app.swipeUp(velocity: .slow); pause(0.5) }
+        for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { drag(up: true); pause(0.5) }
         XCTAssertTrue(row.exists && row.isHittable, "no \(id) row on Settings")
         row.tap(); pause(1.5)
     }
@@ -91,7 +101,7 @@ final class PageOwnButtonsUITests: XCTestCase {
         if any("page.back").exists { any("page.back").tap() }
         else if app.navigationBars.buttons.firstMatch.exists { app.navigationBars.buttons.element(boundBy: 0).tap() }
         pause(1.5)
-        for _ in 0..<10 where !(any("settings.row.profile").exists && any("settings.row.profile").isHittable) { app.swipeDown(velocity: .fast); pause(0.3) }
+        for _ in 0..<10 where !(any("settings.row.profile").exists && any("settings.row.profile").isHittable) { drag(up: false); pause(0.3) }
     }
 
     /// The four pages opened from Settings each have their own control, and it does what it says.

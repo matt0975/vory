@@ -92,9 +92,10 @@ enum BotAvatarImage {
         return img
     }
 
-    /// What a bot's face is drawn from: its choice (with the all-bots glass setting), its colour, and its photo.
+    /// What a bot's face is drawn from: its choice (with the all-bots glass setting), its colour, and its photo, on the
+    /// gateway in use (#573: two gateways' bots of one name can look different, and must not share a kept face).
     @MainActor static func look(for profile: String) -> String {
-        "\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(BotAvatarStore.photoGeneration)"
+        "\(BotAvatarStore.choice(for: profile).raw)|\(BotColors.hex(for: profile))|\(BotAvatarStore.glassAll)|\(BotAvatarStore.photoGeneration)|\(BotLookGateway.current?.uuidString ?? "")"
     }
 
     /// A look that is not a bot's own (the Look tab's shape and eye tiles, the Companion card's
@@ -174,6 +175,9 @@ struct JumpToBottomButton: View {
             Button(action: action) {
                 Image(systemName: "chevron.down").font(.body.weight(.semibold))
                     .frame(width: 38, height: 38)
+                    // The whole circle takes the tap: a frame adds no hit area, and on iOS 26 a tap on the arrow went
+                    // to the thread under it (#614).
+                    .contentShape(Circle())
                     .glassEffect(.regular.interactive(), in: .circle)
             }
             .buttonStyle(.plain)

@@ -1,4 +1,5 @@
 import SwiftUI
+import VoryCore
 
 /// A long text drawn as a stack of `Text`s of bounded size (#361, 1.5 (25)).
 ///
@@ -234,11 +235,14 @@ struct InlineText: View {
         // The chip renderer only where there is a mention: on every paragraph it sized and drew
         // each line itself, a cost in every long reply's layout with nothing to show for it (1.5 (24)).
         let mention = text.utf8.contains(UInt8(ascii: "@"))
+        let math = MathNotation.mayContainMath(text)
         if TextPieces.isLong(text, limits) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(TextPieces.attributed(MarkdownView.inline(text), limits).enumerated()), id: \.offset) { _, piece in
                     Group {
-                        if mention { Mentions.text(piece).textRenderer(MentionChipRenderer()) } else { Text(piece) }
+                        if mention { Mentions.text(piece).textRenderer(MentionChipRenderer()) }
+                        else if math { Mentions.text(piece) }
+                        else { Text(piece) }
                     }
                     .modifier(PieceProbe.Measure())
                 }
@@ -246,6 +250,8 @@ struct InlineText: View {
             .accessibilityElement(children: .combine)
         } else if mention {
             Mentions.text(MarkdownView.inline(text)).textRenderer(MentionChipRenderer()).modifier(PieceProbe.Measure())
+        } else if math {
+            Mentions.text(MarkdownView.inline(text)).modifier(PieceProbe.Measure())
         } else {
             Text(MarkdownView.inline(text)).modifier(PieceProbe.Measure())
         }

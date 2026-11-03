@@ -6,13 +6,16 @@ import XCTest
 ///
 /// Three checks on one long reply from the mock: scrolled up while it streams, the words on
 /// screen stay put until it ends; after it ends, scrolled up again, they stay put; the jump
-/// arrow shows while away from the end and brings the thread back.
+/// arrow shows while away from the end and brings the thread back. Run twice: with the keyboard
+/// up, as typing the prompt leaves it, and with it closed first.
 ///
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set. HERMES_E2E_BUNDLE=
 /// com.vorantx.vory.demo drives the demo copy, pointed at the gateway by launch argument.
 @MainActor
 final class ChatScrollUITests: XCTestCase {
     private var app: XCUIApplication!
+    /// Added to the stills' names in the second case, so its stills don't replace the first's.
+    private var shotTag = ""
 
     private var env: (String, String)? {
         let e = ProcessInfo.processInfo.environment
@@ -21,6 +24,7 @@ final class ChatScrollUITests: XCTestCase {
     }
 
     private func shot(_ name: String) {
+        let name = name + shotTag
         let s = XCUIScreen.main.screenshot()
         let a = XCTAttachment(screenshot: s); a.name = name; a.lifetime = .keepAlways; add(a)
         let folder = ProcessInfo.processInfo.environment["HERMES_E2E_SHOTS"].flatMap { $0.isEmpty ? nil : $0 }
@@ -52,6 +56,23 @@ final class ChatScrollUITests: XCTestCase {
 
     private func text(_ fragment: String) -> XCUIElementQuery {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", fragment))
+    }
+
+    /// The keyboard on screen (XCTest goes on listing it below the screen once it has gone).
+    private var keyboardUp: Bool {
+        let k = app.keyboards.firstMatch
+        return k.exists && k.frame.minY < app.frame.height - 20
+    }
+
+    /// The keyboard down, as ChatFollowUITests does it: a drag from just above the dock to the bottom of the screen pulls
+    /// it away interactively (a swipe in the thread's middle only scrolled).
+    private func keyboardDown() {
+        guard keyboardUp else { return }
+        let dock = app.otherElements["chat.dock"].firstMatch
+        let from = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: dock.frame.minY - 12))
+        let to = app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: app.frame.midX, dy: app.frame.height - 4))
+        from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
     }
 
     /// A row of the reply that is on screen, and where it is: the mark the checks hold the
@@ -135,8 +156,16 @@ final class ChatScrollUITests: XCTestCase {
         XCTAssertTrue(text(" of \(steps): checking shard").firstMatch.exists, "the turn did not start")
     }
 
-    func testTheThreadStaysWhereItWasPutWhileAReplyStreamsAndAfter() throws {
+    /// With the keyboard up, as typing the prompt leaves it: a reader's usual case, and where the arrow lost its tap to
+    /// the row under it (#614).
+    func testTheThreadStaysWhereItWasPutWhileAReplyStreamsAndAfter() throws { try threadStaysWhereItWasPut(closeFirst: false) }
+
+    /// The same with the keyboard closed first.
+    func testTheThreadStaysWhereItWasPutWithTheKeyboardDown() throws { try threadStaysWhereItWasPut(closeFirst: true) }
+
+    private func threadStaysWhereItWasPut(closeFirst: Bool) throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        shotTag = closeFirst ? "-keyboard-down" : ""
         continueAfterFailure = false
         launch(url: url, token: token)
         let newChat = app.buttons["chats.new"].firstMatch
@@ -151,11 +180,15 @@ final class ChatScrollUITests: XCTestCase {
         XCTAssertFalse(end.firstMatch.exists, "the report had already finished: too short to scroll during")
 
         // 1. Up the thread while it streams: the words on screen stay put until the end. The
-        // keyboard is still up from typing the prompt, and a drag on the thread works on it first
-        // (it dismisses interactively): without a swipe of its own the scroll-up could leave the
-        // thread at its end, where it rightly followed the reply.
-        if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6)) }
-        print("CHAT-SCROLL keyboard after dismissing: \(app.keyboards.firstMatch.exists)")
+        // keyboard is still up from typing the prompt; the second case closes it first.
+        if closeFirst {
+            keyboardDown()
+            XCTAssertFalse(keyboardUp, "the keyboard did not go down")
+        }
+        print("CHAT-SCROLL the keyboard \(keyboardUp ? "up" : "down") while scrolling up")
+        // Three slow swipes up, for the distance: the first was meant to close the keyboard and only ever scrolled, and
+        // with two the thread could stay near enough to its end to keep following the reply.
+        app.swipeDown(velocity: .slow); RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         app.swipeDown(velocity: .slow)
         app.swipeDown(velocity: .slow)
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
@@ -169,12 +202,20 @@ final class ChatScrollUITests: XCTestCase {
         XCTAssertEqual(afterEnd.frame.minY, during.y, accuracy: 24, "the thread moved \(Int(afterEnd.frame.minY - during.y)) pt while the reply streamed and ended")
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")).firstMatch.exists, "no jump arrow while away from the end")
 
-        // Back to the end by the arrow.
+        // Back to the end by the arrow. The keyboard can still be up here, and the arrow then stands over a row: the
+        // arrow must take the tap itself.
+        let keyboardAtTap = keyboardUp
         let arrow = try XCTUnwrap(hittable(app.buttons.matching(NSPredicate(format: "label == 'Jump to latest'")), timeout: 5))
+        print("CHAT-SCROLL arrow at \(arrow.frame), the keyboard \(keyboardAtTap ? "up" : "down")")
         arrow.tap()
         XCTAssertTrue(end.firstMatch.waitForExistence(timeout: 10))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
         shot("scroll-back-at-end")
+        // The end's words existing doesn't put the thread at its end (the lazy stack keeps rows it has laid out); the
+        // arrow going does.
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: arrow)
+        XCTAssertEqual(XCTWaiter().wait(for: [gone], timeout: 3), .completed,
+                       "the arrow didn't bring the thread to its end (the keyboard \(keyboardAtTap ? "up" : "down") at the tap): it still shows")
         try assertEndClearsTheDock("after-arrow")
 
         // 2. After the reply: up the thread again, and nothing brings it back.

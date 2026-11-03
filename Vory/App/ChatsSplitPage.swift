@@ -53,6 +53,17 @@ struct ChatsSplitPage: View {
                     .onChange(of: model.chatPath.isEmpty, initial: true) { _, empty in
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
+                    #if os(iOS)
+                    // On the Duo's side (or as a book) with a chat open and the list hidden, the split's sidebar toggle
+                    // stood in the chat page's bar over its face (Back, or the split's edge swipe, brings the list back,
+                    // as before). It's this column's own item, shown in the chat's bar while the list is hidden: taken
+                    // off the chat's page or the detail column it stayed (2026-10-31), so it comes off here, and only
+                    // then. Beside the chat the list keeps its "Hide Sidebar", after Back the empty detail keeps "Show
+                    // Sidebar", and the iPad keeps both (#555).
+                    .toolbar(removing: model.tabBarVertical && !model.chatPath.isEmpty && columns == .detailOnly ? .sidebarToggle : nil)
+                    #endif
+                    // The column's width last, outside everything else on the column: put inside the toolbar's
+                    // removal, the split no longer read it and gave the list its own 320 pt (2026-11-01).
                     .navigationSplitViewColumnWidth(min: listWidth.min, ideal: listWidth.ideal, max: 480)
             } detail: {
                 ChatDetailStack(path: chatPath) { NoChatPlaceholder() }
@@ -79,7 +90,7 @@ struct ChatsSplitPage: View {
                         model.chatsPathOpen = !empty; model.tabAtRoot[.chats] = empty
                     }
                     .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true).closedChatsRoom() }
                     // The bar follows a chat's push and pop in this stack (`MorphState.follow`).
                     .chatsStackProbe()
             }
@@ -133,6 +144,16 @@ struct CountsChatOnScreen: ViewModifier {
 
 extension View {
     func countsChatOnScreen(room: Bool = false) -> some View { modifier(CountsChatOnScreen(room: room)) }
+
+    /// A group chat on the Chats stack keeps its place on the closed Duo, where the stack has no room (`ClosedChatsRoom`;
+    /// iPhone only).
+    @ViewBuilder func closedChatsRoom() -> some View {
+        #if os(iOS)
+        modifier(ClosedChatsRoom())
+        #else
+        self
+        #endif
+    }
 
     /// Hands the Chats stack to the morph bar (iPhone only; the Mac has no bar).
     @ViewBuilder func chatsStackProbe() -> some View {

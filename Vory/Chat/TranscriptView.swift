@@ -1,4 +1,3 @@
-import Combine
 import QuickLook
 import SwiftUI
 import VoryCore
@@ -429,7 +428,7 @@ struct TranscriptView: View {
             // so the tapped card stays where it is and the rows below glide (#437).
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(.bottom, for: .alignment)
-            .defaultScrollAnchor(holdingCard ? .top : .bottom, for: .sizeChanges)
+            .defaultScrollAnchor(awayFromBottom ? .top : (holdingCard ? .top : .bottom), for: .sizeChanges)
             // Streaming text, and the tokens/sec footer landing after it, follow by the anchor for
             // size changes (`.defaultScrollAnchor(.bottom)` above), with no scroll asked per token:
             // that write ran the transcript's body a second time on every token. A new message
@@ -557,11 +556,13 @@ extension TranscriptView {
     /// card that grew pushed itself up and was pulled back a frame later, and one near the bottom was scrolled into view
     /// after it opened, a second motion (#437). A close with the thread at its very end keeps the end anchored: the
     /// thread is shorter after it, so the rows above come down, in the same animation as the close.
-    /// Once the hold ends, a thread still locked to its end follows a running turn again, eased as `followRows` does
-    /// (rows that arrived meanwhile were held back): a card toggled near the end while a turn streams does not stop the
-    /// thread following it. With no turn running, nothing moves after the toggle.
+    /// Once the hold ends, the thread follows its end again only if the reader was at its very end as the card was toggled
+    /// (`CardFollow`): a turn still running, or rows that arrived meanwhile (held back), eased as `followRows` does. A
+    /// reader up the thread is left where they are, even while the thread is still locked to its end, so a card opened
+    /// there never ends with a jump to the bottom. With no turn running and no rows in, nothing moves after the toggle.
     private func holdCard(opening: Bool) {
         guard opening || metrics.distanceFromBottom >= 4 else { CardHold.shared.end(); return }
+        let atEnd = metrics.distanceFromBottom < 4
         cardHold += 1
         let hold = cardHold
         holdingCard = true
@@ -604,9 +605,9 @@ extension TranscriptView {
             #if DEBUG
             CardMotionProbe.holding = false
             #endif
-            // A turn running under a thread locked to its end goes on being followed (eased, as `followRows` does); with
-            // no turn running the thread stays where the card left it.
-            let follow = followAfterHold || chat.isRunning
+            // Followed again only if the reader was at the very end as the card was toggled (`CardFollow`); a reader up
+            // the thread stays where the card left them.
+            let follow = CardFollow.afterHold(atEndWhenToggled: atEnd, rowsArrived: followAfterHold, turnRunning: chat.isRunning)
             followAfterHold = false
             if follow, mayFollow(), metrics.distanceFromBottom > 4 { withAnimation(.easeOut(duration: 0.28)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
@@ -961,13 +962,6 @@ extension TranscriptView {
                 return
             }
             withAnimation(.easeOut(duration: 0.35)) { scrollPosition.scrollTo(edge: .bottom) }
-            // If it did not land (a lazy row laid out late, an older iOS), finish the job flat.
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, metrics.distanceFromBottom > 24 else { return }
-            scrollPosition.scrollTo(edge: .bottom)
-            try? await Task.sleep(for: .milliseconds(60))
-            guard !Task.isCancelled, metrics.distanceFromBottom > 24 else { return }
-            scrollPosition.scrollTo(id: "bottom", anchor: .bottom)
         }
     }
 }
@@ -1457,9 +1451,21 @@ enum ChatStyle {
 
     func rows(for key: Key, build: () -> [TranscriptRowModel]) -> [TranscriptRowModel] {
         if key != self.key {
-            built = build()
+            let nextBuilt = build()
+            if key.chat == self.key?.chat,
+               let split = olderSplit,
+               nextBuilt.count >= split,
+               older.count == split,
+               nextBuilt[..<split].elementsEqual(older) {
+                // When only tail items change and built[..<split] prefix elements remain identical,
+                // preserve the existing older array storage reference so that OlderRows.==
+                // terminates in O(1) time via buffer pointer equality (baseAddress).
+            } else {
+                olderSplit = nil
+                older = []
+            }
+            built = nextBuilt
             self.key = key
-            olderSplit = nil
             builds += 1
         }
         return built
@@ -1748,7 +1754,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1764,13 +1770,13 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
                     // Other files the bot hands back are cards under the words (#309).
                     let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), inlineSelection: false, onShowAll: onShowAll).equatable()
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
@@ -2078,6 +2084,16 @@ extension View {
     func folded(open: Bool, spacing: CGFloat = 0, keep: Bool = true, fade: Bool = true) -> some View { modifier(Folded(open: open, spacing: spacing, keep: keep, fade: fade)) }
 }
 
+/// After a card's hold (`TranscriptView.holdCard`), whether the thread follows its end again: only for a reader who was at
+/// its very end as the card was toggled, and then for a turn still running or rows that came in during the hold. A reader
+/// up the thread is left where they are, even while the thread is still locked to its end, so a card opened there never
+/// ends with a jump to the bottom.
+enum CardFollow {
+    static func afterHold(atEndWhenToggled: Bool, rowsArrived: Bool, turnRunning: Bool) -> Bool {
+        atEndWhenToggled && (rowsArrived || turnRunning)
+    }
+}
+
 /// The tapped card's place while the thread holds it (#437, #473). The thread's hold anchors its size changes at its top,
 /// which keeps a card where it is as it grows, unless rows above it are measured in the same pass (the lazy stack's
 /// estimate for rows not yet measured, right after an open or far up a long chat): then the card moved by their
@@ -2339,6 +2355,7 @@ struct BotMessageNotice: View {
 
 struct ReasoningDisclosure: View {
     var text: String
+    var streaming = false
     @Binding var open: Bool
     /// The whole reasoning, when the fold shows only its start (`TextPieces.foldCap`).
     var onShowAll: ((String) -> Void)? = nil
@@ -2368,7 +2385,7 @@ struct ReasoningDisclosure: View {
             // and closes at once rather than staying laid out under the closing edge (#361).
             let shown = TextPieces.capped(text)
             VStack(alignment: .leading, spacing: 6) {
-                MarkdownView(text: shown.text, style: .reasoning, inlineSelection: false).equatable()
+                MarkdownView(text: shown.text, style: .reasoning, streaming: streaming, inlineSelection: false).equatable()
                 if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(text) } }) }
             }
             .folded(open: open, spacing: 4, keep: shown.text.utf8.count <= 6_000)
@@ -2405,6 +2422,7 @@ extension Notification.Name {
 struct MarkdownView: View, Equatable {
     var text: String
     var style: Style = .reply
+    var streaming = false
 
     /// How the blocks are dressed. A reply keeps the thread's own text size and colour; a
     /// Reasoning card is footnote-sized and secondary, with small headings, and its html fences
@@ -2422,10 +2440,10 @@ struct MarkdownView: View, Equatable {
     // thousands that nothing ever read again. By size too (the cost is the text's length): a
     // long report streaming for minutes made hundreds of entries, each the whole reply so far
     // twice over (the key and its blocks), and 400 of those ran to tens of megabytes.
-    private static let blockCache: NSCache<NSString, BlocksBox> = {
+    static let blockCache: NSCache<NSString, BlocksBox> = {
         let c = NSCache<NSString, BlocksBox>(); c.countLimit = 400; c.totalCostLimit = 4_000_000; return c
     }()
-    private static let inlineCache: NSCache<NSString, InlineBox> = {
+    static let inlineCache: NSCache<NSString, InlineBox> = {
         let c = NSCache<NSString, InlineBox>(); c.countLimit = 2000; c.totalCostLimit = 2_000_000; return c
     }()
     final class BlocksBox { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
@@ -2436,7 +2454,7 @@ struct MarkdownView: View, Equatable {
     /// reply was parsed on every token, a long one's growing with its length.
     @MainActor private static var settled: [MarkdownParser.Settled] = []
 
-    @MainActor static func blocks(_ text: String) -> [MarkdownBlock] {
+    @MainActor static func blocks(_ text: String, streaming: Bool = false) -> [MarkdownBlock] {
         let key = text as NSString
         if let hit = blockCache.object(forKey: key) { return hit.blocks }
         let prior = settled.indices.filter { settled[$0].isStart(of: text) }.max { settled[$0].text.utf8.count < settled[$1].text.utf8.count }
@@ -2446,9 +2464,21 @@ struct MarkdownView: View, Equatable {
             settled.append(s)
             if settled.count > 16 { settled.removeFirst() }
         }
-        blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        if !streaming {
+            blockCache.setObject(BlocksBox(parsed.blocks), forKey: key, cost: text.utf8.count)
+        }
         return parsed.blocks
     }
+
+    @MainActor static func isCachedInBlockCache(_ text: String) -> Bool {
+        blockCache.object(forKey: text as NSString) != nil
+    }
+
+    @MainActor static func clearBlockCache() {
+        blockCache.removeAllObjects()
+        settled.removeAll()
+    }
+
     @MainActor static func inline(_ text: String) -> AttributedString {
         // Mentions are marked after the cache: they depend on the bots known now, not on the text.
         // Most paragraphs mention nobody: those skip the walk over their runs, which ran over every
@@ -2481,11 +2511,13 @@ struct MarkdownView: View, Equatable {
         return "Code · \(lang)"
     }
 
-    static func == (a: MarkdownView, b: MarkdownView) -> Bool { a.text == b.text && a.style == b.style && a.inlineSelection == b.inlineSelection }
+    static func == (a: MarkdownView, b: MarkdownView) -> Bool {
+        a.text == b.text && a.style == b.style && a.streaming == b.streaming && a.inlineSelection == b.inlineSelection
+    }
 
     var body: some View {
         let _ = Perf.tick("markdown")
-        let blocks = Self.blocks(text)
+        let blocks = Self.blocks(text, streaming: streaming)
         let stack = VStack(alignment: .leading, spacing: style == .reasoning ? 6 : 8) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { i, block in
                 render(block, at: i)
@@ -2519,6 +2551,8 @@ struct MarkdownView: View, Equatable {
             Self.inlineText(t).fixedSize(horizontal: false, vertical: true)
         case .heading(let level, let t):
             Self.inlineText(t).font(Self.headingFont(level, style: style)).fixedSize(horizontal: false, vertical: true)
+        case .math(let equation, let closed):
+            MathCardView(equation: equation, closed: closed)
         case .code(let lang, let code, let closed) where style.showsCards && closed && HTMLCard.isCard(language: lang) && !sourceShown.contains(index):
             // A card the bot drew in HTML, once its fence has closed; while it streams it is
             // the code block below. Show Source turns it back into one.
@@ -2528,9 +2562,9 @@ struct MarkdownView: View, Equatable {
                     Button { UIPasteboard.general.string = code } label: { Label("Copy HTML", systemImage: "doc.on.doc") }
                 }
         case .code(let lang, let code, let closed):
-            // Wrapped, not side-scrolling: code is read down the page and copied whole, so long
-            // lines wrap rather than hide past the edge (tables are what scroll sideways, and the
-            // time reveal stands aside for them). A copy button sits in the corner.
+            // Wide lines scroll sideways so a column of output or a diagram keeps its alignment;
+            // the corner switch wraps them instead, for a reader who wants the whole line in the
+            // bubble. A copy button sits beside it.
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     if let lang, !lang.isEmpty { Text(lang).font(.caption2).foregroundStyle(.secondary) }
@@ -2541,14 +2575,16 @@ struct MarkdownView: View, Equatable {
                         }
                         .buttonStyle(.plain).foregroundStyle(.tint).padding(.trailing, 6)
                     }
-                    if closed { CopyButton(text: code) } else { ProgressView().controlSize(.mini) }
+                    if closed {
+                        CodeWrapToggle().padding(.trailing, 2)
+                        CopyButton(text: code)
+                    } else { ProgressView().controlSize(.mini) }
                 }
-                .padding(.horizontal, 10).padding(.top, 6)
+                .padding(.horizontal, 10).padding(.top, 2)
                 // Its start, in pieces: every piece is drawn whole, so a log of thousands of lines cost hundreds of
                 // megabytes; the rest is a Show all away (#361).
                 let shown = TextPieces.capped(code)
-                LongText(shown.text, code: true).font(style.codeFont).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true).padding(10)
+                CodeBody(text: shown.text, font: style.codeFont)
                 if shown.more > 0 {
                     MoreTextNote(more: shown.more, action: onShowAll.map { f in { f(Self.codeTitle(lang), code) } })
                         .padding(.horizontal, 10).padding(.bottom, 8)
@@ -2634,6 +2670,9 @@ struct MarkdownTableView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var full = false
     @State private var more = MarkdownTableMetrics.Overflow()
+    /// Wrap the columns to fit the bubble, or hold their one-line widths and scroll. One key, so
+    /// every table on screen agrees with the one just switched.
+    @AppStorage(MarkdownTableMetrics.wrapKey) private var wrap = true
 
     /// What the reply shows: a table over 16 columns or 60 rows shows that much and says how much more there is; the
     /// whole of it is on the sheet (a wide table made a grid wider than the graphics card draws, #361).
@@ -2662,38 +2701,72 @@ struct MarkdownTableView: View {
     }
 
     private var grid: some View {
-        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn, headerInset: 22)
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
+    }
+
+    /// The same table with its columns held at their longest-word floors, every line of every cell
+    /// drawn: what a reader who would rather not drag asks for.
+    private var wrappedGrid: some View {
+        MarkdownTableGrid(table: shownTable, lineLimit: nil, wraps: true,
+                          maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
+    }
+
+    /// The grid in the sideways scroll view, its edges fading where there is more to see.
+    private var scrollingGrid: some View {
+        ScrollView(.horizontal) { grid }
+            .scrollIndicators(.hidden)
+            .onScrollGeometryChange(for: MarkdownTableMetrics.Overflow.self) { g in
+                MarkdownTableMetrics.overflow(contentWidth: g.contentSize.width, visibleMinX: g.visibleRect.minX, visibleMaxX: g.visibleRect.maxX)
+            } action: { _, now in more = now }
+            .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
+    }
+
+    /// Full screen, beside the wrap switch and built as it is: a caption glyph in a 44 pt square.
+    private var openTableButton: some View {
+        Button { full = true } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open the table full screen")
+        .help("Open Table")
+    }
+
+    /// The card's header, built as a code block's: the title where a code block names its language,
+    /// in the same type, and the wrap switch and full screen at the trailing end. Above the grid
+    /// rather than over its cells, so a narrow last column keeps its header's room.
+    private var controls: some View {
+        HStack {
+            Text("Table").font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            TableWrapToggle().padding(.trailing, 2)
+            openTableButton
+        }
+        .padding(.horizontal, 10).padding(.top, 2)
     }
 
     private var card: some View {
         // The grid alone when its columns fit (it then stretches to the bubble's width), else
         // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
-        // keeps a narrow table free of a scroll view that would catch the thread's drags.
-        ViewThatFits(in: .horizontal) {
-            grid
-            ScrollView(.horizontal) { grid }
-                .scrollIndicators(.hidden)
-                .onScrollGeometryChange(for: MarkdownTableMetrics.Overflow.self) { g in
-                    MarkdownTableMetrics.overflow(contentWidth: g.contentSize.width, visibleMinX: g.visibleRect.minX, visibleMaxX: g.visibleRect.maxX)
-                } action: { _, now in more = now }
-                .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
+        // keeps a narrow table free of a scroll view that would catch the thread's drags. Wrapped,
+        // the first candidate is the word-floor grid: when the words cannot fit, it reports more
+        // than the bubble and this falls through to the scroll that keeps a wide table readable.
+        VStack(spacing: 0) {
+            controls
+            Group {
+                if wrap {
+                    ViewThatFits(in: .horizontal) { wrappedGrid; scrollingGrid }
+                } else {
+                    ViewThatFits(in: .horizontal) { grid; scrollingGrid }
+                }
+            }
         }
         .background(Color(.systemBackground).opacity(0.5))
         .clipShape(.rect(cornerRadius: 10))
         .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator), lineWidth: 0.5) }
-        .overlay(alignment: .topTrailing) {
-            Button { full = true } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(5)
-                    .background(.thinMaterial, in: .circle)
-            }
-            .buttonStyle(.plain)
-            .padding(4)
-            .accessibilityLabel("Open the table full screen")
-            .help("Open Table")
-        }
         .accessibilityElement(children: .contain)
         // Not selectable in the bubble: on the Mac each selectable cell is an AppKit text view
         // with its own accessibility, and inside the sideways scroll view VoiceOver's reading of
@@ -2948,11 +3021,16 @@ struct CodeBlock: View {
         let lines = TextPieces.lines(text, cap: lineCap)
         let shown = TextPieces.capped(showAll || lines.count <= lineCap ? text : String(lines.head))
         VStack(alignment: .leading, spacing: 4) {
-            LongText(shown.text, code: true).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true).padding(10).padding(.trailing, 24)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) { CopyButton(text: text).padding(6) }
+            // Room past the last line for the two corner buttons, so the widest line ends clear of them.
+            CodeBody(text: shown.text, font: .system(.caption, design: .monospaced), trailingInset: 52)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+                .overlay(alignment: .topTrailing) {
+                    // Stacked, not side by side: the wrap button's 44 pt square would otherwise claim a
+                    // wide gutter from every line of the output.
+                    VStack(spacing: 0) { CopyButton(text: text); CodeWrapToggle() }
+                        .padding(.top, 4).padding(.trailing, 4)
+                }
             if shown.more > 0 { MoreTextNote(more: shown.more, action: onShowAll) }
             if lines.count > lineCap {
                 Button(showAll ? "Show less" : "Show \(lines.count - lineCap) more lines") { withAnimation(.snappy) { showAll.toggle() } }
@@ -3007,6 +3085,61 @@ struct CopyButton: View {
         // Laid out at 24 x 20 as before: the code header and the overlays place it by that frame.
         .padding(-4)
         .accessibilityLabel(copied ? "Copied" : "Copy code")
+    }
+}
+
+/// A code block's lines. Wide ones scroll sideways — a column of output, a table drawn in
+/// characters and a diagram all keep their alignment that way — or they wrap, when the reader
+/// would rather have the whole line inside the bubble than drag it. One preference drives every
+/// block, so wrapping one wraps them all: two switches on one screen that disagree read as a bug.
+struct CodeBody: View {
+    var text: String
+    var font: Font
+    /// Space kept past the last line for whatever is drawn in the block's corner.
+    var trailingInset: CGFloat = 0
+
+    static let wrapKey = "code.wrap"
+    /// Wrapping is the default: a line that fits the bubble needs no dragging, and the reader who
+    /// wants a column's alignment back turns it off and scrolls instead.
+    @AppStorage(CodeBody.wrapKey) private var wrap = true
+
+    var body: some View {
+        if wrap {
+            LongText(text, code: true).font(font).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(10).padding(.trailing, trailingInset)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            // Each piece is drawn whole inside the scroll view: squeezed to the bubble's width it
+            // would wrap, which is the thing this mode is for avoiding.
+            ScrollView(.horizontal) {
+                LongText(text, code: true).font(font).textSelection(.enabled)
+                    .fixedSize(horizontal: true, vertical: true)
+                    .padding(10).padding(.trailing, trailingInset)
+            }
+        }
+    }
+}
+
+/// The wrap/unwrap switch in a code block's corner. The glyph is the change it will make:
+/// lines that scroll offer "wrap", wrapped lines offer "unroll".
+struct CodeWrapToggle: View {
+    @AppStorage(CodeBody.wrapKey) private var wrap = true
+
+    var body: some View {
+        Button { withAnimation(.snappy) { wrap.toggle() } } label: {
+            Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                // 44 pt square laid out as such — not a small box with a hit area hanging outside
+                // it, which a clip or a neighbour would eat: the smallest target a finger hits
+                // without aiming, while the glyph stays caption-sized.
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(wrap ? "Unwrap long lines" : "Wrap long lines")
+        .help(wrap ? "Unwrap Lines" : "Wrap Lines")
     }
 }
 

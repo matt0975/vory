@@ -20,8 +20,9 @@ struct RootView: View {
     /// that is only inactive (the switcher, an unfocused window still on screen) is never held.
     @State private var shownWide: Bool?
     /// The window's geometry for this scene, read from the window on every layout (see
-    /// `WindowGeometry`); every view that lays out against the window reads it from the environment.
-    @State private var windowGeometry = WindowGeometry()
+    /// `WindowGeometry`); every view that lays out against the window reads it from the environment. On the Duo a launch
+    /// starts from the last settled window until the first read (`SystemBarItems.launchGeometry`, #554).
+    @State private var windowGeometry = SystemBarItems.shared.launchGeometry()
     /// DEBUG: `-vory-show-tour` shows the first-run tour over a configured app.
     static let forceTour: Bool = {
         #if DEBUG
@@ -76,6 +77,10 @@ struct RootView: View {
         }
         #endif
         .background { WindowGeometryReader(geometry: windowGeometry).ignoresSafeArea() }
+        #if os(iOS)
+        // Where UIKit stands its own navigation items, for the top bar's row on the Duo (#554, #555).
+        .background { SystemBarItemsHost().ignoresSafeArea() }
+        #endif
         .background { TouchSignpostProbe().frame(width: 0, height: 0) }
         // The fold and the camera, for every floating piece below (Step D).
         // Whether the status stands in a top corner, for the top bar's room on every tab (#516), read here once.
@@ -303,6 +308,10 @@ struct MainTabView: View {
             }
             // The morph prototype's top controls, over every page and outside the stacks.
             .overlay(alignment: .top) { if MorphTopBar.active(model) { MorphBarHost() } }
+            // On the Duo's side and as a book, the open chat's Back and More take their taps here, above the split's
+            // floating bar that stands over the strip (#555). The page's header still draws them and holds them for
+            // VoiceOver.
+            .overlay { SideStripCatchers().ignoresSafeArea() }
             // Reserves the bar's height (or width) so lists end before it; the bar itself is
             // hidden (slid off its edge) inside a chat and the setup wizard, and the pages then
             // use the full height. The bar is never removed from the tree: an insert/remove
@@ -359,6 +368,8 @@ struct MainTabView: View {
                             // pushed the stack up until its first tab touched the page's own
                             // strip items (the list's filter met Home, Matt).
                             .padding(.bottom, VoryTabBar.stripGroupGap)
+                            // On the closed Duo the foot slot is left to Chats' search, on every tab (`stripSearchSlot`).
+                            .padding(.bottom, TopBarRoom.closedStrip(barsVertical: vertical, size: windowGeometry.bounds.size) ? VoryTabBar.stripSearchSlot : 0)
                             .ignoresSafeArea(.container, edges: side == .leading ? .leading : .trailing)
                     }
                 }

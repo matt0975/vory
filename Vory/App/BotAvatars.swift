@@ -68,10 +68,11 @@ enum BotAvatarStore {
         BotLooksMirror.mirror()
     }
 
-    static func choice(for profile: String, overrides: [String: String]? = nil) -> BotAvatarChoice {
+    /// A bot's avatar on a gateway (#573: the gateway in use unless one is named): its own, else the one from before.
+    static func choice(for profile: String, overrides: [String: String]? = nil, gateway: UUID? = BotLookGateway.current) -> BotAvatarChoice {
         // The demo's bots wear the demo's looks while it runs (`DemoLooks`), whatever is stored.
         if let demo = DemoLooks.avatar(for: profile) { return BotAvatarChoice(raw: effective(demo)) }
-        return BotAvatarChoice(raw: effective((overrides ?? stored())[profile] ?? ""))
+        return BotAvatarChoice(raw: effective(BotLookGateway.value(in: overrides ?? stored(), for: profile, gateway: gateway) ?? ""))
     }
 
     /// Settings › Bots › "Liquid Glass for all bots": every studio bot draws as glass, whatever
@@ -91,21 +92,28 @@ enum BotAvatarStore {
         // A look picked in the demo is the demo's only.
         if DemoLooks.keep(avatar: choice.raw, for: profile) { return }
         var map = stored()
-        map[profile] = choice.raw
+        map[BotLookGateway.key(profile)] = choice.raw
         save(map)
     }
 
-    static func photoURL(for profile: String) -> URL? {
+    /// A photo's file, by its key in the look maps: a bot's name, or "@<gateway>/<name>" for a gateway's own (#573).
+    static func photoURL(forKey key: String) -> URL? {
         guard let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         let dir = base.appending(path: "BotAvatars", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let safe = profile.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+        let safe = key.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
         return dir.appending(path: "\(safe).jpg")
     }
 
-    /// Downscales to 320 px and writes a JPEG; the same profile's cached image is dropped.
-    static func savePhoto(_ data: Data, for profile: String) throws {
-        guard let url = photoURL(for: profile), let image = UIImage(data: data) else { throw CocoaError(.fileWriteUnknown) }
+    /// The photo a bot shows on the gateway in use: its own when its look is its own there, else the one from before.
+    static func photoURL(for profile: String) -> URL? { photoURL(forKey: BotLookGateway.readKey(in: stored(), for: profile)) }
+
+    /// A bot's photo, set on the gateway in use: kept as that gateway's own.
+    static func savePhoto(_ data: Data, for profile: String) throws { try savePhoto(data, forKey: BotLookGateway.key(profile)) }
+
+    /// Downscales to 320 px and writes a JPEG; the same key's cached image is dropped.
+    static func savePhoto(_ data: Data, forKey key: String) throws {
+        guard let url = photoURL(forKey: key), let image = UIImage(data: data) else { throw CocoaError(.fileWriteUnknown) }
         let side: CGFloat = 320
         let scale = max(side / image.size.width, side / image.size.height)
         let target = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -115,38 +123,44 @@ enum BotAvatarStore {
         }
         guard let jpeg = squared.jpegData(compressionQuality: 0.85) else { throw CocoaError(.fileWriteUnknown) }
         try jpeg.write(to: url, options: .atomic)
-        photoCache.removeObject(forKey: profile as NSString)
+        photoCache.removeObject(forKey: key as NSString)
         photoGen.bump()
     }
 
-    static func photo(for profile: String) -> UIImage? {
-        if let cached = photoCache.object(forKey: profile as NSString) { return cached }
-        guard let url = photoURL(for: profile), let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil }
-        photoCache.setObject(image, forKey: profile as NSString)
+    /// The photo a bot shows on the gateway in use (see `photoURL(for:)`).
+    static func photo(for profile: String) -> UIImage? { photo(forKey: BotLookGateway.readKey(in: stored(), for: profile)) }
+
+    static func photo(forKey key: String) -> UIImage? {
+        if let cached = photoCache.object(forKey: key as NSString) { return cached }
+        guard let url = photoURL(forKey: key), let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil }
+        photoCache.setObject(image, forKey: key as NSString)
         return image
     }
 
     /// Every bot's photo, for a full reset.
     static func removeAllPhotos() {
-        if let dir = photoURL(for: "x")?.deletingLastPathComponent() { try? FileManager.default.removeItem(at: dir) }
+        if let dir = photoURL(forKey: "x")?.deletingLastPathComponent() { try? FileManager.default.removeItem(at: dir) }
         photoCache.removeAllObjects()
         photoGen.bump()
     }
 
+    /// A bot's own photo on the gateway in use goes; one from before, which other gateways may show, stays.
     static func removePhoto(for profile: String) {
-        if let url = photoURL(for: profile) { try? FileManager.default.removeItem(at: url) }
-        photoCache.removeObject(forKey: profile as NSString)
+        let key = BotLookGateway.key(profile)
+        if let url = photoURL(forKey: key) { try? FileManager.default.removeItem(at: url) }
+        photoCache.removeObject(forKey: key as NSString)
         photoGen.bump()
     }
 
-    /// A renamed bot's photo follows it (#315): the file moves, both caches are dropped.
-    static func movePhoto(from old: String, to new: String) {
-        guard let from = photoURL(for: old), let to = photoURL(for: new), from != to,
+    /// A renamed bot's photo follows it (#315): the file at `fromKey` goes to `toKey`, both caches are dropped. With
+    /// `keep`, it's copied, not moved: a photo from before, which other gateways may still show (#573).
+    static func movePhoto(fromKey: String, toKey: String, keep: Bool = false) {
+        guard let from = photoURL(forKey: fromKey), let to = photoURL(forKey: toKey), from != to,
               FileManager.default.fileExists(atPath: from.path) else { return }
         try? FileManager.default.removeItem(at: to)
-        try? FileManager.default.moveItem(at: from, to: to)
-        photoCache.removeObject(forKey: old as NSString)
-        photoCache.removeObject(forKey: new as NSString)
+        if keep { try? FileManager.default.copyItem(at: from, to: to) } else { try? FileManager.default.moveItem(at: from, to: to) }
+        photoCache.removeObject(forKey: fromKey as NSString)
+        photoCache.removeObject(forKey: toKey as NSString)
         photoGen.bump()
     }
 }
@@ -198,7 +212,7 @@ struct CreatorStudio: View {
             HStack {
                 Button("Reset to default") {
                     choice = .default
-                    var map = BotColors.stored(); map[profile] = nil; BotColors.save(map)
+                    BotColors.reset(for: profile)
                     colorsRaw = String(data: (try? JSONEncoder().encode(BotColors.stored())) ?? Data(), encoding: .utf8) ?? ""
                 }
                 .font(.subheadline)
@@ -324,7 +338,7 @@ struct CreatorStudio: View {
     }
 
     private func setColour(_ h: String) {
-        var map = BotColors.stored(); map[profile] = h; BotColors.save(map)
+        BotColors.set(hex: h, for: profile)
         colorsRaw = String(data: (try? JSONEncoder().encode(BotColors.stored())) ?? Data(), encoding: .utf8) ?? ""
     }
 }

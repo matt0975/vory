@@ -115,9 +115,9 @@ import UIKit
 extension View {
     /// Backs this view with a bar's shape for the shield (`BarShieldRegion`), out of the
     /// accessibility tree and, unless it catches, of SwiftUI's hit-testing.
-    func barShieldShape(catches: Bool = false, margin: CGFloat = 0) -> some View {
+    func barShieldShape(catches: Bool = false, margin: CGFloat = 0, square: Bool = false) -> some View {
         background {
-            BarShieldRegion(catches: catches)
+            BarShieldRegion(catches: catches, square: square)
                 .padding(-margin)
                 .accessibilityHidden(true)
                 .allowsHitTesting(catches)
@@ -133,14 +133,21 @@ extension View {
 
 /// A bar's shape for the shield: a capsule the size of what it backs. `catches`: it also takes
 /// the touches inside it that miss the bar's buttons (the tab bar's gaps and edges, `TouchCatcher`
-/// before), so they never reach the page.
+/// before), so they never reach the page. `square`: the whole frame, for a top bar slot whose control is a
+/// button across the slot (#584).
 struct BarShieldRegion: UIViewRepresentable {
     var catches = false
+    var square = false
 
-    func makeUIView(context: Context) -> RegionView { catches ? Catcher() : RegionView() }
-    func updateUIView(_ v: RegionView, context: Context) {}
+    func makeUIView(context: Context) -> RegionView {
+        let v = catches ? Catcher() : RegionView()
+        v.square = square
+        return v
+    }
+    func updateUIView(_ v: RegionView, context: Context) { v.square = square }
 
     class RegionView: UIView {
+        var square = false
         override init(frame: CGRect) {
             super.init(frame: frame)
             backgroundColor = .clear
@@ -152,7 +159,7 @@ struct BarShieldRegion: UIViewRepresentable {
         required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-            UIBezierPath(roundedRect: bounds, cornerRadius: min(bounds.width, bounds.height) / 2).contains(point)
+            square ? bounds.contains(point) : UIBezierPath(roundedRect: bounds, cornerRadius: min(bounds.width, bounds.height) / 2).contains(point)
         }
 
         /// The hosting view the bar is drawn in (the nearest one above the shape).

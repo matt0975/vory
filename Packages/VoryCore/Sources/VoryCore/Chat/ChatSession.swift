@@ -270,6 +270,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
     public var queue: [QueuedMessage] = []
     public var staged: [AttachmentPreview] = []
+    /// Stagings under way (`stagingBegan`): a send waits for them (`stagingSettled`), so a file dropped, pasted or picked
+    /// just before Return goes with that message, not after it.
+    private var stagingInFlight = 0
     public var composerHistory: [String] = []
     public var lastSubmitStatus: String?
     public var stale = false
@@ -312,6 +315,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// streaming row and re-lay out the thread. They are gathered and shown about 25 times a
     /// second instead, which reads the same and leaves the main thread free to scroll.
     private var streamFlush: Task<Void, Never>?
+    var isStreamFlushScheduled: Bool { streamFlush != nil }
     private var lastStatsUpdate = Date.distantPast
     /// Assistant text already sealed into earlier bubbles of the current turn, because tool calls
     /// split the stream. `message.complete` carries the WHOLE turn, so it must be reconciled
@@ -846,7 +850,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // No reply streams in this snapshot: the one this device was drawing is history's row
         // now. Its id kept, the next turn's text went into a row no longer there, and its end
         // added the answer a second time.
-        if let id = streamingItemID, !items.contains(where: { $0.id == id }) { streamingItemID = nil; assembler.reset() }
+        if let id = streamingItemID, !items.contains(where: { $0.id == id }) { streamFlush?.cancel(); streamFlush = nil; streamingItemID = nil; assembler.reset() }
         fetchedRowIDs = Set(items.map(\.id))
         items += added
         if let q = r["queued"]?["user"]?.stringValue, !q.isEmpty { queue = [QueuedMessage(text: q)] }
@@ -992,6 +996,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// then answers in short plain sentences, with the recent spoken exchange in mind.
     public func send(_ rawText: String, voice: VoiceTurn? = nil) async -> String? {
         let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A file still staging is part of this message: waited for before anything is decided, so a message of only
+        // that file is not taken for an empty one.
+        await stagingSettled()
         guard !text.isEmpty || !staged.isEmpty else { return nil }
         await awaitResume()
         if let e = resumeError { return "This chat could not be opened on the gateway: \(e)" }
@@ -1104,6 +1111,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     @discardableResult private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async -> Bool {
+        await stagingSettled()
         interruptCause = nil
         var outgoing = text
         var previews: [AttachmentPreview] = []
@@ -1162,18 +1170,37 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func upload(_ a: AttachmentPreview) async throws -> String? {
-        guard let url = a.localURL, let data = try? Data(contentsOf: url) else { return nil }
-        let b64 = data.base64EncodedString()
-        switch a.kind {
-        case .image:
-            _ = try await rpc("image.attach_bytes", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
+        guard let url = a.localURL else { throw CocoaError(.fileNoSuchFile) }
+        let kind = a.kind
+        let name = a.name
+        let runtimeID = self.runtimeID
+
+        enum UploadPayload: Sendable {
+            case imageOrPdf(b64: String, filename: String, isImage: Bool)
+            case file(dataUrl: String, filename: String)
+        }
+
+        let payload = try await Task.detached(priority: .userInitiated, operation: { () -> UploadPayload in
+            let data = try Data(contentsOf: url)
+            let b64 = data.base64EncodedString()
+            switch kind {
+            case .image:
+                return .imageOrPdf(b64: b64, filename: name, isImage: true)
+            case .pdf:
+                return .imageOrPdf(b64: b64, filename: name, isImage: false)
+            case .audio, .video, .file:
+                let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+                return .file(dataUrl: "data:\(mime);base64,\(b64)", filename: name)
+            }
+        }).value
+
+        switch payload {
+        case .imageOrPdf(let b64, let filename, let isImage):
+            let method = isImage ? "image.attach_bytes" : "pdf.attach"
+            _ = try await rpc(method, ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(filename)])
             return nil
-        case .pdf:
-            _ = try await rpc("pdf.attach", ["session_id": .string(runtimeID), "content_base64": .string(b64), "filename": .string(a.name)])
-            return nil
-        case .audio, .video, .file:
-            let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            let r = try await rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string("data:\(mime);base64,\(b64)"), "name": .string(a.name)])
+        case .file(let dataUrl, let filename):
+            let r = try await rpc("file.attach", ["session_id": .string(runtimeID), "data_url": .string(dataUrl), "name": .string(filename)])
             return r["ref_text"]?.stringValue
         }
     }
@@ -1183,6 +1210,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     nonisolated(unsafe) public static var imageTranscoder: (@Sendable (Data, String) -> (Data, String)?)?
 
     public func stageAttachment(data: Data, name: String, kind: AttachmentPreview.Kind) {
+        if data.count > 512 * 1024 {
+            // Counted now, not when the task gets to run: a send right after this waits for it.
+            stagingBegan()
+            Task { [weak self] in
+                await self?.stageOffMain(data: data, name: name, kind: kind)
+                self?.stagingEnded()
+            }
+            return
+        }
+
         var data = data, name = name
         if kind == .image, let t = Self.imageTranscoder?(data, name) { data = t.0; name = t.1 }
         let dir = runtime.scratchDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
@@ -1196,12 +1233,59 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
+    /// Asynchronous staging for large payloads off @MainActor. A send made meanwhile waits for it.
+    public func stageAttachmentAsync(data: Data, name: String, kind: AttachmentPreview.Kind) async {
+        stagingBegan()
+        await stageOffMain(data: data, name: name, kind: kind)
+        stagingEnded()
+    }
+
+    /// A staging that starts before its bytes are in hand (a drop, a file being read, photos loading): counted from
+    /// now, so a send made meanwhile waits for it. Each `stagingBegan` is matched by one `stagingEnded`, when the
+    /// file is staged or given up.
+    public func stagingBegan() { stagingInFlight += 1 }
+
+    public func stagingEnded() { stagingInFlight = max(0, stagingInFlight - 1) }
+
+    /// Returns once no staging is under way, or after `seconds` at most: a staging that never ends (a drop whose
+    /// provider never answers) holds one message up for that long, never every message after it, since what is still
+    /// counted then is given up (an end that comes later finds nothing to take away).
+    func stagingSettled(upTo seconds: Double = 60) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while stagingInFlight > 0, Date() < deadline { try? await Task.sleep(for: .milliseconds(50)) }
+        stagingInFlight = 0
+    }
+
+    private func stageOffMain(data: Data, name: String, kind: AttachmentPreview.Kind) async {
+        let dir = runtime.scratchDirectory.appendingPathComponent("staged-\(runtimeID)", isDirectory: true)
+        let transcoder = Self.imageTranscoder
+        let result: Result<AttachmentPreview, Error> = await Task.detached(priority: .userInitiated) {
+            var data = data, name = name
+            if kind == .image, let t = transcoder?(data, name) { data = t.0; name = t.1 }
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let url = dir.appendingPathComponent(UUID().uuidString + "-" + name)
+                try data.write(to: url)
+                return .success(AttachmentPreview(id: url.lastPathComponent, name: name, serverPath: nil, kind: kind, localURL: url, byteCount: data.count))
+            } catch {
+                return .failure(error)
+            }
+        }.value
+        switch result {
+        case .success(let preview):
+            staged.append(preview)
+        case .failure(let error):
+            banner = "Could not stage \(name): \(error.localizedDescription)"
+        }
+    }
+
     public func removeStaged(_ id: String) {
         if let a = staged.first(where: { $0.id == id }), let u = a.localURL { try? FileManager.default.removeItem(at: u) }
         staged.removeAll { $0.id == id }
     }
 
     public func stop() async {
+        streamFlush?.cancel(); streamFlush = nil
         interruptCause = .stopped
         _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
     }
@@ -1217,6 +1301,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         } catch {
             banner = error.localizedDescription
             return text
+        }
+    }
+
+    /// A queued message sent into the running turn (#546), as the composer's Steer now sends one. It leaves the queue
+    /// first, so the turn's end (`drainQueue`) can't send it as well. One the gateway doesn't take ("rejected": its turn
+    /// had ended) goes back where it was and is the next message. A steer that fails goes back too: still queued, said,
+    /// while the turn runs; sent as the next message if the turn ended while the steer was out.
+    public func steerQueued(_ id: UUID) async {
+        guard isRunning, let i = queue.firstIndex(where: { $0.id == id }) else { return }
+        let message = queue.remove(at: i)
+        do {
+            guard try await steerSending(message.text) == "rejected" else { return }
+            queue.insert(message, at: min(i, queue.count))
+            if !isRunning { drainQueue() }
+        } catch {
+            queue.insert(message, at: min(i, queue.count))
+            if isRunning { banner = error.localizedDescription } else { drainQueue() }
         }
     }
 
@@ -1799,6 +1900,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case let t where t.hasPrefix("subagent."):
             updateSubagent(t, p)
         case "error":
+            streamFlush?.cancel(); streamFlush = nil
             appendError(p["message"]?.stringValue ?? "Unknown error")
             endPhase = "error"
             isRunning = false
@@ -1813,6 +1915,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "request.cancel":
             cancelCard(id: p["id"]?.stringValue ?? "", reason: p["reason"]?.stringValue ?? "cancelled")
         case "session.reclaimed":
+            streamFlush?.cancel(); streamFlush = nil
             stale = true
             isRunning = false
             banner = "The gateway reclaimed this session (\(p["reason"]?.stringValue ?? "idle")). It will resume on your next message."
@@ -1915,6 +2018,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func beginStreaming() {
+        streamFlush?.cancel(); streamFlush = nil
         if streamingItemID == nil && !isRunning { sealedTurnText = "" }
         if turnStartedAt == nil {
             turnStartedAt = Date()
@@ -1981,6 +2085,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     private func sealStreamingForTool() {
+        streamFlush?.cancel(); streamFlush = nil
         guard let id = streamingItemID, let idx = items.lastIndex(where: { $0.id == id }) else { return }
         sealedTurnText += assembler.text
         // A step that only thought keeps its row, the Reasoning card alone (`isThinkingOnly`):
@@ -1995,6 +2100,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// Returns the index of the turn's final assistant bubble, if one is on screen.
     @discardableResult
     private func finishStreaming(finalText: String?, gatewayReasoning: String? = nil, previewed: Bool = false) -> Int? {
+        streamFlush?.cancel(); streamFlush = nil
         // The final reply already went out as an interim message (some runtimes send every
         // finished message that way) and nothing streamed since: the gateway says so with
         // `response_previewed`, and the bubble on screen is the reply. Appending it again showed

@@ -37,6 +37,19 @@ struct ChatListView: View {
     @Environment(\.statusInCorner) private var statusInCorner
     /// The top bar up in the status band (the open Duo upright): the bar kept while searching there too (#516).
     @Environment(\.barLift) private var barLift
+    #if os(iOS)
+    /// The closed Duo (#591, 2026-11-02): no search drawer, the system's search button in the side column instead,
+    /// and the row's room kept by the list, never by the stack. The stack's room moved the chat's Back and More down the
+    /// strip (#590, #586), and as a pop brought the list in it came late (the field dropped from under the row) or
+    /// collapsed the drawer.
+    private var closedStrip: Bool { TopBarRoom.closedStrip(barsVertical: model.tabBarVertical, size: windowGeometry.bounds.size) }
+    /// The row's room under the top bar (#340), worked out as the stack's always was. On the closed Duo the list keeps it
+    /// itself, over its first row.
+    private var rowRoom: CGFloat {
+        TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner, barOn: MorphTopBar.active(model),
+                         rowBottom: MorphState.shared.rootRowBottom)
+    }
+    #endif
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
     /// The Mac's split view hands in the detail column's path: chats open there, beside the list,
@@ -194,7 +207,7 @@ struct ChatListView: View {
             NavigationStack(path: path) {
                 content
                     .navigationDestination(for: ChatRoute.self) { route in ConversationView(route: route).countsChatOnScreen() }
-                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true) }
+                    .navigationDestination(for: RoomRoute.self) { r in RoomView(room: r.room, initialText: r.initialText).countsChatOnScreen(room: true).closedChatsRoom() }
             }
         }
     }
@@ -215,7 +228,11 @@ struct ChatListView: View {
             // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
-            .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            // On the closed Duo, behind the system's search button instead (`closedStrip`).
+            .searchable(text: $searchText, placement: closedStrip ? .toolbar : .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            .searchToolbarBehavior(closedStrip ? .minimize : .automatic)
+            // Its toolbar integration kept right at the navigation item as the window enters or leaves the closed strip
+            // (`ChatsSearchPlacement`).
             // The bar kept while searching under a status in a top corner or with the bar up in the band, as on the other
             // pages (#516).
             .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0) ? .avoidHidingContent : .automatic)
@@ -242,9 +259,10 @@ struct ChatListView: View {
             // An empty bar collapses (the Duo's search drawer rode up under the capsules): an
             // invisible item keeps it at its height under the prototype.
             .toolbar { if MorphTopBar.active(model) { ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 44).accessibilityHidden(true) } } }
-            // On the closed Duo the search drawer rode up under the bar's capsules (#340): the stack starts under its row.
-            .background(TopBarRoomProbe(tab: .chats, room: TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner,
-                                                               barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
+            // Where the search drawer rode up under the bar's capsules (#340), the stack starts under its row; on the closed
+            // Duo, with no drawer, the list keeps that room itself (`closedStrip`) and the stack has none.
+            .background(TopBarRoomProbe(tab: .chats, room: closedStrip ? 0 : rowRoom).frame(width: 0, height: 0))
+            .background(ChatsSearchPlacement(closedStrip: closedStrip).frame(width: 0, height: 0))
             #endif
             .background(InteractivePopEnabler())
             // The stack's path is watched by whoever owns it (ChatsSplitPage for the model's
@@ -690,6 +708,14 @@ struct ChatListView: View {
         // clamped to the shorter content then, so after Back it sat that much lower, 59 pt, its
         // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
         .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
+        // The closed Duo's room under the top bar's row, the list's own (#591): laid out with the list, so it's in place as a
+        // pop brings the list in, on a stack SwiftUI built anew at a fold too. The row's room alone, so the first row stands
+        // under the bar's row as a group chat's header and every other page do (#616: the search drawer's height, kept
+        // there once search moved into the side column, left an empty band over the rows). The list keeps clear of the
+        // page's own bar there as the chat does (its 24 pt band, and the 58 pt one an animated pop lays out over the coming
+        // page, which carried the list down for the pop and back up after it), so its top is that room alone.
+        .contentMargins(.top, closedStrip ? rowRoom : 0, for: .scrollContent)
+        .ignoresSafeArea(.container, edges: closedStrip ? .top : [])
         #endif
         #if os(macOS)
         // The list runs a little way under the column's edge, which cut the scroll bar in half
@@ -1318,7 +1344,9 @@ struct ChatListView: View {
         if case .bool(let v)? = body["archived"] { archived = v }
         if afterClose { heldRows[s.id] = was }
         // Fenced on a newer Hermes (#467): the chat's revision with the edit.
-        async let sent: Void = SessionMutation.patch(runtime.api, id: s.id, profile: s.profile ?? runtime.selectedProfile, fields: body)
+        let targetProfile = s.profile ?? runtime.selectedProfile
+        let api = runtime.api
+        async let sent: Void = SessionMutation.patch(api, id: s.id, profile: targetProfile, fields: body)
         if afterClose { try? await Task.sleep(for: Self.closeBeforeMove) }
         // Shown now, by the row's id (a reload in the wait may have reordered the list); the
         // gateway's answer decides whether it stays that way.
@@ -1754,3 +1782,36 @@ private struct ChatsSelectPublisher: ViewModifier {
             .onDisappear { model.chatsSelect = nil }
     }
 }
+
+#if os(iOS)
+/// The Chats list's search placement at the root's navigation item (#591). Off the closed strip, the drawer's (.stacked) with
+/// toolbar integration off: SwiftUI put .stacked back when the Duo opened from closed but left the flag on, and UIKit kept
+/// an iOS search bar at the screen's foot with no drawer until the flag changed. On the closed strip, the flag back on, as
+/// SwiftUI set it for the system's search button in the side column; the placement there is SwiftUI's own.
+struct ChatsSearchPlacement: UIViewControllerRepresentable {
+    var closedStrip: Bool
+    func makeUIViewController(context: Context) -> Setter { Setter() }
+    func updateUIViewController(_ setter: Setter, context: Context) {
+        setter.closedStrip = closedStrip
+        // After SwiftUI's own update of the item.
+        DispatchQueue.main.async { setter.apply() }
+    }
+
+    final class Setter: UIViewController {
+        var closedStrip = false
+        override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.backgroundColor = .clear; view = v }
+        override func viewWillAppear(_ animated: Bool) { super.viewWillAppear(animated); apply() }
+
+        func apply() {
+            guard let item = navigationController?.viewControllers.first?.navigationItem else { return }
+            // Only on a change, so an update that changes nothing sets nothing.
+            if closedStrip {
+                if !item.searchBarPlacementAllowsToolbarIntegration { item.searchBarPlacementAllowsToolbarIntegration = true }
+            } else {
+                if item.preferredSearchBarPlacement != .stacked { item.preferredSearchBarPlacement = .stacked }
+                if item.searchBarPlacementAllowsToolbarIntegration { item.searchBarPlacementAllowsToolbarIntegration = false }
+            }
+        }
+    }
+}
+#endif

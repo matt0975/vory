@@ -17,7 +17,8 @@ final class NotificationViewController: UIViewController, UNNotificationContentE
         // this, so the extension still ran the 1.4 drawing with its turn).
         BotFace.motionEngine = true
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
-        let looks = BotLooks.load()
+        // The looks of the gateway the push comes from (#573), not only the one in use.
+        let looks = BotLooks.load().forGateway(hermes["connection_id"] as? String)
         let profile = hermes["profile"] as? String ?? ""
         let bot = content.title.isEmpty ? (profile.isEmpty ? "Hermes" : profile) : content.title
         let key = looks.key(profile: profile, label: bot.components(separatedBy: " · ").first ?? bot) ?? profile

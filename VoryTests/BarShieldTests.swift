@@ -36,6 +36,19 @@ import UIKit
         #expect(!shield.covers(CGPoint(x: 21, y: 801), in: window, event: nil))
     }
 
+    @Test func aSquareShapeTakesItsCorners() throws {
+        // A top bar slot whose control is a button across it takes touches across its frame, so the shield does too.
+        let (window, host, _, _) = scene()
+        let slot = BarShieldRegion.Catcher(frame: CGRect(x: 16, y: 26, width: 44, height: 44))
+        slot.square = true
+        host.addSubview(slot)
+        let shield = try #require(BarShield.shield(for: window))
+        #expect(shield.covers(CGPoint(x: 20.4, y: 30.4), in: window, event: nil))
+        slot.square = false
+        #expect(!shield.covers(CGPoint(x: 20.4, y: 30.4), in: window, event: nil))
+        #expect(shield.covers(CGPoint(x: 38, y: 48), in: window, event: nil))
+    }
+
     @Test func theCirclesKeepTheirOwnGlass() throws {
         let (window, _, _, _) = scene()
         let shield = try #require(BarShield.shield(for: window))

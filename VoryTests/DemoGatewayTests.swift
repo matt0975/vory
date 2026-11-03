@@ -333,6 +333,19 @@ import Testing
         }
     }
 
+    /// The soil chat's answer shows the maths (#550): a formula inline in its first paragraph and one on a card of its
+    /// own. The photos chat's code block has a line longer than any screen it's read on, so it shows the wrap (#551).
+    @Test func theMathAndCodeRepliesShowWhatTheyAreFor() throws {
+        let soil = try #require(DemoContent.chats.first { $0.title == "Soil for the raised beds" }?.rows().last?.text)
+        let cards = MarkdownParser.blocks(from: soil).filter { if case .math(_, true) = $0 { true } else { false } }
+        #expect(cards.count == 1)
+        let opening = try #require(soil.components(separatedBy: "\n\n").first)
+        #expect(MathNotation.findInlineMath(in: opening).count == 1)
+        let photos = try #require(DemoContent.chats.first { $0.title == "Rename the lake trip photos by date" }?.rows().last?.text)
+        let code = try #require(MarkdownParser.blocks(from: photos).compactMap { if case .code(_, let text, true) = $0 { text } else { nil } }.first)
+        #expect((code.split(separator: "\n").map(\.count).max() ?? 0) > 120)
+    }
+
     /// Scheduled tasks in the demo (#428's + on Scheduled Tasks): none at first; a task made with the + is listed, and its
     /// page's actions (pause, Run now, Save, delete) act on it in memory; a create without a schedule is refused as the
     /// gateway refuses it (422).
