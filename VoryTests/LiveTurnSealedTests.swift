@@ -1,3 +1,4 @@
+#if os(iOS)
 import Foundation
 import Testing
 @testable import Vory
@@ -93,3 +94,4 @@ import Testing
         #expect(try JSONDecoder().decode(HermesTurnAttributes.self, from: Data(attrs.utf8)).sealed == "QUJD")
     }
 }
+#endif
