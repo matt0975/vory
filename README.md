@@ -462,7 +462,7 @@ a folder under `/nowhere` is refused the way a missing folder is.
 ## Updates
 
 Releases and the fixes in progress are posted on X at [@_mattwagner_](https://x.com/_mattwagner_) as they
-happen. Every TestFlight build carries its notes, and the [tracker](https://github.com/matt0975/vory/issues)
+happen. Every TestFlight build carries its notes, and the [tracker](https://github.com/vory-dev/vory/issues)
 shows what is open and what shipped.
 
 ## License

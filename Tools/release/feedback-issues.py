@@ -15,7 +15,7 @@ import json, os, re, subprocess, sys, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-REPO = 'matt0975/vory'
+REPO = 'vory-dev/vory'
 APP = '6814980297'
 API = 'https://api.appstoreconnect.apple.com/v1'
 DRY = '--dry-run' in sys.argv
