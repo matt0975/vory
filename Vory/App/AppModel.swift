@@ -408,6 +408,9 @@ final class AppModel {
     /// one picked while the demo runs leaves it this way too (`activate`, #632).
     func endDemo(then next: GatewayConnection? = nil) async {
         guard isInDemo else { return }
+        // A voice session in one of its chats ends first (#392): left up, its script ran on over the stopped runtime, the
+        // Mac's voice window stayed, and a change of its state could raise a card after the ones taken away below.
+        if HandsFreeSession.shared.chat?.runtime.isEphemeral == true { HandsFreeSession.shared.end() }
         // What it showed outside the app goes too: its turns' Live Activities and its notifications; and its drafts.
         DemoLeftovers.takeAway()
         ComposerDrafts.forgetDemo()
