@@ -28,8 +28,8 @@ at `d8b8cf5` and the test portability fixes at `51e53c8` were checked:
 - The isolated Sequoia app passed visible onboarding, Home, Chats, Bots and
   Settings navigation, and a completed demo message/reply flow.
 - The MacBook has since moved to macOS 27.3. Its new isolated app launched;
-  the local visible UI check is pending. The completed build and tests above
-  ran on macOS 27.2.
+  local visible Chats, Home, Bots and Settings navigation and a completed demo
+  reply passed there. The completed build and tests above ran on macOS 27.2.
 - The five automated gateway E2E tests were skipped because their separate
   test environment was not configured; they are not counted as passed.
 - The app reports macOS 15.0 as its minimum system version.
