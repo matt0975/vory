@@ -33,11 +33,32 @@ final class ChatListPrefs {
         }
     }
     /// One of the three, kept outside the demo, and only when it is not what is kept already: coming back from the demo
-    /// puts the person's own back from the defaults and wrote them over themselves, an absent one as "" (#494).
+    /// puts the person's own back from the defaults and wrote them over themselves, an absent one as "" (#494). Never
+    /// while the defaults are read back (`refresh`), and "what is kept" is read as the prefs read it: a number or a Bool
+    /// under the key reads as no value there, while `string(forKey:)` made it "1", so leaving the demo wrote "" over it (#512).
     private func keepOwn(_ value: String, _ key: String) {
-        guard !inDemo, value != (d.string(forKey: key) ?? "") else { return }
+        guard !inDemo, !refreshing, value != (d.object(forKey: key) as? String ?? "") else { return }
+        #if DEBUG
+        Self.traceOwnWrite(key, was: d.object(forKey: key), now: value, inDemo: inDemo)
+        #endif
         d.set(value, forKey: key)
     }
+    /// While `refresh` reads the defaults back: what it sets is what is kept, so nothing is written (#512).
+    @ObservationIgnored private var refreshing = false
+    #if DEBUG
+    /// The writes of the three keys through `keepOwn`, the last eight, each with the frames that called it (symbol names
+    /// only), and how many there have been: the no-trace tests name them when the person's own keys changed (#512).
+    static private(set) var ownWritesForTests: [String] = []
+    static private(set) var ownWriteCountForTests = 0
+    private static func traceOwnWrite(_ key: String, was: Any?, now: String, inDemo: Bool) {
+        let frames = Thread.callStackSymbols.dropFirst(2).prefix(6).map { line in
+            line.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).first.map(String.init) ?? "?"
+        }
+        ownWriteCountForTests += 1
+        ownWritesForTests.append("\(key): \(was.map { "\($0)" } ?? "absent") -> \"\(now)\" (inDemo \(inDemo)) from \(frames.joined(separator: " < "))")
+        if ownWritesForTests.count > 8 { ownWritesForTests.removeFirst(ownWritesForTests.count - 8) }
+    }
+    #endif
     var botColorsRaw: String { didSet { if botColorsRaw != oldValue { d.set(botColorsRaw, forKey: BotColors.storageKey) } } }
     var botAvatarsRaw: String { didSet { if botAvatarsRaw != oldValue { d.set(botAvatarsRaw, forKey: BotAvatarStore.storageKey) } } }
     var glassAll: Bool { didSet { if glassAll != oldValue { d.set(glassAll, forKey: BotAvatarStore.glassAllKey) } } }
@@ -66,6 +87,8 @@ final class ChatListPrefs {
 
     /// Another screen wrote one of the keys: take the new value, only where it differs.
     private func refresh() {
+        refreshing = true
+        defer { refreshing = false }
         let new_allBots = d.object(forKey: "chats.allBots") as? Bool ?? false; if new_allBots != allBots { allBots = new_allBots }
         let new_aiTitles = d.object(forKey: ChatSummarizer.titlesKey) as? Bool ?? ChatSummarizer.titlesOn; if new_aiTitles != aiTitles { aiTitles = new_aiTitles }
         let new_aiPreviews = d.object(forKey: ChatSummarizer.previewsKey) as? Bool ?? ChatSummarizer.previewsOn; if new_aiPreviews != aiPreviews { aiPreviews = new_aiPreviews }
