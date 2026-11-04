@@ -88,6 +88,12 @@ import Vision
         #expect(size.width >= 44 && size.height >= 44, "the target is \(size.width)x\(size.height)pt")
     }
 
+    @Test @MainActor func bothControlsCarryCircularMaterialAffordance() {
+        UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey)
+        let toggleSize = Self.draw(TableWrapToggle())
+        #expect(toggleSize.width >= 28 && toggleSize.height >= 28)
+    }
+
     @Test @MainActor func oneKeyDrivesEveryTable() throws {
         let t = try #require(Self.table(Self.three))
         #expect(MarkdownTableMetrics.wrapKey == "table.wrap")
@@ -111,11 +117,11 @@ import Vision
     @Test @MainActor func theControlsSitInTheirOwnStripSoNoHeaderIsSqueezed() throws {
         // The corner buttons used to overlay the header row, and the room they claimed was taken
         // from the last header cell: with a 65 pt column that left 1 pt for "Status". They now sit
-        // in a header of their own above the grid, so the card is the grid plus that header.
+        // in a strip of their own above the grid, so the card is the grid plus that strip.
         let t = try #require(Self.table(Self.three))
         let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 320, headerInset: 0))
         let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        #expect(card.height >= grid.height + 44, "card \(card.height) pt vs grid \(grid.height) pt: the header is missing")
+        #expect(card.height >= grid.height + 28, "card \(card.height) pt vs grid \(grid.height) pt: the strip is missing")
     }
 
     @Test @MainActor func aCodeSpanColumnHoldsItsWholeToken() throws {
@@ -141,13 +147,12 @@ import Vision
         #expect(wrapped.height >= scrolling.height, "no fallback: wrapped \(wrapped.height) pt vs scroll \(scrolling.height) pt")
     }
 
-    @Test @MainActor func theHeaderIsInsetFromTheCardsEdge() throws {
-        // The header holds the switch and full screen in 44 pt squares, 2 pt under the card's top, as a code block's
-        // header holds its switch and Copy: 46 pt over the grid.
+    @Test @MainActor func theStripIsInsetFromTheCardsEdge() throws {
+        // The action discs are compact 28 pt circles in the strip; 4 pt of vertical padding keeps them inset (strip = 36 pt tall).
         let t = try #require(Self.table(Self.three))
         let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 320, headerInset: 0))
         let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        #expect(card.height - grid.height >= 46, "the header is \(card.height - grid.height) pt: the controls are not inset")
+        #expect(card.height - grid.height >= 34, "the strip is \(card.height - grid.height) pt: the disc is not inset")
     }
 
     @Test @MainActor func probesAreNeverDrawnOverTableCells() throws {
