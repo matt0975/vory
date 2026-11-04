@@ -313,6 +313,9 @@ struct ProfileView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Profile", symbol: "person.crop.circle", color: .indigo, description: "Which bot the Settings screens read and write, and new bots on this gateway.")
+            // In the demo no bot is made or removed here (#392): the demo keeps neither, and the list read the old one
+            // back. Choosing which bot the Settings screens show stays: that is the app's own.
+            DemoReadOnlyNote()
             if let rt = model.runtime {
                 Section("Active profile in this app") {
                     ForEach(rt.profiles) { p in
@@ -328,21 +331,22 @@ struct ProfileView: View {
                             }
                         }
                         .tint(.primary)
+                        .accessibilityIdentifier("profile.row")
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             // The default profile is the gateway's own home; Hermes refuses to delete it.
-                            if p.isDefault != true, p.name != "default" {
+                            if p.isDefault != true, p.name != "default", !model.isInDemo {
                                 Button(role: .destructive) { pendingDelete = p } label: { Label("Delete", systemImage: "trash") }
                             }
                         }
                         .contextMenu {
-                            if p.isDefault != true, p.name != "default" {
+                            if p.isDefault != true, p.name != "default", !model.isInDemo {
                                 Button(role: .destructive) { pendingDelete = p } label: { Label("Delete profile…", systemImage: "trash") }
                             }
                         }
                     }
                 }
                 Section {
-                    Button { showCreate = true } label: { Label("Create Profile", systemImage: "plus") }
+                    if !model.isInDemo { Button { showCreate = true } label: { Label("Create Profile", systemImage: "plus") } }
                     if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 } footer: { Text("Profiles are separate Hermes homes on the gateway machine (config, skills, sessions). Settings screens read and write the profile selected here.") }
             }
@@ -350,8 +354,8 @@ struct ProfileView: View {
         .reloadable { await model.runtime?.loadProfiles() }
         // Add profile at the top as on every page that can make something (#428), with a gateway to make it on: the bar
         // draws it beside its Back where the morph bar is up; the page's own toolbar has it elsewhere. The row stays.
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), model.runtime != nil { Button { showCreate = true } label: { Label("Add profile", systemImage: "plus") }.accessibilityIdentifier("profile.add") } } }
-        .morphPageActions([MorphPageAction(id: "profile.add", symbol: "plus", label: "Add profile") { showCreate = true }],
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), model.runtime != nil, !model.isInDemo { Button { showCreate = true } label: { Label("Add profile", systemImage: "plus") }.accessibilityIdentifier("profile.add") } } }
+        .morphPageActions(model.isInDemo ? [] : [MorphPageAction(id: "profile.add", symbol: "plus", label: "Add profile") { showCreate = true }],
                           on: MorphTopBar.active(model) && model.runtime != nil)
         .alert("Delete \(pendingDelete?.label ?? "profile")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button(deleting ? "Deleting…" : "Delete", role: .destructive) { if let p = pendingDelete { Task { await delete(p) } } }.disabled(deleting)

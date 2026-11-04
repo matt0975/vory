@@ -493,6 +493,16 @@ struct SoulEditorView: View {
     var body: some View {
         Group {
             if loading { ProgressView("Loading SOUL.md…") }
+            else if model.isInDemo {
+                // The demo keeps nothing it is sent (#392): its bot's instructions to read, under the demo's line, and
+                // no Save.
+                List {
+                    DemoReadOnlyNote()
+                    Section {
+                        Text(text.isEmpty ? "No instructions." : text).font(.body.monospaced()).textSelection(.enabled)
+                    }
+                }
+            }
             else {
                 TextEditor(text: $text)
                     .font(.body.monospaced())
@@ -506,10 +516,12 @@ struct SoulEditorView: View {
         .navigationTitle("SOUL.md")
         .navigationBarTitleDisplayMode(.inline)
         .pageToolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button { Task { await save() } } label: { if saving { ProgressView() } else { Image(systemName: "checkmark") } }
-                    .disabled(saving || text == original)
-                    .accessibilityLabel("Save instructions")
+            if !model.isInDemo {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { Task { await save() } } label: { if saving { ProgressView() } else { Image(systemName: "checkmark") } }
+                        .disabled(saving || text == original)
+                        .accessibilityLabel("Save instructions")
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {

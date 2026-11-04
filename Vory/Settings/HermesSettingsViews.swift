@@ -1,6 +1,26 @@
 import SwiftUI
 import VoryCore
 
+// MARK: The demo's read-only pages (#392)
+
+/// In the demo the gateway is the app's own sample, which keeps nothing it is sent: a change on these pages looked
+/// accepted, then the page read the old value back. So in the demo they are read-only, under this line saying why, on
+/// iPhone, iPad and the Mac; out of the demo they are as they were.
+struct DemoReadOnlyNote: View {
+    @Environment(AppModel.self) private var model
+    static let words = "This is the demo's sample setup. Connect your own gateway to make changes."
+    var body: some View {
+        if model.isInDemo {
+            Section {
+                Label(Self.words, systemImage: "info.circle")
+                    .font(.subheadline)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("demo.readonly")
+            }
+        }
+    }
+}
+
 // MARK: Model
 
 struct ModelSettingsView: View {
@@ -24,6 +44,7 @@ struct ModelSettingsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Model", symbol: "cpu", color: .blue, description: "The default model and provider for this bot.")
+            DemoReadOnlyNote()
             if let o = options {
                 Section {
                     // The gateway's model id carries its provider ("anthropic/…"): shown as it is,
@@ -74,6 +95,7 @@ struct ModelSettingsView: View {
                 }
             }
         } label: { Text(title) }
+        .disabled(model.isInDemo)
     }
 
     private func load(refresh: Bool = false) async {
@@ -128,6 +150,7 @@ struct ConfigFormView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Config", symbol: "slider.horizontal.3", color: .gray, description: "Every setting in this bot's config, grouped the way the gateway reports them.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(categories, id: \.0) { cat, fields in
                 Section(cat.capitalized) {
@@ -164,6 +187,7 @@ struct ConfigFormView: View {
             }
             if let d = field.description, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
         }
+        .disabled(model.isInDemo)
         .opacity(saving.contains(key) ? 0.5 : 1)
     }
 
@@ -239,6 +263,7 @@ struct EnvView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "API Keys & Environment", symbol: "key.fill", color: .orange, description: "Provider keys and environment variables the gateway uses.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             Section {
                 Text("These are the keys in the .env file of the bot \((rt?.selectedProfile).map { "\"\($0)\"" } ?? "selected"). Each bot has its own file. A key the gateway gets from its environment or from a login is used but not listed here.")
@@ -258,8 +283,9 @@ struct EnvView: View {
                             }
                         }
                         .tint(.primary)
+                        .disabled(model.isInDemo)
                         .rowActions {
-                            if vars[k]?.hasValue == true { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
+                            if vars[k]?.hasValue == true, !model.isInDemo { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
                         }
                     }
                 }
@@ -269,8 +295,9 @@ struct EnvView: View {
         // Never a tab's root: under the morph bar (a page pushed from Settings) the bar draws its Add
         // beside its Back, in the one morph as the page comes in (#435); elsewhere it is the page's
         // own. Hidden under the bar with nothing drawing it, a variable could not be added (#426).
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add variable", systemImage: "plus") }.accessibilityIdentifier("env.add") } } }
-        .morphPageActions([MorphPageAction(id: "env.add", symbol: "plus", label: "Add variable") { showAdd = true }], on: MorphTopBar.active(model))
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), !model.isInDemo { Button { showAdd = true } label: { Label("Add variable", systemImage: "plus") }.accessibilityIdentifier("env.add") } } }
+        // No Add in the demo (#392): nothing it is given is kept.
+        .morphPageActions(model.isInDemo ? [] : [MorphPageAction(id: "env.add", symbol: "plus", label: "Add variable") { showAdd = true }], on: MorphTopBar.active(model))
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -324,6 +351,7 @@ struct ToolsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Tools", symbol: "wrench.and.screwdriver", color: .teal, description: "What the bot may do: each tool on or off.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(toolsets) { t in
                 Toggle(isOn: Binding(get: { t.enabled }, set: { v in Task { await toggle(t, v) } })) {
@@ -333,6 +361,7 @@ struct ToolsView: View {
                         if let tools = t.tools, !tools.isEmpty { Text(tools.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                     }
                 }
+                .disabled(model.isInDemo)
                 .accessibilityIdentifier("tool.toggle.\(t.name)")
             }
         }
@@ -366,6 +395,7 @@ struct SkillsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Skills", symbol: "sparkles", color: .purple, description: "The skills installed for this bot and what they add.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(skills.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { s in
                 Toggle(isOn: Binding(get: { s.enabled ?? true }, set: { v in Task { await toggle(s, v) } })) {
@@ -374,6 +404,7 @@ struct SkillsView: View {
                         if let d = s.description { Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     }
                 }
+                .disabled(model.isInDemo)
             }
         }
         .pageSearchable(text: $search, always: true)
@@ -407,6 +438,7 @@ struct MCPView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "MCP Servers", symbol: "point.3.connected.trianglepath.dotted", color: .mint, description: "External tool servers the bot can call, and whether each is on.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if let testResult { Text(testResult).font(.footnote) }
             ForEach(servers) { s in
@@ -416,9 +448,12 @@ struct MCPView: View {
                         Text(s.url ?? ([s.command].compactMap { $0 } + (s.args ?? [])).joined(separator: " ")).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
+                .disabled(model.isInDemo)
                 .rowActions {
-                    Button(role: .destructive) { pendingDelete = s } label: { Label("Remove", systemImage: "trash") }
-                    Button { Task { await test(s) } } label: { Label("Test", systemImage: "bolt") }.tint(.blue)
+                    if !model.isInDemo {
+                        Button(role: .destructive) { pendingDelete = s } label: { Label("Remove", systemImage: "trash") }
+                        Button { Task { await test(s) } } label: { Label("Test", systemImage: "bolt") }.tint(.blue)
+                    }
                 }
             }
         }
@@ -490,14 +525,17 @@ struct ApprovalsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Approvals", symbol: "checkmark.shield", color: .green, description: "How commands get approved — manual, smart or off — and what is always allowed.")
+            DemoReadOnlyNote()
             Section {
                 Picker("Mode", selection: $mode) {
                     Text("Smart").tag("smart"); Text("Manual").tag("manual"); Text("Off").tag("off")
                 }
+                .disabled(model.isInDemo)
                 .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
                 LabeledContent("Timeout (seconds)") {
                     NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
                 }
+                .disabled(model.isInDemo)
             } header: { Text("approvals") } footer: {
                 Text("Smart lets a guardian model auto-approve routine commands and escalate risky ones. Manual asks you for every dangerous command. Off disables the gate. YOLO (skip approvals) is per session, default off, and lives in the chat's model menu.")
             }
@@ -512,12 +550,13 @@ struct ApprovalsView: View {
                         }
                         #if os(macOS)
                         .contextMenu {
-                            Button(role: .destructive) {
+                            if !model.isInDemo { Button(role: .destructive) {
                                 let next = allowlist.filter { $0 != rule }
                                 Task { await write(["command_allowlist": .array(next.map { .string($0) })], topLevel: true) }
-                            } label: { Label("Remove rule", systemImage: "trash") }
+                            } label: { Label("Remove rule", systemImage: "trash") } }
                         }
                         #endif
+                        .deleteDisabled(model.isInDemo)
                     }
                     .onDelete { offsets in
                         var next = allowlist; next.remove(atOffsets: offsets)
