@@ -1744,6 +1744,13 @@ struct ChatListProfileItems: View {
                         Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
                     }
                 }
+                // In the demo (#392), the way out is here too, not in Settings only: it leaves as Settings' Leave demo does.
+                if model.isInDemo {
+                    Section {
+                        Button { Task { await model.endDemo() } } label: { Label("Leave demo", systemImage: "rectangle.portrait.and.arrow.right") }
+                            .accessibilityIdentifier("chats.leaveDemo")
+                    }
+                }
                 // Two gateways (a main machine and a homelab, say): switch here instead of
                 // Settings › Gateways. Sessions belong to each gateway, so the list reloads.
                 if model.store.connections.count > 1 {

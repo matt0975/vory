@@ -278,7 +278,7 @@ struct TourView: View {
     @ViewBuilder private func beatPage(_ beat: TourBeat, size: CGSize) -> some View {
         switch beat {
         case .hello:
-            TourHelloBeat(onStart: { go(to: .bots) }, onRestore: onRestore, below: bubbleBottom, above: controlsTop)
+            TourHelloBeat(onStart: { go(to: .bots) }, onRestore: onRestore, onDemo: onDemo, below: bubbleBottom, above: controlsTop)
         case .bots:
             TourBotsBeat(centre: VoryTourLayer.anchor(for: .bots, in: size, compact: compact), live: current == .bots && animating, reduceMotion: reduceMotion) {
                 line.botTapped()
@@ -666,10 +666,12 @@ struct VoryTourLayer: View, Animatable {
 
 // MARK: Beats
 
-/// 1. Hello: Vory out of the launch screen into the glow, the line under him, and the two ways in.
+/// 1. Hello: Vory out of the launch screen into the glow, the line under him, and the ways in: the tour, Restore, and
+/// Try a demo where Demo mode offers it (#392: on the first screen, where App Review looks; the last beat has it too).
 private struct TourHelloBeat: View {
     var onStart: () -> Void
     var onRestore: (() -> Void)?
+    var onDemo: (() -> Void)?
     /// Vory's bubble ends here and the tour's controls start there: the page's words and buttons stay between.
     var below: CGFloat = 0
     var above: CGFloat = 0
@@ -697,6 +699,16 @@ private struct TourHelloBeat: View {
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Brings back the gateways you saved on another device.")
                         .accessibilityIdentifier("onboarding.restore")
+                    }
+                    // An id of its own: the last beat's Try a demo keeps the plain one, and both can be in the tree.
+                    if let onDemo {
+                        Button(action: onDemo) {
+                            Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        }
+                        .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
+                        .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
+                        .accessibilityIdentifier("onboarding.tryDemo.first")
                     }
                 }
             }

@@ -187,6 +187,12 @@ struct OnboardingView: View {
                         Button("Skip") { page = pages.count - 1 }
                             .font(.subheadline).foregroundStyle(.secondary)
                             .accessibilityIdentifier("onboarding.skip")
+                    } else if model.demoAvailable {
+                        // Past the welcome screen, the demo is still a way in (#392): Get Started led here, with no way back.
+                        Button("Try a demo") { Task { await model.startDemo() } }
+                            .font(.subheadline)
+                            .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
+                            .accessibilityIdentifier("onboarding.tryDemo.last")
                     } else {
                         Text(" ").font(.subheadline)
                     }
