@@ -49,6 +49,8 @@ public actor DemoGateway {
         var outputTokens = 0
         /// Requests to the app still open (an approval): their frames, by id, replayed on a resume.
         var openRequests: [String: [String: Any]] = [:]
+        /// Words steered into the running turn (`session.steer`), filed with it as their own user rows.
+        var corrections: [String] = []
         init(sid: String, stored: String, title: String, bot: String, history: [[String: Any]]) {
             self.sid = sid; self.stored = stored; self.title = title; self.bot = bot; self.history = history
         }
@@ -75,6 +77,10 @@ public actor DemoGateway {
     var rng = DemoRandom(seed: 392)
     /// The demo asks for one approval, once (`approvalDue`).
     var approvalAsked = false
+    /// System › Restart gateway (`maintenanceRoute`): how many times, and when the last one began.
+    var restarts = 0
+    var restartedAt: Double?
+    var gatewayPID: Int { 4242 + restarts }
     #if DEBUG
     /// What the demo answered without having it (`trip`), in the order it was first asked for.
     private(set) var tripwire: [String] = []
@@ -277,7 +283,7 @@ extension DemoGateway {
         case "gateway.capabilities":
             return .success(["per_session_exclusive_submit": true])
         case "groups.capabilities":
-            return .success(["protocol_version": 1, "driver": true, "methods": ["groups.list", "groups.create", "groups.send", "groups.log"]])
+            return .success(["protocol_version": 1, "driver": true, "methods": ["groups.list", "groups.create", "groups.send", "groups.log", "groups.disband"]])
         case "groups.list":
             return .success(["rooms": rooms, "next_offset": NSNull()])
         case "groups.log":
@@ -455,12 +461,13 @@ extension DemoGateway {
     func route(method: String, path: String, query: [String: String], payload: [String: Any], body: Data, contentType: String) -> (Int, Any) {
         if path.hasPrefix("/api/plugins/kanban") { return boardRoute(method: method, path: path, query: query, payload: payload) }
         if path.hasPrefix("/api/cron/"), let answer = cronRoute(method: method, path: path, query: query, payload: payload) { return answer }
+        if let answer = maintenanceRoute(method: method, path: path) { return answer }
         if method != "GET", let answer = liveRoute(method: method, path: path, query: query, payload: payload, body: body, contentType: contentType) {
             return answer
         }
         switch path {
         case "/api/status":
-            return (200, ["version": version, "gateway": ["status": "running", "pid": 4242], "gateway_running": true,
+            return (200, ["version": version, "gateway": ["status": "running", "pid": gatewayPID], "gateway_running": true,
                           "gateway_state": "running", "active_sessions": live.values.filter(\.running).count,
                           "auth_required": false, "auth_providers": [], "auth_flows": [],
                           "memory": ["pressure": "ok", "gateway_rss_mb": 312, "system_available_mb": 9200],
@@ -584,6 +591,46 @@ extension DemoGateway {
         trip("\(method) \(path)")
         if path.hasPrefix("/api/") { return (200, [:] as [String: Any]) }
         return (404, ["detail": "Not found"])
+    }
+
+    /// System's actions and the composer's dictation, as a gateway answers them, so none of them ends in an error:
+    /// Restart gateway runs a few seconds and comes back done, as the mock's does; Run doctor prints a report; and a
+    /// recording to transcribe is refused as by a gateway with no speech-to-text provider, so Automatic (the Speech
+    /// default) transcribes it on the device (`VoiceRouting.isNoProvider`). Before the catch-alls, which would trip.
+    func maintenanceRoute(method: String, path: String) -> (Int, Any)? {
+        switch (method, path) {
+        case ("POST", "/api/gateway/restart"):
+            restarts += 1
+            restartedAt = now()
+            return (200, ["ok": true, "pid": gatewayPID, "name": "gateway-restart"])
+        case ("GET", "/api/actions/gateway-restart/status"):
+            let running = restartedAt.map { now() - $0 < (pace == .real ? 3 : 0.5) } ?? false
+            let lines = ["=== hermes gateway restart ===", "stopping gateway (pid \(gatewayPID - 1))", "starting gateway"]
+            return (200, ["name": "gateway-restart", "running": running, "exit_code": running ? NSNull() as Any : 0, "pid": gatewayPID,
+                          "lines": running ? lines : lines + ["gateway up (pid \(gatewayPID))"]])
+        case ("POST", "/api/ops/doctor"):
+            return (200, "Running hermes doctor…")
+        case ("GET", "/api/actions/doctor/status"):
+            return (200, ["name": "doctor", "running": false, "exit_code": 0, "output": Self.doctorReport(pid: gatewayPID)])
+        case ("POST", "/api/audio/transcribe"):
+            return (503, ["detail": "The demo gateway has no speech-to-text provider, so dictation uses this device."])
+        default:
+            return nil
+        }
+    }
+
+    /// What Run doctor prints in the demo: the checks a gateway's doctor runs, its numbers those of `/api/status`.
+    static func doctorReport(pid: Int) -> String {
+        """
+        hermes doctor
+        ✓ config: ~/.hermes/config.yaml is valid
+        ✓ model provider: reachable
+        ✓ gateway: running (pid \(pid)), no errors in the last hour
+        ✓ memory: 312 MB in use, 9.0 GB available
+        ✓ disk: 180 GB free of 483 GB
+        ✓ sessions database: healthy
+        All checks passed.
+        """
     }
 
     /// A route, socket method or board route the demo doesn't have, which a page asked for: in a Debug build it is

@@ -20,6 +20,16 @@ extension DemoGateway {
             let voice = p["surface"] as? String == VoiceTurn.surface
             Task { await self.runTurn(l, prompt: text, voice: voice) }
             return .success(["status": "streaming"])
+        case "session.steer":
+            // As the gateway answers it (and the mock): no text, 4002; no turn running, "rejected", which the app sends
+            // as its next message; a running turn takes the words ("queued") and files them as their own user row.
+            let text = (p["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if text.isEmpty { return .failure(RPCError(code: 4002, message: "text is required")) }
+            guard let l = live[p["session_id"] as? String ?? ""] else { return .failure(RPCError(code: 4006, message: "unknown session")) }
+            guard l.running else { return .success(["status": "rejected", "text": text]) }
+            l.corrections.append(text)
+            l.inflight?["corrections"] = l.corrections
+            return .success(["status": "queued", "text": text])
         case "approval.respond":
             for l in live.values {
                 for (id, f) in l.openRequests where f["method"] as? String == "approval" {
@@ -84,6 +94,13 @@ extension DemoGateway {
                                        "members": members, "updated_at": now(), "disbanded_at": NSNull(), "latest_seq": 0]
             rooms.append(room)
             return .success(["room": room])
+        case "groups.disband":
+            // The chat list's delete asks for this first: the room and its log go, for the demo's life.
+            let roomID = p["room_id"] as? String ?? ""
+            guard rooms.contains(where: { $0["room_id"] as? String == roomID }) else { return .failure(RPCError(code: 4007, message: "room not found")) }
+            rooms.removeAll { $0["room_id"] as? String == roomID }
+            roomLogs[roomID] = nil
+            return .success(["room_id": roomID, "disbanded": true])
         case "groups.send":
             let payload = p["payload"] as? [String: Any] ?? [:]
             guard Set(payload.keys) == ["text", "thread_id"] else {
@@ -170,10 +187,15 @@ extension DemoGateway {
                 closing = a.done
             }
         }
+        // Words steered in while the turn ran: the reply takes them in at its end.
+        if !l.corrections.isEmpty { closing = closing.isEmpty ? Self.steered(l.corrections) : closing + "\n\n" + Self.steered(l.corrections) }
         if let piece = Self.paragraph(closing, after: reply) { await stream(l, piece); reply += piece }
-        // The chat's history as the gateway files it: the prompt, the tool rows, the reply.
+        // The chat's history as the gateway files it: the prompt, the tool rows, any steered words as their own user
+        // rows, the reply.
         var rows: [[String: Any]] = [["role": "user", "text": prompt, "timestamp": userAt]]
         rows += tools
+        rows += l.corrections.map { words -> [String: Any] in ["role": "user", "text": words, "timestamp": now()] }
+        l.corrections = []
         rows.append(["role": "assistant", "text": reply, "timestamp": now()])
         for var r in rows { r["row_id"] = l.history.count + 1; l.history.append(r) }
         if let i = stored.firstIndex(where: { $0.id == l.stored }) {
@@ -189,6 +211,11 @@ extension DemoGateway {
         l.running = false
         l.inflight = nil
         event("message.complete", l.sid, ["text": reply, "status": "complete", "usage": usage(l.outputTokens, calls: 2)])
+    }
+
+    /// The reply's last line for words steered into its turn.
+    static func steered(_ words: [String]) -> String {
+        "Noted: " + words.map { "\u{201C}\($0)\u{201D}" }.joined(separator: " and ") + ". I've kept that in mind for the rest."
     }
 
     /// A paragraph of a reply as it streams: on its own after a blank line, or nil when it has no words.
