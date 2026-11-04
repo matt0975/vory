@@ -11,6 +11,84 @@ final class DemoEntryUITests: XCTestCase {
         app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", fragment))
     }
 
+    /// A screenshot kept with the result, and written as `<name>.png` into HERMES_E2E_SHOTS when it names a folder.
+    private func shot(_ name: String) {
+        let s = XCUIScreen.main.screenshot()
+        let a = XCTAttachment(screenshot: s); a.name = name; a.lifetime = .keepAlways; add(a)
+        guard let folder = ProcessInfo.processInfo.environment["HERMES_E2E_SHOTS"], !folder.isEmpty else { return }
+        let d = URL(fileURLWithPath: folder, isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        try? s.pngRepresentation.write(to: d.appendingPathComponent("\(name).png"))
+    }
+
+    /// The first of `query` that is there and can be tapped, within `timeout`.
+    private func hittable(_ query: XCUIElementQuery, timeout: TimeInterval) -> XCUIElement? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let e = query.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { return e }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        } while Date() < deadline
+        return nil
+    }
+
+    /// The audit with `around` on screen: a finding on an element that overlaps it fails the test, except "Text clipped"
+    /// and contrast, which are printed only (on iOS 27 the first lands on different words each run, as ApprovalCardUITests
+    /// found; the stills show both); a finding elsewhere on the screen is printed, as the screen isn't this change's.
+    private func audit(_ what: String, around: CGRect) throws {
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection, .textClipped, .contrast]) { issue in
+            let mine = issue.element.map { $0.frame.intersects(around) } ?? false
+            print("DEMO-ENTRY-AUDIT \(what) \(mine ? "mine" : "screen") '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")'")
+            return !mine || issue.auditType == .textClipped || issue.auditType == .contrast
+        }
+    }
+
+    /// Try a demo on the first screen (#392: where App Review looks): the tour's first beat offers it with Get Started, it
+    /// opens the demo's Chats, and Leave demo in the Chats chip's menu brings the first screen back with nothing of the
+    /// demo shown. The audit runs on the first beat and with the chip's menu open. HERMES_E2E_SIZE sets the text size as
+    /// ApprovalCardUITests reads it (L, XL, XXL, XXXL, AccessibilityXXXL and the like), light; HERMES_E2E_SHOTS names a
+    /// folder for the stills. On a phone the chip is the bar's (chats.profile); on a wide window, the toolbar's.
+    func testTryADemoOnTheFirstScreenAndLeaveDemoFromTheChatsMenu() throws {
+        let e = ProcessInfo.processInfo.environment
+        guard let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty else { throw XCTSkip("HERMES_E2E_BUNDLE not set") }
+        continueAfterFailure = false
+        let size = e["HERMES_E2E_SIZE"].flatMap { $0.isEmpty ? nil : $0 }
+        let tag = size ?? "default"
+        app = XCUIApplication(bundleIdentifier: bundle)
+        app.launchArguments = ["-companionPromptShown", "YES", "-colorSchemePreference", "light"]
+            + (size.map { ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\($0)"] } ?? [])
+        app.launch()
+
+        XCTAssertTrue(app.buttons["onboarding.getStarted"].firstMatch.waitForExistence(timeout: 30), "no tour on a device with no gateway")
+        let first = app.buttons["onboarding.tryDemo.first"].firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10), "no Try a demo on the tour's first beat (\(tag))")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        shot("demo-first-beat-\(tag)")
+        XCTAssertEqual(first.label, "Try a demo")
+        XCTAssertTrue(first.isHittable, "Try a demo on the first beat can't be tapped (\(tag))")
+        print("DEMO-ENTRY first beat \(tag): Try a demo at \(first.frame)")
+        try audit("first-beat-\(tag)", around: first.frame)
+        first.tap()
+        XCTAssertTrue(text("Packing list for the lake weekend").firstMatch.waitForExistence(timeout: 30), "Try a demo on the first beat didn't open the demo's chats")
+
+        let chips = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'chats.profile' OR label BEGINSWITH 'Profile: '"))
+        let chip = try XCTUnwrap(hittable(chips, timeout: 15), "no Chats chip to open")
+        print("DEMO-ENTRY chip \(tag): id '\(chip.identifier)' label '\(chip.label)'")
+        chip.tap()
+        let leaves = app.buttons.matching(NSPredicate(format: "identifier == 'chats.leaveDemo' OR label == 'Leave demo'"))
+        let leave = try XCTUnwrap(hittable(leaves, timeout: 10), "no Leave demo in the Chats chip's menu")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        shot("demo-chats-menu-\(tag)")
+        try audit("chats-menu-\(tag)", around: leave.frame)
+        leave.tap()
+
+        XCTAssertTrue(app.buttons["onboarding.getStarted"].firstMatch.waitForExistence(timeout: 30), "Leave demo in the Chats menu didn't bring back the first screen")
+        XCTAssertTrue(app.buttons["onboarding.tryDemo.first"].firstMatch.waitForExistence(timeout: 10), "the first screen came back without Try a demo")
+        XCTAssertFalse(text("Packing list for the lake weekend").firstMatch.exists, "the demo's chats are still shown")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        shot("demo-first-beat-after-\(tag)")
+        app.terminate()
+    }
+
     func testTryADemoOpensTheDemoAndLeavingItGoesBack() throws {
         guard let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty else {
             throw XCTSkip("HERMES_E2E_BUNDLE not set")
