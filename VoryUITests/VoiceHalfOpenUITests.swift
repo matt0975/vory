@@ -39,10 +39,12 @@ final class VoiceHalfOpenUITests: XCTestCase {
         return nil
     }
 
-    /// The readout: "row x y w h;bot …;controls …;card …|none;column …;fold …|none;split yes|no".
+    /// The readout: "row x y w h;bot …;controls …;card …|none;column …;fold …|none;split yes|no;room …" (room from #631: the
+    /// screen's room inside the safe area; a build without it reads nil).
     private struct Readout {
         var row = CGRect.null, bot = CGRect.null, controls = CGRect.null, card: CGRect?, column = CGRect.null, fold: CGRect?
         var split = false
+        var room: CGRect?
     }
     private func readout() -> Readout? {
         let r = any("voice.frames")
@@ -61,6 +63,7 @@ final class VoiceHalfOpenUITests: XCTestCase {
             case "column": out.column = rect ?? .null
             case "fold": out.fold = rect
             case "split": out.split = w.last == "yes"
+            case "room": out.room = rect
             default: break
             }
         }
@@ -234,8 +237,17 @@ final class VoiceHalfOpenUITests: XCTestCase {
     private func checkOne(_ state: String) {
         guard !isBase else { return }
         guard let r = readout() else { return XCTFail("\(state): no voice.frames readout") }
-        print("VOICE-HALF \(state) one column row \(r.row) bot \(r.bot) controls \(r.controls) column \(r.column) fold \(r.fold.map { "\($0)" } ?? "none") split \(r.split)")
+        print("VOICE-HALF \(state) one column row \(r.row) bot \(r.bot) controls \(r.controls) column \(r.column) fold \(r.fold.map { "\($0)" } ?? "none") split \(r.split)"
+              + " room \(r.room.map { "\($0)" } ?? "none")")
         XCTAssertFalse(r.split, "\(state): split without a fold across")
+        // #631: the one column stands inside the room the screen gives it, top row to controls (the closed Duo's ran 23 pt
+        // past both ends). A build with no room in its readout is printed only.
+        if let room = r.room {
+            XCTAssertGreaterThanOrEqual(r.column.minY, room.minY - 0.5, "\(state): the column starts above the room (\(r.column.minY) < \(room.minY))")
+            XCTAssertLessThanOrEqual(r.column.maxY, room.maxY + 0.5, "\(state): the column ends below the room (\(r.column.maxY) > \(room.maxY))")
+            XCTAssertGreaterThanOrEqual(r.row.minY, room.minY - 0.5, "\(state): the top row starts above the room")
+            XCTAssertLessThanOrEqual(r.controls.maxY, room.maxY + 0.5, "\(state): the controls end below the room")
+        }
     }
 
     func testVoiceModeAtTheFold() throws {
@@ -318,14 +330,21 @@ final class VoiceHalfOpenUITests: XCTestCase {
             print("VOICE-HALF oracle compared \(compared.count) stops: \(compared.joined(separator: " / "))")
         case "audit":
             print("VOICE-HALF audit at \(pauseAndSettle())")
-            var count = 0
+            // HERMES_E2E_AUDIT_JUDGE=1 (#631): contrast (a "nearly passed" one too), Dynamic Type and clipping on the voice
+            // screen and its card fail; the DEBUG readout and the other types are printed only.
+            let judge = env["HERMES_E2E_AUDIT_JUDGE"] == "1"
+            let judgedTypes: [XCUIAccessibilityAuditType] = [.contrast, .dynamicType, .textClipped]
+            var count = 0, judged = 0
             try app.performAccessibilityAudit { issue in
                 let el = issue.element
                 print("VOICE-HALF audit issue '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' frame \(el?.frame ?? .zero)")
                 count += 1
-                return true
+                guard judge, el?.identifier != "voice.frames", judgedTypes.contains(issue.auditType) else { return true }
+                judged += 1
+                print("VOICE-HALF audit JUDGED '\(issue.compactDescription)' label '\(el?.label.prefix(60) ?? "")'")
+                return false
             }
-            print("VOICE-HALF audit \(count) issues")
+            print("VOICE-HALF audit \(count) issues\(judge ? ", \(judged) judged" : "")")
         case "worst":
             // Measuring only: the top half's worst content, never a pass or fail on the split.
             guard let r = readout() else { return XCTFail("worst: no voice.frames readout") }

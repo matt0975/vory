@@ -493,6 +493,90 @@ enum VoiceSplit {
         guard top >= minTop(for: size), bottom >= minBottom else { return nil }
         return (top, fold.height, bottom)
     }
+
+    /// The least a waiting card gets in one column (#631): its heading and its choices with a few lines of its words over
+    /// them, which scroll from their start when there are more.
+    static func cardFloor(for size: DynamicTypeSize) -> CGFloat { size.isAccessibilitySize ? 300 : 220 }
+    /// What the bot's block gives up at the split's sizes: its ring (with the motion engine off) or its face.
+    static func compactSaving(ring: Bool) -> CGFloat { ring ? 196 - VoiceSplit.ring : 164 - VoiceSplit.face }
+    /// One column with a card waiting (#631): the bot's block at the split's sizes when, at its full size, it would leave
+    /// the card less than its floor between the top row and the controls (the closed Duo's 382 pt column ran 23 pt past
+    /// the screen at both ends, which clipped the card's words and put the top row under the status bar). `botFull` is
+    /// the block at full size. The card is then held to what is left either way, so nothing runs off the screen.
+    static func compactOneColumn(room: CGFloat, row: CGFloat, botFull: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> Bool {
+        room > 0 && room - row - botFull - controls < cardFloor(for: size)
+    }
+    /// The card's height in one column: what the top row, the bot's block and the controls leave, never under its floor.
+    static func oneColumnCardMax(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> CGFloat? {
+        guard room > 0 else { return nil }
+        return max(cardFloor(for: size), room - row - bot - controls)
+    }
+}
+
+/// Voice mode's colours, chosen for contrast (#631). The screen is always dark, under a gradient from the bot's colour at
+/// the top to black; with a light bot colour (yellow, cyan, white) the top was bright enough that white words under 4.5:1
+/// failed the audit, and the card's translucent glass took on whatever stood behind it. Everything here is sRGB, 0 to 1,
+/// composited as the screen draws it (a colour at an opacity over what is under it), so the unit tests check the very
+/// colours drawn. Light bot colours get a darker top; dark ones keep 1.5's.
+enum VoiceLook {
+    struct RGB: Equatable {
+        var r: Double, g: Double, b: Double
+        static let white = RGB(r: 1, g: 1, b: 1), black = RGB(r: 0, g: 0, b: 0)
+        init(r: Double, g: Double, b: Double) { self.r = r; self.g = g; self.b = b }
+        /// "#RRGGBB" (or "RRGGBB"); nil for anything else.
+        init?(hex: String) {
+            let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+            guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+            r = Double((v >> 16) & 0xFF) / 255; g = Double((v >> 8) & 0xFF) / 255; b = Double(v & 0xFF) / 255
+        }
+        var color: Color { Color(.sRGB, red: r, green: g, blue: b) }
+    }
+    /// WCAG relative luminance.
+    static func luminance(_ c: RGB) -> Double {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    static func contrast(_ a: RGB, _ b: RGB) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+    /// `fg` at `alpha` over `bg`.
+    static func over(_ fg: RGB, _ alpha: Double, _ bg: RGB) -> RGB {
+        RGB(r: fg.r * alpha + bg.r * (1 - alpha), g: fg.g * alpha + bg.g * (1 - alpha), b: fg.b * alpha + bg.b * (1 - alpha))
+    }
+
+    /// The gradient's top: the bot's colour at this opacity over black (1.5's 0.55 unless that is too bright).
+    static let fullTopOpacity = 0.55
+    /// The brightest the top may be (its luminance), so the secondary words pass 4.5:1 there with room to spare.
+    static let topLuminanceCap = 0.12
+    /// The top's opacity for a bot colour: 0.55, or the most under it that keeps the top under the cap.
+    static func topOpacity(for tint: RGB) -> Double {
+        if luminance(over(tint, fullTopOpacity, .black)) <= topLuminanceCap { return fullTopOpacity }
+        var lo = 0.0, hi = fullTopOpacity
+        for _ in 0..<30 { let mid = (lo + hi) / 2; if luminance(over(tint, mid, .black)) <= topLuminanceCap { lo = mid } else { hi = mid } }
+        return lo
+    }
+    static func top(for tint: RGB) -> RGB { over(tint, topOpacity(for: tint), .black) }
+
+    /// The screen's quieter words (what the bot is about, "Tap Resume to keep going.", the controls' names, the empty
+    /// conversation's prompt, the person's own words): white at this opacity, in place of `.secondary`.
+    static let secondaryOpacity = 0.85
+    static var secondary: Color { Color.white.opacity(secondaryOpacity) }
+    /// A note or an error under the bot: orange on a dark capsule of its own, as "Mic muted" stands on one.
+    static let orange = RGB(r: 1, g: 0.624, b: 0.039)
+    static let noteBackingOpacity = 0.55
+
+    /// The card in voice mode: black at this opacity under its words, over its glass, so it reads the same whatever is
+    /// behind it. The glass is taken as a light veil over the backdrop (white at 0.08) for the checks.
+    static let cardFillOpacity = 0.6
+    static let glassVeil = 0.08
+    static func cardSurface(over backdrop: RGB) -> RGB { over(.black, cardFillOpacity, over(.white, glassVeil, backdrop)) }
+    /// The card's words in voice mode: its heading in orange, its quieter lines in white at 0.8, Deny's name in a light red,
+    /// the other choices' names in white, and Allow once white on a deep blue of its own.
+    static let cardSecondaryOpacity = 0.8
+    static var cardSecondary: Color { Color.white.opacity(cardSecondaryOpacity) }
+    static let deny = RGB(r: 1, g: 0.45, b: 0.42)
+    static let allowOnceFill = RGB(r: 0, g: 0.35, b: 0.8)
 }
 
 /// The Board's column chips (KanbanView): `count` to a row in even columns. On a window that can fold up its middle (the

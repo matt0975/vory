@@ -5,6 +5,9 @@ import VoryCore
 struct PendingCardView: View {
     @Bindable var chat: ChatSession
     var card: PendingCard
+    /// In voice mode the card has a dark fill under its words, over its glass (#631): its words then read the same
+    /// whatever stands behind it. Off everywhere else.
+    @Environment(\.cardInVoiceMode) private var voiceMode
 
     var body: some View {
         Group {
@@ -19,13 +22,18 @@ struct PendingCardView: View {
             else { Text("Unsupported request \(card.method)").font(.footnote) }
         }
         .padding(14)
+        .background(voiceMode ? Color.black.opacity(VoiceLook.cardFillOpacity) : Color.clear, in: .rect(cornerRadius: 20))
         .glassEffect(.regular, in: .rect(cornerRadius: 20))
     }
 }
 
 extension EnvironmentValues {
-    /// Voice mode's split pins an approval's choices under its words (`ApprovalCardView`, Duo stage 4).
+    /// Voice mode pins an approval's choices under its words (`ApprovalCardView`): in its split (Duo stage 4) and, from
+    /// #631, in one column too, where the card is held to the room the screen leaves it.
     @Entry var approvalChoicesPinned = false
+    /// The card stands in voice mode (#631): its fill, its colours, wrapped choice names and a wrapped command, so it
+    /// passes the audit over any bot colour and at any text size. False everywhere else, so the chat's card is unchanged.
+    @Entry var cardInVoiceMode = false
 }
 
 struct ApprovalCardView: View {
@@ -39,6 +47,11 @@ struct ApprovalCardView: View {
     /// Voice mode's split (Duo stage 4): the choices stand under the words, which scroll from their start when the card is
     /// taller than its room, so what's allowed is read first and the choices are at hand at rest.
     @Environment(\.approvalChoicesPinned) private var choicesPinned
+    @Environment(\.cardInVoiceMode) private var voiceMode
+
+    /// The card's quieter lines: `.secondary` in a chat, white at 0.8 on voice mode's dark fill (#631).
+    private var quiet: AnyShapeStyle { voiceMode ? AnyShapeStyle(VoiceLook.cardSecondary) : AnyShapeStyle(.secondary) }
+    private var warning: Color { voiceMode ? VoiceLook.orange.color : .orange }
 
     var body: some View {
         Group {
@@ -62,33 +75,66 @@ struct ApprovalCardView: View {
     /// The items alone, no stack of their own: in a chat the card stays the one flat stack it always was, so the dock's
     /// height squeezes the choices as before (their names scale down) rather than the words.
     @ViewBuilder private var details: some View {
-        HStack {
-            Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(.orange)
-            Spacer()
-            if count > 1 { Text("\(count) waiting").font(.caption).foregroundStyle(.secondary) }
+        if voiceMode {
+            // The heading wraps rather than cuts, and "N waiting" goes under it when the line is short (#631).
+            ViewThatFits(in: .horizontal) {
+                HStack { heading; Spacer(); waiting }
+                VStack(alignment: .leading, spacing: 2) { heading; waiting }
+            }
+        } else {
+            HStack { heading; Spacer(); waiting }
         }
         if let d = approval.description, !d.isEmpty { Text(d).font(.subheadline) }
         if let cmd = approval.command, !cmd.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(8)
+            if voiceMode {
+                // Wrapped in voice mode, so the whole command is on the card (scrolled sideways, its end was cut off).
+                Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true).padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding(8)
+                }
+                .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
             }
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
         }
-        if let t = approval.toolName { Text("Tool: \(t)").font(.caption).foregroundStyle(.secondary) }
-        if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(.orange) }
+        if let t = approval.toolName { Text("Tool: \(t)").font(.caption).foregroundStyle(quiet) }
+        if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(warning) }
         // What each answer covers, so "Always" is never a surprise: it is a rule on this
         // bot's gateway profile, not the one command, and it lives on until revoked.
-        Text(scopeLine).font(.caption2).foregroundStyle(.secondary)
+        Text(scopeLine).font(.caption2).foregroundStyle(quiet).fixedSize(horizontal: false, vertical: voiceMode)
+    }
+
+    private var heading: some View {
+        Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(warning)
+            .fixedSize(horizontal: false, vertical: voiceMode)
+    }
+
+    @ViewBuilder private var waiting: some View {
+        if count > 1 { Text("\(count) waiting").font(.caption).foregroundStyle(quiet) }
     }
 
     /// Four choices do not fit on one line at iPhone width, and a wrapped name looks broken, so fall back to a 2x2 grid
-    /// when the row cannot fit.
-    private var choices: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 8) { choiceButtons }
-            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
-                GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
+    /// when the row cannot fit. In voice mode a name may take two lines rather than shrink (#631), and when even the grid
+    /// is too wide the choices stand one to a row.
+    @ViewBuilder private var choices: some View {
+        if voiceMode {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { choiceButtons }
+                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
+                    GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
+                }
+                VStack(spacing: 8) { choiceButtons }
+            }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) { choiceButtons }
+                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                    GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
+                    GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
+                }
             }
         }
     }
@@ -130,14 +176,25 @@ struct ApprovalChoiceButton: View {
     var choice: String
     var title: String
     var action: () -> Void
+    @Environment(\.cardInVoiceMode) private var voiceMode
 
-    private var label: some View {
-        Text(title).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+    /// In a chat a name stays on one line and shrinks a little when it must. In voice mode (#631) it grows with the
+    /// text size and takes a second line instead, in colours that pass on the card's dark fill: Allow once white on a
+    /// deep blue of its own, Deny a light red, the rest white.
+    @ViewBuilder private var label: some View {
+        if voiceMode {
+            Text(title).lineLimit(2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                .foregroundStyle(choice == "deny" ? VoiceLook.deny.color : .white)
+                .frame(maxWidth: .infinity)
+        } else {
+            Text(title).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
+        }
     }
 
     var body: some View {
         if choice == "once" {
             Button(action: action) { label }.buttonStyle(.glassProminent)
+                .tint(voiceMode ? VoiceLook.allowOnceFill.color : nil)
         } else if choice == "deny" {
             Button(role: .destructive, action: action) { label }.buttonStyle(.glass)
         } else {

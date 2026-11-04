@@ -33,6 +33,21 @@ struct HandsFreeView: View {
     /// safe area, where the content goes): where the split falls (`VoiceSplit`, Duo stage 4).
     @State private var foldAcross: CGRect?
     @State private var column: CGRect = .zero
+    /// One column with a card waiting (#631): the room the screen gives (its height inside the safe area) and what the top
+    /// row, the bot's block (and whether it was compact when measured) and the controls take of it, so the card is held to
+    /// what is left and the bot's block goes to the split's sizes when it would leave the card too little.
+    @State private var roomFrame: CGRect = .zero
+    private var room: CGFloat { roomFrame.height }
+    @State private var rowH: CGFloat = 0
+    @State private var botH: CGFloat = 0
+    @State private var botWasCompact = false
+    @State private var controlsH: CGFloat = 0
+    private var compactSaving: CGFloat { VoiceSplit.compactSaving(ring: !BotFace.motionEngine) }
+    private var compact: Bool {
+        guard split == nil, chat.firstCard != nil else { return false }
+        return VoiceSplit.compactOneColumn(room: room, row: rowH, botFull: botH + (botWasCompact ? compactSaving : 0),
+                                           controls: controlsH, size: typeSize)
+    }
 
     /// The two halves' heights in the column (the top from the column's top to the fold, the bottom from the fold to the
     /// column's foot), or nil for one column.
@@ -49,13 +64,19 @@ struct HandsFreeView: View {
 
     var body: some View {
         let split = split
+        let compact = compact
         ZStack {
             background
+            // The room inside the safe area, for the one column's card (#631).
+            Color.clear
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { roomFrame = $0 }
+                .accessibilityHidden(true)
             // One tree, whatever the pose: half open like a laptop only the frames change (the bot above the fold, the
             // conversation and the controls below it), so a posture change keeps every view and its state.
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     top
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowH = $0 }
                         #if DEBUG
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeRow = $0 }
                         #endif
@@ -66,13 +87,15 @@ struct HandsFreeView: View {
                         .fixedSize(horizontal: false, vertical: Self.worst != nil)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeBot = $0 }
                         #endif
-                        .padding(.top, 12).frame(maxHeight: split == nil ? nil : .infinity)
+                        .padding(.top, 12)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { botH = $0; botWasCompact = compact }
+                        .frame(maxHeight: split == nil ? nil : .infinity)
                 }
                 .frame(height: split?.top, alignment: .top)
                 Color.clear.frame(height: split?.gap ?? 0).accessibilityHidden(true)
                 VStack(spacing: 0) {
                     // Everything said so far, scrolling, between the state line and the controls (#235).
-                    VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt)
+                    VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt, quiet: VoiceLook.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .padding(.top, 6)
                     if let card = chat.firstCard {
@@ -82,6 +105,7 @@ struct HandsFreeView: View {
                             // which scroll from their start when it's taller than that: what's allowed is read first.
                             PendingCardView(chat: chat, card: card)
                                 .environment(\.approvalChoicesPinned, true)
+                                .environment(\.cardInVoiceMode, true)
                                 .padding(.horizontal, 16)
                                 .frame(maxHeight: max(0, split.bottom - VoiceSplit.controls), alignment: .top)
                                 .layoutPriority(1)
@@ -90,12 +114,21 @@ struct HandsFreeView: View {
                                 #endif
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         } else {
+                            // One column (#631): the card is held to what the top row, the bot's block and the controls
+                            // leave it, its choices standing under its words, which scroll from their start, as below a
+                            // fold; so on the closed Duo nothing runs off the screen and nothing is squeezed.
                             PendingCardView(chat: chat, card: card)
+                                .environment(\.approvalChoicesPinned, true)
+                                .environment(\.cardInVoiceMode, true)
                                 .padding(.horizontal, 16)
+                                .frame(maxHeight: VoiceSplit.oneColumnCardMax(room: room, row: rowH, bot: botH, controls: controlsH, size: typeSize) ?? .infinity,
+                                       alignment: .top)
+                                .layoutPriority(1)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
                     controls
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsH = $0 }
                         #if DEBUG
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeControls = $0 }
                         #endif
@@ -131,6 +164,8 @@ struct HandsFreeView: View {
         func r(_ f: CGRect) -> String { String(format: "%.1f %.1f %.1f %.1f", f.minX, f.minY, f.width, f.height) }
         return "row \(r(probeRow));bot \(r(probeBot));controls \(r(probeControls));card \(chat.firstCard == nil || split == nil ? "none" : r(probeCard))"
             + ";column \(r(column));fold \(foldAcross.map(r) ?? "none");split \(split == nil ? "no" : "yes")"
+            // The room inside the safe area (#631): the one column must stand inside it, the closed Duo's included.
+            + ";room \(r(roomFrame))"
     }
 
     /// DEBUG `-vory-voice-worst thinking|paused|error`: the bot's block in a state's tallest form, for measuring the top
@@ -153,9 +188,13 @@ struct HandsFreeView: View {
     #endif
 
     private var tint: Color { BotColors.color(for: chat.profileName) }
+    /// The gradient's top: the bot's colour at 0.55, or less for a light colour, so the words over it pass 4.5:1 (#631).
+    private var topOpacity: Double {
+        VoiceLook.RGB(hex: BotColors.hex(for: chat.profileName)).map(VoiceLook.topOpacity(for:)) ?? VoiceLook.fullTopOpacity
+    }
 
     private var background: some View {
-        LinearGradient(colors: [tint.opacity(0.55), Color.black], startPoint: .top, endPoint: .bottom)
+        LinearGradient(colors: [tint.opacity(topOpacity), Color.black], startPoint: .top, endPoint: .bottom)
             .ignoresSafeArea()
     }
 
@@ -170,7 +209,7 @@ struct HandsFreeView: View {
             Spacer()
             VStack(spacing: 2) {
                 // Live is named when it is in use: the person's own provider, billed to them.
-                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(VoiceLook.secondary)
                 Text(chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             Spacer()
@@ -192,19 +231,21 @@ struct HandsFreeView: View {
     }
 
     private var bot: some View {
-        VStack(spacing: 18) {
+        // The split's sizes above a fold, and in one column when a waiting card needs the room (#631).
+        let full = split == nil && !compact
+        return VStack(spacing: 18) {
             ZStack {
                 // A ring breathes while the person is heard, and while the bot speaks; with the
                 // motion engine the bot's own listening arcs take its place (1.5 #304).
                 if !BotFace.motionEngine {
                     Circle()
                         .stroke(tint.opacity(0.5), lineWidth: 3)
-                        .frame(width: split == nil ? 196 : VoiceSplit.ring, height: split == nil ? 196 : VoiceSplit.ring)
+                        .frame(width: full ? 196 : VoiceSplit.ring, height: full ? 196 : VoiceSplit.ring)
                         .scaleEffect(state.hearing || state.phase == .speaking ? 1.12 : 0.98)
                         .opacity(state.hearing || state.phase == .speaking ? 1 : 0.25)
                         .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: state.hearing || state.phase == .speaking)
                 }
-                BotAvatar(profile: chat.profileName, size: split == nil ? 164 : VoiceSplit.face, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
+                BotAvatar(profile: chat.profileName, size: full ? 164 : VoiceSplit.face, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
             }
             VStack(spacing: 6) {
                 Text(state.title).font(.title2.weight(.semibold)).contentTransition(.numericText())
@@ -216,16 +257,18 @@ struct HandsFreeView: View {
                         .transition(.opacity)
                 }
                 // Above the fold every line stops at two (`VoiceSplit.minTop`); VoiceOver still reads it whole.
+                // The quieter lines in voice mode's white at 0.85, a note or an error in orange on a dark backing of its
+                // own: they pass 4.5:1 over any bot colour (#631).
                 if state.phase == .thinking, let goal {
-                    Text(goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
+                    Text(goal).font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(2).multilineTextAlignment(.center)
                 } else if state.phase == .needsApproval {
-                    Text("Allow or deny it here. The bot waits for your answer.").font(.subheadline).foregroundStyle(.secondary).lineLimit(split == nil ? nil : 2)
+                    Text("Allow or deny it here. The bot waits for your answer.").font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(split == nil ? nil : 2)
                 } else if state.phase == .paused {
-                    Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+                    Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(VoiceLook.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
                 } else if let note = state.note {
-                    Text(note).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+                    noteLine(note)
                 } else if let lastError {
-                    Text(lastError).font(.subheadline).foregroundStyle(.orange).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+                    noteLine(lastError)
                 }
             }
             .padding(.horizontal, 24)
@@ -235,6 +278,12 @@ struct HandsFreeView: View {
                     .transition(.opacity)
             }
         }
+    }
+
+    private func noteLine(_ text: String) -> some View {
+        Text(text).font(.subheadline).foregroundStyle(VoiceLook.orange.color).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(.black.opacity(VoiceLook.noteBackingOpacity), in: .rect(cornerRadius: 12))
     }
 
     /// What the empty transcript says.
@@ -268,7 +317,7 @@ struct HandsFreeView: View {
             }
             .buttonStyle(.plain)
             .alignmentGuide(.controlCircle) { $0[VerticalAlignment.center] }
-            Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.6)
+            Text(label).font(.caption).foregroundStyle(VoiceLook.secondary).lineLimit(1).minimumScaleFactor(0.6)
         }
         // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays
         // in the middle.
@@ -322,6 +371,9 @@ struct VoiceTranscriptView: View {
     var lines: [VoiceLine]
     /// Shown while nothing has been said.
     var prompt: String
+    /// The prompt's and the person's words: `.secondary` unless given (the iPhone's voice screen gives its own, #631).
+    var quiet: Color? = nil
+    private var quietStyle: AnyShapeStyle { quiet.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary) }
     /// Following the newest words; off while the person reads back.
     @State private var following = true
     @State private var userScrolling = false
@@ -332,7 +384,7 @@ struct VoiceTranscriptView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     if lines.isEmpty {
-                        Text(prompt).font(.body).foregroundStyle(.secondary)
+                        Text(prompt).font(.body).foregroundStyle(quietStyle)
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity)
                     }
                     ForEach(lines) { line in row(line).id(line.id) }
@@ -383,7 +435,7 @@ struct VoiceTranscriptView: View {
 
     @ViewBuilder private func row(_ line: VoiceLine) -> some View {
         if line.isPerson {
-            Text(Mentions.attributed(line.text, names: Mentions.names)).font(.body).foregroundStyle(.secondary)
+            Text(Mentions.attributed(line.text, names: Mentions.names)).font(.body).foregroundStyle(quietStyle)
                 .multilineTextAlignment(.trailing)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .padding(.leading, 36)
