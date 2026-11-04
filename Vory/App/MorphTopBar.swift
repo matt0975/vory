@@ -160,8 +160,12 @@ private struct MorphPageActions: ViewModifier {
     struct PageActions { var token: UUID; var actions: [MorphPageAction] }
     var pageActions: [AppModel.AppTab: PageActions] = [:]
     /// `-vory-ownbar-off` puts the bar's Back over
-    /// those pages again, as in (18) and (19).
+    /// those pages again, as in (18) and (19). DEBUG only: Release never reads it.
+    #if DEBUG
     static let ownBarOff = ProcessInfo.processInfo.arguments.contains("-vory-ownbar-off")
+    #else
+    static let ownBarOff = false
+    #endif
 
     /// The Chats stack, handed over by its root (`ChatsStackProbe`): a chat's push and pop there
     /// are followed frame by frame, the page's own slide being the bar's progress. Timed on a
@@ -176,8 +180,13 @@ private struct MorphPageActions: ViewModifier {
     /// The transition has been seen moving; frames without one before it count down a grace.
     @ObservationIgnored private var followSeen = false
     @ObservationIgnored private var followIdle = 0
-    /// `-vory-morph-timed`: the Chats morph on its own spring again, as in 1.5 (22), to compare.
+    /// `-vory-morph-timed`: the Chats morph on its own spring again, as in 1.5 (22), to compare. DEBUG only: Release
+    /// never reads it.
+    #if DEBUG
     static let follows = !ProcessInfo.processInfo.arguments.contains("-vory-morph-timed")
+    #else
+    static let follows = true
+    #endif
 
     func push(_ c: ChatSession) {
         // The chat under a chat being swiped away comes into view as the swipe starts: it takes the bar once the finger
@@ -569,15 +578,28 @@ struct MorphTopBar: View {
         slot == .columnBack ? back : CGPoint(x: more.x, y: back.y + TopBarRoom.stripPitch)
     }
     /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
-    /// shipped chrome back for a comparison.
-    static var on: Bool { !ProcessInfo.processInfo.arguments.contains("-vory-morph-off") }
+    /// shipped chrome back for a comparison, in DEBUG only: Release never reads it.
+    static var on: Bool {
+        #if DEBUG
+        return !ProcessInfo.processInfo.arguments.contains("-vory-morph-off")
+        #else
+        return true
+        #endif
+    }
     /// The bar runs where a chat pushes over the list (a phone, the closed Duo's strip): that is
     /// the only place a morph exists. On a wide window (iPad, the open Duo) the list and the
     /// chat stand in their own columns with the shipped chrome, each over its column.
     static func active(_ model: AppModel) -> Bool { on && !model.wideLayout }
     /// The pages swap at once on a tab switch while the bar morphs (Matt's pick, "Instant
-    /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison.
-    static var cutsPages: Bool { on && !ProcessInfo.processInfo.arguments.contains("-vory-morph-fade") }
+    /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison, in DEBUG only: Release never
+    /// reads it.
+    static var cutsPages: Bool {
+        #if DEBUG
+        return on && !ProcessInfo.processInfo.arguments.contains("-vory-morph-fade")
+        #else
+        return on
+        #endif
+    }
     private var state: MorphState { MorphState.shared }
     /// The bots' stored looks, read so the seated face follows a shape change.
     @AppStorage(BotAvatarStore.storageKey) private var avatarsRaw = ""
@@ -1379,7 +1401,7 @@ extension View {
 /// a slight grow, like the system's glass controls, at touch-down; gone on lift or when the finger
 /// slides off. A fill, never glass taken to 0 (the glass reference). Reduce Motion: the fill
 /// alone. `-vory-press-style-off` brings back (18)'s
-/// plain controls.
+/// plain controls, in DEBUG only: Release never reads it.
 struct MorphPressStyle: ButtonStyle {
     enum Kind {
         /// A 44 pt round control (Back, the bot circle, the chat's …): a circle just inside it.
@@ -1390,7 +1412,11 @@ struct MorphPressStyle: ButtonStyle {
     var kind: Kind
     /// The pressed control's size, the one number to change the look by.
     static let pressedScale: CGFloat = 1.05
+    #if DEBUG
     static let off = ProcessInfo.processInfo.arguments.contains("-vory-press-style-off")
+    #else
+    static let off = false
+    #endif
     /// The fill behind a pressed control.
     static func fill(_ scheme: ColorScheme) -> Color { scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.12) }
     @Environment(\.colorScheme) private var scheme
