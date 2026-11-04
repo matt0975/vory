@@ -454,6 +454,31 @@ import Testing
         #expect(prefs.projectFilter == "" && prefs.collapsedRaw == "" && prefs.archivedRoomsRaw == "")
     }
 
+    /// A number or a Bool under one of the chat list's own keys (#512) reads as no value, and leaving a demo that had set
+    /// its own wrote "" over it: the prefs read each key as a String or nothing, and the write compared against
+    /// `string(forKey:)`, which turns a number into "1". Each key keeps what it held.
+    @Test func aNumberUnderTheChatListsOwnKeysIsNotWrittenOverOnLeavingTheDemo() {
+        let prefs = ChatListPrefs.shared
+        let d = UserDefaults.standard
+        let keys = ["chats.filter.project", "chats.byProject.collapsed", "chats.archivedRooms"]
+        let before = keys.map { d.object(forKey: $0) }
+        defer {
+            prefs.inDemo = false
+            for (k, v) in zip(keys, before) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
+        }
+        for held in [NSNumber(value: 1), NSNumber(value: true)] {
+            prefs.inDemo = false
+            for k in keys { d.set(held, forKey: k) }
+            prefs.inDemo = true
+            prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
+            prefs.inDemo = false
+            for k in keys {
+                #expect(!(d.object(forKey: k) is String) && (d.object(forKey: k) as? NSNumber) == held,
+                        "\(k) was written over on leaving the demo: now \(d.string(forKey: k).map { "\"\($0)\"" } ?? "absent")")
+            }
+        }
+    }
+
     #if os(iOS)
     /// Nothing of a demo chat is kept as the app leaves the screen (#494): the record of the chat to reopen held the demo's
     /// chat under its gateway's id until the next launch. A gateway's chat is kept as before.
