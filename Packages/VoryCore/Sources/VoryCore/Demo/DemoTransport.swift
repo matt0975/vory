@@ -37,6 +37,13 @@ final class DemoURLProtocol: URLProtocol, @unchecked Sendable {
     /// Requests the demo's sessions refused. None is ever expected: each one is a page asking the network for something.
     static var refused: Int { lock.withLock { refusedCount } }
 
+    /// A try the demo's runtime turned down outside its sessions (a gateway WebSocket, #392), counted with the requests
+    /// they refuse, so the no-trace checks see it.
+    static func refuse(_ what: String) {
+        lock.withLock { refusedCount += 1 }
+        DemoGateway.log.error("demo refused \(what, privacy: .public)")
+    }
+
     /// The id a demo session's requests carry to reach `gateway`; held weakly, so a demo nothing runs any more is gone.
     static func bind(_ gateway: DemoGateway) -> String {
         let id = UUID().uuidString

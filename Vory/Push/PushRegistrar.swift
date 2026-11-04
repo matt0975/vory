@@ -338,6 +338,9 @@ final class PushRegistrar: PushRegistrationSyncing {
     /// every gateway, the relay with them, whether a gateway is open or not (#509; with none open, off left the relay
     /// holding the token).
     func notificationsTurned(on: Bool, runtime: GatewayRuntime?) async {
+        // Never in the demo (#392): it has no gateway and no relay, and the relay's credentials, minted when there are
+        // none, would be saved and sent for it. Settings greys the toggle there too.
+        guard !AppModel.shared.isInDemo, runtime?.isEphemeral != true else { return }
         guard on else { await removeEverywhere(runtime: runtime); return }
         guard let runtime else { return }
         await registerWithRelay()

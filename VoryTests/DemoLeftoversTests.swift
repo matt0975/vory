@@ -144,5 +144,45 @@ extension DemoNoTraceTests {
             AppModel.activateStandInForTests = { _ in }
             await model.endDemo()
         }
+
+        /// What the demo says is the device's voice (#392), whatever Settings › Voice › Speech says: on the gateway's route
+        /// its replies opened a socket of the network's own, to an address that is nowhere. The demo's own runtime, under
+        /// this host's setting (read, never written: it syncs).
+        @Test func spokenRepliesInTheDemoUseTheDeviceVoice() async throws {
+            let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demospeech." + UUID().uuidString)!, connections: [])
+            let rt = GatewayRuntime(connection: .demo, store: store, transport: .demo(DemoGateway(pace: .quick)))
+            await rt.start()
+            let engine = VoiceEngine()
+            engine.attach(rt)
+            #expect(engine.route(for: .speak) == .device, "the demo's speech went the gateway's way (Speech: \(VoiceSettings.speech.rawValue), the socket \(rt.socketState.label))")
+            await rt.stop()
+        }
+
+        /// The route under every setting (#392): the demo's speech is the device's under each one; its words to text, and
+        /// a gateway of the person's own, go as before.
+        @Test func theDemosSpeechIsTheDevicesUnderEverySetting() {
+            for setting in SpeechSource.allCases {
+                #expect(VoiceEngine.route(for: .speak, inDemo: true, setting: setting, gatewayConnected: true, gatewayUnableUntil: nil) == .device,
+                        "the demo's speech under \(setting.rawValue) went the gateway's way")
+                #expect(VoiceEngine.route(for: .speak, inDemo: false, setting: setting, gatewayConnected: true, gatewayUnableUntil: nil)
+                        == VoiceRouting.route(for: setting, gatewayConnected: true, gatewayUnableUntil: nil), "a gateway's own speech changed under \(setting.rawValue)")
+                #expect(VoiceEngine.route(for: .transcribe, inDemo: true, setting: setting, gatewayConnected: true, gatewayUnableUntil: nil)
+                        == VoiceRouting.route(for: setting, gatewayConnected: true, gatewayUnableUntil: nil), "the demo's words to text changed under \(setting.rawValue)")
+            }
+        }
+
+        /// The gateway's speech socket is never opened for the demo (#392): a try is turned down and counted with the
+        /// requests the demo's sessions refuse, so a page that reaches for it shows in the no-trace counts.
+        @Test func theDemoOpensNoGatewaySpeechSocketAndCountsTheTry() async throws {
+            let store = ConnectionStore(defaults: UserDefaults(suiteName: "dev.vory.tests.demospeech." + UUID().uuidString)!, connections: [])
+            let rt = GatewayRuntime(connection: .demo, store: store, transport: .demo(DemoGateway(pace: .quick)))
+            await rt.start()
+            let before = DemoURLProtocol.refused
+            let client = SpeakStreamClient()
+            await #expect(throws: (any Error).self) { try await client.open(runtime: rt, profile: nil) }
+            #expect(!client.isOpen, "the speech socket opened for the demo")
+            #expect(DemoURLProtocol.refused == before + 1, "the try wasn't counted (\(DemoURLProtocol.refused - before))")
+            await rt.stop()
+        }
     }
 }

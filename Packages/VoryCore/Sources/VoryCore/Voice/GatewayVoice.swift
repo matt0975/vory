@@ -122,6 +122,12 @@ public final class SpeakStreamClient {
 
     /// Opens the socket, credentialled like the gateway's others.
     func open(runtime: GatewayRuntime, profile: String?) async throws {
+        // Never for the demo (#392): this is a socket of the network's own, around the demo's sessions, to an address that
+        // is nowhere. Its speech is the device's (VoiceEngine.route); a try is turned down and counted as they count one.
+        if runtime.isEphemeral {
+            DemoURLProtocol.refuse("the gateway's speech socket")
+            throw HermesAPIError.transport("The demo has no gateway voice.")
+        }
         var query: [URLQueryItem] = []
         if let profile, !profile.isEmpty { query.append(URLQueryItem(name: "profile", value: profile)) }
         let (url, headers) = try await runtime.pluginWebsocketURL(path: "/api/audio/speak-stream", query: query)

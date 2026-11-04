@@ -408,12 +408,19 @@ struct NotificationsView: View {
         SettingsList {
             SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(!DeviceWords.isMac ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
             Section {
-                Toggle("Notifications", isOn: $notificationsOn)
+                // In the demo (#392) it reads off and can't be turned: it registers with the person's own gateway and the
+                // relay, and the demo has neither (its notifications are the app's own, on this device).
+                Toggle("Notifications", isOn: model.isInDemo ? .constant(false) : $notificationsOn)
+                    .disabled(model.isInDemo)
                     .onChange(of: notificationsOn) { _, on in
                         Task { await push.notificationsTurned(on: on, runtime: model.runtime) }
                     }
             } footer: {
-                Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
+                if model.isInDemo {
+                    Text("The demo's notifications come from the demo itself, on \(DeviceWords.this). This switch is for your own gateway, once you leave the demo.")
+                } else {
+                    Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
+                }
             }
             #if os(iOS)
             Section {
