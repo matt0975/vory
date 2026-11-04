@@ -72,6 +72,34 @@ enum TestBuild {
         }
     }
 
+    /// The receipt file's name in the bundle, if any: "sandboxReceipt" on TestFlight, "receipt" on the App Store.
+    /// On the Mac the receipt lives inside the bundle at `Contents/_MASReceipt`; on iOS it sits beside the app
+    /// bundle in the container's `StoreKit` directory.
+    static func receiptName(at bundleURL: URL = Bundle.main.bundleURL, fileManager: FileManager = .default) -> String? {
+        #if os(macOS)
+        let candidateDirs = [
+            bundleURL.appendingPathComponent("Contents/_MASReceipt"),
+            bundleURL.deletingLastPathComponent().appendingPathComponent("StoreKit"),
+            bundleURL.appendingPathComponent("StoreKit")
+        ]
+        #else
+        let candidateDirs = [
+            bundleURL.deletingLastPathComponent().appendingPathComponent("StoreKit"),
+            bundleURL.appendingPathComponent("Contents/_MASReceipt"),
+            bundleURL.appendingPathComponent("StoreKit")
+        ]
+        #endif
+        for dir in candidateDirs {
+            if fileManager.fileExists(atPath: dir.appendingPathComponent("sandboxReceipt").path) {
+                return "sandboxReceipt"
+            }
+            if fileManager.fileExists(atPath: dir.appendingPathComponent("receipt").path) {
+                return "receipt"
+            }
+        }
+        return nil
+    }
+
     /// This build's check.
     static func checkHere() async -> Check {
         #if DEBUG
@@ -79,7 +107,7 @@ enum TestBuild {
         #else
         let debug = false
         #endif
-        return await check(debug: debug, transaction: appStoreEnvironment, receiptName: Bundle.main.appStoreReceiptURL?.lastPathComponent)
+        return await check(debug: debug, transaction: appStoreEnvironment, receiptName: receiptName())
     }
 }
 
