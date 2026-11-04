@@ -1178,6 +1178,7 @@ struct SoftwareUpdateView: View {
                         }
                     } else if setup.updateAvailable || setup.updating || setup.showUpdateConsole || setup.updateOutcome != nil {
                         CompanionUpdateRows(setup: setup, runtime: rt)
+                            .updateProbe("card")
                     } else {
                         VStack(spacing: 8) {
                             BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
@@ -1187,12 +1188,14 @@ struct SoftwareUpdateView: View {
                         }
                         .frame(maxWidth: .infinity).padding(.vertical, 10)
                         .animation(.snappy, value: setup.checkingCompanion)
+                        .updateProbe("card")
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
                     Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")
                 }
                 Section {
                     LabeledContent("On the gateway", value: setup.installedVersion.map { "v\($0)" } ?? "—")
+                        .updateProbe("row")
                     if let hb = setup.heartbeat { LabeledContent("Running", value: "v\(hb.version)") }
                     LabeledContent("This build ships", value: "v\(PushSetupModel.bundledPluginVersion)")
                     Button { Task { await setup.checkCompanion(runtime: rt) } } label: {
@@ -1206,6 +1209,9 @@ struct SoftwareUpdateView: View {
         }
         .listSectionSpacing(28)
         .animation(.smooth, value: setup.updateOutcome == nil)
+        #if DEBUG && os(iOS)
+        .overlay(alignment: .topLeading) { if UpdateMotionProbe.isOn { UpdateMotionProbe.Readout().frame(width: 1, height: 1) } }
+        #endif
         .task { if let rt = model.runtime { await setup.prepare(runtime: rt) } }
         .reloadable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) } }
         // The cloud squints while it checks and turns once the answer is in.

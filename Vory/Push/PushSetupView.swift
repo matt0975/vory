@@ -569,6 +569,7 @@ struct CompanionUpdateRows: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
+                        .updateProbe("log", cell: false)
                     }
                     .frame(height: 110)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
@@ -594,6 +595,170 @@ struct CompanionUpdateRows: View {
         .animation(.snappy, value: setup.updateConsole.count)
         .animation(.smooth, value: setup.showUpdateConsole)
         .animation(.smooth, value: setup.updating)
+    }
+}
+
+#if DEBUG
+/// DEBUG, for the update's checks (#635): with `-vory-update-probe`, Settings › Software Update's card, its first
+/// version row and the console's content write their frames at every layout (`updateProbe`: SwiftUI's layout, which
+/// lands on a list row's final height in one pass while Core Animation eases what is drawn), and on iOS what is on
+/// screen as well: from the first of them on screen (the page's rest before Install Now) to 2 s after `updating` goes
+/// false (again from a restart's start), at each display frame and when it moved 0.1 pt or more, each one's
+/// presentation frame in the window's ("<key>-p": the list cell's for the card and the row, the content's own for the
+/// console). The update's own steps mark when they happen (`mark`). A self-check proves the presentation sampler sees
+/// eased motion: at the start a 1 pt view of its own, outside the app's views and invisible, is moved 100 pt over 0.5 s
+/// by UIView.animate (its model at the end at once, its presentation eased), sampled as "selfcheck-p". Read by a UI test
+/// from a 1 pt element ("debug.updatemotion") after the update, and written to the perf log ("update-motion …").
+@MainActor
+enum UpdateMotionProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-update-probe")
+    /// Each key's top and height at each layout, in seconds from the first sample; a mark has a zero frame.
+    private(set) static var samples: [(key: String, t: Double, top: CGFloat, height: CGFloat)] = []
+    private static var began: Date?
+    static func note(_ key: String, _ f: CGRect) {
+        guard isOn else { return }
+        let start = began ?? Date()
+        began = start
+        samples.append((key, Date().timeIntervalSince(start), f.minY, f.height))
+        Perf.note("update-motion \(key) top \(String(format: "%.2f", f.minY)) height \(String(format: "%.2f", f.height))")
+    }
+    /// A step of the update itself (its start, Update Complete, the closing ease, `updating` going false).
+    static func mark(_ what: String) {
+        note("mark:" + what, .zero)
+        #if os(iOS)
+        sampling(what)
+        #endif
+    }
+    /// "key,t,top,height;…", read by a UI test (`Readout`).
+    static var summary: String { samples.map { "\($0.key)," + String(format: "%.3f,%.2f,%.2f", $0.t, $0.top, $0.height) }.joined(separator: ";") }
+
+    #if os(iOS)
+    // The presentation sampler.
+    private struct Weak { weak var view: PresentationAnchorView? }
+    private static var anchors: [Weak] = []
+    private static var link: CADisplayLink?
+    /// Sampling until then; nil when not sampling.
+    private static var until: Date?
+    private static var last: [String: CGRect] = [:]
+    /// The sampling ended (2 s after `updating` went false); an anchor coming on screen after it doesn't start it again.
+    private static var ended = false
+    static func register(_ a: PresentationAnchorView) {
+        anchors.removeAll { $0.view == nil || $0.view === a }
+        anchors.append(Weak(view: a))
+        // From the first anchor on screen, so the page's rest before Install Now is drawn too: a change that lands
+        // in one pass at the start shows as a step from it, not as a first sample.
+        if until == nil, !ended { startSampling() }
+    }
+    private static func startSampling() {
+        until = .distantFuture
+        guard link == nil else { return }
+        let l = CADisplayLink(target: Ticker.shared, selector: #selector(Ticker.tick))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    private static func sampling(_ what: String) {
+        switch what {
+        case "start", "restart-start":
+            ended = false
+            startSampling()
+            if what == "start" { selfCheck() }
+        case "updating-false":
+            until = Date().addingTimeInterval(2)
+        default:
+            break
+        }
+    }
+    fileprivate static func tick() {
+        guard let until, Date() < until else { link?.invalidate(); link = nil; self.until = nil; ended = true; return }
+        for a in anchors {
+            guard let v = a.view, let f = v.screenFrame() else { continue }
+            let key = v.key + "-p"
+            if let p = last[key], abs(p.minY - f.minY) < 0.1, abs(p.height - f.height) < 0.1 { continue }
+            if last[key] == nil { mark("\(key) on \(v.measuredView)") }
+            last[key] = f
+            note(key, f)
+        }
+    }
+    /// The sampler's own check: a 1 pt view on the window, invisible and outside the app's views, eased 100 pt down
+    /// over 0.5 s by UIView.animate, then removed.
+    private static func selfCheck() {
+        guard let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        let v = PresentationAnchorView(frame: CGRect(x: 0, y: 200, width: 1, height: 1))
+        v.key = "selfcheck"; v.measuresCell = false
+        v.alpha = 0.011; v.isUserInteractionEnabled = false; v.accessibilityElementsHidden = true
+        w.addSubview(v)
+        UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseInOut]) { v.frame.origin.y = 300 } completion: { _ in v.removeFromSuperview() }
+    }
+    @MainActor final class Ticker: NSObject {
+        static let shared = Ticker()
+        @objc func tick() { UpdateMotionProbe.tick() }
+    }
+    /// A view in the background of what it measures; on screen, its list cell's presentation frame (the card and the
+    /// row, as the list animates them) or its own (the console's content, as its scroll view moves it), in the window's
+    /// presentation space.
+    final class PresentationAnchorView: UIView {
+        var key = ""
+        var measuresCell = true
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { UpdateMotionProbe.register(self) }
+        }
+        private var target: UIView {
+            guard measuresCell else { return self }
+            var v = superview
+            while let s = v { if s is UICollectionViewCell { return s }; v = s.superview }
+            return self
+        }
+        var measuredView: String { target === self ? "itself" : "its list cell" }
+        func screenFrame() -> CGRect? {
+            guard let w = window else { return nil }
+            let t = target
+            let l = t.layer.presentation() ?? t.layer, wl = w.layer.presentation() ?? w.layer
+            return l.convert(l.bounds, to: wl)
+        }
+    }
+    struct PresentationAnchor: UIViewRepresentable {
+        var key: String
+        var cell: Bool
+        func makeUIView(context: Context) -> PresentationAnchorView {
+            let v = PresentationAnchorView()
+            v.key = key; v.measuresCell = cell; v.isUserInteractionEnabled = false; v.accessibilityElementsHidden = true
+            return v
+        }
+        func updateUIView(_ v: PresentationAnchorView, context: Context) { v.key = key; v.measuresCell = cell }
+    }
+
+    /// A 1 pt element ("debug.updatemotion") whose value is `summary`, taken when it is read.
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.updatemotion" } set {} }
+        override var accessibilityLabel: String? { get { "Update motion" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { UpdateMotionProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    #endif
+}
+#endif
+
+extension View {
+    /// `UpdateMotionProbe`'s reading of this view's frame at each layout under `key`, and on iOS of what is on screen
+    /// under "<key>-p" (its list cell's when `cell`): DEBUG with `-vory-update-probe` only, and the view itself otherwise.
+    @ViewBuilder func updateProbe(_ key: String, cell: Bool = true) -> some View {
+        #if DEBUG
+        if UpdateMotionProbe.isOn {
+            onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in UpdateMotionProbe.note(key, f) }
+                #if os(iOS)
+                .background(UpdateMotionProbe.PresentationAnchor(key: key, cell: cell))
+                #endif
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 
@@ -1361,7 +1526,15 @@ final class PushSetupModel {
     func updateCompanion(runtime rt: GatewayRuntime) async {
         guard !updating else { return }
         updating = true; updateProgress = 0; updateConsole = []; updateOutcome = nil; showUpdateConsole = true
-        defer { updating = false }
+        #if DEBUG
+        UpdateMotionProbe.mark("start")
+        #endif
+        defer {
+            updating = false
+            #if DEBUG
+            UpdateMotionProbe.mark("updating-false")
+            #endif
+        }
         let target = Self.bundledPluginVersion
         guard let home = rt.profileHome else { updateOutcome = (false, "The gateway did not report its home folder."); return }
         let base = "\(home)/plugins/vory-push"
@@ -1409,9 +1582,15 @@ final class PushSetupModel {
                 guard companionHealthy else { break }
                 withAnimation(.snappy) { updateProgress = 1 }
                 updateStage = "Update Complete"
+                #if DEBUG
+                UpdateMotionProbe.mark("complete")
+                #endif
                 console("companion v\(target) running and connected")
                 updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
                 try? await Task.sleep(for: .seconds(4))
+                #if DEBUG
+                UpdateMotionProbe.mark("ease")
+                #endif
                 withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
                 return
             }
@@ -1428,7 +1607,15 @@ final class PushSetupModel {
         let total = 6.0
         var done = 4.0
         updating = true; showUpdateConsole = true
-        defer { updating = false }
+        #if DEBUG
+        UpdateMotionProbe.mark("restart-start")
+        #endif
+        defer {
+            updating = false
+            #if DEBUG
+            UpdateMotionProbe.mark("updating-false")
+            #endif
+        }
         updateStage = "Restarting Gateway…"
         console("POST /api/gateway/restart (profile \(heartbeat?.profile ?? "default"))")
         let mirror = Task { [weak self] in
@@ -1472,9 +1659,15 @@ final class PushSetupModel {
         }
         withAnimation(.snappy) { updateProgress = 1 }
         updateStage = "Update Complete"
+        #if DEBUG
+        UpdateMotionProbe.mark("complete")
+        #endif
         console("companion v\(target) running and connected")
         updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
         try? await Task.sleep(for: .seconds(4))
+        #if DEBUG
+        UpdateMotionProbe.mark("ease")
+        #endif
         withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
     }
 
