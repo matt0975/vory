@@ -88,5 +88,32 @@ extension DemoNoTraceTests {
             #expect(DemoLeftovers.takenAwayForTests == takenBefore + 1, "a pick outside the demo ran the demo's clean-up")
             #expect(handed == [other.id, other.id])
         }
+
+        /// Leave demo ends a voice session in a demo chat (#392): left running, its scripted loop went on over a runtime
+        /// that had stopped, the Mac's voice window stayed up, and its state changes could raise a new card. The app's
+        /// own session on the app's own demo, with the scripted voice (no microphone) and a reporter that shows nothing.
+        @Test func leavingTheDemoEndsItsVoiceSession() async throws {
+            let model = AppModel.shared, voice = HandsFreeSession.shared
+            let timing = voice.demoTiming
+            defer {
+                if voice.isActive { voice.end() }
+                voice.demoTiming = timing
+                AppModel.activateStandInForTests = nil
+            }
+            await model.startDemo()
+            let rt = try #require(model.runtime)
+            try #require(rt.isEphemeral && model.isInDemo)
+            rt.activityReporterFactory = { DemoVoiceTests.Lines() }
+            let chat = try await rt.newChat(profile: "default")
+            voice.demoTiming = DemoVoice.Timing(scale: 0.25)
+            voice.start(chat: chat)
+            try #require(voice.isActive(for: chat), "the demo's voice session didn't start")
+
+            // Out of the demo with no runtime after it: a used host's saved gateway would otherwise connect.
+            AppModel.activateStandInForTests = { _ in }
+            await model.endDemo()
+            #expect(!model.isInDemo)
+            #expect(!voice.isActive, "Leave demo left the demo's voice session up (\(voice.state.title), its chat \(voice.chat?.runtime.connection.name ?? "none"))")
+        }
     }
 }
