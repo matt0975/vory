@@ -115,5 +115,34 @@ extension DemoNoTraceTests {
             #expect(!model.isInDemo)
             #expect(!voice.isActive, "Leave demo left the demo's voice session up (\(voice.state.title), its chat \(voice.chat?.runtime.connection.name ?? "none"))")
         }
+
+        /// Settings' Notifications toggle in the demo (#392) reaches no relay and saves nothing: off asked the relay to
+        /// forget this device, minting its credentials in the Keychain first when there were none, and on registered with
+        /// it. With a relay set, so a request to it would be seen; the Keychain's credentials put back as they were.
+        @Test func theNotificationsToggleInTheDemoReachesNoRelayAndSavesNothing() async throws {
+            let model = AppModel.shared, push = model.push
+            let account = PushRelay.credentialsAccount
+            let before = Keychain.get(account: account), relayAt = push.relayRegisteredAt
+            PushRelay.testURL = URL(string: "https://relay.test.invalid")
+            SharedSessionWatch.reset()
+            URLProtocol.registerClass(SharedSessionWatch.self)
+            defer {
+                URLProtocol.unregisterClass(SharedSessionWatch.self)
+                PushRelay.testURL = nil
+                if let before { try? Keychain.set(before, account: account) } else { Keychain.delete(account: account) }
+                push.relayRegisteredAt = relayAt
+                AppModel.activateStandInForTests = nil
+            }
+            try #require(PushRelay.isConfigured, "no relay: a request to it could not be seen")
+            await model.startDemo()
+            try #require(model.isInDemo)
+            await push.notificationsTurned(on: false, runtime: model.runtime)
+            await push.notificationsTurned(on: true, runtime: model.runtime)
+            try? await Task.sleep(for: .milliseconds(500))
+            #expect(SharedSessionWatch.seen.isEmpty, "the Notifications toggle in the demo sent: \(SharedSessionWatch.seen)")
+            #expect(Keychain.get(account: account) == before, "the Notifications toggle in the demo changed the relay's credentials")
+            AppModel.activateStandInForTests = { _ in }
+            await model.endDemo()
+        }
     }
 }
