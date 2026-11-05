@@ -42,11 +42,19 @@ struct HandsFreeView: View {
     @State private var botH: CGFloat = 0
     @State private var botWasCompact = false
     @State private var controlsH: CGFloat = 0
-    private var compactSaving: CGFloat { VoiceSplit.compactSaving(ring: !BotFace.motionEngine) }
+    /// The waiting approval's parts as its card measures them in one column (#631), and the bot's state lines as they
+    /// would stand (measured while they are hidden too), so the bot's full block is known while it is lean.
+    @State private var cardHeights = VoiceSplit.CardHeights()
+    @State private var linesH: CGFloat = 0
+    /// The mic muted, said under the bot's title (#234); while the bot is lean, a badge on its face (#631): the one state
+    /// line the card doesn't say, kept with no height of its own.
+    private var mutedShown: Bool { state.isMuted && state.phase != .listening }
+    /// What the lean bot gives up: the split's sizes, and its state lines with the space over them.
+    private var compactSaving: CGFloat { VoiceSplit.leanSaving(ring: !BotFace.motionEngine, lines: linesH) }
     private var compact: Bool {
         guard split == nil, chat.firstCard != nil else { return false }
         return VoiceSplit.compactOneColumn(room: room, row: rowH, botFull: botH + (botWasCompact ? compactSaving : 0),
-                                           controls: controlsH, size: typeSize)
+                                           controls: controlsH, card: VoiceSplit.cardWhole(cardHeights), size: typeSize)
     }
 
     /// The two halves' heights in the column (the top from the column's top to the fold, the bottom from the fold to the
@@ -97,7 +105,7 @@ struct HandsFreeView: View {
                     // Everything said so far, scrolling, between the state line and the controls (#235).
                     VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt, quiet: VoiceLook.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding(.top, 6)
+                        .padding(.top, VoiceSplit.transcriptTop)
                     if let card = chat.firstCard {
                         if let split {
                             // Below the fold the card takes what the controls leave (the conversation gives up its
@@ -114,16 +122,26 @@ struct HandsFreeView: View {
                                 #endif
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         } else {
-                            // One column (#631): the card is held to what the top row, the bot's block and the controls
-                            // leave it, its choices standing under its words, which scroll from their start, as below a
-                            // fold; so on the closed Duo nothing runs off the screen and nothing is squeezed.
+                            // One column (#631): what the approval asks and its choices always stand whole, and the card
+                            // takes its whole height before the conversation gets any; when even that leaves too little,
+                            // the bot goes lean (`compact`). Its height is set once its parts are measured, not left to
+                            // the stack's priorities: on the closed Duo the stack shared the room out evenly, and the
+                            // card kept only its choices. Until then it is held to what is left, as before.
+                            let fit = VoiceSplit.oneColumnCard(room: room, row: rowH, bot: botH, controls: controlsH,
+                                                               heights: cardHeights, size: typeSize)
                             PendingCardView(chat: chat, card: card)
                                 .environment(\.approvalChoicesPinned, true)
                                 .environment(\.cardInVoiceMode, true)
+                                .environment(\.approvalInColumn, true)
+                                .environment(\.approvalWordsScroll, fit?.wordsScroll ?? false)
                                 .padding(.horizontal, 16)
-                                .frame(maxHeight: VoiceSplit.oneColumnCardMax(room: room, row: rowH, bot: botH, controls: controlsH, size: typeSize) ?? .infinity,
+                                .frame(height: fit?.height, alignment: .top)
+                                .frame(maxHeight: fit == nil ? (VoiceSplit.oneColumnCardMax(room: room, row: rowH, bot: botH, controls: controlsH, size: typeSize) ?? .infinity) : nil,
                                        alignment: .top)
                                 .layoutPriority(1)
+                                #if DEBUG
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeCard = $0 }
+                                #endif
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
@@ -134,6 +152,8 @@ struct HandsFreeView: View {
                         #endif
                 }
                 .frame(height: split?.bottom)
+                // The one column's card tells its parts' heights; none with no card (or the split's), so they go with it.
+                .onPreferenceChange(ApprovalCardHeightsKey.self) { cardHeights = $0 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { column = $0 }
             .background { FoldAcrossProbe(fold: $foldAcross).ignoresSafeArea() }
@@ -231,9 +251,11 @@ struct HandsFreeView: View {
     }
 
     private var bot: some View {
-        // The split's sizes above a fold, and in one column when a waiting card needs the room (#631).
+        // The split's sizes above a fold, and in one column when a waiting card needs the room (#631): lean then, its title
+        // and the line under it gone too (the card's heading says the same), the mic muted a badge on the face.
         let full = split == nil && !compact
-        return VStack(spacing: 18) {
+        let lean = split == nil && compact
+        return VStack(spacing: VoiceSplit.botLinesGap) {
             ZStack {
                 // A ring breathes while the person is heard, and while the bot speaks; with the
                 // motion engine the bot's own listening arcs take its place (1.5 #304).
@@ -247,37 +269,63 @@ struct HandsFreeView: View {
                 }
                 BotAvatar(profile: chat.profileName, size: full ? 164 : VoiceSplit.face, active: state.phase == .thinking || state.phase == .speaking, mood: mood)
             }
-            VStack(spacing: 6) {
-                Text(state.title).font(.title2.weight(.semibold)).contentTransition(.numericText())
-                // Muted while the bot speaks or thinks: said plainly, not only by the button (#234).
-                if state.isMuted, state.phase != .listening {
-                    Label("Mic muted", systemImage: "mic.slash.fill").font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(.white.opacity(0.18), in: .capsule)
-                        .transition(.opacity)
-                }
-                // Above the fold every line stops at two (`VoiceSplit.minTop`); VoiceOver still reads it whole.
-                // The quieter lines in voice mode's white at 0.85, a note or an error in orange on a dark backing of its
-                // own: they pass 4.5:1 over any bot colour (#631).
-                if state.phase == .thinking, let goal {
-                    Text(goal).font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(2).multilineTextAlignment(.center)
-                } else if state.phase == .needsApproval {
-                    Text("Allow or deny it here. The bot waits for your answer.").font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(split == nil ? nil : 2)
-                } else if state.phase == .paused {
-                    Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(VoiceLook.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
-                } else if let note = state.note {
-                    noteLine(note)
-                } else if let lastError {
-                    noteLine(lastError)
-                }
+            // Lean and muted: the mic muted as a badge at the face's corner, no height of its own (#631).
+            .overlay(alignment: .bottomTrailing) {
+                if lean, mutedShown { mutedBadge.transition(.opacity) }
             }
-            .padding(.horizontal, 24)
+            if !lean { stateLines }
             if state.phase == .listening, !state.isMuted {
                 HandsFreeWaveform(levels: session.levels, tint: tint)
                     .frame(height: 26).padding(.horizontal, 60)
                     .transition(.opacity)
             }
         }
+        // The state lines' height as they would stand, hidden or not (#631): what the lean bot's full block would take.
+        .background(alignment: .top) {
+            stateLines.fixedSize(horizontal: false, vertical: true).hidden().accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { linesH = $0 }
+        }
+    }
+
+    /// Muted while the bot speaks or thinks: said plainly, not only by the button (#234).
+    private var mutedLabel: some View {
+        Label(VoiceLook.micMuted, systemImage: "mic.slash.fill").font(.caption.weight(.semibold))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(.white.opacity(0.18), in: .capsule)
+            .transition(.opacity)
+    }
+
+    /// The lean bot's mic muted (#631): the capsule's symbol alone, on a dark disc at the face's corner; VoiceOver reads it
+    /// as the capsule's words.
+    private var mutedBadge: some View {
+        Image(systemName: "mic.slash.fill").font(.caption.weight(.bold)).foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(.black.opacity(0.7), in: .circle)
+            .accessibilityElement()
+            .accessibilityLabel(Text(VoiceLook.micMuted))
+    }
+
+    /// The bot's state: its title, the mic muted, and the line under them.
+    private var stateLines: some View {
+        VStack(spacing: 6) {
+            Text(state.title).font(.title2.weight(.semibold)).contentTransition(.numericText())
+            if mutedShown { mutedLabel }
+            // Above the fold every line stops at two (`VoiceSplit.minTop`); VoiceOver still reads it whole.
+            // The quieter lines in voice mode's white at 0.85, a note or an error in orange on a dark backing of its
+            // own: they pass 4.5:1 over any bot colour (#631).
+            if state.phase == .thinking, let goal {
+                Text(goal).font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(2).multilineTextAlignment(.center)
+            } else if state.phase == .needsApproval {
+                Text("Allow or deny it here. The bot waits for your answer.").font(.subheadline).foregroundStyle(VoiceLook.secondary).lineLimit(split == nil ? nil : 2)
+            } else if state.phase == .paused {
+                Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(VoiceLook.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
+            } else if let note = state.note {
+                noteLine(note)
+            } else if let lastError {
+                noteLine(lastError)
+            }
+        }
+        .padding(.horizontal, 24)
     }
 
     private func noteLine(_ text: String) -> some View {

@@ -34,6 +34,21 @@ extension EnvironmentValues {
     /// The card stands in voice mode (#631): its fill, its colours, wrapped choice names and a wrapped command, so it
     /// passes the audit over any bot colour and at any text size. False everywhere else, so the chat's card is unchanged.
     @Entry var cardInVoiceMode = false
+    /// Voice mode's one column (#631): the approval's choices and what it asks never scroll, and the card tells the screen
+    /// its parts' heights (`ApprovalCardHeightsKey`). False everywhere else, the split's card too.
+    @Entry var approvalInColumn = false
+    /// The one column's last resort: what's asked scrolls too, when even it and the choices don't fit.
+    @Entry var approvalWordsScroll = false
+}
+
+/// A waiting approval's parts as the card measures them in voice mode's one column (#631), for the screen to size it:
+/// the card's whole height first, the conversation giving way to it.
+struct ApprovalCardHeightsKey: PreferenceKey {
+    static let defaultValue = VoiceSplit.CardHeights()
+    static func reduce(value: inout VoiceSplit.CardHeights, nextValue: () -> VoiceSplit.CardHeights) {
+        let next = nextValue()
+        if next != defaultValue { value = next }
+    }
 }
 
 struct ApprovalCardView: View {
@@ -48,6 +63,15 @@ struct ApprovalCardView: View {
     /// taller than its room, so what's allowed is read first and the choices are at hand at rest.
     @Environment(\.approvalChoicesPinned) private var choicesPinned
     @Environment(\.cardInVoiceMode) private var voiceMode
+    /// Voice mode's one column (#631): what's asked (the heading, the description, the command, the tool, the guardian's
+    /// flag) and the choices never scroll, so the closed Duo shows them whatever the conversation and the bot take; what
+    /// each answer covers scrolls under them when the card is short. Each part's height goes up to voice mode
+    /// (`ApprovalCardHeightsKey`), which gives the card its whole height before the conversation gets any.
+    @Environment(\.approvalInColumn) private var inColumn
+    /// The one column's last resort, when even what's asked and the choices don't fit (the largest text sizes on a short
+    /// screen): the words scroll from their start over the choices, as below a fold.
+    @Environment(\.approvalWordsScroll) private var wordsScroll
+    @State private var heights = VoiceSplit.CardHeights()
 
     /// The card's quieter lines: `.secondary` in a chat, white at 0.8 on voice mode's dark fill (#631).
     private var quiet: AnyShapeStyle { voiceMode ? AnyShapeStyle(VoiceLook.cardSecondary) : AnyShapeStyle(.secondary) }
@@ -55,7 +79,24 @@ struct ApprovalCardView: View {
 
     var body: some View {
         Group {
-            if choicesPinned {
+            if choicesPinned, inColumn {
+                VStack(alignment: .leading, spacing: VoiceSplit.cardGap) {
+                    if wordsScroll {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: VoiceSplit.cardGap) { askedPart; coversPart }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .scrollBounceBehavior(.basedOnSize)
+                    } else {
+                        askedPart.fixedSize(horizontal: false, vertical: true)
+                        ScrollView { coversPart.frame(maxWidth: .infinity, alignment: .leading) }
+                            .scrollBounceBehavior(.basedOnSize)
+                            .frame(maxHeight: heights.covers)
+                    }
+                    choicesPart.fixedSize(horizontal: false, vertical: true)
+                }
+                .preference(key: ApprovalCardHeightsKey.self, value: heights)
+            } else if choicesPinned {
                 ViewThatFits(in: .vertical) {
                     VStack(alignment: .leading, spacing: 10) { details; choices }
                     VStack(alignment: .leading, spacing: 10) {
@@ -69,12 +110,32 @@ struct ApprovalCardView: View {
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(voiceMode ? "approval.card" : "")
     }
 
-    /// What's asked: the heading, the description, the command, the tool, the guardian's flag and what each answer covers.
+    /// The one column's parts (#631), each measured where it stands.
+    private var askedPart: some View {
+        VStack(alignment: .leading, spacing: VoiceSplit.cardGap) { asked }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.asked = $0 }
+    }
+    private var coversPart: some View {
+        covers.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.covers = $0 }
+    }
+    private var choicesPart: some View {
+        choices.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.choices = $0 }
+    }
+
+    /// The heading, the description, the command, the tool, the guardian's flag, and what each answer covers.
     /// The items alone, no stack of their own: in a chat the card stays the one flat stack it always was, so the dock's
     /// height squeezes the choices as before (their names scale down) rather than the words.
     @ViewBuilder private var details: some View {
+        asked
+        covers
+    }
+
+    /// What's asked: everything on the card but what each answer covers. In voice mode each part has an identifier, so the
+    /// rig can see the closed Duo shows them whole (#631).
+    @ViewBuilder private var asked: some View {
         if voiceMode {
             // The heading wraps rather than cuts, and "N waiting" goes under it when the line is short (#631).
             ViewThatFits(in: .horizontal) {
@@ -84,11 +145,14 @@ struct ApprovalCardView: View {
         } else {
             HStack { heading; Spacer(); waiting }
         }
-        if let d = approval.description, !d.isEmpty { Text(d).font(.subheadline) }
+        if let d = approval.description, !d.isEmpty {
+            Text(d).font(.subheadline).accessibilityIdentifier(voiceMode ? "approval.description" : "")
+        }
         if let cmd = approval.command, !cmd.isEmpty {
             if voiceMode {
                 // Wrapped in voice mode, so the whole command is on the card (scrolled sideways, its end was cut off).
                 Text(cmd).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                    .accessibilityIdentifier("approval.command")
                     .fixedSize(horizontal: false, vertical: true).padding(8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
@@ -99,16 +163,22 @@ struct ApprovalCardView: View {
                 .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 10))
             }
         }
-        if let t = approval.toolName { Text("Tool: \(t)").font(.caption).foregroundStyle(quiet) }
+        if let t = approval.toolName {
+            Text("Tool: \(t)").font(.caption).foregroundStyle(quiet).accessibilityIdentifier(voiceMode ? "approval.tool" : "")
+        }
         if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(warning) }
-        // What each answer covers, so "Always" is never a surprise: it is a rule on this
-        // bot's gateway profile, not the one command, and it lives on until revoked.
+    }
+
+    /// What each answer covers, so "Always" is never a surprise: it is a rule on this
+    /// bot's gateway profile, not the one command, and it lives on until revoked.
+    private var covers: some View {
         Text(scopeLine).font(.caption2).foregroundStyle(quiet).fixedSize(horizontal: false, vertical: voiceMode)
     }
 
     private var heading: some View {
         Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(warning)
             .fixedSize(horizontal: false, vertical: voiceMode)
+            .accessibilityIdentifier(voiceMode ? "approval.heading" : "")
     }
 
     @ViewBuilder private var waiting: some View {

@@ -499,12 +499,63 @@ enum VoiceSplit {
     static func cardFloor(for size: DynamicTypeSize) -> CGFloat { size.isAccessibilitySize ? 300 : 220 }
     /// What the bot's block gives up at the split's sizes: its ring (with the motion engine off) or its face.
     static func compactSaving(ring: Bool) -> CGFloat { ring ? 196 - VoiceSplit.ring : 164 - VoiceSplit.face }
-    /// One column with a card waiting (#631): the bot's block at the split's sizes when, at its full size, it would leave
-    /// the card less than its floor between the top row and the controls (the closed Duo's 382 pt column ran 23 pt past
-    /// the screen at both ends, which clipped the card's words and put the top row under the status bar). `botFull` is
-    /// the block at full size. The card is then held to what is left either way, so nothing runs off the screen.
-    static func compactOneColumn(room: CGFloat, row: CGFloat, botFull: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> Bool {
-        room > 0 && room - row - botFull - controls < cardFloor(for: size)
+    /// One column with a card waiting (#631): the bot's block lean (at the split's sizes, its state lines gone: the card's
+    /// heading says the same) when, at its full size, it would leave the card too little between the top row and the
+    /// controls (the closed Duo's 382 pt column ran 23 pt past the screen at both ends, which clipped the card's words and
+    /// put the top row under the status bar). `botFull` is the block at full size. `card` is the card's whole height once
+    /// it is measured (`cardWhole`): the conversation gives way to nothing first, and the bot goes lean only when the
+    /// whole card still doesn't fit. Until then the card's floor decides. The card is held to what is left either way, so
+    /// nothing runs off the screen.
+    static func compactOneColumn(room: CGFloat, row: CGFloat, botFull: CGFloat, controls: CGFloat, card: CGFloat = 0,
+                                 size: DynamicTypeSize) -> Bool {
+        guard room > 0 else { return false }
+        let left = room - row - botFull - controls
+        return card > 0 ? left - transcriptTop < card : left < cardFloor(for: size)
+    }
+
+    /// The conversation's padding over its first line in voice mode (`HandsFreeView`): all it keeps when it gives way.
+    static let transcriptTop: CGFloat = 6
+    /// The space between the bot's face and its state lines (`HandsFreeView`), which goes with them when the bot is lean.
+    static let botLinesGap: CGFloat = 18
+    /// What the bot's block gives up going lean (#631): the split's face or ring, and its state lines (as they stand at full
+    /// size, the mic muted's capsule among them while muted) with the space over them. Lean, the mic muted is a badge on
+    /// the face, with no height of its own, so the lean block is the same height muted or not.
+    static func leanSaving(ring: Bool, lines: CGFloat) -> CGFloat {
+        compactSaving(ring: ring) + botLinesGap + lines
+    }
+    /// The card's padding (`PendingCardView`) and the space between an approval's parts (`ApprovalCardView`).
+    static let cardPadding: CGFloat = 14
+    static let cardGap: CGFloat = 10
+
+    /// A waiting approval's parts in one column (#631), as `ApprovalCardView` measures them: what's asked (the heading,
+    /// the description, the command, the tool, the guardian's flag), what each answer covers, and the choices. 0 until
+    /// measured.
+    struct CardHeights: Equatable {
+        var asked: CGFloat = 0
+        var covers: CGFloat = 0
+        var choices: CGFloat = 0
+    }
+    /// What must show of the card: what's asked and the choices, with the card's padding and the spaces either side of
+    /// what each answer covers (scrolled down to nothing). 0 until measured.
+    static func cardNeed(_ h: CardHeights) -> CGFloat {
+        h.asked > 0 && h.choices > 0 ? h.asked + h.choices + 2 * cardGap + 2 * cardPadding : 0
+    }
+    /// The whole card, what each answer covers too. 0 until measured.
+    static func cardWhole(_ h: CardHeights) -> CGFloat {
+        let need = cardNeed(h)
+        return need > 0 ? need + h.covers : 0
+    }
+    /// The card's height in one column once it is measured (#631): the whole card when what the top row, the bot's
+    /// block and the controls leave holds it (the conversation gets the rest, if any), else what is left, never under
+    /// the card's floor; what each answer covers then scrolls. `wordsScroll` when even what's asked and the choices don't
+    /// fit: the card's last resort. nil until measured.
+    static func oneColumnCard(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, heights: CardHeights,
+                              size: DynamicTypeSize) -> (height: CGFloat, wordsScroll: Bool)? {
+        let whole = cardWhole(heights)
+        guard room > 0, whole > 0 else { return nil }
+        let left = room - row - bot - controls - transcriptTop
+        let height = min(whole, max(left, cardFloor(for: size)))
+        return (height, height < cardNeed(heights))
     }
     /// The card's height in one column: what the top row, the bot's block and the controls leave, never under its floor.
     static func oneColumnCardMax(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> CGFloat? {
@@ -519,6 +570,9 @@ enum VoiceSplit {
 /// composited as the screen draws it (a colour at an opacity over what is under it), so the unit tests check the very
 /// colours drawn. Light bot colours get a darker top; dark ones keep 1.5's.
 enum VoiceLook {
+    /// The mic muted, in words (#234): the capsule under the bot's title, and VoiceOver's label for the lean bot's badge
+    /// (#631).
+    static let micMuted = "Mic muted"
     struct RGB: Equatable {
         var r: Double, g: Double, b: Double
         static let white = RGB(r: 1, g: 1, b: 1), black = RGB(r: 0, g: 0, b: 0)

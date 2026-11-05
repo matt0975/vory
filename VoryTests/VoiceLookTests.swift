@@ -78,6 +78,47 @@ import VoryCore
         #expect(VoiceSplit.cardFloor(for: .accessibility1) > VoiceSplit.cardFloor(for: .xxxLarge))
     }
 
+    /// On the closed Duo the stack shared the room out evenly and the card kept only its choices. Once measured, the card
+    /// takes its whole height when that fits, the conversation giving way first, and the bot goes lean when it doesn't;
+    /// what's asked and the choices always stand whole there. Measured at Large on the closed Duo, near enough: what's
+    /// asked 148, what each answer covers 40, the choices 100 (a 2x2 grid).
+    @Test func theClosedDuosCardStandsWhole() {
+        let parts = VoiceSplit.CardHeights(asked: 148, covers: 40, choices: 100)
+        #expect(VoiceSplit.cardNeed(parts) == 296)
+        #expect(VoiceSplit.cardWhole(parts) == 336)
+        #expect(VoiceSplit.cardNeed(VoiceSplit.CardHeights()) == 0, "nothing until measured")
+        #expect(VoiceSplit.cardWhole(VoiceSplit.CardHeights(asked: 148, covers: 40, choices: 0)) == 0)
+        let row: CGFloat = 48, botFull: CGFloat = 264.3, lean: CGFloat = 12 + VoiceSplit.face, controls: CGFloat = 125.7
+        // The full bot leaves 200 under the whole card's 336: lean. Lean, 312.3 is left, more than what must show (296).
+        #expect(VoiceSplit.compactOneColumn(room: 644, row: row, botFull: botFull, controls: controls, card: 336, size: .large))
+        let fit = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: parts, size: .large)
+        #expect(fit?.height == 644 - row - lean - controls - VoiceSplit.transcriptTop)
+        #expect(fit?.wordsScroll == false)
+        // The open Duo upright: the whole card under the full bot, the conversation keeping the rest.
+        let wide = VoiceSplit.CardHeights(asked: 114, covers: 28, choices: 55)
+        #expect(!VoiceSplit.compactOneColumn(room: 835, row: row, botFull: botFull, controls: 127.3, card: VoiceSplit.cardWhole(wide), size: .large))
+        #expect(VoiceSplit.oneColumnCard(room: 835, row: row, bot: botFull, controls: 127.3, heights: wide, size: .large)?.height
+                == VoiceSplit.cardWhole(wide))
+        // The last resort: what's asked and the choices taller than what is left. The words scroll, and the card is never
+        // under its floor.
+        let tall = VoiceSplit.CardHeights(asked: 260, covers: 60, choices: 180)
+        let last = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: tall, size: .accessibility2)
+        #expect(last?.wordsScroll == true)
+        #expect(last.map { $0.height >= VoiceSplit.cardFloor(for: .accessibility2) } == true)
+        #expect(VoiceSplit.oneColumnCard(room: 0, row: row, bot: lean, controls: controls, heights: parts, size: .large) == nil)
+        // Lean, the bot gives up the split's face (24, or the ring's 28) and its state lines with the space over them. Muted,
+        // its full lines hold the capsule too (26 and the 6 over it), and lean says it by a badge on the face with no height
+        // of its own: the lean block is the face alone either way, so the closed Duo keeps its 312.3 muted or not.
+        #expect(VoiceSplit.leanSaving(ring: false, lines: 74) == 24 + 18 + 74)
+        #expect(VoiceSplit.leanSaving(ring: true, lines: 74) == 28 + 18 + 74)
+        let fullFace: CGFloat = 12 + 164 + 18, unmutedLines: CGFloat = 74, mutedLines: CGFloat = 74 + 6 + 26
+        let leanUnmuted = fullFace + unmutedLines - VoiceSplit.leanSaving(ring: false, lines: unmutedLines)
+        let leanMuted = fullFace + mutedLines - VoiceSplit.leanSaving(ring: false, lines: mutedLines)
+        #expect(leanMuted == leanUnmuted)
+        #expect(leanMuted == lean)
+        #expect(VoiceLook.micMuted == "Mic muted", "the lean bot's badge reads as the capsule's words")
+    }
+
     @Test func theCompactBlockSavesItsRingOrItsFace() {
         #expect(VoiceSplit.compactSaving(ring: true) == 196 - VoiceSplit.ring)
         #expect(VoiceSplit.compactSaving(ring: false) == 164 - VoiceSplit.face)
