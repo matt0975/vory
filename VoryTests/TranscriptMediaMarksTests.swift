@@ -24,6 +24,21 @@ import VoryCore
         #expect(!TranscriptMedia.marks(in: "a / b and c ~ d").mediaOrPath)
     }
 
+    @Test func aPathInInlineCodeEnablesTheScan() {
+        let note = "Done.\n\n`/home/hermes/out/a.wav`\n\nThat is all."
+        #expect(TranscriptMedia.marks(in: note).mediaOrPath)
+        #expect(TranscriptMedia.files(in: note).map(\.name) == ["a.wav"])
+        #expect(TranscriptMedia.files(in: "Done.\n\n`a.wav` and more words here\n").isEmpty)
+    }
+
+    /// A path in a sentence (#638) reaches the scan once the reply is done.
+    @Test func aPathInASentenceReachesTheScan() {
+        #expect(TranscriptMedia.files(in: "See /home/hermes/out/plan.md for the steps.").map(\.name) == ["plan.md"])
+        #expect(TranscriptMedia.files(in: "Saved to `/home/hermes/out/summary.pdf`.").map(\.name) == ["summary.pdf"])
+        #expect(TranscriptMedia.images(in: "The chart is (/home/hermes/out/chart.png).").map(\.name) == ["chart.png"])
+        #expect(TranscriptMedia.files(in: "This and/or that, a / b, and c ~ d.").isEmpty)
+    }
+
     @Test func imagesAndLinks() {
         let both = TranscriptMedia.marks(in: "Here: ![chart](/tmp/chart.png)")
         #expect(both.image && both.link)
