@@ -12,13 +12,15 @@ struct DemoReadOnlyNote: View {
     var body: some View {
         if model.isInDemo {
             Section {
-                // One Text, the symbol inline in it: a single run that wraps and scales with the text size, its height its
-                // text's, with no line limit, stack or combined element (a Label's text was clipped at the larger sizes).
-                // VoiceOver reads the words; the symbol is decoration.
-                Text("\(Text(Image(systemName: "info.circle")).foregroundStyle(.tint)) \(Self.words)")
-                    .font(.subheadline)
-                    .accessibilityLabel(Text(Self.words))
-                    .accessibilityIdentifier("demo.readonly")
+                // The symbol beside the words, hidden from accessibility (it is decoration), and the words a plain Text of
+                // their own: the element VoiceOver and the audit read is that Text, its label its own words, with no
+                // symbol, stack or label of ours in it (with either, the audit read the line's Dynamic Type as partly
+                // unsupported at every size, while it grew). Both scale with the text size; the words wrap, no line limit.
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "info.circle").foregroundStyle(.tint).accessibilityHidden(true)
+                    Text(Self.words).accessibilityIdentifier("demo.readonly")
+                }
+                .font(.subheadline)
             }
         }
     }
@@ -176,14 +178,18 @@ struct ConfigFormView: View {
             case "boolean":
                 Toggle(key, isOn: Binding(get: { current?.boolValue ?? false }, set: { v in Task { await write(key, .bool(v)) } }))
                     .disabled(model.isInDemo)
+            // In the demo a choice, a number or a string is a value to read, in the stock read-only row (as the model
+            // page's Current), not a disabled picker or field: disabled, their values drew dimmed without telling
+            // VoiceOver they aren't enabled (the audit's missing NotEnabled trait). The toggle stays a disabled control.
             case "select":
-                Picker(key, selection: Binding(get: { current?.displayText ?? "" }, set: { v in Task { await write(key, .string(v)) } })) {
-                    ForEach(field.options ?? [], id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
+                if model.isInDemo {
+                    let v = current?.displayText ?? ""
+                    LabeledContent(key, value: v.isEmpty ? "(none)" : v)
+                } else {
+                    Picker(key, selection: Binding(get: { current?.displayText ?? "" }, set: { v in Task { await write(key, .string(v)) } })) {
+                        ForEach(field.options ?? [], id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
+                    }
                 }
-                .disabled(model.isInDemo)
-            // In the demo a number or a string is a value to read, in the stock read-only row (as the model page's
-            // Current), not a disabled field: disabled, its value drew dimmed without telling VoiceOver it isn't
-            // enabled (the audit's missing NotEnabled trait). The toggle and the picker are controls, disabled.
             case "number":
                 if model.isInDemo { LabeledContent(key, value: NumberField.shown(current?.doubleValue ?? 0)) } else {
                     LabeledContent(key) {
@@ -537,18 +543,21 @@ struct ApprovalsView: View {
     @State private var error: String?
     @State private var loaded = false
     private var rt: GatewayRuntime? { model.runtime }
+    /// The picker's titles by the gateway's mode, for the demo's read-only row.
+    static let modeTitles = ["smart": "Smart", "manual": "Manual", "off": "Off"]
 
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Approvals", symbol: "checkmark.shield", color: .green, description: "How commands get approved — manual, smart or off — and what is always allowed.")
             DemoReadOnlyNote()
             Section {
-                Picker("Mode", selection: $mode) {
-                    Text("Smart").tag("smart"); Text("Manual").tag("manual"); Text("Off").tag("off")
+                // In the demo the mode and the timeout are values to read, as the config page's.
+                if model.isInDemo { LabeledContent("Mode", value: Self.modeTitles[mode] ?? mode) } else {
+                    Picker("Mode", selection: $mode) {
+                        Text("Smart").tag("smart"); Text("Manual").tag("manual"); Text("Off").tag("off")
+                    }
+                    .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
                 }
-                .disabled(model.isInDemo)
-                .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
-                // In the demo the timeout is a value to read, as the config page's numbers.
                 if model.isInDemo { LabeledContent("Timeout (seconds)", value: NumberField.shown(timeout)) } else {
                     LabeledContent("Timeout (seconds)") {
                         NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
