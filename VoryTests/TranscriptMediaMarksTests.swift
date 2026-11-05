@@ -39,6 +39,17 @@ import VoryCore
         #expect(TranscriptMedia.files(in: "This and/or that, a / b, and c ~ d.").isEmpty)
     }
 
+    /// While the reply streams, a path in a sentence waits (the scan on every token is what held the main thread);
+    /// the forms found before #638 still show as they come.
+    @Test func aStreamingReplyWaitsForItsSentencePaths() {
+        let text = "See /home/hermes/out/plan.md for the steps.\n\nMEDIA:/home/hermes/out/report.pdf\n`/home/hermes/out/call.m4a`"
+        #expect(TranscriptMedia.files(in: text, streaming: true).map(\.name) == ["report.pdf", "call.m4a"])
+        #expect(TranscriptMedia.files(in: text, streaming: false).map(\.name) == ["report.pdf", "call.m4a", "plan.md"])
+        #expect(TranscriptMedia.images(in: "The chart is (/home/hermes/out/chart.png).", streaming: true).isEmpty)
+        #expect(TranscriptMedia.marks(in: "See /home/hermes/out/plan.md.").prosePath)
+        #expect(!TranscriptMedia.marks(in: "This and/or that, a / b, and c ~ d.").prosePath)
+    }
+
     @Test func imagesAndLinks() {
         let both = TranscriptMedia.marks(in: "Here: ![chart](/tmp/chart.png)")
         #expect(both.image && both.link)

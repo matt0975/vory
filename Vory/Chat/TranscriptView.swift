@@ -1775,10 +1775,11 @@ struct TranscriptRow: View, Equatable {
                     if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
-                    let media = TranscriptMedia.images(in: text)
-                    // Other files the bot hands back are cards under the words (#309).
-                    let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
+                    let media = TranscriptMedia.images(in: text, streaming: streaming)
+                    // Other files the bot hands back are cards under the words (#309); one named in a sentence once
+                    // the reply is done (#638).
+                    let files = TranscriptMedia.files(in: text, streaming: streaming)
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : TranscriptMedia.words(in: text, streaming: streaming), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {

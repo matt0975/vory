@@ -7,42 +7,121 @@ import VoryCore
 /// What a row scans for pictures, with a cheap look first: most rows have none, and the rows
 /// are evaluated often (a streaming reply's on every token).
 enum TranscriptMedia {
-    static func images(in text: String) -> [MediaRef] {
-        let m = marks(in: text)
-        guard m.mediaOrPath || m.image else { return [] }
-        return MediaScan.images(in: text)
+    /// Pictures a row names. While its reply streams, the forms the scans had before #638 only: a path in a sentence
+    /// opens the scan on nearly every technical reply, and the scan on every token is what held the main thread on a
+    /// long one (#371, #421). Those are looked for once the reply is done.
+    static func images(in text: String, streaming: Bool = false) -> [MediaRef] {
+        streaming ? scanImages(text, streaming: true) : done(text).images
     }
-    /// Files that are not pictures (#309), with the same cheap look first.
-    static func files(in text: String) -> [MediaRef] {
+    /// Files that are not pictures (#309), with the same cheap look first and the same wait for prose paths.
+    static func files(in text: String, streaming: Bool = false) -> [MediaRef] {
+        streaming ? scanFiles(text, streaming: true) : done(text).files
+    }
+    /// The words a row shows when it has pictures or files: the reply without its media lines.
+    static func words(in text: String, streaming: Bool = false) -> String {
+        streaming ? MediaScan.textWithoutMedia(text) : done(text).words
+    }
+
+    static func scanImages(_ text: String, streaming: Bool) -> [MediaRef] {
         let m = marks(in: text)
-        guard m.mediaOrPath || m.link else { return [] }
-        return MediaScan.files(in: text)
+        let prose = !streaming && m.prosePath
+        guard m.mediaOrPath || m.image || prose else { return [] }
+        return MediaScan.images(in: text, prose: prose)
+    }
+    static func scanFiles(_ text: String, streaming: Bool) -> [MediaRef] {
+        let m = marks(in: text)
+        let prose = !streaming && m.prosePath
+        guard m.mediaOrPath || m.link || prose else { return [] }
+        return MediaScan.files(in: text, prose: prose)
+    }
+    /// A finished reply's pictures and files together, gated as `scanImages` and `scanFiles` gate them, with one look
+    /// at the bytes and one through the sentences for both: the sentence scan is the larger part of a first draw.
+    static func scanBoth(_ text: String) -> (images: [MediaRef], files: [MediaRef]) {
+        let m = marks(in: text)
+        let paths = m.prosePath ? MediaScan.prosePaths(in: text) : []
+        let images = m.mediaOrPath || m.image || m.prosePath ? MediaScan.images(in: text, prosePaths: paths) : []
+        let files = m.mediaOrPath || m.link || m.prosePath ? MediaScan.files(in: text, prosePaths: paths) : []
+        return (images, files)
+    }
+
+    /// A finished reply's scans, kept by its text (#638): a done row's body runs often, and with a path in a sentence
+    /// it now scans in full and takes the media out of its words. A streaming row never comes here (its text changes
+    /// with every token). Bounded by the texts' size; the system may empty it under memory pressure.
+    /// Made once and never changed, so any thread may read it.
+    final class DoneScan: Sendable {
+        let images: [MediaRef], files: [MediaRef]
+        private let text: String
+        private let shown: String?
+        init(_ text: String) {
+            self.text = text
+            let both = TranscriptMedia.scanBoth(text)
+            images = both.images
+            files = both.files
+            // A row asks for its words only when it has pictures or files, in the same pass: worked out with them.
+            shown = images.isEmpty && files.isEmpty ? nil : MediaScan.textWithoutMedia(text)
+        }
+        /// The words with the media taken out: kept when the reply has pictures or files; otherwise (no row asks)
+        /// taken out afresh.
+        var words: String { shown ?? MediaScan.textWithoutMedia(text) }
+    }
+
+    /// NSCache is safe to use from any thread, and what it holds is immutable.
+    nonisolated(unsafe) static let doneScans: NSCache<NSString, DoneScan> = {
+        let cache = NSCache<NSString, DoneScan>()
+        cache.totalCostLimit = 4 << 20
+        return cache
+    }()
+
+    static func done(_ text: String) -> DoneScan {
+        let key = text as NSString
+        if let known = doneScans.object(forKey: key) { return known }
+        let scan = DoneScan(text)
+        // Twice the text's bytes: the words kept beside it can be as long.
+        doneScans.setObject(scan, forKey: key, cost: 2 * text.utf8.count)
+        return scan
     }
 
     /// The cheap look: one pass over the text's bytes for what the scans start from ("MEDIA:", a
-    /// path at the start of a line, "![" for a picture, "](" for a link). It was eight
-    /// `String.contains` per scan, each walking the whole reply as Characters: sixteen walks on
-    /// every streamed token, the main thread's busiest app code on a long reply.
-    static func marks(in text: String) -> (mediaOrPath: Bool, image: Bool, link: Bool) {
+    /// path at the start of a line, in inline code or not, "![" for a picture, "](" for a link, and a
+    /// path inside a sentence: `/` or `~/` after a space, a bracket, a quote, a backtick or an emphasis
+    /// mark, then a character a path's name starts with). It was eight `String.contains` per scan,
+    /// each walking the whole reply as Characters: sixteen walks on every streamed token, the main
+    /// thread's busiest app code on a long reply.
+    static func marks(in text: String) -> (mediaOrPath: Bool, image: Bool, link: Bool, prosePath: Bool) {
         var text = text
         return text.withUTF8 { b in
             let n = b.count
             let slash: UInt8 = 0x2F, tilde: UInt8 = 0x7E
-            var path = n > 0 && (b[0] == slash || (n > 1 && b[0] == tilde && b[1] == slash))
-            var image = false, link = false
+            /// The byte after a line's leading backticks, spaces and tabs: a path in inline code starts there.
+            func startsPath(_ j: Int) -> Bool {
+                var k = j
+                while k < n, b[k] == 0x60 || b[k] == 0x20 || b[k] == 0x09 { k += 1 }
+                return k < n && (b[k] == slash || (b[k] == tilde && k + 1 < n && b[k + 1] == slash))
+            }
+            /// A path's name starts with a letter, a digit, a dot, a dash or an underscore.
+            func nameByte(_ j: Int) -> Bool {
+                guard j < n else { return false }
+                let x = b[j]
+                return (x >= 0x30 && x <= 0x39) || (x >= 0x41 && x <= 0x5A) || (x >= 0x61 && x <= 0x7A) || x == 0x2E || x == 0x2D || x == 0x5F || x >= 0x80
+            }
+            var path = startsPath(0)
+            var image = false, link = false, prose = false
             var i = 0
-            while i + 1 < n, !(path && image && link) {
+            while i + 1 < n, !(path && image && link && prose) {
                 let c = b[i], d = b[i + 1]
                 switch c {
                 case 0x21 where d == 0x5B: image = true                                    // ![
                 case 0x5D where d == 0x28: link = true                                     // ](
-                case 0x0A where d == slash || (d == tilde && i + 2 < n && b[i + 2] == slash): path = true   // \n/ \n~/
+                case 0x0A where startsPath(i + 1): path = true                             // \n/ \n~/ \n`/
                 case 0x4D where i + 5 < n && d == 0x45 && b[i + 2] == 0x44 && b[i + 3] == 0x49 && b[i + 4] == 0x41 && b[i + 5] == 0x3A: path = true  // MEDIA:
+                // " /x", "(/x", "`/x", "\"/x", "'/x", "*/x", "_/x", and the same with "~/".
+                case 0x20, 0x09, 0x28, 0x60, 0x22, 0x27, 0x2A, 0x5F:
+                    if (d == slash && nameByte(i + 2)) || (d == tilde && i + 2 < n && b[i + 2] == slash) { prose = true }
                 default: break
                 }
                 i += 1
             }
-            return (path, image, link)
+            return (path, image, link, prose)
         }
     }
     static func attachedImages(in text: String, profile: String?) -> [MediaRef] {
