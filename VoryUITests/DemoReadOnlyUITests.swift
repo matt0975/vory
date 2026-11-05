@@ -76,13 +76,34 @@ final class DemoReadOnlyUITests: XCTestCase {
         print("DEMO-RO frames \(why): nav \(navs.map { "\($0.identifier) \(f($0.frame))" }.joined(separator: ", ")); morph.bar \(morph.exists ? f(morph.frame) : "none"); header bottom \(String(format: "%.1f", headerBottom))")
         print("DEMO-RO frames \(why): rows \(rows.map { "\($0.identifier.dropFirst(13)) \(f($0.frame))" }.joined(separator: "; "))")
     }
+    /// The app's window at the app's full size and unchanged for 0.5 s, waited for up to 10 s: a launch zooms the window
+    /// in from small, and a drag made during the zoom lands somewhere else on the list. Printed if it never settles.
+    private func waitForFullWindow() {
+        let full = app.frame, end = Date().addingTimeInterval(10)
+        var last = CGRect.null, since = Date()
+        while Date() < end {
+            let now = app.windows.firstMatch.frame
+            if now != last { last = now; since = Date() }
+            else if abs(now.width - full.width) < 1, abs(now.height - full.height) < 1, Date().timeIntervalSince(since) >= 0.5 { return }
+            pause(0.1)
+        }
+        print("DEMO-RO window: not full and still in 10 s (window \(f(last)), app \(f(full)))")
+    }
     /// A Settings row, tapped once it sits wholly below the header and above the bottom 150 pt; its frame and the
-    /// header's printed first. A first row the list can't bring below the header is reported, with a still.
-    private func openSettingsRow(_ id: String) {
+    /// header's printed first. A first row the list can't bring below the header is reported, with a still. The window
+    /// is let settle first; a row a drag carried past the top (where the list drops it from the tree) is looked for
+    /// again from the top, once.
+    private func openSettingsRow(_ id: String, firstWait: TimeInterval = 30) {
         let row = any("settings.row.\(id)")
-        XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: 30), "no Settings rows")
+        XCTAssertTrue(any("settings.row.profile").waitForExistence(timeout: firstWait), "no Settings rows")
+        waitForFullWindow()
         let limit = app.windows.firstMatch.frame.maxY - 150
-        for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { drag(up: true); pause(0.5) }
+        for attempt in 1...2 {
+            for _ in 0..<12 where !(row.exists && row.isHittable && row.frame.maxY < limit) { drag(up: true); pause(0.5) }
+            if row.exists || attempt == 2 { break }
+            print("DEMO-RO open \(id): not found going down, back to the top for a second look")
+            for _ in 0..<14 where !(any("settings.row.profile").exists && any("settings.row.profile").isHittable) { drag(up: false); pause(0.3) }
+        }
         var lastTop: CGFloat = .nan
         for _ in 0..<8 where row.exists && row.frame.minY <= headerBottom + 4 {
             if row.frame.minY == lastTop { break }   // the list moves no further down: the row is at its top
@@ -107,6 +128,9 @@ final class DemoReadOnlyUITests: XCTestCase {
     /// An audited element's enabled state, for the allowance file's join (read-392.py): unknown when the audit names no
     /// element, gone when it has left the tree.
     private func state(_ el: XCUIElement?) -> String { el.map { $0.exists ? ($0.isEnabled ? "true" : "false") : "gone" } ?? "unknown" }
+    /// Whether an audited element is on the page in front, for read-392.py's scope: false for one the audit reached behind
+    /// it (another tab's rows, the empty detail column), none when the audit names no element, gone when it has left.
+    private func hittable(_ el: XCUIElement?) -> String { el.map { $0.exists ? ($0.isHittable ? "true" : "false") : "gone" } ?? "none" }
     /// A changer by label, offered: there, hittable and enabled.
     private func offered(_ label: String) -> Bool {
         let b = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
@@ -254,7 +278,7 @@ final class DemoReadOnlyUITests: XCTestCase {
         var n = 0
         try app.performAccessibilityAudit { issue in
             let el = issue.element
-            print("DEMO-RO-AUDIT soul '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none")")
+            print("DEMO-RO-AUDIT soul '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none") hittable \(self.hittable(el))")
             n += 1
             return true
         }
@@ -303,7 +327,8 @@ final class DemoReadOnlyUITests: XCTestCase {
     /// Each page in the demo, audited at every place from its top to its end (the read-only judging's drag loop), every
     /// finding printed with its place for the compare with the build before; a still of each page's top. A line above a
     /// page moves what is on screen, so the base and the fix, audited at one place, audited different elements: at every
-    /// place both audit the whole page, and read-392.py keys the union.
+    /// place both audit the whole page, and read-392.py keys the union. Each line says whether its element is hittable: the
+    /// audit also reaches elements behind the page (another tab's rows), which read-392.py lists but doesn't judge.
     func testTheDemosPagesAudit() throws {
         continueAfterFailure = true
         launchDemo()
@@ -316,7 +341,7 @@ final class DemoReadOnlyUITests: XCTestCase {
                 let at = place
                 try app.performAccessibilityAudit { issue in
                     let el = issue.element
-                    print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none") place \(at)")
+                    print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none") place \(at) hittable \(self.hittable(el))")
                     n += 1
                     return true
                 }
@@ -344,11 +369,22 @@ final class DemoReadOnlyUITests: XCTestCase {
         let prefix = String(Self.words.prefix(24))
         for size in Self.sweepSizes {
             launchDemo(extra: ["-UIPreferredContentSizeCategoryName", size.category])
-            openSettingsRow("config")
+            // The accessibility sizes draw Settings slower: its first row waited for up to 60 s.
+            openSettingsRow("config", firstWait: 60)
             let note = any("demo.readonly")
-            guard note.waitForExistence(timeout: 20) else {
-                XCTFail("config at \(size.name): no read-only line"); print("DEMO-RO sweep \(size.name): line MISSING"); app.terminate(); continue
+            // At the largest sizes Config's header can fill the screen, and the list keeps only the rows on screen in its
+            // tree: the line is looked for down the page, a drag at a time, at most 6, before it counts as missing. A
+            // still of each size, and whether Config's header is on screen, tell an open page without its line from a
+            // page that never opened.
+            var looks = 0
+            while !note.waitForExistence(timeout: looks == 0 ? 20 : 2), looks < 6 { drag(up: true); pause(0.5); looks += 1 }
+            shot("392-\(device)-sweep-\(size.name)")
+            guard note.exists else {
+                let title = app.staticTexts.matching(NSPredicate(format: "label == 'Config'")).firstMatch
+                print("DEMO-RO sweep \(size.name): line MISSING after \(looks) drags; Config's title \(title.exists ? f(title.frame) : "not there")")
+                XCTFail("config at \(size.name): no read-only line"); app.terminate(); continue
             }
+            if looks > 0 { print("DEMO-RO sweep \(size.name): the line found after \(looks) drags down the page") }
             let bottom = voryTabBar?.minY ?? app.windows.firstMatch.frame.maxY
             for _ in 0..<12 where !(note.frame.minY > headerBottom && note.frame.maxY < bottom) {
                 nudge(up: note.frame.maxY >= bottom); pause(0.5)
