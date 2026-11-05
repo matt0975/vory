@@ -542,10 +542,6 @@ enum VoiceSplit {
         guard size >= .xxxLarge, need > 0 else { return .lean }
         return room - row - lean - controls - transcriptTop < need ? .hidden : .lean
     }
-    /// Round 3's title switch (#631): while a card waits on a short screen with the bot hidden, the top row's title texts
-    /// hide too and the chevron stays (the row then the chevron's 44 and the 4 over it). Off until the measurements say;
-    /// out of the code if it stays off.
-    static let titleHidesWithCard = false
     /// The card's padding (`PendingCardView`) and the space between an approval's parts (`ApprovalCardView`).
     static let cardPadding: CGFloat = 14
     static let cardGap: CGFloat = 10
