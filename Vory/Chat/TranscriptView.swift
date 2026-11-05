@@ -2714,10 +2714,9 @@ struct MarkdownTableView: View {
         MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
     }
 
-    /// The same table with its columns held at their longest-word floors, every line of every cell
-    /// drawn: what a reader who would rather not drag asks for.
+    /// The table wrapped to fit the bubble, holding columns at their readable floor, capped at 3 lines like the chat view.
     private var wrappedGrid: some View {
-        MarkdownTableGrid(table: shownTable, lineLimit: nil, wraps: true,
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, wraps: true,
                           maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
     }
 
@@ -2731,12 +2730,13 @@ struct MarkdownTableView: View {
             .mask { fade.animation(.easeOut(duration: 0.15), value: more) }
     }
 
-    /// Full screen, beside the wrap switch and built as it is: a caption glyph in a 44 pt square.
     private var openTableButton: some View {
         Button { full = true } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .font(.caption)
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
@@ -2745,25 +2745,32 @@ struct MarkdownTableView: View {
         .help("Open Table")
     }
 
-    /// The card's header, built as a code block's: the title where a code block names its language,
-    /// in the same type, and the wrap switch and full screen at the trailing end. Above the grid
-    /// rather than over its cells, so a narrow last column keeps its header's room.
+    /// The card's top header strip: an anchored title on the leading edge and compact 28 pt action
+    /// discs on the trailing edge (wrap toggle and full-screen sheet).
     private var controls: some View {
-        HStack {
-            Text("Table").font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Image(systemName: "tablecells")
+                    .font(.caption2)
+                Text("Table")
+                    .font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, 12)
+
             Spacer(minLength: 0)
-            TableWrapToggle().padding(.trailing, 2)
+
+            TableWrapToggle()
             openTableButton
         }
-        .padding(.horizontal, 10).padding(.top, 2)
     }
 
     private var card: some View {
         // The grid alone when its columns fit (it then stretches to the bubble's width), else
         // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
         // keeps a narrow table free of a scroll view that would catch the thread's drags. Wrapped,
-        // the first candidate is the word-floor grid: when the words cannot fit, it reports more
-        // than the bubble and this falls through to the scroll that keeps a wide table readable.
+        // the first candidate is the wrapped grid: when the columns cannot fit at their readable
+        // minimum, it reports more than the bubble and falls through to the sideways scroll.
         VStack(spacing: 0) {
             controls
             Group {
