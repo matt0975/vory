@@ -46,26 +46,34 @@ final class FileCardsUITests: XCTestCase {
     }
 
     /// The card scrolled until it sits clear of the composer and the top bar, then tapped where it is: a card under the
-    /// composer's dock takes no tap, the composer does. Short drags from the card's own column, up or down by where it
-    /// lies, at most eight.
+    /// composer's dock takes no tap, the composer does. The band is the transcript between the top bar and the composer
+    /// (the keyboard may stay up, and the composer with it). Each drag starts inside the band, in the card's own column,
+    /// and moves the card's middle toward the band's, at most the band's height less 16, so it never starts on the
+    /// composer or the top bar; at most eight.
     private func bringIntoView(_ card: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let window = app.windows.firstMatch
         let composer = app.textViews["composer.text"].firstMatch
+        var band = ""
         for _ in 0..<8 {
             let w = window.frame, f = card.frame
-            let bottom = composer.exists ? composer.frame.minY - 24 : w.maxY - 120
-            if card.exists && card.isHittable && f.minY >= w.minY + 120 && f.maxY <= bottom { return }
-            let from = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX - w.minX, dy: w.height / 2))
-            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: f.maxY > bottom ? -w.height / 4 : w.height / 4)))
+            let top = w.minY + 120, bottom = composer.exists ? composer.frame.minY - 24 : w.maxY - 120
+            band = "band \(top)...\(bottom), window \(w)"
+            if card.exists && card.isHittable && f.minY >= top && f.maxY <= bottom { return }
+            let room = bottom - top - 16
+            guard room > 0 else { break }
+            let step = max(-room, min(room, (top + bottom) / 2 - f.midY))
+            let from = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX - w.minX, dy: (step > 0 ? top + 8 : bottom - 8) - w.minY))
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: step)))
             RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         }
-        XCTFail("the card never came clear of the composer: \(card.label) at \(card.frame)", file: file, line: line)
+        XCTFail("the card never came clear of the composer: \(card.label) at \(card.frame), \(band)", file: file, line: line)
     }
 
-    /// The preview's own close control, if one is up and hittable: the X on iOS 27 ("Close"), or Done on an older system,
+    /// The preview's own close control, if one is up and hittable: Quick Look's X on iOS 27 (identifier
+    /// QLOverlayDoneButtonAccessibilityIdentifier, label "close", on 27.1 and 27.2 alike), or Done on an older system,
     /// read in a navigation bar only (the keyboard's toolbar has a Done too).
     private func closeControl() -> XCUIElement? {
-        let close = app.buttons.matching(NSPredicate(format: "label == 'Close' OR identifier == 'Close' OR identifier == 'QLOverlayDoneButton'"))
+        let close = app.buttons.matching(NSPredicate(format: "label ==[c] 'close' OR identifier BEGINSWITH 'QLOverlayDoneButton'"))
         let done = app.navigationBars.buttons.matching(NSPredicate(format: "label == 'Done' OR identifier == 'Done'"))
         return (close.allElementsBoundByIndex + done.allElementsBoundByIndex).first { $0.exists && $0.isHittable }
     }
