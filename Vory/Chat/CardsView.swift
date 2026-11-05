@@ -264,6 +264,9 @@ struct ApprovalCardView: View {
                 .environment(\.voiceChoiceArrangement, arrangement)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { choicesW = $0 }
                 .background(alignment: .topLeading) { choiceMeasures }
+                #if DEBUG
+                .modifier(VoiceChoiceProbe.CardRead(line: probeCardLine))
+                #endif
         } else {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { choiceButtons }
@@ -311,6 +314,13 @@ struct ApprovalCardView: View {
         .fixedSize()
         .hidden().accessibilityHidden(true)
     }
+    #if DEBUG
+    /// The arrangement and its measures, for the rig (#631, round 3g; DEBUG `-vory-voice-frames` only).
+    private var probeCardLine: String {
+        String(format: "columns %d oneline %@ minscale %.2f width %.1f widest %.1f word %.1f insets %.1f", arrangement.columns,
+               arrangement.oneLine ? "yes" : "no", arrangement.minScale, choicesW, widestName, longestWord, capsuleW - capsuleSampleW)
+    }
+    #endif
 
     @ViewBuilder private func choiceButtons(_ choices: [String]) -> some View {
         ForEach(choices, id: \.self) { choice in
@@ -360,8 +370,14 @@ struct ApprovalChoiceButton: View {
                 .lineLimit(arrangement?.oneLine == true ? 1 : nil)
                 .minimumScaleFactor(arrangement?.minScale ?? 1)
                 .fixedSize(horizontal: false, vertical: true)
+                #if DEBUG
+                .modifier(VoiceChoiceProbe.NameRead(title: title))
+                #endif
                 .foregroundStyle(choice == "deny" ? VoiceLook.deny.color : .white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                #if DEBUG
+                .modifier(VoiceChoiceProbe.RoomRead(title: title))
+                #endif
         } else {
             Text(title).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
         }
@@ -428,6 +444,81 @@ struct ChoiceCells: Layout {
         }
     }
 }
+
+#if DEBUG
+/// DEBUG `-vory-voice-frames` (#631, round 3g): voice mode's choices tell the rig what each name drew, by geometry reads
+/// only: the card's arrangement and its measures, and each name's own size as laid out beside its one-line natural size
+/// (a hidden copy, there only while the flag is on) and the room its cell gave it. The rig works out from them how many
+/// lines a name took and whether one was cut. Nothing here changes a frame, and none of it is in Release.
+enum VoiceChoiceProbe {
+    static let on = ProcessInfo.processInfo.arguments.contains("-vory-voice-frames")
+    struct Name: Equatable {
+        var title: String
+        var text: CGSize
+        var natural: CGSize
+        /// The width the name was given: its label's, after the frame that fills the cell.
+        var room: CGFloat = 0
+        var line: String {
+            String(format: "%@ text %.1f %.1f natural %.1f %.1f room %.1f", title, text.width, text.height, natural.width, natural.height, room)
+        }
+    }
+    struct Report: Equatable {
+        var card = ""
+        var names: [Name] = []
+        var line: String { card.isEmpty && names.isEmpty ? "none" : ([card] + names.map(\.line)).joined(separator: "|") }
+    }
+    struct Key: PreferenceKey {
+        static let defaultValue = Report()
+        static func reduce(value: inout Report, nextValue: () -> Report) {
+            let next = nextValue()
+            if !next.card.isEmpty { value.card = next.card }
+            value.names += next.names
+        }
+    }
+    /// A name's own size as laid out, and its one-line natural size from a hidden copy, reported up.
+    struct NameRead: ViewModifier {
+        var title: String
+        @State private var text = CGSize.zero
+        @State private var natural = CGSize.zero
+        @ViewBuilder func body(content: Content) -> some View {
+            if on {
+                content
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { text = $0 }
+                    .background {
+                        Text(title).font(.body).fixedSize().hidden().accessibilityHidden(true)
+                            .onGeometryChange(for: CGSize.self) { $0.size } action: { natural = $0 }
+                    }
+                    .preference(key: Key.self, value: Report(names: [Name(title: title, text: text, natural: natural)]))
+            } else {
+                content
+            }
+        }
+    }
+    /// The room the name was given, read after the frame that fills its cell, put on that name's entry.
+    struct RoomRead: ViewModifier {
+        var title: String
+        @State private var room: CGFloat = 0
+        @ViewBuilder func body(content: Content) -> some View {
+            if on {
+                content
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
+                    .transformPreference(Key.self) { report in
+                        for i in report.names.indices where report.names[i].title == title { report.names[i].room = room }
+                    }
+            } else {
+                content
+            }
+        }
+    }
+    /// The card's line, put with its names'.
+    struct CardRead: ViewModifier {
+        var line: String
+        @ViewBuilder func body(content: Content) -> some View {
+            if on { content.transformPreference(Key.self) { $0.card = line } } else { content }
+        }
+    }
+}
+#endif
 
 struct ClarifyCardView: View {
     var request: ClarifyRequest

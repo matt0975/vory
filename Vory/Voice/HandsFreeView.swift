@@ -178,6 +178,10 @@ struct HandsFreeView: View {
                         .frame(height: split?.bottom)
                         // The one column's card tells its parts' heights; none with no card (or the split's), so they go with it.
                         .onPreferenceChange(ApprovalCardHeightsKey.self) { cardHeights = $0 }
+                        #if DEBUG
+                        // What the card's choices drew, for the readout (#631, round 3g; `-vory-voice-frames` only).
+                        .onPreferenceChange(VoiceChoiceProbe.Key.self) { choiceProbe = $0 }
+                        #endif
                     }
                     // The bot's state lines' height as they would stand, at every level (#631): what its full block would take.
                     .background(alignment: .top) {
@@ -210,6 +214,8 @@ struct HandsFreeView: View {
     @State private var probeBot: CGRect = .zero
     @State private var probeControls: CGRect = .zero
     @State private var probeCard: CGRect = .zero
+    /// What the card's choices drew (#631, round 3g).
+    @State private var choiceProbe = VoiceChoiceProbe.Report()
     private var framesReadout: String {
         func r(_ f: CGRect) -> String { String(format: "%.1f %.1f %.1f %.1f", f.minX, f.minY, f.width, f.height) }
         return "row \(r(probeRow));bot \(r(probeBot));controls \(r(probeControls));card \(chat.firstCard == nil || split == nil ? "none" : r(probeCard))"
@@ -224,6 +230,10 @@ struct HandsFreeView: View {
             + ";allscroll \(split == nil && chat.firstCard != nil ? (VoiceSplit.oneColumnCard(room: room, row: rowH, bot: botBlock(botLevel), controls: controlsH, heights: cardHeights)?.allScroll == true ? "yes" : "no") : "none")"
             // The one cap both side captions take (#631, round 3f), or none.
             + ";captioncap \(captionCap.map { "\($0)" } ?? "none")"
+            // The choices as drawn (#631, round 3g): the card's arrangement and measures, then each name's text size as
+            // laid out, its one-line natural size and the room its cell gave it, for the rig's count of lines and its
+            // check that no name is cut; none with no card.
+            + ";choices \(choiceProbe.line)"
     }
 
     /// DEBUG `-vory-voice-worst thinking|paused|error`: the bot's block in a state's tallest form, for measuring the top
