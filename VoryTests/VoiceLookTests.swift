@@ -109,8 +109,9 @@ import VoryCore
         // Lean, the bot gives up the split's face (24, or the ring's 28) and its state lines with the space over them. Muted,
         // its full lines hold the capsule too (26 and the 6 over it), and lean says it by a badge on the face with no height
         // of its own: the lean block is the face alone either way, so the closed Duo keeps its 312.3 muted or not.
-        #expect(VoiceSplit.leanSaving(ring: false, lines: 74) == 24 + 18 + 74)
-        #expect(VoiceSplit.leanSaving(ring: true, lines: 74) == 28 + 18 + 74)
+        // CGFloat on the right: a sum of bare literals there is read as Int on its own, and never equals the CGFloat.
+        #expect(VoiceSplit.leanSaving(ring: false, lines: 74) == CGFloat(24 + 18 + 74))
+        #expect(VoiceSplit.leanSaving(ring: true, lines: 74) == CGFloat(28 + 18 + 74))
         let fullFace: CGFloat = 12 + 164 + 18, unmutedLines: CGFloat = 74, mutedLines: CGFloat = 74 + 6 + 26
         let leanUnmuted = fullFace + unmutedLines - VoiceSplit.leanSaving(ring: false, lines: unmutedLines)
         let leanMuted = fullFace + mutedLines - VoiceSplit.leanSaving(ring: false, lines: mutedLines)
