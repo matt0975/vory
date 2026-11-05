@@ -235,7 +235,7 @@ final class DemoReadOnlyUITests: XCTestCase {
         var n = 0
         try app.performAccessibilityAudit { issue in
             let el = issue.element
-            print("DEMO-RO-AUDIT soul '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(state(el)) frame \(el.map { f($0.frame) } ?? "none")")
+            print("DEMO-RO-AUDIT soul '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none")")
             n += 1
             return true
         }
@@ -292,7 +292,7 @@ final class DemoReadOnlyUITests: XCTestCase {
             var n = 0
             try app.performAccessibilityAudit { issue in
                 let el = issue.element
-                print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(state(el)) frame \(el.map { f($0.frame) } ?? "none")")
+                print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none")")
                 n += 1
                 return true
             }
