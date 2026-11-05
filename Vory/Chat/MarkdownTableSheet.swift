@@ -17,8 +17,25 @@ enum MarkdownTableMetrics {
     /// The grid's horizontal padding, both sides, part of every column's floor: a word needs its
     /// letters' width plus this much before the column can draw it unbroken.
     static let cellPadding: CGFloat = 20
-    /// A column with no words at all still needs a sliver to draw its padding and rules.
-    static let minColumnFloor: CGFloat = 24
+    /// A column's readable minimum width: around 6 to 8 characters plus cell padding, so columns
+    /// never squeeze down to unreadable 2-3 letter slivers before falling back to sideways scroll.
+    static let minColumnFloor: CGFloat = 64
+
+    /// Dynamic minimum floor scaling under larger Dynamic Type sizes, keeping the 6–8 character guarantee.
+    static func minColumnFloor(for size: DynamicTypeSize?) -> CGFloat {
+        guard let size else { return minColumnFloor }
+        switch size {
+        case .xLarge: return 70
+        case .xxLarge: return 76
+        case .xxxLarge: return 84
+        case .accessibility1: return 92
+        case .accessibility2: return 100
+        case .accessibility3: return 108
+        case .accessibility4: return 116
+        case .accessibility5: return 124
+        default: return minColumnFloor
+        }
+    }
     /// The reader's choice for every table: wrap to fit the bubble, or scroll sideways. One key, so
     /// two tables on one screen never disagree, and it outlives the launch.
     static let wrapKey = "table.wrap"
@@ -45,10 +62,10 @@ enum MarkdownTableMetrics {
         return widths.map { $0 + extra * $0 / total }
     }
 
-    /// A wrapped table's widths: every column starts at its longest-word floor, then the spare in
-    /// `fill` goes back to the columns that can use it — their one-line widths first, the rest in
-    /// proportion. Floors that already exceed `fill` stand as they are, so the card falls back to
-    /// its sideways scroll rather than breaking a word to fit.
+    /// A wrapped table's widths: every column starts at its longest-word floor (at least `minColumnFloor`,
+    /// around 6 to 8 characters), then the spare in `fill` goes back to the columns that can use it —
+    /// their one-line widths first, the rest in proportion. Floors that already exceed `fill` stand as
+    /// they are, so the card falls back to its sideways scroll rather than breaking words to fit.
     static func wrapWidths(natural: [CGFloat], floors: [CGFloat], hi: CGFloat, fill: CGFloat?) -> [CGFloat] {
         var widths = floors
         guard let fill, fill.isFinite, !widths.isEmpty, natural.count == widths.count else { return widths }
@@ -151,19 +168,19 @@ extension MarkdownTable {
     }
 }
 
-/// The wrap/scroll switch in a table card's header, built as a code block's (`CodeWrapToggle`): the
-/// same glyphs, caption-sized and secondary, in a 44 pt square with nothing drawn behind them, so the
-/// two switches in one reply read as one feature. The glyph is the change it will make: a scrolling
-/// table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the two
-/// switches on a screen never disagree.
+/// The wrap/scroll switch in a table card's corner. The glyph is the change it will make: a
+/// scrolling table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the
+/// two switches on a screen never disagree.
 struct TableWrapToggle: View {
     @AppStorage(MarkdownTableMetrics.wrapKey) private var wrap = true
 
     var body: some View {
         Button { withAnimation(.snappy) { wrap.toggle() } } label: {
             Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
-                .font(.caption)
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
@@ -257,11 +274,12 @@ struct MarkdownTableLayout: Layout {
     /// per line, is the width of its widest line.
     private func floors(_ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
         if let f = cache.floors, f.count == columns { return f }
-        var f = [CGFloat](repeating: MarkdownTableMetrics.minColumnFloor, count: columns)
+        let minFloor = MarkdownTableMetrics.minColumnFloor(for: sizes?.typeSize)
+        var f = [CGFloat](repeating: minFloor, count: columns)
         if subviews.count >= cellCount + columns {
             for c in 0..<columns {
                 let probe = subviews[cellCount + c].sizeThatFits(.unspecified).width
-                f[c] = Swift.max(MarkdownTableMetrics.minColumnFloor, probe + MarkdownTableMetrics.cellPadding)
+                f[c] = Swift.max(minFloor, probe + MarkdownTableMetrics.cellPadding)
             }
         }
         cache.floors = f
@@ -289,13 +307,15 @@ struct MarkdownTableLayout: Layout {
 
     private func heights(_ widths: [CGFloat], _ subviews: Subviews, _ cache: inout Cache) -> [CGFloat] {
         let count = (cellCount + columns - 1) / columns
-        if let h = cache.rows[widths], h.count == count { return h }
+        let scale = sizes?.scale ?? 2
+        let key = widths.map { ($0 * scale).rounded() / scale }
+        if let h = cache.rows[key], h.count == count { return h }
         var h = [CGFloat](repeating: 0, count: count)
         for (i, s) in subviews.prefix(cellCount).enumerated() {
             h[i / columns] = max(h[i / columns], s.sizeThatFits(ProposedViewSize(width: widths[i % columns], height: nil)).height)
         }
-        if cache.rows.count >= 8 { cache.rows.removeAll() }
-        cache.rows[widths] = h
+        if cache.rows.count >= 16 { cache.rows.removeAll() }
+        cache.rows[key] = h
         SizeStore.shared.keep(cache)
         return h
     }
@@ -346,7 +366,7 @@ struct MarkdownTableLayout: Layout {
                     proposal: ProposedViewSize(width: w[c], height: h[r]))
         }
         for s in subviews.dropFirst(cellCount) {
-            s.place(at: CGPoint(x: -10000, y: -10000), proposal: .zero)
+            s.place(at: bounds.origin, proposal: .zero)
         }
     }
 }
@@ -360,7 +380,6 @@ struct MarkdownTableGrid: View {
     /// Lines a cell may take before it is cut short; nil for all of them.
     var lineLimit: Int? = 3
     /// Wrap the cells inside their columns' word floors instead of holding their one-line widths.
-    /// A wrapped cell is never cut short: every line of it is drawn.
     var wraps = false
     var maxColumn: CGFloat = MarkdownTableMetrics.bubbleMaxColumn
     var fillWidth: CGFloat? = nil
@@ -376,7 +395,7 @@ struct MarkdownTableGrid: View {
 
     var body: some View {
         let n = table.header.count
-        let sizes = MarkdownTableLayout.SizeKey(table: table, font: font, lineLimit: wraps ? nil : lineLimit, headerInset: headerInset,
+        let sizes = MarkdownTableLayout.SizeKey(table: table, font: font, lineLimit: lineLimit, headerInset: headerInset,
                                                 typeSize: typeSize, bold: legibility == .bold, scale: scale,
                                                 names: MarkdownTableLayout.SizeKey.names(for: table, Mentions.names),
                                                 wraps: wraps)
@@ -444,7 +463,7 @@ struct MarkdownTableGrid: View {
     private func text(_ markdown: String, column c: Int, header: Bool) -> some View {
         Text(MarkdownView.inline(MarkdownTableMetrics.shownCell(markdown)))
             .font(header ? font.weight(.semibold) : font)
-            .lineLimit(wraps ? nil : lineLimit)
+            .lineLimit(lineLimit)
             .truncationMode(.tail)
             .multilineTextAlignment(textAlignment(c))
             .fixedSize(horizontal: false, vertical: true)

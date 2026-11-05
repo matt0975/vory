@@ -192,7 +192,7 @@ import Testing
         #expect(abs(roomy.reduce(0, +) - 320) < 0.001)
         #expect(roomy[0] > 60 && roomy[0] <= 220)
         #expect(roomy[1] >= 40 && roomy[2] >= 24)
-        // A floor past `hi` is kept: never clamped down into a broken word.
+        // A floor past `hi` is kept: never clamped down into a broken word when room permits.
         #expect(M.wrapWidths(natural: [400, 40], floors: [400, 40], hi: 220, fill: 1000)[0] >= 400)
         // The scroll-mode arithmetic is untouched: its own suite below still holds.
         #expect(M.columnWidths(natural: [20, 100, 500], fill: 300, min: 64, max: 220) == [64, 100, 220])
