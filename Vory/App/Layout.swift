@@ -553,6 +553,8 @@ enum VoiceSplit {
         var asked: CGFloat = 0
         var covers: CGFloat = 0
         var choices: CGFloat = 0
+        /// One line of what each answer covers (round 3k), so its scroll shows whole lines only. 0 until measured.
+        var coversLine: CGFloat = 0
     }
     /// What must show of the card: what's asked and the choices, with the card's padding and the spaces either side of
     /// what each answer covers (scrolled down to nothing). 0 until measured.
@@ -576,11 +578,17 @@ enum VoiceSplit {
     /// The card's height in one column once it is measured (#631): the whole card when what the top row, the bot's
     /// block and the controls leave holds it (the conversation gets the rest, if any), else exactly what is left, so the
     /// column never runs past the screen (round 3: no floor once measured; the floor let the column run long at the
-    /// accessibility sizes). nil until measured.
+    /// accessibility sizes). nil until measured. Round 3k: when the card is short of its whole height yet holds what must
+    /// show, what each answer covers shows whole lines only: its share is cut down to a whole number of its lines, the card
+    /// is that much shorter, and the conversation takes the rest (a line cut through under the fade read as clipped text).
     static func oneColumnCard(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, heights: CardHeights) -> OneColumnFit? {
         let whole = cardWhole(heights)
         guard room > 0, whole > 0 else { return nil }
-        let height = min(whole, max(0, room - row - bot - controls - transcriptTop))
+        var height = min(whole, max(0, room - row - bot - controls - transcriptTop))
+        let need = cardNeed(heights)
+        if heights.coversLine > 0, height < whole, height >= need {
+            height = need + ((height - need) / heights.coversLine + 0.01).rounded(.down) * heights.coversLine
+        }
         let choicesAlone = heights.choices + cardGap + 2 * cardPadding
         return OneColumnFit(height: height, wordsScroll: height < cardNeed(heights), allScroll: height < choicesAlone)
     }

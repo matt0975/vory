@@ -190,6 +190,11 @@ struct ApprovalCardView: View {
     }
     private var coversPart: some View {
         covers.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.covers = $0 }
+            // One line of it, measured off screen (round 3k), so its scroll shows whole lines only.
+            .background(alignment: .topLeading) {
+                Text(verbatim: "Ag").font(.caption2).fixedSize().hidden().accessibilityHidden(true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.coversLine = $0 }
+            }
     }
     private var choicesPart: some View {
         choices.onGeometryChange(for: CGFloat.self) { $0.size.height } action: { heights.choices = $0 }

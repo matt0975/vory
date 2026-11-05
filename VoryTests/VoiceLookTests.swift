@@ -163,6 +163,37 @@ import VoryCore
         #expect(VoiceSplit.compactSaving(ring: false) == 164 - VoiceSplit.face)
     }
 
+    /// Round 3k: what each answer covers shows whole lines only. On the closed Duo at Large the card was short of its whole
+    /// height and its small print's third line was cut through at its scroll's edge (the audit's element-less "Text
+    /// clipped"). Its share is now cut down to whole lines, the card that much shorter; nothing changes when the whole
+    /// card fits, when the words scroll, or before a line is measured.
+    @Test func theSmallPrintShowsWholeLinesOnly() {
+        let row: CGFloat = 48, lean = 12 + VoiceSplit.face, controls: CGFloat = 125.7
+        let left = 644 - row - lean - controls - VoiceSplit.transcriptTop
+        // What must show leaves 30 for the small print, whose lines are 13 and which runs to four of them: two show, 26.
+        let parts = VoiceSplit.CardHeights(asked: left - 30 - 76.6 - 2 * VoiceSplit.cardGap - 2 * VoiceSplit.cardPadding,
+                                           covers: 52, choices: 76.6, coversLine: 13)
+        let fit = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: parts)
+        #expect(fit?.height == VoiceSplit.cardNeed(parts) + 26, "two whole lines")
+        #expect(fit?.wordsScroll == false)
+        #expect(fit?.allScroll == false)
+        // Before a line is measured: what is left, as before.
+        var unmeasured = parts; unmeasured.coversLine = 0
+        #expect(VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: unmeasured)?.height == left)
+        // Exactly three lines' room: all three show.
+        var three = parts; three.asked += 30 - 39
+        #expect(VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: three)?.height
+                == VoiceSplit.cardNeed(three) + 39, "three whole lines")
+        // The whole card fits: as it is.
+        let small = VoiceSplit.CardHeights(asked: 100, covers: 26, choices: 76.6, coversLine: 13)
+        #expect(VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: small)?.height == VoiceSplit.cardWhole(small))
+        // The words scroll (what must show doesn't fit): what is left, as before.
+        let tall = VoiceSplit.CardHeights(asked: left, covers: 52, choices: 76.6, coversLine: 13)
+        let words = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: tall)
+        #expect(words?.height == left)
+        #expect(words?.wordsScroll == true)
+    }
+
     /// Round 3f: the top row's title in full white, 6:1 or more over every tint's top (white at 0.85 had under 5:1 over
     /// the light ones).
     @Test func theTitlePassesOverTheTopForEveryTintWithRoomToSpare() {
