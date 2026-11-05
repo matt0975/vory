@@ -663,6 +663,39 @@ def _pdf_bytes(title: str, line: str) -> bytes:
     return bytes(out)
 
 
+def files_download(query: dict) -> Response:
+    """GET /api/files/download (#638), as the gateway's files router sends it: the file's raw bytes with its media
+    type and an attachment disposition naming it. The refusal is ASSUMED: 403 "Access denied" for a secret or a
+    session store, as the demo gateway sends it; the real gateway's answer for those isn't checked yet.
+    MOCK_NO_DOWNLOAD=1: the route isn't there (Starlette's 404 "Not Found"), for the app's fallback to the picture
+    routes."""
+    from urllib.parse import unquote
+    if os.environ.get("MOCK_NO_DOWNLOAD"):
+        return _json_response(404, {"detail": "Not Found"})
+    p = unquote(query.get("path", ""))
+    if p.startswith("~/"):
+        p = "/home/hermes/" + p[2:]
+    name = p.rsplit("/", 1)[-1].replace('"', "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if "/.hermes/sessions/" in p or "/.ssh/" in p or p.startswith("/etc/") or name == "auth.json":
+        return _json_response(403, {"detail": "Access denied"})
+    if "gone" in p:
+        return _json_response(404, {"detail": "File not found"})
+    import base64
+    if ext in ("md", "markdown", "txt"):
+        body, mime = f"# {name}\n\nA few lines the mock wrote for {p}.\n".encode(), "text/markdown"
+    elif ext == "pdf":
+        body, mime = _pdf_bytes("Mock " + name, "Served by the download route."), "application/pdf"
+    elif ext == "png":
+        body, mime = base64.b64decode(_png_data_url(sum(ord(c) for c in p)).split(",", 1)[1]), "image/png"
+    elif ext == "csv":
+        body, mime = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n", "text/csv"
+    else:
+        return _json_response(404, {"detail": "File not found"})
+    return Response(200, "OK", Headers([("Content-Type", mime), ("Content-Disposition", f'attachment; filename="{name}"'),
+                                        ("Content-Length", str(len(body)))]), body)
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -1825,6 +1858,8 @@ def _process_request(connection, request):
     auth = auth_rest(method, base, query, body_json if isinstance(body_json, dict) else {}, request.headers)
     if auth is not None:
         result = auth
+    elif method == "GET" and base == "/api/files/download":
+        return files_download(query)
     elif base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
         try:
             payload = json.loads(getattr(request, "body", b"") or b"{}")
@@ -2693,6 +2728,24 @@ class Gateway:
             # view, where a long paragraph's link sits above the screen.
             await self.event("message.start", s.sid)
             text = "The export finished and every shard matched. The details are on the [status page](https://status.example.com/shards)."
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
+        if prompt.strip().lower().startswith("files inline"):
+            # Files a reply names in a sentence, in inline code and on a line of their own (#638): a note, a PDF and a
+            # picture each way, by names that say which; a session store the gateway won't share; and words that only
+            # start with a slash.
+            await self.event("message.start", s.sid)
+            text = ("Everything for the review is ready.\n\n"
+                    "The notes are in /home/hermes/out/notes-sentence.md, the summary in /home/hermes/out/summary-sentence.pdf, "
+                    "and the chart is /home/hermes/out/chart-sentence.png.\n\n"
+                    "In code: `/home/hermes/out/notes-code.md`, `/home/hermes/out/summary-code.pdf` and "
+                    "`/home/hermes/out/chart-code.png`.\n\n"
+                    "/home/hermes/out/notes-line.md\n/home/hermes/out/summary-line.pdf\n/home/hermes/out/chart-line.png\n\n"
+                    "The session log at /home/hermes/.hermes/sessions/s1.jsonl stays where it is.\n\n"
+                    "Not files: /var/log, /help, and/or, /api/files/download, https://example.com/a/guide.pdf. That is all.\n")
             await self.stream_words(s, text)
             self.store_turn(s, prompt, [text])
             s.inflight = None

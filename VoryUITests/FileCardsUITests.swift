@@ -94,4 +94,74 @@ final class FileCardsUITests: XCTestCase {
         // Back in the chat, the card now shows the size.
         XCTAssertTrue(cards.allElementsBoundByIndex.contains { $0.label.contains("report.pdf") && $0.label.contains("bytes") || $0.label.contains("KB") }, "the card does not show the size after the download: \(cards.allElementsBoundByIndex.map(\.label))")
     }
+
+    /// Files a reply names in a sentence, in inline code and on a line of their own (#638): the mock's "files inline"
+    /// turn names a note, a PDF and a picture each way, a session store the gateway won't share, and words that only
+    /// start with a slash. One card per file, a thumbnail per picture, none for the look-alikes; a note and a PDF open
+    /// in the preview; the session store says plainly that it can't be shared. HERMES_E2E_NO_DOWNLOAD=1: the mock was
+    /// started without its download route (MOCK_NO_DOWNLOAD=1), and the PDF still opens, through the picture routes.
+    func testFilesNamedInSentencesAndInlineCodeAreCards() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        let noDownload = ProcessInfo.processInfo.environment["HERMES_E2E_NO_DOWNLOAD"] == "1"
+        continueAfterFailure = false
+        if let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
+            app = XCUIApplication(bundleIdentifier: bundle)
+            app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES"]
+        } else {
+            app = XCUIApplication()
+        }
+        app.launch()
+        let newChat = app.buttons["chats.new"].firstMatch
+        XCTAssertTrue(newChat.waitForExistence(timeout: 40))
+        wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: newChat)], timeout: 60)
+        newChat.tap()
+        let composer = app.textViews["composer.text"].firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30))
+        composer.tap()
+        composer.typeText("files inline please")
+        for _ in 0..<3 {
+            guard let send = hittable(app.buttons.matching(identifier: "composer.send"), timeout: 5),
+                  (composer.value as? String)?.contains("files inline") == true else { break }
+            send.tap()
+            if text("Everything for the review").firstMatch.waitForExistence(timeout: 10) { break }
+        }
+        XCTAssertTrue(text("That is all").firstMatch.waitForExistence(timeout: 30), "the reply did not arrive")
+        if let done = hittable(app.buttons.matching(NSPredicate(format: "label == 'Hide keyboard' OR label == 'Done'")), timeout: 1) { done.tap() }
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+
+        // One card per file, wherever the reply named it; none for the look-alikes.
+        let cards = app.buttons.matching(identifier: "file.card")
+        let names = ["notes-sentence.md", "summary-sentence.pdf", "notes-code.md", "summary-code.pdf", "notes-line.md", "summary-line.pdf", "s1.jsonl"]
+        XCTAssertEqual(cards.count, names.count, "expected \(names.count) file cards, got \(cards.allElementsBoundByIndex.map(\.label))")
+        let labels = cards.allElementsBoundByIndex.map(\.label)
+        for name in names { XCTAssertTrue(labels.contains { $0.contains(name) }, "no card for \(name): \(labels)") }
+        // A card's label is "File <name>, <line>", and the line may read "Tap to download": the names are matched.
+        for word in ["guide.pdf", "download", "help", "log"] { XCTAssertFalse(labels.contains { $0.hasPrefix("File \(word),") }, "a card for \(word): \(labels)") }
+        // A thumbnail per picture; the sentence keeps its path in the words.
+        let pictures = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Image chart-'"))
+        XCTAssertEqual(pictures.count, 3, "expected three pictures, got \(pictures.allElementsBoundByIndex.map(\.label))")
+        XCTAssertTrue(text("The notes are in /home/hermes/out/notes-sentence.md").firstMatch.exists, "the sentence lost its path")
+        shot(noDownload ? "file-cards-inline-nodownload" : "file-cards-inline")
+
+        // Each kind opens in the preview, named for the file.
+        for name in noDownload ? ["summary-sentence.pdf"] : ["notes-code.md", "summary-sentence.pdf"] {
+            let card = try XCTUnwrap(cards.allElementsBoundByIndex.first { $0.label.contains(name) })
+            card.tap()
+            XCTAssertTrue(app.navigationBars.matching(NSPredicate(format: "identifier CONTAINS %@ OR label CONTAINS %@", name, name)).firstMatch.waitForExistence(timeout: 20)
+                          || app.staticTexts[name].firstMatch.waitForExistence(timeout: 2), "the preview of \(name) did not open")
+            RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+            shot("file-preview-" + name)
+            if let done = hittable(app.buttons.matching(NSPredicate(format: "label == 'Done'")), timeout: 5) { done.tap() }
+            RunLoop.current.run(until: Date().addingTimeInterval(1))
+        }
+
+        // The session store: refused, said plainly, no code.
+        guard !noDownload else { return }
+        let store = try XCTUnwrap(cards.allElementsBoundByIndex.first { $0.label.contains("s1.jsonl") })
+        store.tap()
+        let refused = NSPredicate(format: "label CONTAINS %@", "This file can't be shared from the gateway")
+        XCTAssertTrue(cards.matching(refused).firstMatch.waitForExistence(timeout: 20), "the refused card does not say so: \(cards.allElementsBoundByIndex.map(\.label))")
+        XCTAssertFalse(cards.allElementsBoundByIndex.contains { $0.label.contains("403") }, "the refusal shows a code")
+        shot("file-card-refused")
+    }
 }
