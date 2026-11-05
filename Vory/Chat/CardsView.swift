@@ -43,8 +43,14 @@ extension EnvironmentValues {
     @Entry var approvalAllScroll = false
 }
 
-/// A waiting approval's parts as the card measures them in voice mode's one column (#631), for the screen to size it:
-/// the card's whole height first, the conversation giving way to it.
+private extension View {
+    /// An identifier for voice mode's checks (#631), set in voice mode only (round 3e): in a chat the element carries no
+    /// identifier modifier at all, so the chat card's accessibility tree is as it was before #631.
+    @ViewBuilder func voiceIdentifier(_ id: String, when on: Bool) -> some View {
+        if on { accessibilityIdentifier(id) } else { self }
+    }
+}
+
 /// A scroll in voice mode's card that holds more than it shows (#631, round 3): its foot fades out over 12 pt, so its edge
 /// reads as a scroll rather than a line cut through its letters.
 private struct FootFade: ViewModifier {
@@ -63,6 +69,8 @@ private struct FootFade: ViewModifier {
     }
 }
 
+/// A waiting approval's parts as the card measures them in voice mode's one column (#631), for the screen to size it:
+/// the card's whole height first, the conversation giving way to it.
 struct ApprovalCardHeightsKey: PreferenceKey {
     static let defaultValue = VoiceSplit.CardHeights()
     static func reduce(value: inout VoiceSplit.CardHeights, nextValue: () -> VoiceSplit.CardHeights) {
@@ -157,7 +165,7 @@ struct ApprovalCardView: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier(voiceMode ? "approval.card" : "")
+        .voiceIdentifier("approval.card", when: voiceMode)
     }
 
     /// The one column's parts (#631), each measured where it stands.
@@ -193,7 +201,7 @@ struct ApprovalCardView: View {
             HStack { heading; Spacer(); waiting }
         }
         if let d = approval.description, !d.isEmpty {
-            Text(d).font(.subheadline).accessibilityIdentifier(voiceMode ? "approval.description" : "")
+            Text(d).font(.subheadline).voiceIdentifier("approval.description", when: voiceMode)
         }
         if let cmd = approval.command, !cmd.isEmpty {
             if voiceMode {
@@ -211,7 +219,7 @@ struct ApprovalCardView: View {
             }
         }
         if let t = approval.toolName {
-            Text("Tool: \(t)").font(.caption).foregroundStyle(quiet).accessibilityIdentifier(voiceMode ? "approval.tool" : "")
+            Text("Tool: \(t)").font(.caption).foregroundStyle(quiet).voiceIdentifier("approval.tool", when: voiceMode)
         }
         if approval.smartDenied == true { Text("The smart-approval guardian flagged this command.").font(.caption).foregroundStyle(warning) }
     }
@@ -225,7 +233,7 @@ struct ApprovalCardView: View {
     private var heading: some View {
         Label("Approval needed", systemImage: "exclamationmark.shield.fill").font(.headline).foregroundStyle(warning)
             .fixedSize(horizontal: false, vertical: voiceMode)
-            .accessibilityIdentifier(voiceMode ? "approval.heading" : "")
+            .voiceIdentifier("approval.heading", when: voiceMode)
     }
 
     @ViewBuilder private var waiting: some View {

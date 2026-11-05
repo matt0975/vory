@@ -40,6 +40,8 @@ struct HandsFreeView: View {
     private var room: CGFloat { roomFrame.height }
     @State private var rowH: CGFloat = 0
     @State private var controlsH: CGFloat = 0
+    /// The widest control caption at this text size, measured off screen (#631, round 3e).
+    @State private var captionW: CGFloat = 0
     /// The waiting approval's parts as its card measures them in one column (#631), and the bot's state lines as they
     /// would stand (measured while they are hidden too), so the bot's full block is known at every level.
     @State private var cardHeights = VoiceSplit.CardHeights()
@@ -387,6 +389,28 @@ struct HandsFreeView: View {
             control(state.phase == .paused ? "play.fill" : "pause.fill", label: state.phase == .paused ? "Resume" : "Pause", on: state.phase == .paused) { session.togglePause() }
         }
         .padding(.top, 18).padding(.bottom, 24)
+        // The four captions' widest one-line width at this text size, measured off screen (#631, round 3e).
+        .background {
+            VStack { ForEach(Self.captions, id: \.self) { Text($0).font(.caption).fixedSize() } }
+                .fixedSize().hidden().accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { captionW = $0 }
+        }
+    }
+
+    /// Every caption a side control can show (#631, round 3e).
+    private static let captions = ["Mute", "Unmute", "Pause", "Resume"]
+    /// The side columns' width (#631, round 3e): 88 under the accessibility sizes, where every caption fits it on one
+    /// line. At them, the widest caption's own one-line width (measured off screen) and 8 pt of margin, up to what the row
+    /// allows (the column less End's 72 and the two 19 pt gaps, halved), the same both sides so End stays in the middle; a
+    /// caption that even that can't hold steps down to the largest size that does (`control`).
+    private var controlColumn: CGFloat {
+        guard typeSize.isAccessibilitySize else { return 88 }
+        return max(88, min(captionW + 8, (column.width - 72 - 2 * 19) / 2))
+    }
+
+    /// A control's caption on one line, never shrunk (#631, round 3e).
+    private func caption(_ label: String) -> some View {
+        Text(label).font(.caption).foregroundStyle(VoiceLook.secondary).lineLimit(1)
     }
 
     private func control(_ symbol: String, label: String, on: Bool, action: @escaping () -> Void) -> some View {
@@ -399,11 +423,20 @@ struct HandsFreeView: View {
             }
             .buttonStyle(.plain)
             .alignmentGuide(.controlCircle) { $0[VerticalAlignment.center] }
-            Text(label).font(.caption).foregroundStyle(VoiceLook.secondary).lineLimit(1).minimumScaleFactor(0.6)
+            // Never shrunk past a whole word, never cut or wrapped (#631, round 3e): the caption at its own size when its
+            // column holds it on one line, else at the largest accessibility size that does, a size floor as the stock
+            // controls have. Under the accessibility sizes, and wherever it fits, that's its own size.
+            ViewThatFits(in: .horizontal) {
+                caption(label)
+                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility4)
+                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility3)
+                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility1)
+            }
         }
-        // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays
-        // in the middle. 88 wide (#631, round 3), so "Resume" isn't cut at its own size; the row's height is the same.
-        .frame(width: 88)
+        // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays in the middle
+        // (`controlColumn`: 88 under the accessibility sizes, wider at them).
+        .frame(width: controlColumn)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
     }
