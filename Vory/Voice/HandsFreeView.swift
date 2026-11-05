@@ -34,28 +34,38 @@ struct HandsFreeView: View {
     @State private var foldAcross: CGRect?
     @State private var column: CGRect = .zero
     /// One column with a card waiting (#631): the room the screen gives (its height inside the safe area) and what the top
-    /// row, the bot's block (and whether it was compact when measured) and the controls take of it, so the card is held to
-    /// what is left and the bot's block goes to the split's sizes when it would leave the card too little.
+    /// row and the controls take of it (the controls at their natural height, round 3), so the card is held to what is left
+    /// and the bot's block goes lean, then hides its face, when it would leave the card too little.
     @State private var roomFrame: CGRect = .zero
     private var room: CGFloat { roomFrame.height }
     @State private var rowH: CGFloat = 0
-    @State private var botH: CGFloat = 0
-    @State private var botWasCompact = false
+    /// The top row with its title (round 3's title switch can hide the title): the bot's level is decided on it, so hiding
+    /// the title can't flip the decision back.
+    @State private var rowTitledH: CGFloat = 0
     @State private var controlsH: CGFloat = 0
     /// The waiting approval's parts as its card measures them in one column (#631), and the bot's state lines as they
-    /// would stand (measured while they are hidden too), so the bot's full block is known while it is lean.
+    /// would stand (measured while they are hidden too), so the bot's full block is known at every level.
     @State private var cardHeights = VoiceSplit.CardHeights()
     @State private var linesH: CGFloat = 0
-    /// The mic muted, said under the bot's title (#234); while the bot is lean, a badge on its face (#631): the one state
-    /// line the card doesn't say, kept with no height of its own.
+    /// The mic muted, said under the bot's title (#234); while the bot is lean, a badge on its face, and with its face
+    /// hidden, the same badge on the top row (#631): the one state line the card doesn't say, kept with no height of its own.
     private var mutedShown: Bool { state.isMuted && state.phase != .listening }
-    /// What the lean bot gives up: the split's sizes, and its state lines with the space over them.
-    private var compactSaving: CGFloat { VoiceSplit.leanSaving(ring: !BotFace.motionEngine, lines: linesH) }
-    private var compact: Bool {
-        guard split == nil, chat.firstCard != nil else { return false }
-        return VoiceSplit.compactOneColumn(room: room, row: rowH, botFull: botH + (botWasCompact ? compactSaving : 0),
-                                           controls: controlsH, card: VoiceSplit.cardWhole(cardHeights), size: typeSize)
+    /// The waveform under the bot while it listens, unmuted: its 26 and the space over it.
+    private var waveformShown: Bool { state.phase == .listening && !state.isMuted }
+    /// The bot's block at a level, at its natural height (#631, round 3: worked out, not measured, so a level doesn't feed
+    /// back into its own decision).
+    private func botBlock(_ level: VoiceSplit.BotLevel) -> CGFloat {
+        guard level != .hidden else { return 0 }
+        return VoiceSplit.botBlock(level, ring: !BotFace.motionEngine, lines: linesH) + (waveformShown ? VoiceSplit.botLinesGap + 26 : 0)
     }
+    private var botLevel: VoiceSplit.BotLevel {
+        guard split == nil, chat.firstCard != nil else { return .full }
+        return VoiceSplit.oneColumnBotLevel(room: room, row: rowTitledH > 0 ? rowTitledH : rowH, full: botBlock(.full),
+                                            lean: botBlock(.lean), controls: controlsH, whole: VoiceSplit.cardWhole(cardHeights),
+                                            need: VoiceSplit.cardNeed(cardHeights), size: typeSize)
+    }
+    /// The top row's title hides with the bot (round 3's switch, off unless the measurements turn it on).
+    private var titleShown: Bool { !(VoiceSplit.titleHidesWithCard && botLevel == .hidden) }
 
     /// The two halves' heights in the column (the top from the column's top to the fold, the bottom from the fold to the
     /// column's foot), or nil for one column.
@@ -72,7 +82,7 @@ struct HandsFreeView: View {
 
     var body: some View {
         let split = split
-        let compact = compact
+        let level = botLevel
         ZStack {
             background
             // The room inside the safe area, for the one column's card (#631).
@@ -84,20 +94,26 @@ struct HandsFreeView: View {
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     top
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowH = $0 }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowH = $0; if titleShown { rowTitledH = $0 } }
                         #if DEBUG
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeRow = $0 }
                         #endif
-                    bot
-                        #if DEBUG
-                        // Measuring the worst (`-vory-voice-worst`): the block at its own height, so a line lost to a
-                        // short half shows as an overflow, not as a quietly shorter block.
-                        .fixedSize(horizontal: false, vertical: Self.worst != nil)
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeBot = $0 }
-                        #endif
-                        .padding(.top, 12)
-                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { botH = $0; botWasCompact = compact }
-                        .frame(maxHeight: split == nil ? nil : .infinity)
+                    if level != .hidden {
+                        bot
+                            // One column with a card waiting (#631, round 3): the block at its own height, never squeezed
+                            // by the stack, so it is the height the card's room is worked out from.
+                            .fixedSize(horizontal: false, vertical: split == nil && chat.firstCard != nil)
+                            #if DEBUG
+                            // Measuring the worst (`-vory-voice-worst`): the block at its own height, so a line lost to a
+                            // short half shows as an overflow, not as a quietly shorter block.
+                            .fixedSize(horizontal: false, vertical: Self.worst != nil)
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeBot = $0 }
+                            .onDisappear { probeBot = .zero }
+                            #endif
+                            .padding(.top, 12)
+                            .frame(maxHeight: split == nil ? nil : .infinity)
+                            .transition(.opacity)
+                    }
                 }
                 .frame(height: split?.top, alignment: .top)
                 Color.clear.frame(height: split?.gap ?? 0).accessibilityHidden(true)
@@ -124,19 +140,21 @@ struct HandsFreeView: View {
                         } else {
                             // One column (#631): what the approval asks and its choices always stand whole, and the card
                             // takes its whole height before the conversation gets any; when even that leaves too little,
-                            // the bot goes lean (`compact`). Its height is set once its parts are measured, not left to
-                            // the stack's priorities: on the closed Duo the stack shared the room out evenly, and the
-                            // card kept only its choices. Until then it is held to what is left, as before.
-                            let fit = VoiceSplit.oneColumnCard(room: room, row: rowH, bot: botH, controls: controlsH,
-                                                               heights: cardHeights, size: typeSize)
+                            // the bot goes lean, then (at XXXL and larger) hides its face (`botLevel`). Its height is set
+                            // once its parts are measured, not left to the stack's priorities, and never more than what
+                            // is left, so the column never runs past the screen: above that, its words scroll, and as the
+                            // last resort the choices with them (round 3). Until then it is held to what is left, as before.
+                            let botTaken = botBlock(level)
+                            let fit = VoiceSplit.oneColumnCard(room: room, row: rowH, bot: botTaken, controls: controlsH, heights: cardHeights)
                             PendingCardView(chat: chat, card: card)
                                 .environment(\.approvalChoicesPinned, true)
                                 .environment(\.cardInVoiceMode, true)
                                 .environment(\.approvalInColumn, true)
                                 .environment(\.approvalWordsScroll, fit?.wordsScroll ?? false)
+                                .environment(\.approvalAllScroll, fit?.allScroll ?? false)
                                 .padding(.horizontal, 16)
                                 .frame(height: fit?.height, alignment: .top)
-                                .frame(maxHeight: fit == nil ? (VoiceSplit.oneColumnCardMax(room: room, row: rowH, bot: botH, controls: controlsH, size: typeSize) ?? .infinity) : nil,
+                                .frame(maxHeight: fit == nil ? (VoiceSplit.oneColumnCardMax(room: room, row: rowH, bot: botTaken, controls: controlsH, size: typeSize) ?? .infinity) : nil,
                                        alignment: .top)
                                 .layoutPriority(1)
                                 #if DEBUG
@@ -146,6 +164,9 @@ struct HandsFreeView: View {
                         }
                     }
                     controls
+                        // Their natural height always (#631, round 3): the stack squeezed them to their minimum, the
+                        // captions down to their 0.6 floor, and the card took the points back on the next pass.
+                        .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsH = $0 }
                         #if DEBUG
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { probeControls = $0 }
@@ -154,6 +175,11 @@ struct HandsFreeView: View {
                 .frame(height: split?.bottom)
                 // The one column's card tells its parts' heights; none with no card (or the split's), so they go with it.
                 .onPreferenceChange(ApprovalCardHeightsKey.self) { cardHeights = $0 }
+            }
+            // The bot's state lines' height as they would stand, at every level (#631): what its full block would take.
+            .background(alignment: .top) {
+                stateLines.fixedSize(horizontal: false, vertical: true).hidden().accessibilityHidden(true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { linesH = $0 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { column = $0 }
             .background { FoldAcrossProbe(fold: $foldAcross).ignoresSafeArea() }
@@ -186,6 +212,9 @@ struct HandsFreeView: View {
             + ";column \(r(column));fold \(foldAcross.map(r) ?? "none");split \(split == nil ? "no" : "yes")"
             // The room inside the safe area (#631): the one column must stand inside it, the closed Duo's included.
             + ";room \(r(roomFrame))"
+            // The bot's level in one column (#631, round 3): full, lean or hidden, and its block as worked out for that
+            // level (the 12 over it included), for a check against the block as drawn.
+            + ";level \(botLevel);botblock \(String(format: "%.1f", botBlock(botLevel)))"
     }
 
     /// DEBUG `-vory-voice-worst thinking|paused|error`: the bot's block in a state's tallest form, for measuring the top
@@ -227,13 +256,20 @@ struct HandsFreeView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Hide voice mode")
             Spacer()
-            VStack(spacing: 2) {
-                // Live is named when it is in use: the person's own provider, billed to them.
-                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(VoiceLook.secondary)
-                Text(chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+            if titleShown {
+                VStack(spacing: 2) {
+                    // Live is named when it is in use: the person's own provider, billed to them.
+                    Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(VoiceLook.secondary)
+                    Text(chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                }
             }
             Spacer()
-            Color.clear.frame(width: 44, height: 44)
+            // The chevron's balance on the far side; with the bot's face hidden (#631, round 3), the mic muted's badge,
+            // which then has no face to sit on.
+            ZStack {
+                Color.clear.frame(width: 44, height: 44)
+                if botLevel == .hidden, mutedShown { mutedBadge.transition(.opacity) }
+            }
         }
         .padding(.horizontal, 16).padding(.top, 4)
     }
@@ -252,9 +288,11 @@ struct HandsFreeView: View {
 
     private var bot: some View {
         // The split's sizes above a fold, and in one column when a waiting card needs the room (#631): lean then, its title
-        // and the line under it gone too (the card's heading says the same), the mic muted a badge on the face.
-        let full = split == nil && !compact
-        let lean = split == nil && compact
+        // and the line under it gone too (the card's heading says the same), the mic muted a badge on the face. Hidden
+        // (round 3), the block isn't drawn at all (`body`).
+        let level = botLevel
+        let full = split == nil && level == .full
+        let lean = level == .lean
         return VStack(spacing: VoiceSplit.botLinesGap) {
             ZStack {
                 // A ring breathes while the person is heard, and while the bot speaks; with the
@@ -274,16 +312,11 @@ struct HandsFreeView: View {
                 if lean, mutedShown { mutedBadge.transition(.opacity) }
             }
             if !lean { stateLines }
-            if state.phase == .listening, !state.isMuted {
+            if waveformShown {
                 HandsFreeWaveform(levels: session.levels, tint: tint)
                     .frame(height: 26).padding(.horizontal, 60)
                     .transition(.opacity)
             }
-        }
-        // The state lines' height as they would stand, hidden or not (#631): what the lean bot's full block would take.
-        .background(alignment: .top) {
-            stateLines.fixedSize(horizontal: false, vertical: true).hidden().accessibilityHidden(true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { linesH = $0 }
         }
     }
 
@@ -368,8 +401,8 @@ struct HandsFreeView: View {
             Text(label).font(.caption).foregroundStyle(VoiceLook.secondary).lineLimit(1).minimumScaleFactor(0.6)
         }
         // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays
-        // in the middle.
-        .frame(width: 76)
+        // in the middle. 88 wide (#631, round 3), so "Resume" isn't cut at its own size; the row's height is the same.
+        .frame(width: 88)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
     }

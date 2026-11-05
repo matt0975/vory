@@ -91,33 +91,71 @@ import VoryCore
         let row: CGFloat = 48, botFull: CGFloat = 264.3, lean: CGFloat = 12 + VoiceSplit.face, controls: CGFloat = 125.7
         // The full bot leaves 200 under the whole card's 336: lean. Lean, 312.3 is left, more than what must show (296).
         #expect(VoiceSplit.compactOneColumn(room: 644, row: row, botFull: botFull, controls: controls, card: 336, size: .large))
-        let fit = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: parts, size: .large)
+        let fit = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: parts)
         #expect(fit?.height == 644 - row - lean - controls - VoiceSplit.transcriptTop)
         #expect(fit?.wordsScroll == false)
+        #expect(fit?.allScroll == false)
         // The open Duo upright: the whole card under the full bot, the conversation keeping the rest.
         let wide = VoiceSplit.CardHeights(asked: 114, covers: 28, choices: 55)
         #expect(!VoiceSplit.compactOneColumn(room: 835, row: row, botFull: botFull, controls: 127.3, card: VoiceSplit.cardWhole(wide), size: .large))
-        #expect(VoiceSplit.oneColumnCard(room: 835, row: row, bot: botFull, controls: 127.3, heights: wide, size: .large)?.height
+        #expect(VoiceSplit.oneColumnCard(room: 835, row: row, bot: botFull, controls: 127.3, heights: wide)?.height
                 == VoiceSplit.cardWhole(wide))
-        // The last resort: what's asked and the choices taller than what is left. The words scroll, and the card is never
-        // under its floor.
+        // The last resort: what's asked and the choices taller than what is left. The card is exactly what is left (round
+        // 3: no floor once measured, so the column never runs past the screen), its words scroll, the choices still fit.
         let tall = VoiceSplit.CardHeights(asked: 260, covers: 60, choices: 180)
-        let last = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: tall, size: .accessibility2)
+        let last = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: tall)
+        #expect(last?.height == 644 - row - lean - controls - VoiceSplit.transcriptTop)
         #expect(last?.wordsScroll == true)
-        #expect(last.map { $0.height >= VoiceSplit.cardFloor(for: .accessibility2) } == true)
-        #expect(VoiceSplit.oneColumnCard(room: 0, row: row, bot: lean, controls: controls, heights: parts, size: .large) == nil)
-        // Lean, the bot gives up the split's face (24, or the ring's 28) and its state lines with the space over them. Muted,
-        // its full lines hold the capsule too (26 and the 6 over it), and lean says it by a badge on the face with no height
-        // of its own: the lean block is the face alone either way, so the closed Duo keeps its 312.3 muted or not.
-        // CGFloat on the right: a sum of bare literals there is read as Int on its own, and never equals the CGFloat.
-        #expect(VoiceSplit.leanSaving(ring: false, lines: 74) == CGFloat(24 + 18 + 74))
-        #expect(VoiceSplit.leanSaving(ring: true, lines: 74) == CGFloat(28 + 18 + 74))
-        let fullFace: CGFloat = 12 + 164 + 18, unmutedLines: CGFloat = 74, mutedLines: CGFloat = 74 + 6 + 26
-        let leanUnmuted = fullFace + unmutedLines - VoiceSplit.leanSaving(ring: false, lines: unmutedLines)
-        let leanMuted = fullFace + mutedLines - VoiceSplit.leanSaving(ring: false, lines: mutedLines)
-        #expect(leanMuted == leanUnmuted)
-        #expect(leanMuted == lean)
+        #expect(last?.allScroll == false)
+        // The closed Duo at AX5 as measured, the longer text, the face hidden: the choices alone (457, with the card's padding and a
+        // gap) are taller than what is left, so everything scrolls, and the card is still only what is left.
+        let huge = VoiceSplit.CardHeights(asked: 774, covers: 576, choices: 457.3)
+        let worst = VoiceSplit.oneColumnCard(room: 644, row: 116, bot: 0, controls: 164.3, heights: huge)
+        #expect(worst?.allScroll == true)
+        #expect(worst?.height == 644 - 116 - 164.3 - VoiceSplit.transcriptTop)
+        #expect(VoiceSplit.oneColumnCard(room: 0, row: row, bot: lean, controls: controls, heights: parts) == nil)
+        // The bot's block at each level (round 3: worked out, not measured): full is the face, the space and its state
+        // lines; lean the split's face alone (24 less, or the ring's 28), the same muted or not, since the mic muted is a
+        // badge on the face then; hidden nothing. CGFloat on the right: a sum of bare literals there is read as Int.
+        #expect(VoiceSplit.botBlock(.full, ring: false, lines: 74) == CGFloat(12 + 164 + 18 + 74))
+        #expect(VoiceSplit.botBlock(.lean, ring: false, lines: 74) == lean)
+        #expect(VoiceSplit.botBlock(.lean, ring: false, lines: 74 + 6 + 26) == lean, "the lean block, muted or not")
+        #expect(VoiceSplit.botBlock(.lean, ring: true, lines: 74) == 12 + VoiceSplit.ring)
+        #expect(VoiceSplit.botBlock(.hidden, ring: false, lines: 74) == 0)
         #expect(VoiceLook.micMuted == "Mic muted", "the lean bot's badge reads as the capsule's words")
+    }
+
+    /// Round 3: past lean, the bot's face hides too, only at XXXL and larger, and only when what must show doesn't fit
+    /// beside the lean face. The closed Duo at XXXL as measured, the longer text: the row 53, the controls at their natural 134.5, what
+    /// must show 482.3 (asked 243.7, the choices 190.7), the whole card 590.7.
+    @Test func theBotHidesItsFaceOnlyAtTheLargerSizes() {
+        let full = VoiceSplit.botBlock(.full, ring: false, lines: 120), lean = VoiceSplit.botBlock(.lean, ring: false, lines: 120)
+        // At XXXL, 298.5 is left beside the lean face; what must show is 482.3: hidden.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 590.7, need: 482.3,
+                                             size: .xxxLarge) == .hidden)
+        // The same numbers at Large: lean at most. The face never hides under XXXL.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 590.7, need: 482.3,
+                                             size: .large) == .lean)
+        // Large on the closed Duo, the longer text, as measured: what must show 299 fits beside the lean face (310.7): lean.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 48, full: full, lean: lean, controls: 127.3, whole: 338.3, need: 299,
+                                             size: .large) == .lean)
+        // At XXXL when what must show fits beside the lean face: lean.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 400, need: 290,
+                                             size: .xxxLarge) == .lean)
+        // Upright, the whole card fits beside the full bot: full.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 835, row: 48, full: VoiceSplit.botBlock(.full, ring: false, lines: 74), lean: lean,
+                                             controls: 127.3, whole: 245, need: 217, size: .large) == .full)
+        // Not measured yet: the floor decides lean, and the face never hides unmeasured.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 0, need: 0,
+                                             size: .xxxLarge) == .lean)
+    }
+
+    /// Round 3: the choices' solid fills in voice mode. White names on Allow once's blue and on the grey, and Deny's red on
+    /// the grey, each at 4.5:1 or more whatever stands behind the card, since the fills are solid.
+    @Test func theChoicesNamesPassOnTheirOwnFills() {
+        #expect(VoiceLook.contrast(.white, VoiceLook.allowOnceFill) >= 4.5, "Allow once")
+        #expect(VoiceLook.contrast(.white, VoiceLook.choiceFill) >= 4.5, "Allow for this chat and Always allow…")
+        #expect(VoiceLook.contrast(VoiceLook.deny, VoiceLook.choiceFill) >= 4.5, "Deny")
     }
 
     @Test func theCompactBlockSavesItsRingOrItsFace() {

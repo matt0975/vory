@@ -517,12 +517,35 @@ enum VoiceSplit {
     static let transcriptTop: CGFloat = 6
     /// The space between the bot's face and its state lines (`HandsFreeView`), which goes with them when the bot is lean.
     static let botLinesGap: CGFloat = 18
-    /// What the bot's block gives up going lean (#631): the split's face or ring, and its state lines (as they stand at full
-    /// size, the mic muted's capsule among them while muted) with the space over them. Lean, the mic muted is a badge on
-    /// the face, with no height of its own, so the lean block is the same height muted or not.
-    static func leanSaving(ring: Bool, lines: CGFloat) -> CGFloat {
-        compactSaving(ring: ring) + botLinesGap + lines
+    /// The bot's block in one column with a card waiting (#631): full (its face and its state lines), lean (the split's
+    /// face alone, the lines gone: the card's heading says the same; the mic muted a badge on the face), or hidden (no face
+    /// either, at XXXL and larger only; the badge on the top row).
+    enum BotLevel: Equatable { case full, lean, hidden }
+    /// The block's natural height at a level, the 12 over it included: at full the face (164, or its ring's 196 with the
+    /// motion engine off) and the state lines (`lines`, the mic muted's capsule among them while muted) with the space
+    /// over them; lean the split's face or ring alone, the same height muted or not; hidden nothing.
+    static func botBlock(_ level: BotLevel, ring: Bool, lines: CGFloat) -> CGFloat {
+        let face: CGFloat = ring ? 196 : 164
+        switch level {
+        case .full: return 12 + face + botLinesGap + lines
+        case .lean: return 12 + face - compactSaving(ring: ring)
+        case .hidden: return 0
+        }
     }
+    /// The bot's level in one column with a card waiting (#631): full while the whole card fits beside the full block (the
+    /// conversation gives way first); lean when it doesn't (`compactOneColumn`); hidden at XXXL and larger when even what
+    /// must show doesn't fit beside the lean face. The blocks are their natural heights (`botBlock`), and the controls
+    /// theirs too (round 3: never squeezed).
+    static func oneColumnBotLevel(room: CGFloat, row: CGFloat, full: CGFloat, lean: CGFloat, controls: CGFloat,
+                                  whole: CGFloat, need: CGFloat, size: DynamicTypeSize) -> BotLevel {
+        guard compactOneColumn(room: room, row: row, botFull: full, controls: controls, card: whole, size: size) else { return .full }
+        guard size >= .xxxLarge, need > 0 else { return .lean }
+        return room - row - lean - controls - transcriptTop < need ? .hidden : .lean
+    }
+    /// Round 3's title switch (#631): while a card waits on a short screen with the bot hidden, the top row's title texts
+    /// hide too and the chevron stays (the row then the chevron's 44 and the 4 over it). Off until the measurements say;
+    /// out of the code if it stays off.
+    static let titleHidesWithCard = false
     /// The card's padding (`PendingCardView`) and the space between an approval's parts (`ApprovalCardView`).
     static let cardPadding: CGFloat = 14
     static let cardGap: CGFloat = 10
@@ -545,17 +568,25 @@ enum VoiceSplit {
         let need = cardNeed(h)
         return need > 0 ? need + h.covers : 0
     }
+    /// How a measured card stands in one column (#631): its height, and which of its parts scroll.
+    struct OneColumnFit: Equatable {
+        var height: CGFloat
+        /// What's asked doesn't fit with the choices: it scrolls from the heading, the choices under it.
+        var wordsScroll: Bool
+        /// Even the choices don't fit with the card's padding (the largest sizes on a short screen): everything scrolls,
+        /// from the heading. The last resort, so nothing runs past the screen.
+        var allScroll: Bool
+    }
     /// The card's height in one column once it is measured (#631): the whole card when what the top row, the bot's
-    /// block and the controls leave holds it (the conversation gets the rest, if any), else what is left, never under
-    /// the card's floor; what each answer covers then scrolls. `wordsScroll` when even what's asked and the choices don't
-    /// fit: the card's last resort. nil until measured.
-    static func oneColumnCard(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, heights: CardHeights,
-                              size: DynamicTypeSize) -> (height: CGFloat, wordsScroll: Bool)? {
+    /// block and the controls leave holds it (the conversation gets the rest, if any), else exactly what is left, so the
+    /// column never runs past the screen (round 3: no floor once measured; the floor let the column run long at the
+    /// accessibility sizes). nil until measured.
+    static func oneColumnCard(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, heights: CardHeights) -> OneColumnFit? {
         let whole = cardWhole(heights)
         guard room > 0, whole > 0 else { return nil }
-        let left = room - row - bot - controls - transcriptTop
-        let height = min(whole, max(left, cardFloor(for: size)))
-        return (height, height < cardNeed(heights))
+        let height = min(whole, max(0, room - row - bot - controls - transcriptTop))
+        let choicesAlone = heights.choices + cardGap + 2 * cardPadding
+        return OneColumnFit(height: height, wordsScroll: height < cardNeed(heights), allScroll: height < choicesAlone)
     }
     /// The card's height in one column: what the top row, the bot's block and the controls leave, never under its floor.
     static func oneColumnCardMax(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> CGFloat? {
@@ -573,6 +604,9 @@ enum VoiceLook {
     /// The mic muted, in words (#234): the capsule under the bot's title, and VoiceOver's label for the lean bot's badge
     /// (#631).
     static let micMuted = "Mic muted"
+    /// The solid fill under the choices other than Allow once in voice mode (#631, round 3): a dark grey that white words
+    /// and Deny's red both pass 4.5:1 on, and that, unlike glass, doesn't take on what stands behind the card.
+    static let choiceFill = RGB(r: 0.2, g: 0.2, b: 0.2)
     struct RGB: Equatable {
         var r: Double, g: Double, b: Double
         static let white = RGB(r: 1, g: 1, b: 1), black = RGB(r: 0, g: 0, b: 0)

@@ -128,15 +128,35 @@ final class ApprovalCardUITests: XCTestCase {
         XCTAssertEqual(cardChoices(), names, "the card's choices, in VoiceOver's order")
         shot("approval-card")
 
-        // The audit on the chat with the card up: anything inside the card fails it, except
-        // "Text clipped", which on iOS 27 lands on different whole words of the card each run
-        // (the screenshots show them in full), and contrast, whose one finding (the orange
-        // "Approval needed") is 1.5 (25)'s and outside this change; those are reported only.
-        let dock = app.otherElements["chat.dock"].firstMatch.frame
+        // The audit on the chat with the card up, once the turn has finished writing, so every run
+        // audits the same screen: anything inside the card fails it, except "Text clipped", which on
+        // iOS 27 lands on different whole words of the card each run (the screenshots show them in
+        // full), and contrast, whose one finding (the orange "Approval needed") is 1.5 (25)'s and
+        // outside this change; those are reported only. A finding is the card's when the dock holds
+        // its element: by its label, else its identifier, else (neither) its frame wholly inside the
+        // dock's. One outside the dock is the chat's, or behind the chat when it isn't hittable (another
+        // page's rows the audit reaches); a clipped card element is still the card's.
+        XCTAssertTrue(app.staticTexts["Writing…"].firstMatch.waitForNonExistence(timeout: 30), "the turn was still writing after 30 s")
+        let dockElement = app.otherElements["chat.dock"].firstMatch
+        let dock = dockElement.frame
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection, .textClipped, .contrast]) { issue in
-            let inCard = issue.element.map { dock.intersects($0.frame) } ?? false
-            print("CARD-AUDIT \(inCard ? "card" : "chat") '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")'")
-            return !inCard || issue.auditType == .textClipped || issue.auditType == .contrast
+            guard let element = issue.element else {
+                print("CARD-AUDIT none '\(issue.compactDescription)' label '' id '' frame none hittable false")
+                return true
+            }
+            let label = element.label, id = element.identifier, frame = element.frame
+            let hittable = element.exists && element.isHittable
+            let inDock: Bool
+            if !label.isEmpty {
+                inDock = dockElement.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch.exists
+            } else if !id.isEmpty {
+                inDock = dockElement.descendants(matching: .any).matching(identifier: id).firstMatch.exists
+            } else {
+                inDock = dock.contains(frame)
+            }
+            let place = inDock ? "card" : (hittable ? "chat" : "behind")
+            print("CARD-AUDIT \(place) '\(issue.compactDescription)' label '\(label)' id '\(id)' frame \(frame) hittable \(hittable)")
+            return !inDock || issue.auditType == .textClipped || issue.auditType == .contrast
         }
 
         // A long press on the card opens nothing and answers nothing.

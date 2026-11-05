@@ -39,10 +39,30 @@ extension EnvironmentValues {
     @Entry var approvalInColumn = false
     /// The one column's last resort: what's asked scrolls too, when even it and the choices don't fit.
     @Entry var approvalWordsScroll = false
+    /// The one column's very last resort (round 3): the choices scroll too, with what's asked, when even they don't fit.
+    @Entry var approvalAllScroll = false
 }
 
 /// A waiting approval's parts as the card measures them in voice mode's one column (#631), for the screen to size it:
 /// the card's whole height first, the conversation giving way to it.
+/// A scroll in voice mode's card that holds more than it shows (#631, round 3): its foot fades out over 12 pt, so its edge
+/// reads as a scroll rather than a line cut through its letters.
+private struct FootFade: ViewModifier {
+    var on: Bool
+    func body(content: Content) -> some View {
+        if on {
+            content.mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 12)
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 struct ApprovalCardHeightsKey: PreferenceKey {
     static let defaultValue = VoiceSplit.CardHeights()
     static func reduce(value: inout VoiceSplit.CardHeights, nextValue: () -> VoiceSplit.CardHeights) {
@@ -71,7 +91,15 @@ struct ApprovalCardView: View {
     /// The one column's last resort, when even what's asked and the choices don't fit (the largest text sizes on a short
     /// screen): the words scroll from their start over the choices, as below a fold.
     @Environment(\.approvalWordsScroll) private var wordsScroll
+    /// The one column's very last resort (round 3): even the choices don't fit what's left, so everything scrolls from the
+    /// heading and nothing runs past the screen.
+    @Environment(\.approvalAllScroll) private var allScroll
     @State private var heights = VoiceSplit.CardHeights()
+    /// What each answer covers as it shows (round 3): when its scroll cuts it, its foot fades.
+    @State private var coversShown: CGFloat = 0
+    /// The longest word of the four choices' names at this text size, measured off screen (round 3): what a cell of the
+    /// two-by-two grid must hold without breaking a word.
+    @State private var longestWord: CGFloat = 0
 
     /// The card's quieter lines: `.secondary` in a chat, white at 0.8 on voice mode's dark fill (#631).
     private var quiet: AnyShapeStyle { voiceMode ? AnyShapeStyle(VoiceLook.cardSecondary) : AnyShapeStyle(.secondary) }
@@ -81,19 +109,35 @@ struct ApprovalCardView: View {
         Group {
             if choicesPinned, inColumn {
                 VStack(alignment: .leading, spacing: VoiceSplit.cardGap) {
-                    if wordsScroll {
+                    if allScroll {
+                        // Everything scrolls from the heading (round 3's last resort), in the order VoiceOver reads it:
+                        // what's asked, what each answer covers, the choices.
                         ScrollView {
-                            VStack(alignment: .leading, spacing: VoiceSplit.cardGap) { askedPart; coversPart }
+                            VStack(alignment: .leading, spacing: VoiceSplit.cardGap) { askedPart; coversPart; choicesPart }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .scrollBounceBehavior(.basedOnSize)
+                        .modifier(FootFade(on: true))
                     } else {
-                        askedPart.fixedSize(horizontal: false, vertical: true)
-                        ScrollView { coversPart.frame(maxWidth: .infinity, alignment: .leading) }
+                        if wordsScroll {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: VoiceSplit.cardGap) { askedPart; coversPart }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                             .scrollBounceBehavior(.basedOnSize)
-                            .frame(maxHeight: heights.covers)
+                            // Its words are taller than its room here: the fade marks the scroll's edge (round 3).
+                            .modifier(FootFade(on: true))
+                        } else {
+                            askedPart.fixedSize(horizontal: false, vertical: true)
+                            ScrollView { coversPart.frame(maxWidth: .infinity, alignment: .leading) }
+                                .scrollBounceBehavior(.basedOnSize)
+                                .frame(maxHeight: heights.covers)
+                                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { coversShown = $0 }
+                                // Cut by its scroll, its foot fades rather than showing a sliver of a line (round 3).
+                                .modifier(FootFade(on: coversShown + 0.5 < heights.covers))
+                        }
+                        choicesPart.fixedSize(horizontal: false, vertical: true)
                     }
-                    choicesPart.fixedSize(horizontal: false, vertical: true)
                 }
                 .preference(key: ApprovalCardHeightsKey.self, value: heights)
             } else if choicesPinned {
@@ -190,13 +234,25 @@ struct ApprovalCardView: View {
     /// is too wide the choices stand one to a row.
     @ViewBuilder private var choices: some View {
         if voiceMode {
+            // In voice mode a choice's name wraps, never shrinks or cuts (round 3): one row when the four fit at their
+            // names' own widths; else two by two, each cell half the card's width and as tall as its wrapped name; one
+            // column of four only when a cell couldn't hold the longest word of a name (the grid's ideal width is two of
+            // those words with a button's insets, so the grid is picked whenever its cells can hold them).
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { choiceButtons }
                 Grid(horizontalSpacing: 8, verticalSpacing: 8) {
                     GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
                     GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
                 }
+                .frame(minWidth: 0, idealWidth: 2 * (longestWord + Self.choiceInsets) + 8, maxWidth: .infinity)
                 VStack(spacing: 8) { choiceButtons }
+            }
+            .background(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(choiceWords, id: \.self) { Text($0).font(.body).fixedSize() }
+                }
+                .hidden().accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { longestWord = $0 }
             }
         } else {
             ViewThatFits(in: .horizontal) {
@@ -212,6 +268,14 @@ struct ApprovalCardView: View {
     @ViewBuilder private var choiceButtons: some View {
         choiceButtons(approval.offeredChoices)
     }
+
+    /// Each word of the offered choices' names, once each (round 3): the longest is what a grid cell must hold.
+    private var choiceWords: [String] {
+        var seen = Set<String>()
+        return approval.offeredChoices.flatMap { label($0).split(separator: " ").map(String.init) }.filter { seen.insert($0).inserted }
+    }
+    /// A prominent capsule button's insets either side of its name, with room to spare (round 3).
+    private static let choiceInsets: CGFloat = 40
 
     @ViewBuilder private func choiceButtons(_ choices: [String]) -> some View {
         ForEach(choices, id: \.self) { choice in
@@ -253,7 +317,8 @@ struct ApprovalChoiceButton: View {
     /// deep blue of its own, Deny a light red, the rest white.
     @ViewBuilder private var label: some View {
         if voiceMode {
-            Text(title).lineLimit(2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            // As many lines as its name needs at the text size, never shrunk or cut (round 3).
+            Text(title).font(.body).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(choice == "deny" ? VoiceLook.deny.color : .white)
                 .frame(maxWidth: .infinity)
         } else {
@@ -262,9 +327,18 @@ struct ApprovalChoiceButton: View {
     }
 
     var body: some View {
-        if choice == "once" {
+        if voiceMode {
+            // In voice mode a solid fill of its own under each name (round 3), stock: a prominent bordered capsule in our
+            // colour, which, unlike glass, doesn't take on what stands behind the card. Allow once on its deep blue, first
+            // and prominent; the rest on a dark grey (VoiceLook.choiceFill); each name at 4.5:1 or more on its fill
+            // (VoiceLookTests). Deny's destructive role is left off here: with it the stock fill would be red, under its
+            // red words.
+            Button(action: action) { label }
+                .buttonStyle(.borderedProminent)
+                .buttonBorderShape(.capsule)
+                .tint(choice == "once" ? VoiceLook.allowOnceFill.color : VoiceLook.choiceFill.color)
+        } else if choice == "once" {
             Button(action: action) { label }.buttonStyle(.glassProminent)
-                .tint(voiceMode ? VoiceLook.allowOnceFill.color : nil)
         } else if choice == "deny" {
             Button(role: .destructive, action: action) { label }.buttonStyle(.glass)
         } else {
