@@ -606,26 +606,32 @@ enum VoiceSplit {
     }
     /// The furthest a choice's name shrinks to stay on one line, under the accessibility sizes (round 3f).
     static let choiceMinScale: CGFloat = 0.8
+    /// The scale the one-line check measures a name at (round 3j), above the drawing bound: a name shrunk to its floor
+    /// draws wider than a copy set at that size measures (the closed Duo at XXL: "Allow for this chat" measured 129.7 at
+    /// 0.8 against a room of 133, and was cut when drawn). A name stands on one line only where it measures as fitting
+    /// here; it still draws down to `choiceMinScale`.
+    static let choiceFitScale: CGFloat = 0.85
     /// The space between the choices, across and down.
     static let choiceGap: CGFloat = 8
     /// The choices' arrangement across `width` (round 3f), from the widest name's and the longest word's one-line widths
-    /// at the text size, the widest name's as it draws at `choiceMinScale` (`widestAtBound`, round 3i) and the capsule's own
-    /// insets (its width less its name's), all measured off screen: one line, in as many columns as there are choices or
-    /// else two, when the widest name fits its cell at the bound (at the accessibility sizes, at its own size: nothing
+    /// at the text size, the widest name's at `choiceFitScale` (`widestAtFit`; round 3i, 3j) and the capsule's own insets
+    /// (its width less its name's), all measured off screen: one line, in as many columns as there are choices or else
+    /// two, when the widest name fits its cell at the fit scale (at the accessibility sizes, at its own size: nothing
     /// shrinks there); else two columns whose names wrap on words, when a half cell holds the longest word; else one
-    /// column, wrapping. No name is cut and none breaks inside a word. The width at the bound is measured at that point
-    /// size, not worked out from the name's own: text grows relatively wider as it shrinks, and upright at XL a name the
-    /// estimate put on one line was cut (round 3i). Before the measures are in, two by two, wrapping, or one column at
-    /// the accessibility sizes.
-    static func choiceArrangement(width: CGFloat, widestName: CGFloat, widestAtBound: CGFloat, longestWord: CGFloat, insets: CGFloat,
+    /// column, wrapping. No name is cut and none breaks inside a word. The width at the fit scale is measured at that
+    /// point size, not worked out from the name's own (text grows relatively wider as it shrinks: upright at XL a name the
+    /// estimate put on one line was cut, round 3i), and at a scale above the bound the name draws down to (a name drawn
+    /// at its floor is wider still: the closed Duo at XXL, round 3j). Before the measures are in, two by two, wrapping, or
+    /// one column at the accessibility sizes.
+    static func choiceArrangement(width: CGFloat, widestName: CGFloat, widestAtFit: CGFloat, longestWord: CGFloat, insets: CGFloat,
                                   count: Int, accessibility: Bool) -> ChoiceArrangement {
         guard count > 1 else { return ChoiceArrangement(columns: 1, oneLine: false, minScale: 1) }
-        guard width > 0, widestName > 0, accessibility || widestAtBound > 0, longestWord > 0, insets > 0 else {
+        guard width > 0, widestName > 0, accessibility || widestAtFit > 0, longestWord > 0, insets > 0 else {
             return accessibility ? .unmeasuredAccessible : .unmeasured
         }
         func room(_ columns: Int) -> CGFloat { (width - CGFloat(columns - 1) * choiceGap) / CGFloat(columns) - insets }
         let minScale = accessibility ? 1 : choiceMinScale
-        let need = accessibility ? widestName : widestAtBound
+        let need = accessibility ? widestName : widestAtFit
         for columns in [count, 2] where need <= room(columns) {
             return ChoiceArrangement(columns: columns, oneLine: true, minScale: minScale)
         }

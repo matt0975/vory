@@ -115,9 +115,9 @@ struct ApprovalCardView: View {
     /// The widest choice's name on one line at this text size, a prominent capsule round a sample and the sample alone,
     /// measured off screen (round 3f): the arrangement's widths, the capsule's less the sample's being its insets.
     @State private var widestName: CGFloat = 0
-    /// The widest name as it draws at the bound (round 3i): measured at the body size's `VoiceSplit.choiceMinScale`, the
-    /// body size read through `bodySize`.
-    @State private var widestAtBound: CGFloat = 0
+    /// The widest name at the one-line check's scale (round 3i, 3j): measured at the body size's
+    /// `VoiceSplit.choiceFitScale`, the body size read through `bodySize`.
+    @State private var widestAtFit: CGFloat = 0
     @ScaledMetric(relativeTo: .body) private var bodySize: CGFloat = 17
     @State private var capsuleW: CGFloat = 0
     @State private var capsuleSampleW: CGFloat = 0
@@ -293,13 +293,13 @@ struct ApprovalCardView: View {
     }
     /// Voice mode's arrangement of the choices at this width and text size (round 3f).
     private var arrangement: VoiceSplit.ChoiceArrangement {
-        VoiceSplit.choiceArrangement(width: choicesW, widestName: widestName, widestAtBound: widestAtBound, longestWord: longestWord,
+        VoiceSplit.choiceArrangement(width: choicesW, widestName: widestName, widestAtFit: widestAtFit, longestWord: longestWord,
                                      insets: capsuleW - capsuleSampleW, count: approval.offeredChoices.count,
                                      accessibility: typeSize.isAccessibilitySize)
     }
     /// The arrangement's measures, off screen and out of VoiceOver's reach (round 3f): the longest word and the widest
-    /// name at body, the widest name at the bound's point size (round 3i), and a prominent capsule round a sample beside
-    /// the sample alone, for the capsule's own insets.
+    /// name at body, the widest name at the one-line check's point size (round 3i, 3j), and a prominent capsule round a
+    /// sample beside the sample alone, for the capsule's own insets.
     private var choiceMeasures: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 0) {
@@ -312,10 +312,10 @@ struct ApprovalCardView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widestName = $0 }
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(approval.offeredChoices, id: \.self) {
-                    Text(label($0)).font(.system(size: bodySize * VoiceSplit.choiceMinScale)).fixedSize()
+                    Text(label($0)).font(.system(size: bodySize * VoiceSplit.choiceFitScale)).fixedSize()
                 }
             }
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widestAtBound = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widestAtFit = $0 }
             Text(verbatim: "W").font(.body).fixedSize()
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { capsuleSampleW = $0 }
             Button {} label: { Text(verbatim: "W").font(.body).fixedSize() }
@@ -328,9 +328,9 @@ struct ApprovalCardView: View {
     #if DEBUG
     /// The arrangement and its measures, for the rig (#631, round 3g; DEBUG `-vory-voice-frames` only).
     private var probeCardLine: String {
-        String(format: "columns %d oneline %@ minscale %.2f width %.1f widest %.1f word %.1f insets %.1f bound %.1f", arrangement.columns,
+        String(format: "columns %d oneline %@ minscale %.2f width %.1f widest %.1f word %.1f insets %.1f fit %.1f", arrangement.columns,
                arrangement.oneLine ? "yes" : "no", arrangement.minScale, choicesW, widestName, longestWord, capsuleW - capsuleSampleW,
-               widestAtBound)
+               widestAtFit)
     }
     #endif
 

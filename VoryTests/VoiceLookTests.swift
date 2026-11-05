@@ -176,9 +176,10 @@ import VoryCore
     /// upright, 807 on its side and as a book.
     @Test func theChoicesTakeOneLineAtTheBoundElseWrapOnWords() {
         typealias A = VoiceSplit.ChoiceArrangement
-        // The width at the bound taken as the name's times the bound here (round 3i measures it; upright XL's case below).
+        // The width at the fit scale taken as the name's times 0.8 here, as these cases always had it (the app measures it;
+        // the measured cases are in noFrameEverBreaksAWord).
         func a(_ width: CGFloat, _ name: CGFloat, _ word: CGFloat, ax: Bool = false, count: Int = 4) -> A {
-            VoiceSplit.choiceArrangement(width: width, widestName: name, widestAtBound: name * VoiceSplit.choiceMinScale, longestWord: word,
+            VoiceSplit.choiceArrangement(width: width, widestName: name, widestAtFit: name * VoiceSplit.choiceMinScale, longestWord: word,
                                          insets: 32, count: count, accessibility: ax)
         }
         let line = A(columns: 2, oneLine: true, minScale: VoiceSplit.choiceMinScale)
@@ -202,7 +203,7 @@ import VoryCore
         #expect(a(807, 190, 80, ax: true) == A(columns: 2, oneLine: true, minScale: 1))
         // Before the measures: two by two, wrapping. Fewer choices: as many to a row as fit; one alone takes the row.
         #expect(a(0, 135.7, 50) == .unmeasured)
-        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 135.7, widestAtBound: 108.6, longestWord: 50, insets: 0, count: 4,
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 135.7, widestAtFit: 108.6, longestWord: 50, insets: 0, count: 4,
                                              accessibility: false) == .unmeasured)
         #expect(a(322, 82.6, 50, count: 2) == line)
         #expect(a(322, 135.7, 50, count: 3) == line)
@@ -213,23 +214,31 @@ import VoryCore
     /// start in one column (the closed Duo's first frame at AX5 was two by two, its half cell 113 pt against a 118.3 pt
     /// "Deny"); under them, two by two, where the closed card's half cell, less generous insets, holds XXXL's longest word
     /// (70.7, as measured on the closed Duo). Once measured: wherever the names wrap two to a row, a half cell holds the
-    /// longest word; wherever they stand on one line, the widest name as it draws at the bound fits its cell. Upright at XL:
-    /// 150.7 at its own size, about 122.4 at the bound (wider than 150.7 x 0.8, as text grows relatively wider as it
-    /// shrinks), a quarter cell 122.25: two by two at its own size, where the estimate had a row and the name was cut.
+    /// longest word; wherever they stand on one line, the widest name measured at the fit scale fits its cell. As measured
+    /// on round 3i at 0.8: upright at XL 122.3 against a quarter cell's 122.25 (a row was cut; now two by two at its own
+    /// size), and the closed Duo at XXL 129.7 against a half cell's 133 (drawn at its floor, it was cut). Round 3j measures
+    /// at 0.85: about 130.0 and 137.8, and both leave one line in those cells.
     @Test func noFrameEverBreaksAWord() {
         typealias A = VoiceSplit.ChoiceArrangement
-        #expect(VoiceSplit.choiceArrangement(width: 0, widestName: 0, widestAtBound: 0, longestWord: 0, insets: 0, count: 4, accessibility: true)
+        #expect(VoiceSplit.choiceArrangement(width: 0, widestName: 0, widestAtFit: 0, longestWord: 0, insets: 0, count: 4, accessibility: true)
                 == .unmeasuredAccessible)
-        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 0, widestAtBound: 0, longestWord: 0, insets: 0, count: 4,
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 0, widestAtFit: 0, longestWord: 0, insets: 0, count: 4,
                                              accessibility: true).columns == 1)
-        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 0, widestAtBound: 0, longestWord: 0, insets: 0, count: 4,
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 0, widestAtFit: 0, longestWord: 0, insets: 0, count: 4,
                                              accessibility: false) == .unmeasured)
         let longestUnderAccessibility: CGFloat = 70.7
         #expect(longestUnderAccessibility <= (322 - VoiceSplit.choiceGap) / 2 - 40, "the unmeasured two by two under the accessibility sizes")
-        #expect(VoiceSplit.choiceArrangement(width: 609, widestName: 150.7, widestAtBound: 122.4, longestWord: 59, insets: 24, count: 4,
-                                             accessibility: false) == A(columns: 2, oneLine: true, minScale: VoiceSplit.choiceMinScale), "upright at XL")
-        #expect(VoiceSplit.choiceArrangement(width: 609, widestName: 150.7, widestAtBound: 122.0, longestWord: 59, insets: 24, count: 4,
+        let line2 = A(columns: 2, oneLine: true, minScale: VoiceSplit.choiceMinScale), wrap2 = A(columns: 2, oneLine: false, minScale: 1)
+        #expect(VoiceSplit.choiceArrangement(width: 609, widestName: 150.7, widestAtFit: 130.0, longestWord: 59, insets: 24, count: 4,
+                                             accessibility: false) == line2, "upright at XL")
+        #expect(VoiceSplit.choiceArrangement(width: 609, widestName: 150.7, widestAtFit: 122.0, longestWord: 59, insets: 24, count: 4,
                                              accessibility: false) == A(columns: 4, oneLine: true, minScale: VoiceSplit.choiceMinScale), "a row where it fits")
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 162.3, widestAtFit: 137.8, longestWord: 64.7, insets: 24, count: 4,
+                                             accessibility: false) == wrap2, "the closed Duo at XXL")
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 162.3, widestAtFit: 133.0, longestWord: 64.7, insets: 24, count: 4,
+                                             accessibility: false) == line2, "one line at the half cell's room")
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 162.3, widestAtFit: 133.1, longestWord: 64.7, insets: 24, count: 4,
+                                             accessibility: false) == wrap2, "wrapping just past it")
         func room(_ width: CGFloat, _ columns: Int, _ insets: CGFloat) -> CGFloat {
             (width - CGFloat(columns - 1) * VoiceSplit.choiceGap) / CGFloat(columns) - insets
         }
@@ -237,13 +246,13 @@ import VoryCore
             for word: CGFloat in stride(from: 40, through: 200, by: 5) {
                 for widest in [word * 1.5, word * 2.5, word * 4] {
                     for grow: CGFloat in [1, 1.02, 1.05] {
-                        let atBound = widest * VoiceSplit.choiceMinScale * grow
+                        let atFit = widest * VoiceSplit.choiceFitScale * grow
                         for insets: CGFloat in [24, 32, 44] {
                             for accessibility in [false, true] {
-                                let a = VoiceSplit.choiceArrangement(width: width, widestName: widest, widestAtBound: atBound, longestWord: word,
+                                let a = VoiceSplit.choiceArrangement(width: width, widestName: widest, widestAtFit: atFit, longestWord: word,
                                                                      insets: insets, count: 4, accessibility: accessibility)
                                 if a.oneLine {
-                                    #expect((accessibility ? widest : atBound) <= room(width, a.columns, insets), "width \(width), widest \(widest)")
+                                    #expect((accessibility ? widest : atFit) <= room(width, a.columns, insets), "width \(width), widest \(widest)")
                                 } else if a.columns == 2 {
                                     #expect(word <= room(width, 2, insets), "width \(width), word \(word), insets \(insets)")
                                 }
