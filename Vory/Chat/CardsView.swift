@@ -117,6 +117,9 @@ struct ApprovalCardView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .scrollBounceBehavior(.basedOnSize)
+                        // The choices are below the fold here: the scroll's bar flashes as the card appears, so the
+                        // card reads as a scroll with more below (round 3c).
+                        .scrollIndicatorsFlash(onAppear: true)
                         .modifier(FootFade(on: true))
                     } else {
                         if wordsScroll {
