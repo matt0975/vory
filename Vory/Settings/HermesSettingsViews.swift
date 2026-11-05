@@ -12,10 +12,15 @@ struct DemoReadOnlyNote: View {
     var body: some View {
         if model.isInDemo {
             Section {
-                Label(Self.words, systemImage: "info.circle")
-                    .font(.subheadline)
-                    .accessibilityElement(children: .combine)
-                    .accessibilityIdentifier("demo.readonly")
+                // Wrapped at every text size, its height its text's: no line limit, nothing cut (the audit's larger sizes
+                // clipped a Label's text in the row). The symbol scales with the text.
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Image(systemName: "info.circle").foregroundStyle(.tint)
+                    Text(Self.words).fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.subheadline)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("demo.readonly")
             }
         }
     }
@@ -222,11 +227,18 @@ struct StringField: View {
     var value: String
     var commit: (String) -> Void
     @State private var text = ""
+    /// Disabled (the demo's read-only pages), the value is text: a disabled TextField draws dimmed but doesn't tell
+    /// VoiceOver it's not enabled (the audit's missing NotEnabled trait), and there is nothing to edit.
+    @Environment(\.isEnabled) private var isEnabled
     var body: some View {
-        TextField("", text: $text).multilineTextAlignment(.trailing).autocorrectionDisabled().textInputAutocapitalization(.never)
-            .onAppear { text = value }
-            .onChange(of: value) { _, v in text = v }
-            .onSubmit { if text != value { commit(text) } }
+        if isEnabled {
+            TextField("", text: $text).multilineTextAlignment(.trailing).autocorrectionDisabled().textInputAutocapitalization(.never)
+                .onAppear { text = value }
+                .onChange(of: value) { _, v in text = v }
+                .onSubmit { if text != value { commit(text) } }
+        } else {
+            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+        }
     }
 }
 
@@ -234,10 +246,18 @@ struct NumberField: View {
     var value: Double
     var commit: (Double) -> Void
     @State private var text = ""
+    /// Disabled, the value is text, as StringField's.
+    @Environment(\.isEnabled) private var isEnabled
+    /// A whole number without its ".0"; anything Int can't hold (infinite, NaN or past 1e15) as Double prints it.
+    private var shown: String { value.isFinite && abs(value) < 1e15 && value.rounded() == value ? String(Int(value)) : String(value) }
     var body: some View {
-        TextField("", text: $text).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-            .onAppear { text = value.rounded() == value ? String(Int(value)) : String(value) }
-            .onSubmit { if let d = Double(text), d != value { commit(d) } }
+        if isEnabled {
+            TextField("", text: $text).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                .onAppear { text = shown }
+                .onSubmit { if let d = Double(text), d != value { commit(d) } }
+        } else {
+            Text(shown).foregroundStyle(.secondary).monospacedDigit()
+        }
     }
 }
 
