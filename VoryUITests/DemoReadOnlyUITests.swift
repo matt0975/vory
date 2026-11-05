@@ -5,8 +5,9 @@ import XCTest
 /// SOUL.md. On each the line is there in its set words, nothing adds, changes or removes (no Add, no Create
 /// Profile, no Save, no switch enabled), and the page still reads. New bot and Edit bot… are nowhere in the demo. Over the
 /// mock (HERMES_E2E_URL / TOKEN / BUNDLE) the same pages have no line and their controls are there.
-/// `testTheDemosPagesAudit` opens each page in the demo and prints every audit finding (DEMO-RO-AUDIT) for a compare
-/// with the build before; HERMES_E2E_SHOTS keeps a still of each page (DEMO-RO still lines name them).
+/// `testTheDemosPagesAudit` opens each page in the demo and prints every audit finding (DEMO-RO-AUDIT) at every place
+/// down the page for a compare with the build before; HERMES_E2E_SHOTS keeps a still of each page (DEMO-RO still lines
+/// name them). `testTheDemosLineScalesWithTheTextSize` reads the line on Config at five text sizes (DEMO-RO sweep).
 @MainActor
 final class DemoReadOnlyUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -19,10 +20,10 @@ final class DemoReadOnlyUITests: XCTestCase {
     private func any(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
     private var device: String { app.windows.firstMatch.frame.width > 700 ? "ipad" : "iphone" }
 
-    private func launchDemo(tab: String = "settings") {
+    private func launchDemo(tab: String = "settings", extra: [String] = []) {
         app = XCUIApplication()
         app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", tab, "-colorSchemePreference", "light",
-                               "-tabLayout", "chats,bots,settings", "-tabLayout.homeFirstApplied", "YES"]
+                               "-tabLayout", "chats,bots,settings", "-tabLayout.homeFirstApplied", "YES"] + extra
         app.launch()
     }
     private func launchMock() throws {
@@ -174,7 +175,7 @@ final class DemoReadOnlyUITests: XCTestCase {
                 if keys.insert(key).inserted { added += 1 }
                 if c.isEnabled { enabled.insert(key) }
             }
-            print("DEMO-RO \(page): place \(place), \(here.count) controls on screen, \(added) new")
+            print("DEMO-RO \(page): place \(place), \(here.count) controls on screen, \(added) new; \(placeReport())")
             let before = cellFrames().map(\.frame.minY)
             drag(up: true); pause(0.5)
             if cellFrames().map(\.frame.minY) == before || place >= 15 { break }
@@ -185,12 +186,30 @@ final class DemoReadOnlyUITests: XCTestCase {
         print("DEMO-RO \(page): line \(note.exists ? "there" : "MISSING"), \(keys.count) controls over \(place + 1) places, none enabled: \(enabled.isEmpty)")
         // The page still reads: a drag moves it, or it all fits. Read from one snapshot of the tree before the drag and one
         // after (values, not elements: an element bound by index, read again after the drag, can be gone from the tree).
-        let before = cellFrames()
+        // The cells' labels are mostly empty, so they are paired by frame order: the n-th from the top before and after.
+        let before = cellFrames().map(\.frame).sorted { $0.minY < $1.minY }
         drag(up: true); pause(0.6)
-        let after = cellFrames()
-        let moved = before.compactMap { b in after.first { $0.label == b.label && !b.label.isEmpty }.map { b.frame.minY - $0.frame.minY } }.sorted()
-        print("DEMO-RO \(page): \(before.count) cells; \(moved.isEmpty ? "none to compare" : "they moved \(Int(moved[moved.count / 2])) pt") on a drag up")
+        let after = cellFrames().map(\.frame).sorted { $0.minY < $1.minY }
+        let moved = zip(before, after).map { $0.minY - $1.minY }.sorted()
+        let fits = (before.last?.maxY ?? 0) <= (voryTabBar?.minY ?? app.windows.firstMatch.frame.maxY)
+        print("DEMO-RO \(page): \(before.count) cells; \(moved.isEmpty ? "none to compare" : "they moved \(Int(moved[moved.count / 2])) pt by frame order") on a drag up\(fits ? " (the page fits above the tab bar)" : "")")
         drag(up: false); pause(0.4)
+    }
+    /// One place's own read, from one snapshot: the cell count, the lowest cell's frame, and the lowest static text above
+    /// the tab bar (its label and frame), so a place that adds no control still shows how far down the page it is.
+    private func placeReport() -> String {
+        guard let s = try? app.snapshot() else { return "no snapshot" }
+        let floor = voryTabBar?.minY ?? app.windows.firstMatch.frame.maxY
+        var cells: [CGRect] = [], texts: [(label: String, frame: CGRect)] = []
+        func walk(_ n: XCUIElementSnapshot) {
+            if n.elementType == .cell { cells.append(n.frame) }
+            if n.elementType == .staticText, !n.frame.isEmpty, n.frame.minY < floor { texts.append((n.label, n.frame)) }
+            for c in n.children { walk(c) }
+        }
+        walk(s)
+        let lastCell = cells.max { $0.maxY < $1.maxY }
+        let lastText = texts.max { $0.frame.maxY < $1.frame.maxY }
+        return "\(cells.count) cells, last cell \(lastCell.map(f) ?? "none"), last text '\(lastText.map { String($0.label.prefix(40)) } ?? "")' \(lastText.map { f($0.frame) } ?? "none")"
     }
     /// Every cell's label and frame, from one snapshot of the tree.
     private func cellFrames() -> [(label: String, frame: CGRect)] {
@@ -281,7 +300,10 @@ final class DemoReadOnlyUITests: XCTestCase {
         }
     }
 
-    /// Each page in the demo, audited, every finding printed for the compare with the build before; a still of each.
+    /// Each page in the demo, audited at every place from its top to its end (the read-only judging's drag loop), every
+    /// finding printed with its place for the compare with the build before; a still of each page's top. A line above a
+    /// page moves what is on screen, so the base and the fix, audited at one place, audited different elements: at every
+    /// place both audit the whole page, and read-392.py keys the union.
     func testTheDemosPagesAudit() throws {
         continueAfterFailure = true
         launchDemo()
@@ -289,15 +311,59 @@ final class DemoReadOnlyUITests: XCTestCase {
             openSettingsRow(page)
             pause(1)
             shot("392-\(device)-\(page)")
-            var n = 0
-            try app.performAccessibilityAudit { issue in
-                let el = issue.element
-                print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none")")
-                n += 1
+            var n = 0, place = 0
+            while true {
+                let at = place
+                try app.performAccessibilityAudit { issue in
+                    let el = issue.element
+                    print("DEMO-RO-AUDIT \(page) '\(issue.compactDescription)' type \(el?.elementType.rawValue ?? 0) id '\(el?.identifier ?? "")' label '\(el?.label.prefix(60) ?? "")' enabled \(self.state(el)) frame \(el.map { self.f($0.frame) } ?? "none") place \(at)")
+                    n += 1
+                    return true
+                }
+                let before = cellFrames().map(\.frame.minY)
+                drag(up: true); pause(0.5)
+                if cellFrames().map(\.frame.minY) == before || place >= 15 { break }
+                place += 1
+            }
+            print("DEMO-RO-AUDIT \(page) done, \(n) issues over \(place + 1) places")
+            for _ in 0...place { drag(up: false); pause(0.3) }
+            back()
+        }
+    }
+
+    /// The text sizes of the line's sweep: Large (the default), the largest standard one, and three accessibility sizes.
+    static let sweepSizes: [(name: String, category: String)] = [
+        ("L", "UICTContentSizeCategoryL"), ("XXXL", "UICTContentSizeCategoryXXXL"), ("AX1", "UICTContentSizeCategoryAccessibilityM"),
+        ("AX3", "UICTContentSizeCategoryAccessibilityXL"), ("AX5", "UICTContentSizeCategoryAccessibilityXXXL"),
+    ]
+    /// The demo's line on Config at each sweep size, a launch of its own each: the line brought wholly on screen between
+    /// the header and the tab bar, its frame printed, then an audit of Dynamic Type and clipped text with the findings on
+    /// the line printed. It scales when its height grows at each size up and no finding names it (read-392.py's SWEEP392).
+    func testTheDemosLineScalesWithTheTextSize() throws {
+        continueAfterFailure = true
+        let prefix = String(Self.words.prefix(24))
+        for size in Self.sweepSizes {
+            launchDemo(extra: ["-UIPreferredContentSizeCategoryName", size.category])
+            openSettingsRow("config")
+            let note = any("demo.readonly")
+            guard note.waitForExistence(timeout: 20) else {
+                XCTFail("config at \(size.name): no read-only line"); print("DEMO-RO sweep \(size.name): line MISSING"); app.terminate(); continue
+            }
+            let bottom = voryTabBar?.minY ?? app.windows.firstMatch.frame.maxY
+            for _ in 0..<12 where !(note.frame.minY > headerBottom && note.frame.maxY < bottom) {
+                nudge(up: note.frame.maxY >= bottom); pause(0.5)
+            }
+            let fr = note.frame, shown = fr.minY > headerBottom && fr.maxY < bottom
+            print("DEMO-RO sweep \(size.name): line \(f(fr)), wholly on screen \(shown), header bottom \(String(format: "%.1f", headerBottom)), tab bar top \(String(format: "%.1f", bottom))")
+            var hits = 0
+            try app.performAccessibilityAudit(for: [.dynamicType, .textClipped]) { issue in
+                guard let el = issue.element, el.identifier == "demo.readonly" || el.label.hasPrefix(prefix) else { return true }
+                print("DEMO-RO sweep \(size.name): finding '\(issue.compactDescription)' on the line \(self.f(el.frame))")
+                hits += 1
                 return true
             }
-            print("DEMO-RO-AUDIT \(page) done, \(n) issues")
-            back()
+            print("DEMO-RO sweep \(size.name): \(hits) findings on the line")
+            app.terminate()
         }
     }
 }

@@ -12,15 +12,13 @@ struct DemoReadOnlyNote: View {
     var body: some View {
         if model.isInDemo {
             Section {
-                // Wrapped at every text size, its height its text's: no line limit, nothing cut (the audit's larger sizes
-                // clipped a Label's text in the row). The symbol scales with the text.
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Image(systemName: "info.circle").foregroundStyle(.tint)
-                    Text(Self.words).fixedSize(horizontal: false, vertical: true)
-                }
-                .font(.subheadline)
-                .accessibilityElement(children: .combine)
-                .accessibilityIdentifier("demo.readonly")
+                // One Text, the symbol inline in it: a single run that wraps and scales with the text size, its height its
+                // text's, with no line limit, stack or combined element (a Label's text was clipped at the larger sizes).
+                // VoiceOver reads the words; the symbol is decoration.
+                Text("\(Text(Image(systemName: "info.circle")).foregroundStyle(.tint)) \(Self.words)")
+                    .font(.subheadline)
+                    .accessibilityLabel(Text(Self.words))
+                    .accessibilityIdentifier("demo.readonly")
             }
         }
     }
@@ -177,22 +175,30 @@ struct ConfigFormView: View {
             switch field.type {
             case "boolean":
                 Toggle(key, isOn: Binding(get: { current?.boolValue ?? false }, set: { v in Task { await write(key, .bool(v)) } }))
+                    .disabled(model.isInDemo)
             case "select":
                 Picker(key, selection: Binding(get: { current?.displayText ?? "" }, set: { v in Task { await write(key, .string(v)) } })) {
                     ForEach(field.options ?? [], id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
                 }
+                .disabled(model.isInDemo)
+            // In the demo a number or a string is a value to read, in the stock read-only row (as the model page's
+            // Current), not a disabled field: disabled, its value drew dimmed without telling VoiceOver it isn't
+            // enabled (the audit's missing NotEnabled trait). The toggle and the picker are controls, disabled.
             case "number":
-                LabeledContent(key) {
-                    NumberField(value: current?.doubleValue ?? 0) { v in Task { await write(key, .number(v)) } }
+                if model.isInDemo { LabeledContent(key, value: NumberField.shown(current?.doubleValue ?? 0)) } else {
+                    LabeledContent(key) {
+                        NumberField(value: current?.doubleValue ?? 0) { v in Task { await write(key, .number(v)) } }
+                    }
                 }
             default:
-                LabeledContent(key) {
-                    StringField(value: current?.displayText ?? "") { v in Task { await write(key, .string(v)) } }
+                if model.isInDemo { LabeledContent(key, value: current?.displayText ?? "") } else {
+                    LabeledContent(key) {
+                        StringField(value: current?.displayText ?? "") { v in Task { await write(key, .string(v)) } }
+                    }
                 }
             }
             if let d = field.description, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
         }
-        .disabled(model.isInDemo)
         .opacity(saving.contains(key) ? 0.5 : 1)
     }
 
@@ -227,18 +233,11 @@ struct StringField: View {
     var value: String
     var commit: (String) -> Void
     @State private var text = ""
-    /// Disabled (the demo's read-only pages), the value is text: a disabled TextField draws dimmed but doesn't tell
-    /// VoiceOver it's not enabled (the audit's missing NotEnabled trait), and there is nothing to edit.
-    @Environment(\.isEnabled) private var isEnabled
     var body: some View {
-        if isEnabled {
-            TextField("", text: $text).multilineTextAlignment(.trailing).autocorrectionDisabled().textInputAutocapitalization(.never)
-                .onAppear { text = value }
-                .onChange(of: value) { _, v in text = v }
-                .onSubmit { if text != value { commit(text) } }
-        } else {
-            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
-        }
+        TextField("", text: $text).multilineTextAlignment(.trailing).autocorrectionDisabled().textInputAutocapitalization(.never)
+            .onAppear { text = value }
+            .onChange(of: value) { _, v in text = v }
+            .onSubmit { if text != value { commit(text) } }
     }
 }
 
@@ -246,18 +245,15 @@ struct NumberField: View {
     var value: Double
     var commit: (Double) -> Void
     @State private var text = ""
-    /// Disabled, the value is text, as StringField's.
-    @Environment(\.isEnabled) private var isEnabled
-    /// A whole number without its ".0"; anything Int can't hold (infinite, NaN or past 1e15) as Double prints it.
-    private var shown: String { value.isFinite && abs(value) < 1e15 && value.rounded() == value ? String(Int(value)) : String(value) }
+    /// A whole number without its ".0"; anything Int can't hold (infinite, NaN or past 1e15) as Double prints it. Also
+    /// the demo's read-only rows' value.
+    static func shown(_ value: Double) -> String {
+        value.isFinite && abs(value) < 1e15 && value.rounded() == value ? String(Int(value)) : String(value)
+    }
     var body: some View {
-        if isEnabled {
-            TextField("", text: $text).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                .onAppear { text = shown }
-                .onSubmit { if let d = Double(text), d != value { commit(d) } }
-        } else {
-            Text(shown).foregroundStyle(.secondary).monospacedDigit()
-        }
+        TextField("", text: $text).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+            .onAppear { text = Self.shown(value) }
+            .onSubmit { if let d = Double(text), d != value { commit(d) } }
     }
 }
 
@@ -552,10 +548,12 @@ struct ApprovalsView: View {
                 }
                 .disabled(model.isInDemo)
                 .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
-                LabeledContent("Timeout (seconds)") {
-                    NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
+                // In the demo the timeout is a value to read, as the config page's numbers.
+                if model.isInDemo { LabeledContent("Timeout (seconds)", value: NumberField.shown(timeout)) } else {
+                    LabeledContent("Timeout (seconds)") {
+                        NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
+                    }
                 }
-                .disabled(model.isInDemo)
             } header: { Text("approvals") } footer: {
                 Text("Smart lets a guardian model auto-approve routine commands and escalate risky ones. Manual asks you for every dangerous command. Off disables the gate. YOLO (skip approvals) is per session, default off, and lives in the chat's model menu.")
             }
