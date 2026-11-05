@@ -1713,7 +1713,7 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
+                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed", wholeOnMac: true) {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 // The last message can be edited and sent in its own place, since only the last turn can be
@@ -1825,7 +1825,7 @@ struct TranscriptRow: View, Equatable {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .bubble(Color(.systemGray4), side: .trailing) {
+                        .bubble(Color(.systemGray4), side: .trailing, wholeOnMac: true) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                             // A steer isn't a turn the gateway can take back: its words go into a new message.
                             Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }
