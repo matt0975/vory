@@ -49,7 +49,7 @@ final class FileCardsUITests: XCTestCase {
     /// composer's dock takes no tap, the composer does. The band is the transcript between the top bar and the composer
     /// (the keyboard may stay up, and the composer with it). Each drag starts inside the band, in the card's own column,
     /// and moves the card's middle toward the band's, at most the band's height less 16, so it never starts on the
-    /// composer or the top bar; at most eight.
+    /// composer or the top bar; it rests at its end before lifting, so the transcript doesn't coast past; at most eight.
     private func bringIntoView(_ card: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let window = app.windows.firstMatch
         let composer = app.textViews["composer.text"].firstMatch
@@ -63,7 +63,7 @@ final class FileCardsUITests: XCTestCase {
             guard room > 0 else { break }
             let step = max(-room, min(room, (top + bottom) / 2 - f.midY))
             let from = window.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: f.midX - w.minX, dy: (step > 0 ? top + 8 : bottom - 8) - w.minY))
-            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: step)))
+            from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: step)), withVelocity: .slow, thenHoldForDuration: 0.5)
             RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         }
         XCTFail("the card never came clear of the composer: \(card.label) at \(card.frame), \(band)", file: file, line: line)
