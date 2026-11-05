@@ -42,6 +42,8 @@ struct HandsFreeView: View {
     @State private var controlsH: CGFloat = 0
     /// The widest control caption at this text size, measured off screen (#631, round 3e).
     @State private var captionW: CGFloat = 0
+    /// The same under each of `VoiceSplit.captionCaps` (#631, round 3f), for the one cap both side captions take.
+    @State private var captionCappedW: [CGFloat] = Array(repeating: 0, count: VoiceSplit.captionCaps.count)
     /// The waiting approval's parts as its card measures them in one column (#631), and the bot's state lines as they
     /// would stand (measured while they are hidden too), so the bot's full block is known at every level.
     @State private var cardHeights = VoiceSplit.CardHeights()
@@ -220,6 +222,8 @@ struct HandsFreeView: View {
             // Whether the one column's card scrolls its choices with its words (#631, round 3b: the all-scroll at closed
             // AX4 and AX5), for the probe's line; none in a split or with no card.
             + ";allscroll \(split == nil && chat.firstCard != nil ? (VoiceSplit.oneColumnCard(room: room, row: rowH, bot: botBlock(botLevel), controls: controlsH, heights: cardHeights)?.allScroll == true ? "yes" : "no") : "none")"
+            // The one cap both side captions take (#631, round 3f), or none.
+            + ";captioncap \(captionCap.map { "\($0)" } ?? "none")"
     }
 
     /// DEBUG `-vory-voice-worst thinking|paused|error`: the bot's block in a state's tallest form, for measuring the top
@@ -263,7 +267,8 @@ struct HandsFreeView: View {
             Spacer()
             VStack(spacing: 2) {
                 // Live is named when it is in use: the person's own provider, billed to them.
-                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(VoiceLook.secondary)
+                // Full white (#631, round 3f): it stands on the gradient's brightest part.
+                Text(session.isLive ? "Live voice · \(session.liveLabel ?? "")" : "Voice mode").font(.caption.weight(.semibold)).foregroundStyle(VoiceLook.topTitle.color)
                 Text(chat.title.count > 30 ? String(chat.title.prefix(29)) + "…" : chat.title).font(.subheadline.weight(.semibold)).lineLimit(1)
             }
             Spacer()
@@ -389,11 +394,21 @@ struct HandsFreeView: View {
             control(state.phase == .paused ? "play.fill" : "pause.fill", label: state.phase == .paused ? "Resume" : "Pause", on: state.phase == .paused) { session.togglePause() }
         }
         .padding(.top, 18).padding(.bottom, 24)
-        // The four captions' widest one-line width at this text size, measured off screen (#631, round 3e).
+        // The four captions' widest one-line width at this text size (#631, round 3e), and under each cap (round 3f),
+        // measured off screen.
         .background {
-            VStack { ForEach(Self.captions, id: \.self) { Text($0).font(.caption).fixedSize() } }
-                .fixedSize().hidden().accessibilityHidden(true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { captionW = $0 }
+            VStack {
+                VStack { ForEach(Self.captions, id: \.self) { Text($0).font(.caption).fixedSize() } }
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { captionW = $0 }
+                ForEach(VoiceSplit.captionCaps.indices, id: \.self) { i in
+                    VStack { ForEach(Self.captions, id: \.self) { Text($0).font(.caption).fixedSize() } }
+                        .fixedSize()
+                        .dynamicTypeSize(...VoiceSplit.captionCaps[i])
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { captionCappedW[i] = $0 }
+                }
+            }
+            .fixedSize().hidden().accessibilityHidden(true)
         }
     }
 
@@ -401,11 +416,18 @@ struct HandsFreeView: View {
     private static let captions = ["Mute", "Unmute", "Pause", "Resume"]
     /// The side columns' width (#631, round 3e): 88 under the accessibility sizes, where every caption fits it on one
     /// line. At them, the widest caption's own one-line width (measured off screen) and 8 pt of margin, up to what the row
-    /// allows (the column less End's 72 and the two 19 pt gaps, halved), the same both sides so End stays in the middle; a
-    /// caption that even that can't hold steps down to the largest size that does (`control`).
+    /// allows (`sideRoom`), the same both sides so End stays in the middle; when even that can't hold the widest caption,
+    /// both captions take the one largest size that does (`captionCap`, round 3f).
     private var controlColumn: CGFloat {
         guard typeSize.isAccessibilitySize else { return 88 }
-        return max(88, min(captionW + 8, (column.width - 72 - 2 * 19) / 2))
+        return max(88, min(captionW + 8, sideRoom))
+    }
+    /// What the row allows a side: the column less End's 72 and the two 19 pt gaps, halved.
+    private var sideRoom: CGFloat { (column.width - 72 - 2 * 19) / 2 }
+    /// The one cap both side captions take (#631, round 3f, `VoiceSplit.captionCap`), so they are always the same size;
+    /// none under the accessibility sizes, where every caption fits.
+    private var captionCap: DynamicTypeSize? {
+        typeSize.isAccessibilitySize ? VoiceSplit.captionCap(room: sideRoom, current: captionW, capped: captionCappedW) : nil
     }
 
     /// A control's caption on one line, never shrunk (#631, round 3e).
@@ -423,16 +445,10 @@ struct HandsFreeView: View {
             }
             .buttonStyle(.plain)
             .alignmentGuide(.controlCircle) { $0[VerticalAlignment.center] }
-            // Never shrunk past a whole word, never cut or wrapped (#631, round 3e): the caption at its own size when its
-            // column holds it on one line, else at the largest accessibility size that does, a size floor as the stock
-            // controls have. Under the accessibility sizes, and wherever it fits, that's its own size.
-            ViewThatFits(in: .horizontal) {
-                caption(label)
-                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility4)
-                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility3)
-                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility2)
-                caption(label).dynamicTypeSize(...DynamicTypeSize.accessibility1)
-            }
+            // Never shrunk past a whole word, never cut or wrapped (#631, round 3e), and both sides the same size (round
+            // 3f): at its own size when the side holds the widest caption on one line, else both at the one largest
+            // accessibility size that does (`captionCap`), a size floor as the stock controls have.
+            caption(label).dynamicTypeSize(...(captionCap ?? .accessibility5))
         }
         // Both columns as wide, whatever their words ("Unmute", "Resume", large text): End stays in the middle
         // (`controlColumn`: 88 under the accessibility sizes, wider at them).

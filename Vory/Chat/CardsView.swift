@@ -41,6 +41,9 @@ extension EnvironmentValues {
     @Entry var approvalWordsScroll = false
     /// The one column's very last resort (round 3): the choices scroll too, with what's asked, when even they don't fit.
     @Entry var approvalAllScroll = false
+    /// Voice mode's choices (#631, round 3f): their arrangement, which each name follows (one line, shrunk no further than
+    /// its bound, or wrapping on words). nil everywhere else, the chat's card included.
+    @Entry var voiceChoiceArrangement: VoiceSplit.ChoiceArrangement? = nil
 }
 
 private extension View {
@@ -91,6 +94,7 @@ struct ApprovalCardView: View {
     /// taller than its room, so what's allowed is read first and the choices are at hand at rest.
     @Environment(\.approvalChoicesPinned) private var choicesPinned
     @Environment(\.cardInVoiceMode) private var voiceMode
+    @Environment(\.dynamicTypeSize) private var typeSize
     /// Voice mode's one column (#631): what's asked (the heading, the description, the command, the tool, the guardian's
     /// flag) and the choices never scroll, so the closed Duo shows them whatever the conversation and the bot take; what
     /// each answer covers scrolls under them when the card is short. Each part's height goes up to voice mode
@@ -108,6 +112,13 @@ struct ApprovalCardView: View {
     /// The longest word of the four choices' names at this text size, measured off screen (round 3): what a cell of the
     /// two-by-two grid must hold without breaking a word.
     @State private var longestWord: CGFloat = 0
+    /// The widest choice's name on one line at this text size, a prominent capsule round a sample and the sample alone,
+    /// measured off screen (round 3f): the arrangement's widths, the capsule's less the sample's being its insets.
+    @State private var widestName: CGFloat = 0
+    @State private var capsuleW: CGFloat = 0
+    @State private var capsuleSampleW: CGFloat = 0
+    /// The width the choices are given (round 3f).
+    @State private var choicesW: CGFloat = 0
 
     /// The card's quieter lines: `.secondary` in a chat, white at 0.8 on voice mode's dark fill (#631).
     private var quiet: AnyShapeStyle { voiceMode ? AnyShapeStyle(VoiceLook.cardSecondary) : AnyShapeStyle(.secondary) }
@@ -241,30 +252,18 @@ struct ApprovalCardView: View {
     }
 
     /// Four choices do not fit on one line at iPhone width, and a wrapped name looks broken, so fall back to a 2x2 grid
-    /// when the row cannot fit. In voice mode a name may take two lines rather than shrink (#631), and when even the grid
-    /// is too wide the choices stand one to a row.
+    /// when the row cannot fit. In voice mode (#631) the four stand the same size, in a row, two by two or one to a row.
     @ViewBuilder private var choices: some View {
         if voiceMode {
-            // In voice mode a choice's name wraps, never shrinks or cuts (round 3): one row when the four fit at their
-            // names' own widths; else two by two, each cell half the card's width and as tall as its wrapped name; one
-            // column of four only when a cell couldn't hold the longest word of a name (the grid's ideal width is two of
-            // those words with a button's insets, so the grid is picked whenever its cells can hold them).
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { choiceButtons }
-                Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-                    GridRow { choiceButtons(Array(approval.offeredChoices.prefix(2))) }
-                    GridRow { choiceButtons(Array(approval.offeredChoices.dropFirst(2))) }
-                }
-                .frame(minWidth: 0, idealWidth: 2 * (longestWord + Self.choiceInsets) + 8, maxWidth: .infinity)
-                VStack(spacing: 8) { choiceButtons }
-            }
-            .background(alignment: .topLeading) {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(choiceWords, id: \.self) { Text($0).font(.body).fixedSize() }
-                }
-                .hidden().accessibilityHidden(true)
-                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { longestWord = $0 }
-            }
+            // The four the same size (round 3f): one layout of the same four buttons in every arrangement, so a change of
+            // text size or pose moves them rather than building others; every cell as wide as the others and as tall as
+            // the tallest. The names stand on one line, shrunk to 0.8 at most, where every name fits so (at its own size
+            // at the accessibility sizes); else they wrap on words, never inside one, and never shrink
+            // (`VoiceSplit.choiceArrangement`).
+            ChoiceCells(columns: arrangement.columns, spacing: VoiceSplit.choiceGap) { choiceButtons }
+                .environment(\.voiceChoiceArrangement, arrangement)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { choicesW = $0 }
+                .background(alignment: .topLeading) { choiceMeasures }
         } else {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { choiceButtons }
@@ -285,8 +284,33 @@ struct ApprovalCardView: View {
         var seen = Set<String>()
         return approval.offeredChoices.flatMap { label($0).split(separator: " ").map(String.init) }.filter { seen.insert($0).inserted }
     }
-    /// A prominent capsule button's insets either side of its name, with room to spare (round 3).
-    private static let choiceInsets: CGFloat = 40
+    /// Voice mode's arrangement of the choices at this width and text size (round 3f).
+    private var arrangement: VoiceSplit.ChoiceArrangement {
+        VoiceSplit.choiceArrangement(width: choicesW, widestName: widestName, longestWord: longestWord,
+                                     insets: capsuleW - capsuleSampleW, count: approval.offeredChoices.count,
+                                     accessibility: typeSize.isAccessibilitySize)
+    }
+    /// The arrangement's measures, off screen and out of VoiceOver's reach (round 3f): the longest word and the widest
+    /// name at body, and a prominent capsule round a sample beside the sample alone, for the capsule's own insets.
+    private var choiceMeasures: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(choiceWords, id: \.self) { Text($0).font(.body).fixedSize() }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { longestWord = $0 }
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(approval.offeredChoices, id: \.self) { Text(label($0)).font(.body).fixedSize() }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widestName = $0 }
+            Text(verbatim: "W").font(.body).fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { capsuleSampleW = $0 }
+            Button {} label: { Text(verbatim: "W").font(.body).fixedSize() }
+                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).fixedSize().disabled(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { capsuleW = $0 }
+        }
+        .fixedSize()
+        .hidden().accessibilityHidden(true)
+    }
 
     @ViewBuilder private func choiceButtons(_ choices: [String]) -> some View {
         ForEach(choices, id: \.self) { choice in
@@ -322,16 +346,22 @@ struct ApprovalChoiceButton: View {
     var title: String
     var action: () -> Void
     @Environment(\.cardInVoiceMode) private var voiceMode
+    @Environment(\.voiceChoiceArrangement) private var arrangement
 
     /// In a chat a name stays on one line and shrinks a little when it must. In voice mode (#631) it grows with the
-    /// text size and takes a second line instead, in colours that pass on the card's dark fill: Allow once white on a
-    /// deep blue of its own, Deny a light red, the rest white.
+    /// text size, on one line or wrapping as the four's arrangement says, in colours that pass on the card's dark fill:
+    /// Allow once white on a deep blue of its own, Deny a light red, the rest white.
     @ViewBuilder private var label: some View {
         if voiceMode {
-            // As many lines as its name needs at the text size, never shrunk or cut (round 3).
-            Text(title).font(.body).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            // On one line, shrunk only as far as its cell needs and never under the bound, when every name fits so;
+            // else as many lines as it needs, wrapping on words, never shrunk (round 3). Either way it fills its cell,
+            // so the four stand the same size (round 3f).
+            Text(title).font(.body).multilineTextAlignment(.center)
+                .lineLimit(arrangement?.oneLine == true ? 1 : nil)
+                .minimumScaleFactor(arrangement?.minScale ?? 1)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(choice == "deny" ? VoiceLook.deny.color : .white)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Text(title).lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
         }
@@ -354,6 +384,47 @@ struct ApprovalChoiceButton: View {
             Button(role: .destructive, action: action) { label }.buttonStyle(.glass)
         } else {
             Button(action: action) { label }.buttonStyle(.glass)
+        }
+    }
+}
+
+/// Voice mode's choices (#631, round 3f): `columns` to a row, every cell as wide as the others (the row less its gaps,
+/// shared out evenly) and as tall as the tallest button at that width, so the four stand the same size whichever name
+/// wraps. The same buttons in every arrangement.
+struct ChoiceCells: Layout {
+    var columns: Int
+    var spacing: CGFloat
+
+    private func cells(_ width: CGFloat, _ subviews: Subviews) -> (columns: Int, rows: Int, size: CGSize) {
+        let columns = max(1, min(self.columns, subviews.count))
+        let rows = (subviews.count + columns - 1) / columns
+        let w = max(0, (width - CGFloat(columns - 1) * spacing) / CGFloat(columns))
+        let h = subviews.map { $0.sizeThatFits(ProposedViewSize(width: w, height: nil)).height }.max() ?? 0
+        return (columns, rows, CGSize(width: w, height: h))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let width: CGFloat
+        if let w = proposal.width, w.isFinite {
+            width = w
+        } else {
+            // No width given (an ideal size): each cell as wide as the widest button's own width.
+            let columns = max(1, min(self.columns, subviews.count))
+            let widest = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+            width = CGFloat(columns) * widest + CGFloat(columns - 1) * spacing
+        }
+        let c = cells(width, subviews)
+        return CGSize(width: width, height: CGFloat(c.rows) * c.size.height + CGFloat(c.rows - 1) * spacing)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let c = cells(bounds.width, subviews)
+        for (i, subview) in subviews.enumerated() {
+            let x = bounds.minX + CGFloat(i % c.columns) * (c.size.width + spacing)
+            let y = bounds.minY + CGFloat(i / c.columns) * (c.size.height + spacing)
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(c.size))
         }
     }
 }

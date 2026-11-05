@@ -589,6 +589,50 @@ enum VoiceSplit {
         guard room > 0 else { return nil }
         return max(cardFloor(for: size), room - row - bot - controls)
     }
+
+    /// Voice mode's choices, all the same size (#631, round 3f): how many to a row, and whether their names stand on one
+    /// line or wrap. The cells share the row evenly and are all as tall as the tallest (`ChoiceCells`), so the widest name
+    /// and the longest word decide. `columns` is 4 (a row), 2 (two by two) or 1 (a column) for four choices.
+    struct ChoiceArrangement: Equatable {
+        var columns: Int
+        /// The names stand on one line, each shrunk only as far as its cell needs and never under `minScale`.
+        var oneLine: Bool
+        var minScale: CGFloat
+        /// Before the measures are in: two by two, wrapping.
+        static let unmeasured = ChoiceArrangement(columns: 2, oneLine: false, minScale: 1)
+    }
+    /// The furthest a choice's name shrinks to stay on one line, under the accessibility sizes (round 3f).
+    static let choiceMinScale: CGFloat = 0.8
+    /// The space between the choices, across and down.
+    static let choiceGap: CGFloat = 8
+    /// The choices' arrangement across `width` (round 3f), from the widest name's and the longest word's one-line widths
+    /// at the text size and the capsule's own insets (its width less its name's), all measured off screen: one line, in
+    /// as many columns as there are choices or else two, when every name fits its cell at `choiceMinScale` or more (at
+    /// the accessibility sizes, at its own size: nothing shrinks there); else two columns whose names wrap on words, when
+    /// a half cell holds the longest word; else one column, wrapping. A name never breaks inside a word.
+    static func choiceArrangement(width: CGFloat, widestName: CGFloat, longestWord: CGFloat, insets: CGFloat, count: Int,
+                                  accessibility: Bool) -> ChoiceArrangement {
+        guard count > 1 else { return ChoiceArrangement(columns: 1, oneLine: false, minScale: 1) }
+        guard width > 0, widestName > 0, longestWord > 0, insets > 0 else { return .unmeasured }
+        func room(_ columns: Int) -> CGFloat { (width - CGFloat(columns - 1) * choiceGap) / CGFloat(columns) - insets }
+        let minScale = accessibility ? 1 : choiceMinScale
+        for columns in [count, 2] where widestName * minScale <= room(columns) {
+            return ChoiceArrangement(columns: columns, oneLine: true, minScale: minScale)
+        }
+        return ChoiceArrangement(columns: longestWord <= room(2) ? 2 : 1, oneLine: false, minScale: 1)
+    }
+
+    /// The caps the side controls' captions step down through, largest first (#631, round 3f).
+    static let captionCaps: [DynamicTypeSize] = [.accessibility4, .accessibility3, .accessibility2, .accessibility1]
+    /// The one cap both side captions take (round 3f), so they are always the same size, whichever words they show:
+    /// none when the widest caption (`current`) with 8 pt of margin fits the side's `room`; else the largest of
+    /// `captionCaps` at which it does (`capped`: the widest caption's width under each); else the smallest. None until
+    /// every width is measured, so a cap is never picked from part of them.
+    static func captionCap(room: CGFloat, current: CGFloat, capped: [CGFloat]) -> DynamicTypeSize? {
+        guard room > 0, current > 0, current + 8 > room, capped.count == captionCaps.count, !capped.contains(0) else { return nil }
+        for (cap, width) in zip(captionCaps, capped) where width + 8 <= room { return cap }
+        return captionCaps.last
+    }
 }
 
 /// Voice mode's colours, chosen for contrast (#631). The screen is always dark, under a gradient from the bot's colour at
@@ -646,6 +690,11 @@ enum VoiceLook {
     /// conversation's prompt, the person's own words): white at this opacity, in place of `.secondary`.
     static let secondaryOpacity = 0.85
     static var secondary: Color { Color.white.opacity(secondaryOpacity) }
+    /// The top row's first line ("Voice mode", or the live provider's name): full white (#631, round 3f). It stands on
+    /// the gradient's brightest part; at 0.85 it passed over every tint's top on paper, at under 5:1 for the light ones,
+    /// yet the accessibility audit flagged it at the largest text size. Full white has 6.18:1 at worst, as the chat's
+    /// name under it has.
+    static let topTitle = RGB.white
     /// A note or an error under the bot: orange on a dark capsule of its own, as "Mic muted" stands on one.
     static let orange = RGB(r: 1, g: 0.624, b: 0.039)
     static let noteBackingOpacity = 0.55

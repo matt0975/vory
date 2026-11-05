@@ -162,4 +162,60 @@ import VoryCore
         #expect(VoiceSplit.compactSaving(ring: true) == 196 - VoiceSplit.ring)
         #expect(VoiceSplit.compactSaving(ring: false) == 164 - VoiceSplit.face)
     }
+
+    /// Round 3f: the top row's title in full white, 6:1 or more over every tint's top (white at 0.85 had under 5:1 over
+    /// the light ones).
+    @Test func theTitlePassesOverTheTopForEveryTintWithRoomToSpare() {
+        for t in Self.tints {
+            #expect(VoiceLook.contrast(VoiceLook.topTitle, VoiceLook.top(for: t)) >= 6, "the title over \(t)")
+        }
+    }
+
+    /// Round 3f: the four choices the same size. The widest name, "Allow for this chat", 135.7 at Large and about 151.7,
+    /// 167.6 and 183.6 at XL, XXL and XXXL; the capsule's insets taken as 32; the card's inside 322 on the closed Duo, 609
+    /// upright, 807 on its side and as a book.
+    @Test func theChoicesTakeOneLineAtTheBoundElseWrapOnWords() {
+        typealias A = VoiceSplit.ChoiceArrangement
+        func a(_ width: CGFloat, _ name: CGFloat, _ word: CGFloat, ax: Bool = false, count: Int = 4) -> A {
+            VoiceSplit.choiceArrangement(width: width, widestName: name, longestWord: word, insets: 32, count: count, accessibility: ax)
+        }
+        let line = A(columns: 2, oneLine: true, minScale: VoiceSplit.choiceMinScale)
+        let wrap = A(columns: 2, oneLine: false, minScale: 1)
+        // Closed: two by two on one line at Large (it needs 0.92) and XL (0.82); wrapping at XXL and XXXL (0.75, 0.68).
+        #expect(a(322, 135.7, 50) == line)
+        #expect(a(322, 151.7, 56) == line)
+        #expect(a(322, 167.6, 62) == wrap)
+        #expect(a(322, 183.6, 68) == wrap)
+        // At the accessibility sizes nothing shrinks: two by two while a half cell (125) holds the longest word, wrapping;
+        // past it, one to a row.
+        #expect(a(322, 301.2, 120, ax: true) == wrap)
+        #expect(a(322, 400, 130, ax: true) == A(columns: 1, oneLine: false, minScale: 1))
+        // Upright: a row at Large (0.84), two by two from XL, one line at full size through XXXL.
+        #expect(a(609, 135.7, 50) == A(columns: 4, oneLine: true, minScale: VoiceSplit.choiceMinScale))
+        #expect(a(609, 151.7, 56) == line)
+        #expect(a(609, 183.6, 68) == line)
+        // On its side and as a book: a row through XXXL (0.89).
+        #expect(a(807, 183.6, 68) == A(columns: 4, oneLine: true, minScale: VoiceSplit.choiceMinScale))
+        // One line at an accessibility size only at its own size.
+        #expect(a(807, 190, 80, ax: true) == A(columns: 2, oneLine: true, minScale: 1))
+        // Before the measures: two by two, wrapping. Fewer choices: as many to a row as fit; one alone takes the row.
+        #expect(a(0, 135.7, 50) == .unmeasured)
+        #expect(VoiceSplit.choiceArrangement(width: 322, widestName: 135.7, longestWord: 50, insets: 0, count: 4, accessibility: false) == .unmeasured)
+        #expect(a(322, 82.6, 50, count: 2) == line)
+        #expect(a(322, 135.7, 50, count: 3) == line)
+        #expect(a(322, 82.6, 50, count: 1).columns == 1)
+    }
+
+    /// Round 3f: one cap for both side captions, the largest at which the widest of them fits its side (the widths here
+    /// are the test's own).
+    @Test func bothSideCaptionsTakeOneCap() {
+        let capped: [CGFloat] = [131, 120, 100, 80]
+        #expect(VoiceSplit.captionCap(room: 136, current: 120, capped: capped) == nil, "fits at its own size")
+        #expect(VoiceSplit.captionCap(room: 136, current: 149.2, capped: capped) == .accessibility3)
+        #expect(VoiceSplit.captionCap(room: 60, current: 149.2, capped: capped) == .accessibility1, "none fits: the smallest")
+        #expect(VoiceSplit.captionCap(room: 0, current: 149.2, capped: capped) == nil, "not measured yet")
+        #expect(VoiceSplit.captionCap(room: 136, current: 0, capped: capped) == nil, "not measured yet")
+        #expect(VoiceSplit.captionCap(room: 60, current: 149.2, capped: [131, 120, 0, 80]) == nil, "not all measured")
+        #expect(VoiceSplit.captionCap(room: 136, current: 149.2, capped: [0, 120, 100, 80]) == nil, "not all measured, though AX3 fits")
+    }
 }
