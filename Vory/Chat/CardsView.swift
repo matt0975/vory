@@ -449,13 +449,16 @@ struct ChoiceCells: Layout {
 /// DEBUG `-vory-voice-frames` (#631, round 3g): voice mode's choices tell the rig what each name drew, by geometry reads
 /// only: the card's arrangement and its measures, and each name's own size as laid out beside its one-line natural size
 /// (a hidden copy, there only while the flag is on) and the room its cell gave it. The rig works out from them how many
-/// lines a name took and whether one was cut. Nothing here changes a frame, and none of it is in Release.
+/// lines a name took and whether one was cut. Round 3h: each name is read straight from layout, by a GeometryReader in a
+/// background that emits the preference itself, with no state between (round 3g's onGeometryChange and @State kept the
+/// first pass's numbers, or none once the card went all-scroll). Nothing here changes a frame, and none of it is in
+/// Release.
 enum VoiceChoiceProbe {
     static let on = ProcessInfo.processInfo.arguments.contains("-vory-voice-frames")
     struct Name: Equatable {
         var title: String
-        var text: CGSize
-        var natural: CGSize
+        var text: CGSize = .zero
+        var natural: CGSize = .zero
         /// The width the name was given: its label's, after the frame that fills the cell.
         var room: CGFloat = 0
         var line: String {
@@ -466,45 +469,57 @@ enum VoiceChoiceProbe {
         var card = ""
         var names: [Name] = []
         var line: String { card.isEmpty && names.isEmpty ? "none" : ([card] + names.map(\.line)).joined(separator: "|") }
+        /// A name's reading put with the others of the same title: each read part (text, natural, room) taken as read.
+        mutating func merge(_ n: Name) {
+            guard let i = names.firstIndex(where: { $0.title == n.title }) else { names.append(n); return }
+            if n.text != .zero { names[i].text = n.text }
+            if n.natural != .zero { names[i].natural = n.natural }
+            if n.room != 0 { names[i].room = n.room }
+        }
     }
     struct Key: PreferenceKey {
         static let defaultValue = Report()
         static func reduce(value: inout Report, nextValue: () -> Report) {
             let next = nextValue()
             if !next.card.isEmpty { value.card = next.card }
-            value.names += next.names
+            for n in next.names { value.merge(n) }
         }
     }
-    /// A name's own size as laid out, and its one-line natural size from a hidden copy, reported up.
+    /// A name's own size as laid out, and its one-line natural size from a hidden copy, each read by a GeometryReader in
+    /// a background and reported up from the layout itself.
     struct NameRead: ViewModifier {
         var title: String
-        @State private var text = CGSize.zero
-        @State private var natural = CGSize.zero
         @ViewBuilder func body(content: Content) -> some View {
             if on {
                 content
-                    .onGeometryChange(for: CGSize.self) { $0.size } action: { text = $0 }
+                    .background {
+                        GeometryReader { text in
+                            Color.clear.preference(key: Key.self, value: Report(names: [Name(title: title, text: text.size)]))
+                        }
+                    }
                     .background {
                         Text(title).font(.body).fixedSize().hidden().accessibilityHidden(true)
-                            .onGeometryChange(for: CGSize.self) { $0.size } action: { natural = $0 }
+                            .background {
+                                GeometryReader { natural in
+                                    Color.clear.preference(key: Key.self, value: Report(names: [Name(title: title, natural: natural.size)]))
+                                }
+                            }
                     }
-                    .preference(key: Key.self, value: Report(names: [Name(title: title, text: text, natural: natural)]))
             } else {
                 content
             }
         }
     }
-    /// The room the name was given, read after the frame that fills its cell, put on that name's entry.
+    /// The room the name was given, read after the frame that fills its cell by a GeometryReader in a background.
     struct RoomRead: ViewModifier {
         var title: String
-        @State private var room: CGFloat = 0
         @ViewBuilder func body(content: Content) -> some View {
             if on {
-                content
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { room = $0 }
-                    .transformPreference(Key.self) { report in
-                        for i in report.names.indices where report.names[i].title == title { report.names[i].room = room }
+                content.background {
+                    GeometryReader { room in
+                        Color.clear.preference(key: Key.self, value: Report(names: [Name(title: title, room: room.size.width)]))
                     }
+                }
             } else {
                 content
             }
