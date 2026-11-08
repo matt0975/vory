@@ -229,6 +229,21 @@ import VoryCore
         #expect(VoiceSplit.conversationShown(room: bottom + 36, rows: [66, 0], line: line) == bottom + 36)
     }
 
+    /// Round 3m: the conversation's room on the voice screen is what it is offered, never what its scroll was last set to.
+    /// In 3l the room was read from a frame the scroll itself held open, so once read tall it never came back down, and an
+    /// approval arriving left the closed Duo's column 247 pt past its screen. With the scroll set to 600 over it, the room
+    /// still takes the 120 or the 800 offered.
+    @Test @MainActor func theConversationsRoomIsWhatItIsOfferedNeverItsScroll() {
+        let room = Color.red.modifier(WholeLinesRoom(on: true, shown: 600, room: .constant(0), line: .constant(0)))
+        #if canImport(UIKit)
+        let host = UIHostingController(rootView: room)
+        #else
+        let host = NSHostingController(rootView: room)
+        #endif
+        #expect(abs(host.sizeThatFits(in: CGSize(width: 382, height: 120)).height - 120) <= 0.5, "a short room stays short")
+        #expect(abs(host.sizeThatFits(in: CGSize(width: 382, height: 800)).height - 800) <= 0.5, "a tall room stays tall")
+    }
+
     /// Round 3f: the top row's title in full white, 6:1 or more over every tint's top (white at 0.85 had under 5:1 over
     /// the light ones).
     @Test func theTitlePassesOverTheTopForEveryTintWithRoomToSpare() {

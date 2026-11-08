@@ -572,9 +572,8 @@ struct VoiceTranscriptView: View {
             // Each new word: to the bottom, unanimated (the words stream several times a second).
             .onChange(of: tail) { _, _ in if following { proxy.scrollTo(bottomID, anchor: .bottom) } }
             // Round 3l: back at the newest when the whole-lines height changes (the card coming shortens it), so its lines
-            // stand where they were worked out from; then the scroll at that height, at the foot of its room.
+            // stand where they were worked out from. The scroll takes that height over its room (`WholeLinesRoom`, 3m).
             .onChange(of: shown) { _, _ in if following { proxy.scrollTo(bottomID, anchor: .bottom) } }
-            .frame(height: shown)
             .mask {
                 // The top edge fades, so a line scrolling out does not cut under the state line (round 3l: never over the
                 // newest whole line).
@@ -600,9 +599,9 @@ struct VoiceTranscriptView: View {
             }
             .animation(.snappy(duration: 0.2), value: following)
         }
-        // Round 3l: on the voice screen, the room it is given (the scroll at its foot, the rest blank above it) and one line,
-        // measured off screen; the Mac's window as it was.
-        .modifier(WholeLinesRoom(on: wholeLines, room: $roomH, line: $lineH))
+        // Round 3l: on the voice screen, the room it is given (the scroll at its foot at the whole-lines height, the rest
+        // blank above it) and one line, measured off screen; the Mac's window as it was.
+        .modifier(WholeLinesRoom(on: wholeLines, shown: shown, room: $roomH, line: $lineH))
     }
 
     /// What changes as the conversation goes on: the last line's words and the count.
@@ -624,22 +623,27 @@ struct VoiceTranscriptView: View {
     }
 }
 
-/// The voice screen's conversation in its room (#631, round 3l): the scroll at the room's foot, the rest blank above it,
-/// the room and one line of the conversation measured for its whole lines. Off (the Mac's voice window), the content as
-/// it is, so that window's layout doesn't change.
-private struct WholeLinesRoom: ViewModifier {
+/// The voice screen's conversation in its room (#631, round 3l): the scroll at the room's foot at its whole-lines height
+/// (`shown`), the rest blank above it, the room and one line of the conversation measured for its whole lines. Round 3m:
+/// the room is read from a clear view that takes exactly what it is offered, and the scroll stands over it in an overlay,
+/// which never changes the size of the view it is on. In 3l the room was read from a frame the scroll itself held open,
+/// so once read tall it never came back down, and an approval arriving left the column past the screen. Off (the Mac's
+/// voice window), the content as it is, so that window's layout doesn't change.
+struct WholeLinesRoom: ViewModifier {
     let on: Bool
+    let shown: CGFloat?
     @Binding var room: CGFloat
     @Binding var line: CGFloat
     @ViewBuilder func body(content: Content) -> some View {
         if on {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room = $0 }
                 .background {
                     Text(verbatim: "Ag").font(.body).fixedSize().hidden().accessibilityHidden(true)
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { line = $0 }
                 }
+                .overlay(alignment: .bottom) { content.frame(height: shown) }
         } else {
             content
         }
