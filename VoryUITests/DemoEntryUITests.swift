@@ -4,6 +4,7 @@ import XCTest
 /// Vory on the demo's bots and chats, Settings tags the gateway "Demo" and offers Leave demo, and leaving brings back the
 /// tour with nothing of the demo left. Runs on the demo copy (HERMES_E2E_BUNDLE), which keeps no gateway between
 /// launches; skipped without it.
+@MainActor
 final class DemoEntryUITests: XCTestCase {
     private var app: XCUIApplication!
 
