@@ -33,27 +33,27 @@ struct OnboardingView: View {
         var p = Self.basePages
         if ChatSummarizer.isAvailable {
             // Before the last page, the one that connects.
-            p.insert(Page(title: "Summaries, on your \(Self.device).", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your \(Self.device). Optional — your call.", demo: .summaries), at: p.count - 1)
+            p.insert(Page(title: "Summaries, on your \(Self.device).", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your \(Self.device). Optional, your call.", demo: .summaries), at: p.count - 1)
         }
         return p
     }
     #if os(macOS)
     // No Dynamic Island page: the menu bar takes that job on the Mac and gets its page with it.
     private static let basePages: [Page] = [
-        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your Mac. Every bot you run lives here — step through to see what we can do together.", demo: .bots),
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your Mac. Every bot you run lives here. Step through to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
-        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands right here. Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands right here. Once, for the session, always, or deny. It waits for you.", demo: .approval),
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
-        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your network, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
+        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard, whether it's on your network, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
     ]
     #else
     private static let basePages: [Page] = [
-        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on \(DeviceWords.your). Every bot you run lives here — swipe to see what we can do together.", demo: .bots),
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on \(DeviceWords.your). Every bot you run lives here. Swipe to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
-        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on \(DeviceWords.your). Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on \(DeviceWords.your). Once, for the session, always, or deny. It waits for you.", demo: .approval),
         Page(title: "I keep you posted.", says: "A Live Activity follows every turn in the Dynamic Island, and the reply comes as a notification you can answer right there.", demo: .island),
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
-        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
+        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard, whether it's on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
     ]
     #endif
 
@@ -274,7 +274,7 @@ private struct ChatDemo: View {
     @State private var toolDone = false
     @State private var reply2 = ""
     private let full = "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone."
-    private let full2 = "Done — 4.2 GB freed. Want log rotation set up so it stays that way?"
+    private let full2 = "Done, 4.2 GB freed. Want log rotation set up so it stays that way?"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -432,7 +432,7 @@ private struct IslandDemo: View {
                 BotFaceView(spec: bot, size: 36, active: false, mood: BotFaceView.Mood(profile: "tour-note"))
                 VStack(alignment: .leading, spacing: 2) {
                     HStack { Text("Ada").font(.subheadline.weight(.semibold)); Spacer(); Text("now").font(.caption2).foregroundStyle(.secondary) }
-                    Text("Done — 4.2 GB freed. Want me to set up log rotation?").font(.caption).lineLimit(2)
+                    Text("Done, 4.2 GB freed. Want me to set up log rotation?").font(.caption).lineLimit(2)
                 }
             }
             .padding(12)
@@ -582,7 +582,7 @@ private struct SummariesDemo: View {
                         if summarized { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).transition(.scale.combined(with: .opacity)).accessibilityLabel("Summarized") }
                     }
                     Text(summarized ? "Freed 4.2 GB of rotated logs; the bot offered to set up log rotation and is waiting on a yes."
-                                    : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done — 4.2 GB freed. Want log rotation set up so it")
+                                    : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done, 4.2 GB freed. Want log rotation set up so it")
                         .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                         .contentTransition(.numericText())
                     Text("Ada · 2 min ago").font(.caption2).foregroundStyle(.tertiary)
