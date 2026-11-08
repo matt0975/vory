@@ -11,7 +11,10 @@ import XCTest
 /// (`-vory-update-probe`, `UpdateMotionProbe`), which also marks the update's own steps (its start, Update Complete, the
 /// closing ease, `updating` going false), printed with their times. The probe's self-check ("selfcheck-p", a view of its
 /// own eased 100 pt over 0.5 s at the start) must read as an eased run of many samples; if it doesn't, the presentation
-/// sampler can't see motion, and the test is skipped as VOID (UPDATE-CONTROL VOID), never judged.
+/// sampler can't see motion, and the test is skipped as VOID (UPDATE-CONTROL VOID), never judged. The probe numbers
+/// each view it draws from (its instance) and times the drawn samples by their display frames: a judged series holding
+/// more than one instance is two views under one key, and the test is skipped as VOID too (UPDATE-SERIES VOID). Each
+/// instance on screen at once is its own series ("card-p", then "card#2-p"), printed with its instances.
 ///
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set: the mock started with `--companion 1.0.39` (an older
 /// companion on the gateway, its update served). HERMES_E2E_BUNDLE=com.vorantx.vory.demo drives the demo copy.
@@ -40,15 +43,16 @@ final class CompanionUpdateMotionUITests: XCTestCase {
         return found
     }
 
-    /// The probe's samples by key: (seconds from its first sample, top, height). Marks are under "mark:<what>".
-    private func probe() -> [String: [(t: Double, top: Double, height: Double)]] {
+    /// The probe's samples by key: (seconds from its first sample, top, height, the drawing view's instance or 0). Marks
+    /// are under "mark:<what>".
+    private func probe() -> [String: [(t: Double, top: Double, height: Double, inst: Int)]] {
         let e = app.descendants(matching: .any).matching(identifier: "debug.updatemotion").firstMatch
         guard e.waitForExistence(timeout: 5), let v = e.value as? String else { return [:] }
-        var out: [String: [(t: Double, top: Double, height: Double)]] = [:]
+        var out: [String: [(t: Double, top: Double, height: Double, inst: Int)]] = [:]
         for s in v.split(separator: ";") {
             let f = s.split(separator: ",").map(String.init)
-            guard f.count == 4, let t = Double(f[1]), let top = Double(f[2]), let h = Double(f[3]) else { continue }
-            out[f[0], default: []].append((t, top, h))
+            guard f.count == 5, let t = Double(f[1]), let top = Double(f[2]), let h = Double(f[3]), let n = Int(f[4]) else { continue }
+            out[f[0], default: []].append((t, top, h, n))
         }
         return out
     }
@@ -110,7 +114,8 @@ final class CompanionUpdateMotionUITests: XCTestCase {
             if key.hasPrefix("mark:") {
                 print("UPDATE-MARK \(key.dropFirst(5)): \(s.map { String(format: "%.3f", $0.t) }.joined(separator: " "))")
             } else {
-                print("UPDATE-MOTION \(key): \(s.map { String(format: "%.3f:%.1f/%.1f", $0.t, $0.top, $0.height) }.joined(separator: " "))")
+                let insts = Set(s.map(\.inst)).sorted().map(String.init).joined(separator: ",")
+                print("UPDATE-MOTION \(key) [instances \(insts)]: \(s.map { String(format: "%.3f:%.1f/%.1f", $0.t, $0.top, $0.height) }.joined(separator: " "))")
             }
         }
         guard let start = p["mark:start"]?.first?.t else { return XCTFail("the probe marked no start of the update") }
@@ -121,6 +126,14 @@ final class CompanionUpdateMotionUITests: XCTestCase {
         let eased = check.count >= 10 && (checkSteps.max() ?? 100) <= 25 && abs((check.last ?? 0) - (check.first ?? 0) - 100) <= 2
         print("UPDATE-CONTROL \(eased ? "ok" : "VOID"): selfcheck-p \(check.count) samples, \(String(format: "%.1f", check.first ?? 0)) to \(String(format: "%.1f", check.last ?? 0)), largest step \(String(format: "%.1f", checkSteps.max() ?? 0)) pt")
         guard eased else { throw XCTSkip("VOID: the presentation sampler didn't see the self-check's eased move (\(check.count) samples)") }
+        // Step 1c: a judged series holding more than one instance is two views under one key, never judged.
+        for key in ["card-p", "row-p", "log-p"] {
+            let insts = Set((p[key] ?? []).map(\.inst)).sorted()
+            if insts.count > 1 {
+                print("UPDATE-SERIES VOID: \(key) holds \(insts.count) instances (\(insts.map(String.init).joined(separator: ",")))")
+                throw XCTSkip("VOID: \(key) holds more than one instance (two views under one key)")
+            }
+        }
         XCTAssertNotNil(p["card-p"], "the probe drew no card")
         XCTAssertNotNil(p["row-p"], "the probe drew no version row")
         // The layout's own steps, printed for the read (a list row's layout lands in one pass), not judged.

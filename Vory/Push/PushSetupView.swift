@@ -609,17 +609,29 @@ struct CompanionUpdateRows: View {
 /// eased motion: at the start a 1 pt view of its own, outside the app's views and invisible, is moved 100 pt over 0.5 s
 /// by UIView.animate (its model at the end at once, its presentation eased), sampled as "selfcheck-p". Read by a UI test
 /// from a 1 pt element ("debug.updatemotion") after the update, and written to the perf log ("update-motion …").
+/// Step 1b: what is drawn or nothing (never the model's frame in its place), and each instance under a key its own
+/// series ("<key>-p", then "<key>#2-p" for another on screen at once). Step 1c: each anchor numbered once (its instance),
+/// carried by every drawn sample, and drawn samples timed by their display frames.
 @MainActor
 enum UpdateMotionProbe {
     nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-update-probe")
-    /// Each key's top and height at each layout, in seconds from the first sample; a mark has a zero frame.
-    private(set) static var samples: [(key: String, t: Double, top: CGFloat, height: CGFloat)] = []
+    /// Each key's top and height at each layout, in seconds from the first sample; a mark has a zero frame. A drawn
+    /// sample ("-p") carries its anchor's instance and its display frame's time (step 1c); the others 0 and now.
+    private(set) static var samples: [(key: String, t: Double, top: CGFloat, height: CGFloat, inst: Int)] = []
     private static var began: Date?
-    static func note(_ key: String, _ f: CGRect) {
+    /// Where each key's last sample is in `samples`: one instance's two samples at one frame time collapse to the last.
+    private static var lastIndex: [String: Int] = [:]
+    static func note(_ key: String, _ f: CGRect, frame: Double? = nil, inst: Int = 0) {
         guard isOn else { return }
         let start = began ?? Date()
         began = start
-        samples.append((key, Date().timeIntervalSince(start), f.minY, f.height))
+        let t = frame ?? Date().timeIntervalSince(start)
+        if let i = lastIndex[key], samples[i].inst == inst, samples[i].t == t {
+            samples[i] = (key, t, f.minY, f.height, inst)
+        } else {
+            lastIndex[key] = samples.count
+            samples.append((key, t, f.minY, f.height, inst))
+        }
         Perf.note("update-motion \(key) top \(String(format: "%.2f", f.minY)) height \(String(format: "%.2f", f.height))")
     }
     /// A step of the update itself (its start, Update Complete, the closing ease, `updating` going false).
@@ -629,8 +641,10 @@ enum UpdateMotionProbe {
         sampling(what)
         #endif
     }
-    /// "key,t,top,height;…", read by a UI test (`Readout`).
-    static var summary: String { samples.map { "\($0.key)," + String(format: "%.3f,%.2f,%.2f", $0.t, $0.top, $0.height) }.joined(separator: ";") }
+    /// "key,t,top,height,instance;…", read by a UI test (`Readout`).
+    static var summary: String {
+        samples.map { "\($0.key)," + String(format: "%.3f,%.2f,%.2f,%d", $0.t, $0.top, $0.height, $0.inst) }.joined(separator: ";")
+    }
 
     #if os(iOS)
     // The presentation sampler.
@@ -642,8 +656,18 @@ enum UpdateMotionProbe {
     private static var last: [String: CGRect] = [:]
     /// The sampling ended (2 s after `updating` went false); an anchor coming on screen after it doesn't start it again.
     private static var ended = false
+    /// The last instance number given (step 1c): each anchor is numbered once, from 1.
+    private static var instances = 0
+    /// The display link's frame times on the probe's clock (step 1c), mapped once.
+    private static var mediaToProbe: Double?
     static func register(_ a: PresentationAnchorView) {
         anchors.removeAll { $0.view == nil || $0.view === a }
+        if a.instance == 0 { instances += 1; a.instance = instances }
+        // Each instance its own series (step 1b): when a list swaps one row for another under the same key (the update's
+        // card for "up to date" at its end), both cells are on screen through the swap, and one series carried both, two
+        // values a tick. The first on screen keeps "<key>-p"; another on screen at once is "<key>#2-p", and so on.
+        let others = anchors.compactMap(\.view).filter { $0.key == a.key && $0.window != nil }.count
+        a.series = others == 0 ? a.key + "-p" : a.key + "#\(others + 1)-p"
         anchors.append(Weak(view: a))
         // From the first anchor on screen, so the page's rest before Install Now is drawn too: a change that lands
         // in one pass at the start shows as a step from it, not as a first sample.
@@ -652,7 +676,7 @@ enum UpdateMotionProbe {
     private static func startSampling() {
         until = .distantFuture
         guard link == nil else { return }
-        let l = CADisplayLink(target: Ticker.shared, selector: #selector(Ticker.tick))
+        let l = CADisplayLink(target: Ticker.shared, selector: #selector(Ticker.tick(_:)))
         l.add(to: .main, forMode: .common)
         link = l
     }
@@ -668,15 +692,20 @@ enum UpdateMotionProbe {
             break
         }
     }
-    fileprivate static func tick() {
+    fileprivate static func tick(_ frameTime: CFTimeInterval) {
         guard let until, Date() < until else { link?.invalidate(); link = nil; self.until = nil; ended = true; return }
+        // Step 1c: the drawn frame's own time on the probe's clock.
+        let start = began ?? Date()
+        began = start
+        if mediaToProbe == nil { mediaToProbe = Date().timeIntervalSince(start) - CACurrentMediaTime() }
+        let t = frameTime + (mediaToProbe ?? 0)
         for a in anchors {
             guard let v = a.view, let f = v.screenFrame() else { continue }
-            let key = v.key + "-p"
+            let key = v.series
             if let p = last[key], abs(p.minY - f.minY) < 0.1, abs(p.height - f.height) < 0.1 { continue }
             if last[key] == nil { mark("\(key) on \(v.measuredView)") }
             last[key] = f
-            note(key, f)
+            note(key, f, frame: t, inst: v.instance)
         }
     }
     /// The sampler's own check: a 1 pt view on the window, invisible and outside the app's views, eased 100 pt down
@@ -691,7 +720,7 @@ enum UpdateMotionProbe {
     }
     @MainActor final class Ticker: NSObject {
         static let shared = Ticker()
-        @objc func tick() { UpdateMotionProbe.tick() }
+        @objc func tick(_ l: CADisplayLink) { UpdateMotionProbe.tick(l.timestamp) }
     }
     /// A view in the background of what it measures; on screen, its list cell's presentation frame (the card and the
     /// row, as the list animates them) or its own (the console's content, as its scroll view moves it), in the window's
@@ -699,6 +728,10 @@ enum UpdateMotionProbe {
     final class PresentationAnchorView: UIView {
         var key = ""
         var measuresCell = true
+        /// Its series: "<key>-p", or "<key>#2-p" for a second instance on screen at once (step 1b).
+        var series = ""
+        /// Its number, given once when it first comes on screen (step 1c), carried by its drawn samples.
+        var instance = 0
         override func didMoveToWindow() {
             super.didMoveToWindow()
             if window != nil { UpdateMotionProbe.register(self) }
@@ -713,7 +746,10 @@ enum UpdateMotionProbe {
         func screenFrame() -> CGRect? {
             guard let w = window else { return nil }
             let t = target
-            let l = t.layer.presentation() ?? t.layer, wl = w.layer.presentation() ?? w.layer
+            // Step 1b: what is drawn, or nothing; never the model's frame in its place (before its first commit a layer
+            // has no presentation, and the model then gave the self-check's end, 300, as its first sample).
+            guard let l = t.layer.presentation() else { return nil }
+            let wl = w.layer.presentation() ?? w.layer
             return l.convert(l.bounds, to: wl)
         }
     }
