@@ -43,19 +43,33 @@ final class DemoEntryUITests: XCTestCase {
         }
     }
 
+    /// Each element's frame beside a still, in points, with the window's, for reading the still's contrast (#392); printed
+    /// only.
+    private func frames(_ still: String, _ named: [(String, XCUIElement)]) {
+        let w = app.windows.firstMatch.frame
+        print("DEMO-ENTRY window \(still) \(w.width) \(w.height)")
+        for (name, el) in named where el.exists {
+            let f = el.frame
+            print("DEMO-ENTRY frame \(still) \(name) \(f.minX) \(f.minY) \(f.width) \(f.height)")
+        }
+    }
+
     /// Try a demo on the first screen (#392: where App Review looks): the tour's first beat offers it with Get Started, it
     /// opens the demo's Chats, and Leave demo in the Chats chip's menu brings the first screen back with nothing of the
     /// demo shown. The audit runs on the first beat and with the chip's menu open. HERMES_E2E_SIZE sets the text size as
-    /// ApprovalCardUITests reads it (L, XL, XXL, XXXL, AccessibilityXXXL and the like), light; HERMES_E2E_SHOTS names a
-    /// folder for the stills. On a phone the chip is the bar's (chats.profile); on a wide window, the toolbar's.
+    /// ApprovalCardUITests reads it (L, XL, XXL, XXXL, AccessibilityXXXL and the like); HERMES_E2E_SCHEME light or dark
+    /// (light when unset, and then the stills' names don't carry it); HERMES_E2E_SHOTS names a folder for the stills;
+    /// HERMES_E2E_CONNECT=1 adds the tour's last beat, by Skip, at the end. On a phone the chip is the bar's
+    /// (chats.profile); on a wide window, the toolbar's.
     func testTryADemoOnTheFirstScreenAndLeaveDemoFromTheChatsMenu() throws {
         let e = ProcessInfo.processInfo.environment
         guard let bundle = e["HERMES_E2E_BUNDLE"], !bundle.isEmpty else { throw XCTSkip("HERMES_E2E_BUNDLE not set") }
         continueAfterFailure = false
         let size = e["HERMES_E2E_SIZE"].flatMap { $0.isEmpty ? nil : $0 }
-        let tag = size ?? "default"
+        let scheme = e["HERMES_E2E_SCHEME"].flatMap { $0.isEmpty ? nil : $0 }
+        let tag = (size ?? "default") + (scheme.map { "-\($0)" } ?? "")
         app = XCUIApplication(bundleIdentifier: bundle)
-        app.launchArguments = ["-companionPromptShown", "YES", "-colorSchemePreference", "light"]
+        app.launchArguments = ["-companionPromptShown", "YES", "-colorSchemePreference", scheme ?? "light"]
             + (size.map { ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategory\($0)"] } ?? [])
         app.launch()
 
@@ -64,6 +78,9 @@ final class DemoEntryUITests: XCTestCase {
         XCTAssertTrue(first.waitForExistence(timeout: 10), "no Try a demo on the tour's first beat (\(tag))")
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         shot("demo-first-beat-\(tag)")
+        frames("demo-first-beat-\(tag)", [("getStarted", app.buttons["onboarding.getStarted"].firstMatch), ("tryDemo", first),
+                                          ("restore", app.buttons["onboarding.restore"].firstMatch),
+                                          ("subtitle", text("Your Hermes agents").firstMatch)])
         XCTAssertEqual(first.label, "Try a demo")
         XCTAssertTrue(first.isHittable, "Try a demo on the first beat can't be tapped (\(tag))")
         print("DEMO-ENTRY first beat \(tag): Try a demo at \(first.frame)")
@@ -79,6 +96,7 @@ final class DemoEntryUITests: XCTestCase {
         let leave = try XCTUnwrap(hittable(leaves, timeout: 10), "no Leave demo in the Chats chip's menu")
         RunLoop.current.run(until: Date().addingTimeInterval(0.8))
         shot("demo-chats-menu-\(tag)")
+        frames("demo-chats-menu-\(tag)", [("leaveDemo", leave)])
         try audit("chats-menu-\(tag)", around: leave.frame)
         leave.tap()
 
@@ -87,6 +105,17 @@ final class DemoEntryUITests: XCTestCase {
         XCTAssertFalse(text("Packing list for the lake weekend").firstMatch.exists, "the demo's chats are still shown")
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         shot("demo-first-beat-after-\(tag)")
+        if e["HERMES_E2E_CONNECT"] == "1" {
+            // The tour's last beat, which shares the first beat's column (its scroll at the largest text), by Skip.
+            app.buttons["onboarding.skip"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["onboarding.addGateway"].firstMatch.waitForExistence(timeout: 10), "Skip didn't reach the tour's last beat")
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+            shot("tour-connect-\(tag)")
+            frames("tour-connect-\(tag)", [("addGateway", app.buttons["onboarding.addGateway"].firstMatch),
+                                           ("tryDemo", app.buttons["onboarding.tryDemo"].firstMatch),
+                                           ("setupHelp", app.descendants(matching: .any)["onboarding.setupHelp"].firstMatch),
+                                           ("subtitle", text("need a Hermes gateway").firstMatch)])
+        }
         app.terminate()
     }
 

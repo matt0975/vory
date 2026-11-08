@@ -104,22 +104,19 @@ struct OnboardingView: View {
             BotFaceView(spec: BotLookSpec.vory, size: 150, active: true, mood: BotFaceView.Mood(profile: "vory-welcome", state: .guide))
             Text("Vory").font(.system(size: 46, weight: .bold, design: .rounded)).padding(.top, 6)
             Text("Your Hermes bots, on \(DeviceWords.your).")
-                .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 2)
+                .font(.title3).foregroundStyle(.primary).multilineTextAlignment(.center).padding(.top, 2)
             Spacer(minLength: 24)
+            // In the order of their weight (#392), as on the iPhone's first screen: the tour, the demo, then Restore.
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button {
                         withAnimation(reduceMotion ? nil : .snappy) { welcomed = true }
                     } label: {
-                        Text("Get Started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Text("Get Started").font(.headline).foregroundStyle(Color.onOnboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityIdentifier("onboarding.getStarted")
-                    Button { showRestore = true } label: {
-                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("onboarding.restore")
                     // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
                     Button { Task { await model.startDemo() } } label: {
                         Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
@@ -128,9 +125,15 @@ struct OnboardingView: View {
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")
+                    Button { showRestore = true } label: {
+                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("onboarding.restore")
                 }
             }
             .frame(maxWidth: 380)
+            .tint(Color.onboardingAccent)
             Text("Already use Vory on another device? Restore brings your gateways, bot looks and settings from your own iCloud.")
                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
@@ -179,7 +182,7 @@ struct OnboardingView: View {
                         if isLast { showForm = true } else { page += 1 }
                     } label: {
                         Text(isLast ? "Connect your gateway" : "Continue")
-                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            .font(.headline).foregroundStyle(Color.onOnboardingAccent).frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityIdentifier(isLast ? "onboarding.addGateway" : "onboarding.continue")
@@ -197,6 +200,7 @@ struct OnboardingView: View {
                         Text(" ").font(.subheadline)
                     }
                 }
+                .tint(Color.onboardingAccent)
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
             }
@@ -216,6 +220,31 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 20).padding(.top, 10)
     }
+}
+
+extension Color {
+    /// The onboarding's accent, on its buttons and links on the first screen and past it (the tour on iPhone and iPad,
+    /// the welcome and pages on the Mac): the system blue read under 4.5:1 on the glow (#392). Darker in light, lighter
+    /// in dark, so its words read at 4.5:1 or better on either ground.
+    #if canImport(UIKit)
+    static let onboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0x6C / 255, green: 0xB0 / 255, blue: 0xFF / 255, alpha: 1)
+        : UIColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1) })
+    /// The words on a button filled with that accent: white in light; in dark, where the accent is light, near-black,
+    /// since no blue reads at 4.5:1 both under white words and as words on a dark ground.
+    static let onOnboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white })
+    #else
+    static let onboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0x6C / 255, green: 0xB0 / 255, blue: 0xFF / 255, alpha: 1)
+            : NSColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1)
+    })
+    static let onOnboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white
+    })
+    #endif
 }
 
 enum TourDemoKind { case bots, chat, approval, island, studio, summaries, connect }

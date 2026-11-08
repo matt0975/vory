@@ -100,6 +100,9 @@ struct TourView: View {
                 .scrollPosition(id: $page)
                 .scrollIndicators(.hidden)
                 .scrollDisabled(reduceMotion)
+                // The onboarding's own accent on the beats' buttons and link (#392: the system blue read under 4.5:1 on
+                // the glow); the tour's chat, the app's own, keeps the app's.
+                .tint(Color.onboardingAccent)
                 .onScrollGeometryChange(for: CGFloat.self) { g in g.contentOffset.x / max(1, g.containerSize.width) } action: { _, p in
                     progress = p
                 }
@@ -129,6 +132,7 @@ struct TourView: View {
                     .animation(.easeOut(duration: 0.2), value: typingInChat)
                 controls
                     .dynamicTypeSize(...Self.largestText)
+                    .tint(Color.onboardingAccent)
                 #if DEBUG
                 if TourGapProbe.isOn { TourGapProbe.Readout().frame(width: 1, height: 1).allowsHitTesting(false) }
                 #endif
@@ -330,7 +334,8 @@ struct TourView: View {
                     Button {
                         go(to: TourBeat(rawValue: current.rawValue + 1) ?? .connect)
                     } label: {
-                        Text("Continue").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                        Text("Continue").font(.headline).foregroundStyle(Color.onOnboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityShowsLargeContentViewer()
@@ -666,8 +671,10 @@ struct VoryTourLayer: View, Animatable {
 
 // MARK: Beats
 
-/// 1. Hello: Vory out of the launch screen into the glow, the line under him, and the ways in: the tour, Restore, and
-/// Try a demo where Demo mode offers it (#392: on the first screen, where App Review looks; the last beat has it too).
+/// 1. Hello: Vory out of the launch screen into the glow, the line under him, and the ways in: the tour, Try a demo where
+/// Demo mode offers it (#392: on the first screen, where App Review looks; the last beat has it too), and Restore.
+/// The three stand whole above the dots at the default size on the smallest phone (the closed Duo): a little less
+/// padding and space than the connect beat's two, and the line in body type.
 private struct TourHelloBeat: View {
     var onStart: () -> Void
     var onRestore: (() -> Void)?
@@ -679,36 +686,37 @@ private struct TourHelloBeat: View {
     var body: some View {
         TourColumn(top: below, bottom: above) {
             Text("Your Hermes agents, on \(DeviceWords.your).")
-                .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .font(.body).foregroundStyle(.primary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            GlassEffectContainer(spacing: 14) {
-                VStack(spacing: 14) {
+            GlassEffectContainer(spacing: 10) {
+                VStack(spacing: 10) {
                     Button(action: onStart) {
-                        Text("Get Started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Text("Get Started").font(.headline).foregroundStyle(Color.onOnboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Starts a short tour.")
                     .accessibilityIdentifier("onboarding.getStarted")
-                    if let onRestore {
-                        Button(action: onRestore) {
-                            Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
-                                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 8)
-                        }
-                        .buttonStyle(.glass)
-                        .accessibilityShowsLargeContentViewer()
-                        .accessibilityHint("Brings back the gateways you saved on another device.")
-                        .accessibilityIdentifier("onboarding.restore")
-                    }
                     // An id of its own: the last beat's Try a demo keeps the plain one, and both can be in the tree.
                     if let onDemo {
                         Button(action: onDemo) {
-                            Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                            Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                         }
                         .buttonStyle(.glass)
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                         .accessibilityIdentifier("onboarding.tryDemo.first")
+                    }
+                    if let onRestore {
+                        Button(action: onRestore) {
+                            Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
+                                .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 6)
+                        }
+                        .buttonStyle(.glass)
+                        .accessibilityShowsLargeContentViewer()
+                        .accessibilityHint("Brings back the gateways you saved on another device.")
+                        .accessibilityIdentifier("onboarding.restore")
                     }
                 }
             }
@@ -955,7 +963,8 @@ private struct TourConnectBeat: View {
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button(action: onConnect) {
-                        Text("Connect your gateway").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Text("Connect your gateway").font(.headline).foregroundStyle(Color.onOnboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityShowsLargeContentViewer()
@@ -992,7 +1001,8 @@ private struct TourConnectBeat: View {
 
 /// A page's own words and buttons, at the foot of the room between Vory's bubble and the tour's controls (the dots), in
 /// the tour's space; where they need more than that room (the largest text on a small phone) they scroll in it rather
-/// than run under either.
+/// than run under either, from their top, so the page's line and its first button show whole first (#392), with the
+/// scroll's bar flashed and its foot faded to say there is more.
 private struct TourColumn<Content: View>: View {
     var top: CGFloat
     var bottom: CGFloat
@@ -1001,7 +1011,7 @@ private struct TourColumn<Content: View>: View {
     var body: some View {
         GeometryReader { geo in
             // The scroll's edges sit a little outside the room, so the glass buttons' rims and shadows aren't cut; a
-            // row scrolled up under the top fades out.
+            // row scrolled under either edge fades out.
             let edge: CGFloat = 10
             let from = top + 12 - edge, to = (bottom > 0 ? bottom - 12 : geo.size.height - 64) + edge
             let room = max(0, to - from)
@@ -1012,12 +1022,14 @@ private struct TourColumn<Content: View>: View {
                     .frame(minHeight: room, alignment: .bottom)
             }
             .scrollBounceBehavior(.basedOnSize)
-            .scrollIndicators(.hidden)
-            .defaultScrollAnchor(.bottom)
+            // Opens at its top: anchored at its foot it hid the page's line and first button at the largest text, and
+            // the anchor didn't hold once Vory's bubble grew, which cut the last button instead (#392).
+            .scrollIndicatorsFlash(onAppear: true)
             .mask {
                 VStack(spacing: 0) {
                     LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: edge)
                     Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: edge)
                 }
             }
             .frame(width: geo.size.width, height: room)

@@ -1719,7 +1719,7 @@ struct ChatListFilterItems: View {
         }
 }
 
-/// The bot picker, All bots, the connection and the gateway switch.
+/// The bot picker, All bots, the connection and the gateway switch. In the demo, the connection and Leave demo first.
 struct ChatListProfileItems: View {
     @Environment(AppModel.self) private var model
     @Environment(\.colorScheme) private var colorScheme
@@ -1727,6 +1727,19 @@ struct ChatListProfileItems: View {
     private var runtime: GatewayRuntime? { model.runtime }
     @ViewBuilder var body: some View {
             if let runtime {
+                // In the demo (#392), the way out is here too, not in Settings only: it leaves as Settings' Leave demo does.
+                // Its section comes first, so Leave demo is in reach at every text size (at the largest the menu scrolls,
+                // and as its last row it was out of sight).
+                if model.isInDemo {
+                    Section(sectionTitle(runtime)) {
+                        Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
+                        if case .open = runtime.socketState {} else {
+                            Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                        }
+                        Button { Task { await model.endDemo() } } label: { Label("Leave demo", systemImage: "rectangle.portrait.and.arrow.right") }
+                            .accessibilityIdentifier("chats.leaveDemo")
+                    }
+                }
                 Picker("Profile", selection: Binding(get: { runtime.selectedProfile ?? "" }, set: { runtime.selectedProfile = $0 })) {
                     ForEach(runtime.profiles) { p in
                         Label { Text(p.label) } icon: { Image(uiImage: BotAvatarImage.cached(profile: p.name, scheme: colorScheme)).renderingMode(.original) }.tag(p.name)
@@ -1736,19 +1749,13 @@ struct ChatListProfileItems: View {
                 #if os(macOS)
                 if !model.isInDemo { Button { model.chatListRequest = .init(.newBot) } label: { Label("New Bot…", systemImage: "plus") } }
                 #endif
-                Divider()
-                // With a backup address (#283), the address in use beside the gateway's name.
-                Section([runtime.connection.name, runtime.addressLabel].compactMap { $0 }.joined(separator: " · ")) {
-                    Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
-                    if case .open = runtime.socketState {} else {
-                        Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
-                    }
-                }
-                // In the demo (#392), the way out is here too, not in Settings only: it leaves as Settings' Leave demo does.
-                if model.isInDemo {
-                    Section {
-                        Button { Task { await model.endDemo() } } label: { Label("Leave demo", systemImage: "rectangle.portrait.and.arrow.right") }
-                            .accessibilityIdentifier("chats.leaveDemo")
+                if !model.isInDemo {
+                    Divider()
+                    Section(sectionTitle(runtime)) {
+                        Label(runtime.socketState.label, systemImage: connectionSymbol(runtime.socketState))
+                        if case .open = runtime.socketState {} else {
+                            Button { Task { await runtime.reconnectNow() } } label: { Label("Reconnect", systemImage: "arrow.clockwise") }
+                        }
                     }
                 }
                 // Two gateways (a main machine and a homelab, say): switch here instead of
@@ -1762,6 +1769,10 @@ struct ChatListProfileItems: View {
                 }
             }
             }
+    /// The connection's section title: with a backup address (#283), the address in use beside the gateway's name.
+    private func sectionTitle(_ runtime: GatewayRuntime) -> String {
+        [runtime.connection.name, runtime.addressLabel].compactMap { $0 }.joined(separator: " · ")
+    }
     private func connectionSymbol(_ s: SocketState) -> String {
         switch s {
         case .open: return "checkmark.circle.fill"
