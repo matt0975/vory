@@ -122,7 +122,7 @@ struct HandsFreeView: View {
                         Color.clear.frame(height: split?.gap ?? 0).accessibilityHidden(true)
                         VStack(spacing: 0) {
                             // Everything said so far, scrolling, between the state line and the controls (#235).
-                            VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt, quiet: VoiceLook.secondary)
+                            VoiceTranscriptView(lines: session.transcriptLines, prompt: prompt, quiet: VoiceLook.secondary, wholeLines: true)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .padding(.top, VoiceSplit.transcriptTop)
                             if let card = chat.firstCard {
@@ -143,7 +143,7 @@ struct HandsFreeView: View {
                                 } else {
                                     // One column (#631): what the approval asks and its choices always stand whole, and the card
                                     // takes its whole height before the conversation gets any; when even that leaves too little,
-                                    // the bot goes lean, then (at XXXL and larger) hides its face (`botLevel`). Its height is set
+                                    // the bot goes lean, then hides its face (`botLevel`, round 3l: at any size). Its height is set
                                     // once its parts are measured, not left to the stack's priorities, and never more than what
                                     // is left, so the column never runs past the screen: above that, its words scroll, and as the
                                     // last resort the choices with them (round 3). Until then it is held to what is left, as before.
@@ -515,23 +515,49 @@ struct VoiceTranscriptView: View {
     /// The prompt's and the person's words: `.secondary` unless given (the iPhone's voice screen gives its own, #631).
     var quiet: Color? = nil
     private var quietStyle: AnyShapeStyle { quiet.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary) }
+    /// The iPhone's voice screen (#631, round 3l): whole lines only, at the top edge too (`VoiceSplit.conversationShown`).
+    /// The Mac's window keeps its scroll as it was.
+    var wholeLines = false
     /// Following the newest words; off while the person reads back.
     @State private var following = true
     @State private var userScrolling = false
     private let bottomID = "voice.transcript.bottom"
+    /// Round 3l: the room the conversation is given, one line of it, and its rows' heights (the prompt's while nothing has
+    /// been said), for the whole lines.
+    @State private var roomH: CGFloat = 0
+    @State private var lineH: CGFloat = 0
+    @State private var promptH: CGFloat = 0
+    @State private var rowHeights: [UUID: CGFloat] = [:]
+    /// The scroll's height on the voice screen (round 3l): cut down to whole lines, the rest blank above it. nil off the
+    /// voice screen and until the room is measured.
+    private var shownH: CGFloat? {
+        guard wholeLines, roomH > 0 else { return nil }
+        let rows = lines.isEmpty ? [promptH] : lines.reversed().map { rowHeights[$0.id] ?? 0 }
+        return VoiceSplit.conversationShown(room: roomH, rows: rows, line: lineH)
+    }
+    /// The top fade's height (round 3l): 28, never over the newest whole line on the voice screen, so a lone line shows whole.
+    private func fade(_ shown: CGFloat?) -> CGFloat {
+        guard let shown, lineH > 0 else { return 28 }
+        return min(28, max(0, shown - VoiceSplit.conversationBottom - lineH))
+    }
 
     var body: some View {
+        let shown = shownH
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: VoiceSplit.conversationGap) {
                     if lines.isEmpty {
                         Text(prompt).font(.body).foregroundStyle(quietStyle)
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { promptH = $0 }
                     }
-                    ForEach(lines) { line in row(line).id(line.id) }
+                    ForEach(lines) { line in
+                        row(line).id(line.id)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeights[line.id] = $0 }
+                    }
                     Color.clear.frame(height: 1).id(bottomID)
                 }
-                .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 6)
+                .padding(.horizontal, 24).padding(.top, VoiceSplit.conversationTop).padding(.bottom, 6)
             }
             .scrollIndicators(.hidden)
             .onScrollGeometryChange(for: CGFloat.self) { g in
@@ -545,10 +571,15 @@ struct VoiceTranscriptView: View {
             .onScrollPhaseChange { _, phase in userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating }
             // Each new word: to the bottom, unanimated (the words stream several times a second).
             .onChange(of: tail) { _, _ in if following { proxy.scrollTo(bottomID, anchor: .bottom) } }
+            // Round 3l: back at the newest when the whole-lines height changes (the card coming shortens it), so its lines
+            // stand where they were worked out from; then the scroll at that height, at the foot of its room.
+            .onChange(of: shown) { _, _ in if following { proxy.scrollTo(bottomID, anchor: .bottom) } }
+            .frame(height: shown)
             .mask {
-                // The top edge fades, so a line scrolling out does not cut under the state line.
+                // The top edge fades, so a line scrolling out does not cut under the state line (round 3l: never over the
+                // newest whole line).
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 28)
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: fade(shown))
                     Color.black
                 }
             }
@@ -569,6 +600,9 @@ struct VoiceTranscriptView: View {
             }
             .animation(.snappy(duration: 0.2), value: following)
         }
+        // Round 3l: on the voice screen, the room it is given (the scroll at its foot, the rest blank above it) and one line,
+        // measured off screen; the Mac's window as it was.
+        .modifier(WholeLinesRoom(on: wholeLines, room: $roomH, line: $lineH))
     }
 
     /// What changes as the conversation goes on: the last line's words and the count.
@@ -586,6 +620,28 @@ struct VoiceTranscriptView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.trailing, 16)
                 .accessibilityLabel("Bot said: \(line.text)")
+        }
+    }
+}
+
+/// The voice screen's conversation in its room (#631, round 3l): the scroll at the room's foot, the rest blank above it,
+/// the room and one line of the conversation measured for its whole lines. Off (the Mac's voice window), the content as
+/// it is, so that window's layout doesn't change.
+private struct WholeLinesRoom: ViewModifier {
+    let on: Bool
+    @Binding var room: CGFloat
+    @Binding var line: CGFloat
+    @ViewBuilder func body(content: Content) -> some View {
+        if on {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { room = $0 }
+                .background {
+                    Text(verbatim: "Ag").font(.body).fixedSize().hidden().accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { line = $0 }
+                }
+        } else {
+            content
         }
     }
 }

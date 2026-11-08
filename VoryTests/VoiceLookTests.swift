@@ -125,20 +125,31 @@ import VoryCore
         #expect(VoiceLook.micMuted == "Mic muted", "the lean bot's badge reads as the capsule's words")
     }
 
-    /// Round 3: past lean, the bot's face hides too, only at XXXL and larger, and only when what must show doesn't fit
-    /// beside the lean face. The closed Duo at XXXL as measured, the longer text: the row 53, the controls at their natural 134.5, what
-    /// must show 482.3 (asked 243.7, the choices 190.7), the whole card 590.7.
-    @Test func theBotHidesItsFaceOnlyAtTheLargerSizes() {
+    /// Round 3: past lean, the bot's face hides too when what must show doesn't fit beside the lean face. Round 3l: at any
+    /// size (it was XXXL and larger only: the closed Duo at XXL cut the command under the words' fade), within the margin
+    /// (`faceMargin`). The closed Duo at XXXL as measured, the longer text: the row 53, the controls at their natural 134.5,
+    /// what must show 482.3 (asked 243.7, the choices 190.7), the whole card 590.7.
+    @Test func theBotHidesItsFaceWhenWhatIsAskedWouldNotStandWhole() {
         let full = VoiceSplit.botBlock(.full, ring: false, lines: 120), lean = VoiceSplit.botBlock(.lean, ring: false, lines: 120)
         // At XXXL, 298.5 is left beside the lean face; what must show is 482.3: hidden.
         #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 590.7, need: 482.3,
                                              size: .xxxLarge) == .hidden)
-        // The same numbers at Large: lean at most. The face never hides under XXXL.
+        // The same numbers at Large: hidden too (round 3l: at any size).
         #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 590.7, need: 482.3,
-                                             size: .large) == .lean)
-        // Large on the closed Duo, the longer text, as measured: what must show 299 fits beside the lean face (310.7): lean.
+                                             size: .large) == .hidden)
+        // The closed Duo at XXL as measured on round 3k: 305.4 left beside the lean face, what must show 366.7: hidden.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 48.3, full: full, lean: lean, controls: 132.3, whole: 444.7, need: 366.7,
+                                             size: .xxLarge) == .hidden)
+        // XL on the closed Duo as measured on round 3k: what must show 296.3 beside 308, past the margin: lean.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 48, full: full, lean: lean, controls: 130, whole: 366, need: 296.3,
+                                             size: .xLarge) == .lean)
+        // Large on the closed Duo, the longer text, as measured: what must show 299 fits beside the lean face (310.7), past
+        // the margin: lean.
         #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 48, full: full, lean: lean, controls: 127.3, whole: 338.3, need: 299,
                                              size: .large) == .lean)
+        // Within the margin of the same 310.7: hidden, so a measure a point short never cuts what's asked.
+        #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 48, full: full, lean: lean, controls: 127.3, whole: 338.3,
+                                             need: 310.7 - VoiceSplit.faceMargin + 1, size: .large) == .hidden)
         // At XXXL when what must show fits beside the lean face: lean.
         #expect(VoiceSplit.oneColumnBotLevel(room: 644, row: 53, full: full, lean: lean, controls: 134.5, whole: 400, need: 290,
                                              size: .xxxLarge) == .lean)
@@ -192,6 +203,30 @@ import VoryCore
         let words = VoiceSplit.oneColumnCard(room: 644, row: row, bot: lean, controls: controls, heights: tall)
         #expect(words?.height == left)
         #expect(words?.wordsScroll == true)
+    }
+
+    /// Round 3l: the voice screen's conversation shows whole lines only, at its top edge too. On the closed Duo at Large
+    /// the card left it a sliver, and a line of it showed cut through above the card. Its rows walked from the newest up
+    /// (the screen follows them), its height is cut down to where a line starts; the rest stays blank.
+    @Test func theConversationShowsWholeLinesOnly() {
+        let line: CGFloat = 22, bottom = VoiceSplit.conversationBottom, gap = VoiceSplit.conversationGap
+        // The newest row three lines (66), the one before it two (44).
+        let rows: [CGFloat] = [66, 44]
+        // A sliver, under the space below the newest row: no line there, the room as it is (blank).
+        #expect(VoiceSplit.conversationShown(room: 13, rows: rows, line: line) == 13)
+        // The edge a line and a bit up the newest row: one whole line.
+        #expect(VoiceSplit.conversationShown(room: bottom + 66 - 30, rows: rows, line: line) == bottom + 22)
+        // Exactly two lines' room: both.
+        #expect(VoiceSplit.conversationShown(room: bottom + 44, rows: rows, line: line) == bottom + 44)
+        // The edge between the two rows: no line cut, the room as it is.
+        #expect(VoiceSplit.conversationShown(room: bottom + 66 + gap / 2, rows: rows, line: line) == bottom + 66 + gap / 2)
+        // The edge inside the older row: its whole lines under the edge.
+        #expect(VoiceSplit.conversationShown(room: bottom + 66 + gap + 30, rows: rows, line: line) == bottom + 66 + gap + 22)
+        // Everything fits: the room as it is.
+        #expect(VoiceSplit.conversationShown(room: 400, rows: rows, line: line) == 400)
+        // Until one line and every row are measured: the room as it is.
+        #expect(VoiceSplit.conversationShown(room: bottom + 36, rows: rows, line: 0) == bottom + 36)
+        #expect(VoiceSplit.conversationShown(room: bottom + 36, rows: [66, 0], line: line) == bottom + 36)
     }
 
     /// Round 3f: the top row's title in full white, 6:1 or more over every tint's top (white at 0.85 had under 5:1 over

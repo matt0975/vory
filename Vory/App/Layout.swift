@@ -515,11 +515,33 @@ enum VoiceSplit {
 
     /// The conversation's padding over its first line in voice mode (`HandsFreeView`): all it keeps when it gives way.
     static let transcriptTop: CGFloat = 6
+    /// The conversation's scroll in voice mode (`VoiceTranscriptView`, round 3l): its padding over its first row, the space
+    /// between its rows, and what stands under its newest row (its padding 6, the marker it follows and the space over it).
+    static let conversationTop: CGFloat = 20
+    static let conversationGap: CGFloat = 12
+    static let conversationBottom: CGFloat = 6 + 1 + 12
+    /// How much of the conversation shows on the voice screen (round 3l): whole lines only, at its top edge too. Its newest
+    /// rows stand at the bottom (the screen follows them), so the rows are walked from the newest up, and when the top edge
+    /// would fall inside a row, the height is cut down to where one of its lines starts; the rest stays blank above it.
+    /// `rows` are the rows' heights, newest first; `line` one line of them. The room as it is when everything fits, when
+    /// the edge falls between rows or under the newest one, and until the line and every row are measured.
+    static func conversationShown(room: CGFloat, rows: [CGFloat], line: CGFloat) -> CGFloat {
+        guard room > 0, line > 0, !rows.isEmpty, !rows.contains(where: { $0 <= 0 }),
+              conversationTop + rows.reduce(0, +) + CGFloat(rows.count - 1) * conversationGap + conversationBottom > room
+        else { return max(0, room) }
+        var y = conversationBottom
+        for h in rows {
+            if room <= y { return room }
+            if room < y + h { return max(y, y + h - ((y + h - room) / line - 0.01).rounded(.up) * line) }
+            y += h + conversationGap
+        }
+        return room
+    }
     /// The space between the bot's face and its state lines (`HandsFreeView`), which goes with them when the bot is lean.
     static let botLinesGap: CGFloat = 18
     /// The bot's block in one column with a card waiting (#631): full (its face and its state lines), lean (the split's
     /// face alone, the lines gone: the card's heading says the same; the mic muted a badge on the face), or hidden (no face
-    /// either, at XXXL and larger only; the badge on the top row).
+    /// either, whenever what must show wouldn't stand whole beside the lean face, round 3l; the badge on the top row).
     enum BotLevel: Equatable { case full, lean, hidden }
     /// The block's natural height at a level, the 12 over it included: at full the face (164, or its ring's 196 with the
     /// motion engine off) and the state lines (`lines`, the mic muted's capsule among them while muted) with the space
@@ -533,15 +555,21 @@ enum VoiceSplit {
         }
     }
     /// The bot's level in one column with a card waiting (#631): full while the whole card fits beside the full block (the
-    /// conversation gives way first); lean when it doesn't (`compactOneColumn`); hidden at XXXL and larger when even what
-    /// must show doesn't fit beside the lean face. The blocks are their natural heights (`botBlock`), and the controls
-    /// theirs too (round 3: never squeezed).
+    /// conversation gives way first); lean when it doesn't (`compactOneColumn`); hidden when even what must show (what's
+    /// asked and the choices) wouldn't stand whole beside the lean face, at any size (round 3l: it was XXXL and larger only,
+    /// and the closed Duo at XXL cut the command under the words' fade), within `faceMargin`. The blocks are their natural
+    /// heights (`botBlock`), and the controls theirs too (round 3: never squeezed).
     static func oneColumnBotLevel(room: CGFloat, row: CGFloat, full: CGFloat, lean: CGFloat, controls: CGFloat,
                                   whole: CGFloat, need: CGFloat, size: DynamicTypeSize) -> BotLevel {
         guard compactOneColumn(room: room, row: row, botFull: full, controls: controls, card: whole, size: size) else { return .full }
-        guard size >= .xxxLarge, need > 0 else { return .lean }
-        return room - row - lean - controls - transcriptTop < need ? .hidden : .lean
+        guard need > 0 else { return .lean }
+        return room - row - lean - controls - transcriptTop < need + faceMargin ? .hidden : .lean
     }
+    /// How close what must show may come to what's left beside the lean face before the face hides (round 3l): the
+    /// decision errs to hiding, as the choices' one-line check errs to wrapping (`choiceFitScale`), so a measure a point
+    /// short never leaves what's asked under the fade. Nothing it reads changes with the level (the card's width, its parts
+    /// and the controls are the same either way), so the face can't flicker between the two.
+    static let faceMargin: CGFloat = 8
     /// The card's padding (`PendingCardView`) and the space between an approval's parts (`ApprovalCardView`).
     static let cardPadding: CGFloat = 14
     static let cardGap: CGFloat = 10
