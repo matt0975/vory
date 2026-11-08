@@ -1176,11 +1176,20 @@ struct SoftwareUpdateView: View {
                                 }
                             }
                         }
+                    } else if CompanionUpdatePhase.of(available: setup.updateAvailable, updating: setup.updating,
+                                                      console: setup.showUpdateConsole, outcome: setup.updateOutcome) == .upToDate {
+                        // "Up to date" and the update card are two rows (#635), swapped inside the closing transaction:
+                        // the List animates a row deleted and one inserted, where a row's change of height jumps.
+                        CompanionUpToDateRow(setup: setup)
+                            .updateProbe("card")
                     } else {
-                        // One row from Install Now to "up to date" (#635): the card shows every phase, "up to date" its
-                        // last, so the List never swaps this row for another.
                         CompanionUpdateRows(setup: setup, runtime: rt)
                             .updateProbe("card")
+                            .listRowSeparator(.hidden, edges: .bottom)
+                        // Update Complete's line, a row inserted inside that transaction rather than the card growing.
+                        if setup.updateOutcome?.ok == true {
+                            CompanionInstalledRow().listRowSeparator(.hidden, edges: .top)
+                        }
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
                     Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")

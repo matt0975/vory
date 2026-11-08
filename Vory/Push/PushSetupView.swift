@@ -492,8 +492,8 @@ struct PushSetupView: View {
     }
 }
 
-/// Where the companion's update stands, for its card (#635): one card for every phase, so Software Update's List keeps
-/// one row from Install Now to "up to date", and the hand-over eases rather than swapping rows.
+/// Where the companion's update stands (#635): Software Update shows the update card in every phase but the last, and
+/// the "up to date" row in that one; the two swap inside the closing transaction.
 enum CompanionUpdatePhase: Equatable {
     case available, working, complete, upToDate
     static func of(available: Bool, updating: Bool, console: Bool, outcome: (ok: Bool, text: String)?) -> Self {
@@ -510,30 +510,11 @@ struct CompanionUpdateRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    private var phase: CompanionUpdatePhase {
-        .of(available: setup.updateAvailable, updating: setup.updating, console: setup.showUpdateConsole, outcome: setup.updateOutcome)
-    }
 
     private var version: String { PushSetupModel.bundledPluginVersion }
     private var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(PushSetupModel.bundledScriptSize), countStyle: .file) }
 
-    var body: some View {
-        // One row, two faces (#635): "up to date" and the card swap here, inside the row, each fading, so the row's
-        // height eases and the rows below follow it. They were two List rows, deleted and inserted in one frame.
-        if phase == .upToDate { upToDate.transition(.opacity) } else { card.transition(.opacity) }
-    }
-
-    /// "Your gateway is up to date." (#635: moved here from Software Update's page.)
-    private var upToDate: some View {
-        VStack(spacing: 8) {
-            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
-            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
-            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
-                .contentTransition(.numericText())
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 10)
-        .animation(.snappy, value: setup.checkingCompanion)
-    }
+    var body: some View { card }
 
     private var card: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -582,9 +563,6 @@ struct CompanionUpdateRows: View {
                     if let o = setup.updateOutcome, !o.ok {
                         Label(o.text, systemImage: "xmark.octagon").font(.footnote).foregroundStyle(.red).transition(.opacity)
                     }
-                    if let o = setup.updateOutcome, o.ok {
-                        Text("Vory Companion \(version) is installed and running.").font(.footnote).foregroundStyle(.secondary).transition(.opacity)
-                    }
                 }
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
@@ -628,6 +606,31 @@ struct CompanionUpdateRows: View {
         .animation(.snappy, value: setup.updateConsole.count)
         .animation(.smooth, value: setup.showUpdateConsole)
         .animation(.smooth, value: setup.updating)
+    }
+}
+
+/// "Your gateway is up to date." (#635): its own row on Software Update's page, after the update card's. The List
+/// animates a row deleted and another inserted inside a transaction, where a row's change of height in place jumps, so
+/// the hand-over swaps the two rows inside the closing ease.
+struct CompanionUpToDateRow: View {
+    var setup: PushSetupModel
+    var body: some View {
+        VStack(spacing: 8) {
+            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
+            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
+            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 10)
+        .animation(.snappy, value: setup.checkingCompanion)
+    }
+}
+
+/// Update Complete's line (#635): its own row under the update card, inserted inside Update Complete's transaction, so
+/// the rows below ease down rather than the card growing in place.
+struct CompanionInstalledRow: View {
+    var body: some View {
+        Text("Vory Companion \(PushSetupModel.bundledPluginVersion) is installed and running.").font(.footnote).foregroundStyle(.secondary)
     }
 }
 

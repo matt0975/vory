@@ -1,8 +1,8 @@
 import Testing
 @testable import Vory
 
-/// #635: Software Update's companion card shows every phase of an update in one row, so the List never swaps it for
-/// another (a swap moved the rows below 135 pt in one frame). The phase comes from the model's flags.
+/// #635: Software Update shows the companion's update card in every phase but "up to date", and swaps the two rows
+/// inside the closing transaction. The phase comes from the model's flags.
 @Suite struct CompanionUpdatePhaseTests {
     @Test func eachPhaseFromTheFlags() {
         #expect(CompanionUpdatePhase.of(available: true, updating: false, console: false, outcome: nil) == .available)
