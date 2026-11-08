@@ -3,9 +3,10 @@ import XCTest
 /// What the demo shows outside the app outlives neither the app nor the demo (#632, and #392's Leave demo with a voice
 /// session up). Two cases, picked by HERMES_E2E_LEFT_CASE, each a run of its own; the rig reads the app's own activity
 /// lines around them (`log show`, dev.vory / activity) and keys them by the "DEMO-LEFT … at <epoch>" lines printed here.
-/// - "quit": a Demo voice session to its approval card, the app sent home with the card waiting (its notification comes),
-///   then quit; relaunched under `-vory-demo`, then without it: the demo's notifications read 0 delivered and 0 waiting
-///   each time (`-vory-delivered-readout`), and the launch lines say how many cards the sweep ended.
+/// - "quit": a Demo voice session, the app sent home before its approval card comes (so the card's notification is
+///   posted while away), then quit from the background; relaunched under `-vory-demo`, then without it: the demo's
+///   notifications read 0 delivered and 0 waiting each time (`-vory-delivered-readout`), and the launch lines say how many
+///   cards and notifications the sweep ended.
 /// - "leave": a Demo voice session to its card, hidden to its pill, then Settings › Leave demo: no voice screen or pill
 ///   comes back, and a relaunch's sweep finds no card.
 /// - "warm": one launch and quit after an install, so neither case starts on the first launch of a new install; it asks
@@ -18,6 +19,15 @@ final class DemoLeftoversUITests: XCTestCase {
     private func pause(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
     private func any(_ id: String) -> XCUIElement { app.descendants(matching: .any).matching(identifier: id).firstMatch }
     private func mark(_ what: String) { print(String(format: "DEMO-LEFT %@ at %.1f", what, Date().timeIntervalSince1970)) }
+    /// A still of the screen, kept with the result and written as `<name>.png` into HERMES_E2E_SHOTS when it names a folder.
+    private func shot(_ name: String) {
+        let s = XCUIScreen.main.screenshot()
+        let a = XCTAttachment(screenshot: s); a.name = name; a.lifetime = .keepAlways; add(a)
+        guard let folder = ProcessInfo.processInfo.environment["HERMES_E2E_SHOTS"], !folder.isEmpty else { return }
+        let d = URL(fileURLWithPath: folder, isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        try? s.pngRepresentation.write(to: d.appendingPathComponent("\(name).png"))
+    }
 
     private func launch(demo: Bool, askNotifications: Bool = false) {
         app = XCUIApplication()
@@ -87,16 +97,20 @@ final class DemoLeftoversUITests: XCTestCase {
             pause(3); app.terminate(); mark("warm done")
         case "quit":
             launch(demo: true)
-            voiceToTheCard()
-            // Away with the card waiting: its notification comes (the readout's "most" counts it), then the app quits.
+            // Away before the card: the demo posts a card's notification only when the card arrives with the app out of
+            // the foreground (LocalNotifier.cardArrived); a card already on screen when the app leaves posts none.
+            let mic = app.buttons.matching(identifier: "chats.voice").firstMatch
+            XCTAssertTrue(mic.waitForExistence(timeout: 30), "no mic on the Chats list")
+            mic.tap()
+            XCTAssertTrue(app.buttons["End voice mode"].firstMatch.waitForExistence(timeout: 30), "the voice screen did not open")
+            mark("voice on")
+            let early = app.buttons["Allow once"].firstMatch.exists
             XCUIDevice.shared.press(.home)
-            pause(8)
-            app.activate()
-            let most = readout()?[2] ?? -1
-            print("DEMO-LEFT away most \(most)")
-            XCTAssertGreaterThanOrEqual(most, 1, "the demo's approval posted no notification while away")
-            XCUIDevice.shared.press(.home)
-            pause(2)
+            mark("away")
+            XCTAssertFalse(early, "the card came before Home (a fast turn): no notification could be posted, so this run proves nothing")
+            // Quit while still away: back in front, the chat clears its own notifications as it shows (ConversationView),
+            // and the sweep this case is for (#632) is of what a demo closed in the background left behind.
+            pause(15)
             mark("quit")
             app.terminate()
             pause(2)
@@ -115,20 +129,28 @@ final class DemoLeftoversUITests: XCTestCase {
             hide.tap(); pause(1.5)
             let back = app.buttons["chat.back"].firstMatch
             if back.waitForExistence(timeout: 5) { back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5) }
-            // Settings from the tab strip. On the closed Duo the strip stands down the side and its foot can sit at the
-            // screen's edge: the tab once it can be tapped, else its part on screen, tapped by coordinate.
-            let settings = app.buttons["tab.settings"].firstMatch
-            XCTAssertTrue(settings.waitForExistence(timeout: 10), "no Settings tab")
+            // Settings from the tab strip. Every "tab.settings" match is listed with its frame and whether it can be tapped,
+            // and the screen kept as a still, before one is chosen: on the closed Duo the first match sat past the screen's
+            // edge (dl632 tags a and b). The first that can be tapped is; else the first's part on screen, by coordinate;
+            // with none on screen the case fails here, plainly, the still showing why.
+            let tabs = app.buttons.matching(identifier: "tab.settings")
+            XCTAssertTrue(tabs.firstMatch.waitForExistence(timeout: 10), "no Settings tab")
             let window = app.windows.firstMatch.frame
-            var hittable = false
+            var all = tabs.allElementsBoundByIndex
             let until = Date().addingTimeInterval(5)
-            repeat { hittable = settings.isHittable; if !hittable { pause(0.5) } } while !hittable && Date() < until
-            print("DEMO-LEFT settings tab \(settings.frame) window \(window) hittable \(hittable)")
-            if hittable {
-                settings.tap()
+            while !all.contains(where: { $0.isHittable }), Date() < until { pause(0.5); all = tabs.allElementsBoundByIndex }
+            shot("leave-before-settings")
+            for (i, tab) in all.enumerated() {
+                print("DEMO-LEFT settings tab \(i + 1)/\(all.count) \(tab.frame) window \(window) hittable \(tab.isHittable)")
+            }
+            if let tab = all.first(where: { $0.isHittable }) {
+                tab.tap()
             } else {
-                let part = settings.frame.intersection(window)
-                XCTAssertFalse(part.isNull || part.height < 12 || part.width < 12, "the Settings tab is off the screen (\(settings.frame) in \(window))")
+                let part = all.first.map { $0.frame.intersection(window) } ?? .null
+                guard !part.isNull, part.width >= 12, part.height >= 12 else {
+                    XCTFail("no Settings tab on the screen (\(all.map { "\($0.frame)" }.joined(separator: ", ")) in \(window)); the still is leave-before-settings")
+                    return
+                }
                 app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: part.midX, dy: part.midY)).tap()
                 mark("settings by its part on screen")
             }
