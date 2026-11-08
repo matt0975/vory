@@ -116,24 +116,28 @@ struct OnboardingView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
+                    .tint(Color.onboardingAccent)
                     .accessibilityIdentifier("onboarding.getStarted")
                     // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
+                    // The two below take the accent in their words only: on the Mac a tinted glass button is filled, and
+                    // all three read as Get Started.
                     Button { Task { await model.startDemo() } } label: {
-                        Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Label("Try a demo", systemImage: "sparkles").font(.headline).foregroundStyle(Color.onboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glass)
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")
                     Button { showRestore = true } label: {
-                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).foregroundStyle(Color.onboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glass)
                     .accessibilityIdentifier("onboarding.restore")
                 }
             }
             .frame(maxWidth: 380)
-            .tint(Color.onboardingAccent)
             Text("Already use Vory on another device? Restore brings your gateways, bot looks and settings from your own iCloud.")
                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .frame(maxWidth: 380)
@@ -228,7 +232,7 @@ extension Color {
     /// in dark, so its words read at 4.5:1 or better on either ground.
     #if canImport(UIKit)
     static let onboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0x6C / 255, green: 0xB0 / 255, blue: 0xFF / 255, alpha: 1)
+        ? UIColor(red: 0x9A / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1)
         : UIColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1) })
     /// The words on a button filled with that accent: white in light; in dark, where the accent is light, near-black,
     /// since no blue reads at 4.5:1 both under white words and as words on a dark ground.
@@ -237,7 +241,7 @@ extension Color {
     #else
     static let onboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-            ? NSColor(red: 0x6C / 255, green: 0xB0 / 255, blue: 0xFF / 255, alpha: 1)
+            ? NSColor(red: 0x9A / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1)
             : NSColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1)
     })
     static let onOnboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
