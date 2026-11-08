@@ -1176,19 +1176,11 @@ struct SoftwareUpdateView: View {
                                 }
                             }
                         }
-                    } else if setup.updateAvailable || setup.updating || setup.showUpdateConsole || setup.updateOutcome != nil {
+                    } else {
+                        // One row from Install Now to "up to date" (#635): the card shows every phase, "up to date" its
+                        // last, so the List never swaps this row for another.
                         CompanionUpdateRows(setup: setup, runtime: rt)
                             .updateProbe("card")
-                    } else {
-                        VStack(spacing: 8) {
-                            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
-                            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
-                            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
-                                .contentTransition(.numericText())
-                        }
-                        .frame(maxWidth: .infinity).padding(.vertical, 10)
-                        .animation(.snappy, value: setup.checkingCompanion)
-                        .updateProbe("card")
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
                     Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")

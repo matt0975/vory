@@ -492,17 +492,50 @@ struct PushSetupView: View {
     }
 }
 
+/// Where the companion's update stands, for its card (#635): one card for every phase, so Software Update's List keeps
+/// one row from Install Now to "up to date", and the hand-over eases rather than swapping rows.
+enum CompanionUpdatePhase: Equatable {
+    case available, working, complete, upToDate
+    static func of(available: Bool, updating: Bool, console: Bool, outcome: (ok: Bool, text: String)?) -> Self {
+        if let outcome, outcome.ok { return .complete }
+        if updating || console || outcome != nil { return .working }
+        return available ? .available : .upToDate
+    }
+}
+
 /// The companion update, in the voice of iOS Software Update: what is available, one Install Now
 /// button, a progress bar with a stage and time remaining, then "Update Complete". A small console
 /// underneath shows what the gateway is doing and fades out a few seconds after success.
 struct CompanionUpdateRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var phase: CompanionUpdatePhase {
+        .of(available: setup.updateAvailable, updating: setup.updating, console: setup.showUpdateConsole, outcome: setup.updateOutcome)
+    }
 
     private var version: String { PushSetupModel.bundledPluginVersion }
     private var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(PushSetupModel.bundledScriptSize), countStyle: .file) }
 
     var body: some View {
+        // One row, two faces (#635): "up to date" and the card swap here, inside the row, each fading, so the row's
+        // height eases and the rows below follow it. They were two List rows, deleted and inserted in one frame.
+        if phase == .upToDate { upToDate.transition(.opacity) } else { card.transition(.opacity) }
+    }
+
+    /// "Your gateway is up to date." (#635: moved here from Software Update's page.)
+    private var upToDate: some View {
+        VStack(spacing: 8) {
+            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
+            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
+            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 10)
+        .animation(.snappy, value: setup.checkingCompanion)
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 ZStack {
@@ -553,7 +586,7 @@ struct CompanionUpdateRows: View {
                         Text("Vory Companion \(version) is installed and running.").font(.footnote).foregroundStyle(.secondary).transition(.opacity)
                     }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
 
             if setup.showUpdateConsole {
@@ -564,7 +597,7 @@ struct CompanionUpdateRows: View {
                                 Text(line).font(.caption2.monospaced())
                                     .foregroundStyle(line.contains("FAILED") ? Color.red : Color.secondary)
                                     .id(i)
-                                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -575,7 +608,7 @@ struct CompanionUpdateRows: View {
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
                     .onChange(of: setup.updateConsole.count) { _, n in withAnimation(.snappy) { proxy.scrollTo(max(0, n - 1), anchor: .bottom) } }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
 
             if setup.updateNeedsRestart, !setup.updating {
@@ -1557,6 +1590,20 @@ final class PushSetupModel {
         if updateConsole.count > 40 { updateConsole.removeFirst(updateConsole.count - 40) }
     }
 
+    /// The update card's animations (#635): smooth, or a 0.2 s ease with Reduce Motion (an instant change would be the
+    /// same one-frame step of the rows below). MorphTopBar's way, with the Mac's own flag, as BotColors' StillBlink reads it.
+    static var reduceMotion: Bool {
+        #if os(iOS)
+        UIAccessibility.isReduceMotionEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+    }
+    static var growing: Animation { reduceMotion ? .easeInOut(duration: 0.2) : .smooth }
+    static var closing: Animation { reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.7) }
+    /// An update's outcome, in one eased transaction (#635), so the line it adds grows the card rather than stepping it.
+    func setOutcome(_ o: (ok: Bool, text: String)) { withAnimation(Self.growing) { updateOutcome = o } }
+
     /// Upload the plugin files, enable, restart the gateway and wait for the new heartbeat, reporting
     /// each step under a progress bar. The console stays for a moment after success, then goes away.
     func updateCompanion(runtime rt: GatewayRuntime) async {
@@ -1564,6 +1611,8 @@ final class PushSetupModel {
         updating = true; updateProgress = 0; updateConsole = []; updateOutcome = nil; showUpdateConsole = true
         #if DEBUG
         UpdateMotionProbe.mark("start")
+        // #635: what the app sees of Reduce Motion, so a Reduce Motion leg proves the setting reached it.
+        UpdateMotionProbe.mark(Self.reduceMotion ? "reduce-motion" : "full-motion")
         #endif
         defer {
             updating = false
@@ -1572,13 +1621,13 @@ final class PushSetupModel {
             #endif
         }
         let target = Self.bundledPluginVersion
-        guard let home = rt.profileHome else { updateOutcome = (false, "The gateway did not report its home folder."); return }
+        guard let home = rt.profileHome else { setOutcome((false, "The gateway did not report its home folder.")); return }
         let base = "\(home)/plugins/vory-push"
         guard let script = Bundle.main.url(forResource: "hermes_push", withExtension: "py", subdirectory: "hermes-push") ?? Bundle.main.url(forResource: "hermes_push", withExtension: "py"),
               let manifest = Bundle.main.url(forResource: "plugin", withExtension: "yaml", subdirectory: "hermes-push/plugin") ?? Bundle.main.url(forResource: "plugin", withExtension: "yaml"),
               let entry = Bundle.main.url(forResource: "__init__", withExtension: "py", subdirectory: "hermes-push/plugin") ?? Bundle.main.url(forResource: "__init__", withExtension: "py"),
               let s = try? Data(contentsOf: script), let m = try? Data(contentsOf: manifest), let e = try? Data(contentsOf: entry) else {
-            updateOutcome = (false, "The plugin files are missing from this build."); return
+            setOutcome((false, "The plugin files are missing from this build.")); return
         }
         let files = [("hermes_push.py", s, "text/x-python"), ("plugin.yaml", m, "text/yaml"), ("__init__.py", e, "text/x-python")]
         let total = Double(files.count + 3)   // files + enable + restart + heartbeat
@@ -1592,16 +1641,16 @@ final class PushSetupModel {
                 console("wrote \(base)/\(name) (\(data.count) bytes)")
             } catch {
                 console("FAILED \(name): \(error.localizedDescription)")
-                updateOutcome = (false, "Could not write \(name): \(error.localizedDescription)"); return
+                setOutcome((false, "Could not write \(name): \(error.localizedDescription)")); return
             }
             done += 1; withAnimation(.snappy) { updateProgress = done / total }
         }
         updateStage = "Installing…"
         do {
             let r: JSONValue = try await rt.api.send("POST", "/api/dashboard/agent-plugins/vory-push/enable", body: EmptyBody())
-            if r["ok"]?.boolValue == false { let msg = r["error"]?.stringValue ?? "Hermes refused to enable the plugin."; console("FAILED enable: \(msg)"); updateOutcome = (false, msg); return }
+            if r["ok"]?.boolValue == false { let msg = r["error"]?.stringValue ?? "Hermes refused to enable the plugin."; console("FAILED enable: \(msg)"); setOutcome((false, msg)); return }
             console("plugin vory-push enabled")
-        } catch { console("FAILED enable: \(error.localizedDescription)"); updateOutcome = (false, error.localizedDescription); return }
+        } catch { console("FAILED enable: \(error.localizedDescription)"); setOutcome((false, error.localizedDescription)); return }
         done += 1; withAnimation(.snappy) { updateProgress = done / total }
 
         // Companions from 1.0.12 on pick new code up by themselves; give that half a minute first.
@@ -1615,19 +1664,24 @@ final class PushSetupModel {
                 withAnimation(.snappy) { updateProgress = 5 / total }
                 updateStage = "Verifying…"
                 for _ in 0..<10 where !companionHealthy { try? await Task.sleep(for: .seconds(3)); await checkCompanion(runtime: rt) }
-                guard companionHealthy else { break }
+                // #635: finished only when the gateway's files are this build's, the version read back as the restart path
+                // checks and the script (companionHealthy needs installedScriptMatches). So `updateAvailable` is false
+                // from here on, and the card's last phase after the closing ease is "up to date", never "available".
+                guard companionHealthy, installedVersion == target else { break }
                 withAnimation(.snappy) { updateProgress = 1 }
-                updateStage = "Update Complete"
                 #if DEBUG
                 UpdateMotionProbe.mark("complete")
                 #endif
                 console("companion v\(target) running and connected")
-                updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
+                // #635: Update Complete in one eased transaction, so its line grows the card rather than stepping it.
+                withAnimation(Self.growing) { updateStage = "Update Complete"; updateOutcome = (true, "Updated to v\(target). The companion is running and connected.") }
                 try? await Task.sleep(for: .seconds(4))
                 #if DEBUG
                 UpdateMotionProbe.mark("ease")
                 #endif
-                withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
+                // #635: `updating` goes false inside the closing ease (the defer, after it, did it unanimated), so the
+                // card hands over to "up to date" in this one transaction.
+                withAnimation(Self.closing) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = ""; updating = false }
                 return
             }
         }
@@ -1665,7 +1719,7 @@ final class PushSetupModel {
         }
         await rt.maintenance.restartGateway(runtime: rt, profile: heartbeat?.profile == "default" ? nil : heartbeat?.profile)
         mirror.cancel()
-        if case .failed(let why) = rt.maintenance.phase { console("FAILED restart: \(why)"); updateOutcome = (false, "Restart failed: \(why)"); return }
+        if case .failed(let why) = rt.maintenance.phase { console("FAILED restart: \(why)"); setOutcome((false, "Restart failed: \(why)")); return }
         console("gateway restart finished")
         restartPending = false; updateNeedsRestart = false
         done += 1; withAnimation(.snappy) { updateProgress = done / total }
@@ -1690,21 +1744,22 @@ final class PushSetupModel {
         guard companionHealthy, installedVersion == target else {
             updateStage = "Not verified"
             let seen = heartbeat.map { "The last heartbeat is from v\($0.version)\($0.connected == true ? ", connected" : ", not connected")." } ?? "No heartbeat has been read."
-            updateOutcome = (false, "The files are on the gateway but the new companion did not report in within two minutes. \(seen) Restart the gateway once more (Settings › Gateway), then Check again here; if it still does not report, open the Companion page and run the setup's Test.")
+            setOutcome((false, "The files are on the gateway but the new companion did not report in within two minutes. \(seen) Restart the gateway once more (Settings › Gateway), then Check again here; if it still does not report, open the Companion page and run the setup's Test."))
             return
         }
         withAnimation(.snappy) { updateProgress = 1 }
-        updateStage = "Update Complete"
         #if DEBUG
         UpdateMotionProbe.mark("complete")
         #endif
         console("companion v\(target) running and connected")
-        updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
+        // #635: as in place. The guard above (companionHealthy, installedVersion == target) makes `updateAvailable`
+        // false here; Update Complete eased; `updating` false inside the closing ease.
+        withAnimation(Self.growing) { updateStage = "Update Complete"; updateOutcome = (true, "Updated to v\(target). The companion is running and connected.") }
         try? await Task.sleep(for: .seconds(4))
         #if DEBUG
         UpdateMotionProbe.mark("ease")
         #endif
-        withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
+        withAnimation(Self.closing) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = ""; updating = false }
     }
 
     // MARK: Test notification
