@@ -958,7 +958,7 @@ private struct TourConnectBeat: View {
     var body: some View {
         TourColumn(top: below, bottom: above) {
             Text("You\u{2019}ll need a Hermes gateway running on a computer you own.")
-                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .font(.subheadline).foregroundStyle(.primary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {

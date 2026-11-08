@@ -238,6 +238,10 @@ extension Color {
     /// since no blue reads at 4.5:1 both under white words and as words on a dark ground.
     static let onOnboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
         ? UIColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white })
+    /// A grey for the onboarding's second lines (the connect card's): still read as under their titles, and at 4.5:1 or
+    /// better on its ground in light and dark, where the secondary label read about 2.9:1.
+    static let onboardingCaption = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(white: 0xBA / 255, alpha: 1) : UIColor(white: 0x66 / 255, alpha: 1) })
     #else
     static let onboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
@@ -247,6 +251,9 @@ extension Color {
     static let onOnboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
             ? NSColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white
+    })
+    static let onboardingCaption = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 0xBA / 255, alpha: 1) : NSColor(white: 0x66 / 255, alpha: 1)
     })
     #endif
 }
@@ -673,7 +680,7 @@ private struct ConnectDemo: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold))
-                Text(text).font(.caption).foregroundStyle(.secondary)
+                Text(text).font(.caption).foregroundStyle(Color.onboardingCaption)
             }
             Spacer(minLength: 0)
         }
