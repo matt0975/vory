@@ -118,7 +118,10 @@ struct BotsView: View {
             if rt.profiles.isEmpty {
                 Text("No profiles reported by this gateway.").foregroundStyle(.secondary).font(.footnote).padding()
             }
+            // Words, not a control: where the line fits on one line it's 16 pt tall, and the audit took it for a tap target
+            // that's too small (#652). VoiceOver still reads it.
             Text("Each bot is a Hermes profile: its own SOUL.md, model and sessions. \(DeviceWords.Tap) one for its chats.")
+                .accessibilityRespondsToUserInteraction(false)
                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .padding(.horizontal, 28).padding(.top, 14)
             if capabilities != nil, !rooms.isEmpty {
