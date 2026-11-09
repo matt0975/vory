@@ -330,8 +330,9 @@ struct ReservedRegions: Equatable {
     /// "@") would reach across it: `listTop`, the list's top edge at full size with the dock
     /// unlifted, nil with no list open. `held` keeps a lift made for the list until the list
     /// closes (the decision: the dock rides above the fold while the list is open), so
-    /// the list's own resizing after the lift cannot drop the dock back under it.
-    func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false) -> CGFloat {
+    /// the list's own resizing after the lift cannot drop the dock back under it. `restingBottom`
+    /// is where the dock's bottom edge stands with no keyboard (window space), nil where it isn't known.
+    func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false, restingBottom: CGFloat? = nil) -> CGFloat {
         guard let fold = horizontalFold, dock.height > 0 else { return 0 }
         let onFold = dock.minY < fold.maxY + Self.margin && dock.maxY > fold.minY - Self.margin
         let underFold = dock.minY >= fold.maxY + Self.margin

@@ -58,7 +58,12 @@ struct ConversationView: View {
         let bottom = dockSlotBottom - barReserve
         let dock = CGRect(x: 0, y: bottom - dockHeight, width: 1, height: dockHeight)
         let listTop = listReach > 0 ? bottom - BottomDock.bottomPadding - listReach : nil
-        return regions.dockLift(dock: dock, listTop: listTop, held: liftHeldForList)
+        return regions.dockLift(dock: dock, listTop: listTop, held: liftHeldForList, restingBottom: restingDockBottom)
+    }
+    /// Where the dock's bottom edge stands with no keyboard, in the same space as `foldLift`'s `bottom` (window space, the
+    /// bar's reserve taken off): the window's safe bottom less the bar's reserve. Nil until the window is measured.
+    private var restingDockBottom: CGFloat? {
+        windowGeometry.bounds.height > 0 ? windowGeometry.bounds.height - windowGeometry.safeArea.bottom - barReserve : nil
     }
     #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
@@ -461,14 +466,19 @@ struct ConversationView: View {
             }
     }
 
+    /// Whether the dock's measured height is kept: over 0, since a zero-height report (the dock not yet laid out) must not
+    /// empty the thread's fallback margin, and under 400 pt. `window` is the window's height.
+    static func keepsDockHeight(_ height: CGFloat, window: CGFloat) -> Bool { height > 0 && height < 400 }
+
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             // Demo mode's chats put the keyboard away after a send (#490, Matt: swiping it away was hard); the app's own
             // chats keep it up for the next message.
             .environment(\.composerFocusesAfterSend, !chat.runtime.connection.isDemo)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
-            // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                if Self.keepsDockHeight($0, window: windowGeometry.bounds.height) { dockHeight = $0 }
+            }
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this. It follows
             // every frame of an interactive keyboard dismiss too: the thread's rows no longer
