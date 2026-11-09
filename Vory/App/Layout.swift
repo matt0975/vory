@@ -131,6 +131,8 @@ enum TopBarRoom {
     /// closer. ASSUMPTION (the iPhone Duo simulator on iOS 27.1, closed, with Back and More in one group, at default text
     /// and XXXL, 2026-11-02): 52.
     static let stripPitch: CGFloat = 52
+    /// The closed Duo's column: the side of Back's and More's circles there, and of the square each takes a touch across.
+    static let columnSide: CGFloat = 44
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
     /// (.avoidHidingContent)`): under a status in a top corner, with the bar up in the status band (#516), and wherever
     /// the floating top bar stands over the system's band (`floatingBar`, `floatingBarOverBand`: a standard iPhone too,
