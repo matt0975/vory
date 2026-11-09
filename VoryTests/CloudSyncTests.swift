@@ -176,6 +176,23 @@ struct CloudSyncTests {
         #expect(phoneDefaults.string(forKey: AppTheme.accentKey) == "green")
     }
 
+    @Test func customAccentHexReplicatesAcrossDevices() {
+        let cloud = MemoryCloudStore(), clock = Clock()
+        let (phone, phoneDefaults) = device(cloud, clock, id: "phone")
+        let (mac, macDefaults) = device(cloud, clock, id: "mac")
+        joined(phone, mac)
+
+        #expect(CloudMerge.syncedSettings.contains(AppTheme.customHexKey))
+
+        phoneDefaults.set("custom", forKey: AppTheme.accentKey)
+        phoneDefaults.set("#FF9500", forKey: AppTheme.customHexKey)
+        phone.reconcile(.backUp)
+
+        mac.reconcile(.merge)
+        #expect(macDefaults.string(forKey: AppTheme.accentKey) == "custom")
+        #expect(macDefaults.string(forKey: AppTheme.customHexKey) == "#FF9500")
+    }
+
     @Test func thisDevicesOwnSettingsNeverLeaveIt() {
         let cloud = MemoryCloudStore(), clock = Clock()
         let (phone, phoneDefaults) = device(cloud, clock, id: "phone")

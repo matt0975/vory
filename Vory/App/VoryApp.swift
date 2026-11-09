@@ -40,6 +40,7 @@ struct VoryApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("colorSchemePreference") private var scheme = "system"
     @AppStorage(AppTheme.accentKey) private var accentID = "blue"
+    @AppStorage(AppTheme.customHexKey) private var customHex = AppTheme.defaultCustomHex
 
     var body: some Scene {
         WindowGroup {
@@ -47,7 +48,7 @@ struct VoryApp: App {
                 .environment(model)
                 // The open chat in the scene's storage, for a cold launch after a system end (#371).
                 .modifier(RestoreSceneKeeper(model: model))
-                .tint(AppTheme.accent(accentID).color)
+                .tint(AppTheme.accent(accentID, customHex: customHex).color)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
                 // A chat handed over from the Mac (or another iPhone or iPad): open it here.
