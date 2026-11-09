@@ -40,6 +40,7 @@ struct VoryApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("colorSchemePreference") private var scheme = "system"
     @AppStorage(AppTheme.accentKey) private var accentID = "blue"
+    @AppStorage(AppTheme.customHexKey) private var customHex = AppTheme.defaultCustomHex
 
     var body: some Scene {
         WindowGroup {

@@ -1712,7 +1712,7 @@ struct TranscriptRow: View, Equatable {
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(AppTheme.currentForeground)
                             .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed", wholeOnMac: true) {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
