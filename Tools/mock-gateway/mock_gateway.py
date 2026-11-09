@@ -357,6 +357,24 @@ def math_examples(n: int, cards: bool = True) -> str:
     return "\n\n".join(parts)
 
 
+# A small table and a code block in one reply (#643): the two cards' headers one above the other, each with its wrap
+# switch, for stills of the two side by side.
+CODE_TABLE_REPLY = """Two places fill the disk:
+
+| Path | Size | Kept |
+|---|---|---|
+| /var/log | 4.2 GB | 90 days |
+| /srv/backups | 1.1 GB | 8 weeks |
+
+And the command that measures them:
+
+```bash
+du -sh /var/log /srv/backups
+```
+
+That's the table and the command together."""
+
+
 # A table wider than a phone's bubble (six columns, emoji, bold, star ratings), with markdown
 # in the reasoning before it: what the app's scrolling table card and Reasoning card are
 # checked against.
@@ -2655,6 +2673,15 @@ class Gateway:
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": DELEGATE_PART_1 + "\n\n" + DELEGATE_PART_2, "status": "complete", "usage": usage(s.output_tokens, 2)})
 
+    async def _code_table_turn(self, s: Session, prompt: str) -> None:
+        """`codetable` (#643): CODE_TABLE_REPLY, a table and a code block in one reply."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, CODE_TABLE_REPLY, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [CODE_TABLE_REPLY])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": CODE_TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
+
     async def _table_turn(self, s: Session, prompt: str) -> None:
         """A reply with the markdown PR #133 renders: headings, a table with and without outer
         pipes, a nested list with task items, and a web image (loaded only on a tap)."""
@@ -3031,6 +3058,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("wide"):
             await self._wide_table_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("codetable"):
+            await self._code_table_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("table"):
             await self._table_turn(s, prompt)

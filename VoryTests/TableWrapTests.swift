@@ -88,17 +88,38 @@ import Vision
         #expect(size.width >= 44 && size.height >= 44, "the target is \(size.width)x\(size.height)pt")
     }
 
-    @Test @MainActor func bothControlsCarryCircularMaterialAffordance() {
-        UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey)
-        let toggleSize = Self.draw(TableWrapToggle())
-        #expect(toggleSize.width >= 28 && toggleSize.height >= 28)
+    /// A view's picture as PNG bytes, at scale 2 so a glyph's edges are compared too.
+    @MainActor static func png(_ view: some View) -> Data? {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        #if canImport(UIKit)
+        return renderer.uiImage?.pngData()
+        #else
+        return renderer.nsImage?.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?.representation(using: .png, properties: [:])
+        #endif
+    }
+
+    @Test @MainActor func theTableSwitchIsDrawnAsTheCodeBlocks() throws {
+        // The table's switch is built as the code block's (`CodeWrapToggle`): the same glyph, caption-sized and secondary,
+        // in a 44 pt square with nothing drawn behind it, so the two switches in one reply read as one feature. With both
+        // keys set alike they show the same glyph, so their pictures match pixel for pixel.
+        let keys = [MarkdownTableMetrics.wrapKey, CodeBody.wrapKey]
+        defer { for k in keys { UserDefaults.standard.removeObject(forKey: k) } }
+        for wrap in [true, false] {
+            for k in keys { UserDefaults.standard.set(wrap, forKey: k) }
+            let table = try #require(Self.png(TableWrapToggle()), "no picture of the table's switch")
+            let code = try #require(Self.png(CodeWrapToggle()), "no picture of the code block's switch")
+            #expect(table == code, "wrap \(wrap): the table's switch isn't drawn as the code block's (\(table.count) and \(code.count) bytes)")
+        }
     }
 
     @Test @MainActor func oneKeyDrivesEveryTable() throws {
+        // Each cell fits one line while the table scrolls, but the three together are wider than 320 pt in the Mac's
+        // smaller text as well as the phone's, so wrapping has to break them: the wrapped table is the taller one.
         let tableText = """
         | Owner | Task | Status |
         |---|---|---|
-        | @work | deploy every gateway to staging | Done |
+        | @work and the night crew | deploy every gateway to staging | rolled back by dawn |
         """
         let t = try #require(Self.table(tableText))
         #expect(MarkdownTableMetrics.wrapKey == "table.wrap")
@@ -134,7 +155,7 @@ import Vision
         // If the floor ignores that, this token breaks mid-character at the floor width.
         let token = String(repeating: "i", count: 20)
         let t = try #require(Self.table("| cmd |\n|---|\n| `\(token)` |"))
-        let tight = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 240))
+        let tight = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 120))
         let roomy = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 900))
         #expect(tight.height == roomy.height, "the token broke: tight \(tight.height) pt vs roomy \(roomy.height) pt")
     }
