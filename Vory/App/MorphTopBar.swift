@@ -573,9 +573,8 @@ struct MorphTopBar: View {
                       width: side, height: side)
     }
     /// A closed column control's middle, window space, from the two markers' (#618): Back on its own; More on its own
-    /// marker's line, `TopBarRoom.stripPitch` under Back, as close as the system stacks two items of one group (it stands
-    /// our two in two groups, 70 apart). Back's marker moves down with the status as Live Activities arrive, and More with
-    /// it.
+    /// marker's line, `TopBarRoom.stripPitch` under Back (closer than the system's two groups, 70 apart, with room between
+    /// the two circles, #671). Back's marker moves down with the status as Live Activities arrive, and More with it.
     static func columnCentre(_ slot: MorphSlot, back: CGPoint, more: CGPoint) -> CGPoint {
         slot == .columnBack ? back : CGPoint(x: more.x, y: back.y + TopBarRoom.stripPitch)
     }
@@ -953,8 +952,8 @@ struct MorphTopBar: View {
             .buttonStyle(MorphPressStyle(kind: .circle))
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Back").accessibilityIdentifier("chat.back").accessibilityAddTraits(.isButton)
-            // A touch takes it across its 44 pt square (its slot's `squareHit`, #584); VoiceOver activates it through the
-            // action.
+            // A touch takes it across its square, 44 pt in the row and `TopBarRoom.columnSide` in the closed column (its
+            // slot's `squareHit`, #584); VoiceOver activates it through the action.
             .accessibilityAction { model.chatRequest = .init(.back) }
             .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
         case .mid:

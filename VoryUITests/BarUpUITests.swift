@@ -648,18 +648,20 @@ final class BarUpUITests: XCTestCase {
         }
         // More's menu open: More's frame while it shows (the press look holds then, closed and on its side alike), the
         // menu's first item and Rename's frames, and a still.
+        // More's own side: 44 pt, and the closed column's circle of 48 (#671, `TopBarRoom.columnSide`).
+        let moreSide: CGFloat = pose == .closed ? 48 : 44
         let moreMenu = { (how: String) in
             let first = self.app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Model:'")).firstMatch
             print("CHATFRAMES more menu \(how): More \(more.frame), first item "
                   + (first.exists ? "\(first.label) \(first.frame)" : "not found") + ", Rename chat \(rename.frame)")
             print("BARUP HOLD more-menu"); self.pause(2)
-            // No press look while the menu shows, closed and on its side alike: More at its 44 pt, not grown.
-            XCTAssertEqual(more.frame.width, 44, accuracy: 0.5, "More \(more.frame) grown while its menu shows (\(how))")
+            // No press look while the menu shows, closed and on its side alike: More at its own side, not grown.
+            XCTAssertEqual(more.frame.width, moreSide, accuracy: 0.5, "More \(more.frame) grown while its menu shows (\(how))")
         }
-        // More after its menu has gone (Rename's dialog and Cancel): at its 44 pt again.
+        // More after its menu has gone (Rename's dialog and Cancel): at its own side again.
         let moreAfter = { (how: String) in
             print("CHATFRAMES More after its menu: \(more.frame)")
-            XCTAssertEqual(more.frame.width, 44, accuracy: 0.5, "More \(more.frame) grown after its menu (\(how))")
+            XCTAssertEqual(more.frame.width, moreSide, accuracy: 0.5, "More \(more.frame) grown after its menu (\(how))")
         }
         if pose == .side || pose == .book, more.exists {
             more.tap()
