@@ -65,8 +65,13 @@ extension Color {
 /// Settings › Appearance: one swatch per accent, the chosen one ringed.
 struct AccentPicker: View {
     @AppStorage(AppTheme.accentKey) private var accentID = "blue"
+    @AppStorage(AppTheme.customHexKey) private var customHex = AppTheme.defaultCustomHex
+    @State private var customColor: Color = .blue
 
     var body: some View {
+        let customAccent = AppTheme.accent("custom")
+        let customSelected = accentID == "custom"
+
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 14) {
                 ForEach(AppTheme.accents) { a in
@@ -84,8 +89,48 @@ struct AccentPicker: View {
                     .accessibilityLabel(a.name)
                     .accessibilityAddTraits(accentID == a.id ? .isSelected : [])
                 }
+
+                VStack(spacing: 6) {
+                    ZStack {
+                        ColorPicker("", selection: $customColor, supportsOpacity: false)
+                            .labelsHidden()
+                            .frame(width: 34, height: 34)
+                            .clipShape(Circle())
+                            .overlay(Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1))
+
+                        if customSelected {
+                            Image(systemName: "checkmark")
+                                .font(.footnote.weight(.bold))
+                                .foregroundStyle(customAccent.contrastForeground)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .overlay(Circle().strokeBorder(customSelected ? customAccent.color.opacity(0.5) : .clear, lineWidth: 3).padding(-4).allowsHitTesting(false))
+
+                    Button {
+                        withAnimation(.snappy) { accentID = "custom" }
+                    } label: {
+                        Text("Custom")
+                            .font(.caption2)
+                            .foregroundStyle(customSelected ? .primary : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Custom accent color")
+                .accessibilityHint("Double tap to choose a custom color")
+                .accessibilityAddTraits(customSelected ? .isSelected : [])
             }
             .padding(.vertical, 6)
+        }
+        .onAppear {
+            customColor = Color(hex: customHex) ?? .blue
+        }
+        .onChange(of: customColor) { _, c in
+            let newHex = c.hexString
+            guard newHex.uppercased() != customHex.uppercased() else { return }
+            customHex = newHex
+            withAnimation(.snappy) { accentID = "custom" }
         }
     }
 }
