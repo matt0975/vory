@@ -51,32 +51,47 @@ final class HealthReportsAuditUITests: XCTestCase {
         }
 
         row.tap()
-        XCTAssertTrue(any("healthReports.copy").waitForExistence(timeout: 10), "the page has no Copy: the fixture's rows didn't show")
+        let page = any("healthReports.page")
+        XCTAssertTrue(page.waitForExistence(timeout: 10), "the page didn't open")
         RunLoop.current.run(until: Date().addingTimeInterval(1.5))
         // Everything on the page is new: an issue counts unless its element lies wholly in the shared bars, found as elements
         // the way the base's tests find them (the top bar, morph.bar, or the system's on a wide window; Vory's tab bar, by its
         // tab.* buttons), or wholly outside the page's own frame (healthReports.page: on a wide window, the columns beside it).
-        // An issue with no element counts.
-        var bars: [CGRect] = []
-        if any("morph.bar").exists { bars.append(any("morph.bar").frame) }
-        if app.navigationBars.firstMatch.exists { bars.append(app.navigationBars.firstMatch.frame) }
-        let tabs = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'"))
-            .allElementsBoundByIndex.filter(\.exists).map(\.frame)
-        if let first = tabs.first { bars.append(tabs.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -8, dy: -8)) }
-        let page = any("healthReports.page")
-        let pageFrame = page.exists ? page.frame : app.windows.firstMatch.frame
-        print("AUDIT \(device) reports page \(pageFrame) bars \(bars)")
-        try app.performAccessibilityAudit(for: types) { issue in
-            let el = issue.element
-            let new = el.map { e in
-                let f = e.frame
-                return !bars.contains { $0.insetBy(dx: -1, dy: -1).contains(f) } && f.intersects(pageFrame)
-            } ?? true
-            let line = "\(issue.auditType) '\(el?.identifier ?? "")' '\(el?.label ?? "")' \(el.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)"
-            print("AUDIT \(device) reports \(new ? "NEW" : "old") \(line)")
-            if new { flagged.append("reports: \(line)") }
-            return true
+        // An issue with no element counts. Audited at its top, then at its foot: on a phone the fixture's page runs past the
+        // screen, and a lazy list's rows off screen aren't there to audit (#668's first iPhone run).
+        func auditPage(_ at: String) throws {
+            var bars: [CGRect] = []
+            if any("morph.bar").exists { bars.append(any("morph.bar").frame) }
+            if app.navigationBars.firstMatch.exists { bars.append(app.navigationBars.firstMatch.frame) }
+            let tabs = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'"))
+                .allElementsBoundByIndex.filter(\.exists).map(\.frame)
+            if let first = tabs.first { bars.append(tabs.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -8, dy: -8)) }
+            let pageFrame = page.exists ? page.frame : app.windows.firstMatch.frame
+            print("AUDIT \(device) reports page \(pageFrame) bars \(bars) at the \(at)")
+            try app.performAccessibilityAudit(for: types) { issue in
+                let el = issue.element
+                let new = el.map { e in
+                    let f = e.frame
+                    return !bars.contains { $0.insetBy(dx: -1, dy: -1).contains(f) } && f.intersects(pageFrame)
+                } ?? true
+                let line = "\(issue.auditType) '\(el?.identifier ?? "")' '\(el?.label ?? "")' \(el.map { "\($0.frame)" } ?? "-") \(issue.compactDescription)"
+                print("AUDIT \(device) reports \(new ? "NEW" : "old") \(line)")
+                if new { flagged.append("reports: \(line)") }
+                return true
+            }
         }
+        try auditPage("top")
+        // Down the page to Copy, as BarUpUITests drags, and the foot audited too.
+        let copy = any("healthReports.copy")
+        for _ in 0..<8 where !(copy.exists && copy.isHittable) {
+            let w = app.windows.firstMatch
+            w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)).press(forDuration: 0.05,
+                thenDragTo: w.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)), withVelocity: .slow, thenHoldForDuration: 0.3)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.8))
+        }
+        XCTAssertTrue(copy.exists && copy.isHittable, "Copy wasn't reached: the fixture's rows didn't show")
+        RunLoop.current.run(until: Date().addingTimeInterval(1.0))
+        try auditPage("foot")
         print("AUDIT \(device) done, \(flagged.count) on the new row and page")
         XCTAssertTrue(flagged.isEmpty, "the audit flags the new row or page: \(flagged.joined(separator: "; "))")
         app.terminate()
