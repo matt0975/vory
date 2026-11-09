@@ -8,6 +8,8 @@ struct VoryMacApp: App {
     @State private var model: AppModel
     @State private var board = TurnBoard.shared
     @AppStorage("colorSchemePreference") private var scheme = "system"
+    @AppStorage(AppTheme.accentKey) private var accentID = "blue"
+    @AppStorage(AppTheme.customHexKey) private var customHex = AppTheme.defaultCustomHex
 
     init() {
         #if DEBUG
@@ -83,6 +85,7 @@ struct VoryMacApp: App {
                 // Bots move only while this window is visible and in front (#248).
                 .botWindowLiveness(needsKey: true)
                 .environment(model)
+                .tint(AppTheme.accent(accentID).color)
                 .preferredColorScheme(scheme == "light" ? .light : scheme == "dark" ? .dark : nil)
                 .onOpenURL { url in model.open(url) }
                 .continuesHandoff(model)
