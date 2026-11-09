@@ -408,6 +408,47 @@ import Testing
         #expect(calls.all("session.mutate").isEmpty)
     }
 
+    // MARK: The tool line
+
+    private func toolStarts(_ c: ChatSession, _ id: String, _ name: String) {
+        c.handle(event: GatewayEvent(type: "tool.start", sessionID: "rt-a", payload: ["tool_id": .string(id), "name": .string(name)]))
+    }
+
+    private func approvalAsked(_ c: ChatSession) {
+        c.handle(event: GatewayEvent(type: "approval.request", sessionID: "rt-a", payload: [
+            "kind": "approval", "prompt_id": "p-1", "execution_generation": 3, "command": "rm -rf /var/log/old",
+            "description": "Delete the old log folder", "choices": ["once", "deny"]]))
+    }
+
+    @Test func anApprovalTakesTheOpenToolsName() async throws {
+        let (c, _) = try await chat(authority: true)
+        toolStarts(c, "t-1", "terminal")
+        approvalAsked(c)
+        let card = try #require(c.cards.first)
+        #expect(card.approval?.toolName == "terminal")
+    }
+
+    @Test func anApprovalWithTwoOpenToolsHasNoToolLine() async throws {
+        let (c, _) = try await chat(authority: true)
+        toolStarts(c, "t-1", "terminal")
+        toolStarts(c, "t-2", "execute_code")
+        approvalAsked(c)
+        let card = try #require(c.cards.first)
+        #expect(card.approval?.toolName == nil)
+    }
+
+    @Test func aToolLeftRunningByAnEarlierTurnDoesNotCount() async throws {
+        let (c, _) = try await chat(authority: true)
+        c.items.append(TranscriptItem(id: "u1", kind: .user(text: "Clean the old logs", attachments: [])))
+        // Its turn ended without its completion (an interrupt, a dropped socket): the row stays running.
+        toolStarts(c, "t-old", "execute_code")
+        c.items.append(TranscriptItem(id: "u2", kind: .user(text: "Now the cache", attachments: [])))
+        toolStarts(c, "t-new", "terminal")
+        approvalAsked(c)
+        let card = try #require(c.cards.first)
+        #expect(card.approval?.toolName == "terminal")
+    }
+
     @Test func aLegacySessionInfoStillReplacesTheInfo() async throws {
         let (c, _) = try await chat(authority: false)
         #expect(c.info?.model == "gpt-x")

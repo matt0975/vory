@@ -1861,6 +1861,18 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     nonisolated static let renameFailedLine = "The chat couldn't be renamed."
+
+    /// The name of the one tool call still running in this turn, nil when none or several (#666). Only the turn's own
+    /// count, those after the person's last message: a row an earlier turn left running (an interrupt, a dropped
+    /// socket) isn't asking.
+    private func soleRunningTool() -> String? {
+        let start = items.lastIndex { if case .user = $0.kind { return true }; return false }.map { $0 + 1 } ?? 0
+        let running = items[start...].compactMap { item -> String? in
+            if case .tool(let a) = item.kind, a.status == .running { return a.name }
+            return nil
+        }
+        return running.count == 1 ? running[0] : nil
+    }
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
 
@@ -2207,9 +2219,15 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             banner = nil
         case "approval.request", "clarify.request":
             // Hermes's session authority asks by event, not by request (#665).
-            guard runtime.sessionAuthority, let card = Self.promptCard(p, sessionID: runtimeID) else { break }
+            guard runtime.sessionAuthority, var card = Self.promptCard(p, sessionID: runtimeID) else { break }
             noteGeneration(card.generation)
             guard removedHereAt[card.id] == nil, (card.generation ?? 0) >= (executionGeneration ?? 0) else { break }
+            // The authority's approval names no tool. It's asked from inside a tool call whose start this chat has,
+            // so the one tool still running is the one asking; with none or several, the card has no tool line (#666).
+            if card.method == "approval", let tool = soleRunningTool(), case .object(var params) = card.params, params["tool_name"] == nil {
+                params["tool_name"] = .string(tool)
+                card.params = .object(params)
+            }
             addCard(card)
         case "approval.settled", "clarify.settled":
             // Answered here, the card went already; answered elsewhere, timed out or its turn over, it goes now.
