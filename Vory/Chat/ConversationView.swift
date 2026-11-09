@@ -833,7 +833,7 @@ struct ChatHeader: View {
             if back {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
                 .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }

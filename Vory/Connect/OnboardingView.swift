@@ -133,7 +133,7 @@ struct OnboardingView: View {
                         Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).foregroundStyle(Color.onboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                     .accessibilityIdentifier("onboarding.restore")
                 }
             }

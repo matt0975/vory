@@ -639,7 +639,7 @@ struct MorphTopBar: View {
         #if DEBUG
         let _ = noteBarState()
         #endif
-        GlassEffectContainer(spacing: 10) {
+        VoryGlassEffectContainer(spacing: 10) {
             ZStack(alignment: .topLeading) {
                 // The end states, for their frames only. Up in the status band (the open Duo upright) the whole bar
                 // stands `lift` higher, a chat's row with it (like Messages, #542), so nothing travels between the list and
@@ -1365,7 +1365,7 @@ private struct CapsuleFrame: ViewModifier {
             // The page's glass under the capsule stays still when it is touched (#344).
             .barShieldShape(square: squareHit)
             .clipShape(.capsule)
-            .glassEffect(present && !bare ? .regular : .identity, in: .capsule)
+            .voryGlassEffect(present && !bare ? .regular : .identity, in: .capsule)
             // The glass's capsule is its hit shape as well: on a 44 pt slot a circle, so a touch at a corner went to what's
             // under the bar. A button's slot takes the whole square (#584). A menu's slot (More, the bot menu) keeps the
             // circle: its own button is round, and a square around it would take touches it doesn't answer. The empty set

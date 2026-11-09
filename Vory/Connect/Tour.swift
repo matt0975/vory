@@ -314,14 +314,14 @@ struct TourView: View {
                     // last page); a replay's Done is there.
                     Button("Skip") { go(to: .connect) }
                         .font(.subheadline.weight(.medium))
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityLabel("Skip the tour")
                         .accessibilityIdentifier("onboarding.skip")
                 } else if let onClose {
                     Button("Done", action: onClose)
                         .font(.subheadline.weight(.medium))
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityLabel("Done with the tour")
                         .accessibilityIdentifier("onboarding.done")
@@ -337,7 +337,7 @@ struct TourView: View {
                         Text("Continue").font(.headline).foregroundStyle(Color.onOnboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
                     .accessibilityShowsLargeContentViewer()
                     .accessibilityIdentifier("onboarding.continue")
                     .frame(maxWidth: 380)
@@ -688,13 +688,13 @@ private struct TourHelloBeat: View {
             Text("Your Hermes agents, on \(DeviceWords.your).")
                 .font(.body).foregroundStyle(.primary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            GlassEffectContainer(spacing: 10) {
+            VoryGlassEffectContainer(spacing: 10) {
                 VStack(spacing: 10) {
                     Button(action: onStart) {
                         Text("Get Started").font(.headline).foregroundStyle(Color.onOnboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
                     .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Starts a short tour.")
                     .accessibilityIdentifier("onboarding.getStarted")
@@ -703,7 +703,7 @@ private struct TourHelloBeat: View {
                         Button(action: onDemo) {
                             Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
                         }
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                         .accessibilityIdentifier("onboarding.tryDemo.first")
@@ -713,7 +713,7 @@ private struct TourHelloBeat: View {
                             Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline)
                                 .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity).padding(.vertical, 6)
                         }
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Brings back the gateways you saved on another device.")
                         .accessibilityIdentifier("onboarding.restore")
@@ -960,13 +960,13 @@ private struct TourConnectBeat: View {
             Text("You\u{2019}ll need a Hermes gateway running on a computer you own.")
                 .font(.subheadline).foregroundStyle(.primary).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
-            GlassEffectContainer(spacing: 14) {
+            VoryGlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button(action: onConnect) {
                         Text("Connect your gateway").font(.headline).foregroundStyle(Color.onOnboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
                     .accessibilityShowsLargeContentViewer()
                     .accessibilityHint("Opens the form for your gateway\u{2019}s address.")
                     .accessibilityIdentifier("onboarding.addGateway")
@@ -974,7 +974,7 @@ private struct TourConnectBeat: View {
                         Button(action: onDemo) {
                             Text("Try a demo").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                         }
-                        .buttonStyle(.glass)
+                        .voryGlassButtonStyle()
                         .accessibilityShowsLargeContentViewer()
                         .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                         .accessibilityIdentifier("onboarding.tryDemo")
