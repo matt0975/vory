@@ -134,6 +134,13 @@ private struct MorphPageActions: ViewModifier {
     /// this much (`TopBarRoom`, #340). Kept, not cleared, over a chat or a pushed page, so a root page coming back has
     /// its room at once.
     var rootRowBottom: CGFloat = 0
+    /// `rootRowBottom` from the root row's slots' frames: from the root row's own frames only, never mid-scrub (the row's
+    /// height doesn't change while `t` moves); its tallest slot's height, not its lowest bottom (`TopBarRoom.rowBottom`).
+    func noteRootRow(_ frames: [MorphSlot: CGRect]) {
+        guard !scrubbing else { return }
+        let bottom = TopBarRoom.rowBottom(of: Array(frames.values))
+        if abs(bottom - rootRowBottom) > 0.5 { rootRowBottom = bottom }
+    }
     /// The bottom of a chat's row (Back, the title pill, More) in the bar's space, for what may grow up under it (the
     /// + panel's cap, `AttachPanel.room`).
     var chatRowBottom: CGFloat = 0
@@ -693,13 +700,6 @@ struct MorphTopBar: View {
             else if !open, state.chat != nil || state.opening, !state.scrubbing { state.pop() }
         }
         .onChange(of: model.roomsOnScreen) { _, n in if n > 0, model.chatsPathOpen { state.roomShown() } }
-        // The root row's bottom for the pages under it (#340): from the root row's own frames only, never mid-scrub
-        // (the row's height doesn't change while `t` moves).
-        .onChange(of: listFrames, initial: true) { _, f in
-            guard !state.scrubbing else { return }
-            let bottom = f.values.map(\.maxY).max() ?? 0
-            if abs(bottom - state.rootRowBottom) > 0.5 { state.rootRowBottom = bottom }
-        }
         .onChange(of: chatFrames, initial: true) { _, f in
             guard !state.scrubbing else { return }
             // Like Messages on the Duo, the thread starts under the chat's band, not under its row (Matt, 2026-10-28).
@@ -1154,8 +1154,8 @@ struct MorphTopBar: View {
         return HStack(spacing: 10) {
             if let _ = selecting {
                 Text("Done").font(.body.weight(.semibold)).padding(.horizontal, 16).frame(height: 44).hidden()
-                    .measured(.lead, into: $listFrames, last: $lastListFrames)
-            } else if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames) }
+                    .measured(.lead, into: $listFrames, last: $lastListFrames, rootRow: true)
+            } else if chrome.lead != nil { Color.clear.frame(width: 44, height: 44).measured(.lead, into: $listFrames, last: $lastListFrames, rootRow: true) }
             // The title alone: the pull's wheel widens the seen capsule itself (CapsuleFrame), so
             // a pull never changes what is measured here. Hidden, not only unseen: at opacity 0 under
             // accessibilityHidden it stayed in the tree as a second title, a "Settings" text over a
@@ -1165,17 +1165,17 @@ struct MorphTopBar: View {
             // came out a few points taller for a moment and the capsule breathed (Matt,
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
-            .measured(.mid, into: $listFrames, last: $lastListFrames)
+            .measured(.mid, into: $listFrames, last: $lastListFrames, rootRow: true)
             Spacer(minLength: 0)
             if let sel = selecting {
-                trailIcons((sel.canMove ? ["folder"] : []) + ["archivebox", "trash"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
+                trailIcons((sel.canMove ? ["folder"] : []) + ["archivebox", "trash"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
             } else {
             switch chrome.trail {
-            case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames)
-            case .plus: trailIcons(["plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
-            case .filesActions: trailIcons(["eye.slash", "square.and.arrow.up"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
-            case .boardActions: trailIcons(["ellipsis.circle", "plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
-            case .sessionsOptions: trailIcons(["gearshape"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames)
+            case .chatActions: actions.measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
+            case .plus: trailIcons(["plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
+            case .filesActions: trailIcons(["eye.slash", "square.and.arrow.up"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
+            case .boardActions: trailIcons(["ellipsis.circle", "plus"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
+            case .sessionsOptions: trailIcons(["gearshape"], label: "").measured(.trail, into: $listFrames, last: $lastListFrames, rootRow: true)
             case nil: EmptyView()
             }
             }
@@ -1418,7 +1418,8 @@ private extension View {
     /// Reports this view's frame in the bar's space under its slot. A change after the first
     /// measurement animates (a tab switch moves and resizes the capsules: the morph); a slot
     /// that goes away leaves its last frame so its capsule can fade out where it was.
-    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil) -> some View {
+    func measured(_ slot: MorphSlot, into frames: Binding<[MorphSlot: CGRect]>, last: Binding<[MorphSlot: CGRect]>? = nil,
+                  rootRow: Bool = false) -> some View {
         onGeometryChange(for: CGRect.self) { $0.frame(in: .named("morph")) } action: { f in
             #if DEBUG
             // The launch probe (#555): every trailing frame measured, against the one drawn ("trail").
@@ -1431,6 +1432,10 @@ private extension View {
                 frames.wrappedValue[slot] = f
             }
             last?.wrappedValue[slot] = f
+            // The root row's bottom for the pages under it (#340), from the measurement itself (#612): an onChange of the
+            // frames came a beat late, with the frames from before the latest measurement, so after a quick run of them (an
+            // accessibility audit's text sizes) its last write put back a stale bottom and the pages stood under it.
+            if rootRow { MorphState.shared.noteRootRow(frames.wrappedValue) }
         }
         // The frame is not cleared when the view goes: on a tab switch the old view's
         // disappearance landed after the new view's measurement and wiped it, which left the

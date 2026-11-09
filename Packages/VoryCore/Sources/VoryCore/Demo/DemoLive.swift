@@ -17,7 +17,8 @@ extension DemoGateway {
             l.running = true
             l.turnStartedAt = now()
             l.inflight = ["user": text, "assistant": "", "streaming": true]
-            Task { await self.runTurn(l, prompt: text) }
+            let voice = p["surface"] as? String == VoiceTurn.surface
+            Task { await self.runTurn(l, prompt: text, voice: voice) }
             return .success(["status": "streaming"])
         case "approval.respond":
             for l in live.values {
@@ -142,9 +143,9 @@ extension DemoGateway {
 
     // MARK: A turn
 
-    func runTurn(_ l: Live, prompt: String) async {
+    func runTurn(_ l: Live, prompt: String, voice: Bool = false) async {
         let userAt = now()
-        let turn = approvalDue(l, prompt: prompt) ? DemoContent.cleanup : DemoContent.everyday
+        let turn = approvalDue(l, prompt: prompt, voice: voice) ? DemoContent.cleanup : DemoContent.everyday
         event("message.start", l.sid)
         // The reply's paragraphs as they stream (`paragraph`); an empty one (a turn that opens with its tool step) adds nothing.
         var reply = ""
@@ -206,11 +207,14 @@ extension DemoGateway {
     }
 
     /// Once per demo: the message that asks what's taking the space or for a cleanup (onboarding's ready-made
-    /// message among them), or the second message in a chat.
-    func approvalDue(_ l: Live, prompt: String) -> Bool {
-        guard !approvalAsked else { return false }
+    /// message among them), or the second message in a chat. Said in voice mode (#621), that message asks every time,
+    /// so a voice session shows its one approval card whatever was typed before it.
+    func approvalDue(_ l: Live, prompt: String, voice: Bool = false) -> Bool {
         let p = prompt.lowercased()
-        if ["space", "disk", "clean", "delete", "remove", "tidy", "free up"].contains(where: p.contains) { return true }
+        let asks = ["space", "disk", "clean", "delete", "remove", "tidy", "free up"].contains(where: p.contains)
+        if voice, asks { return true }
+        guard !approvalAsked else { return false }
+        if asks { return true }
         return l.history.filter { $0["role"] as? String == "user" }.count == 1 && l.stored.hasPrefix("demo_")
     }
 

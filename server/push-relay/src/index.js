@@ -123,7 +123,8 @@ async function push(request, env) {
     payload = { aps: { timestamp: now, event, "content-state": b.content_state || {} } };
     if (event === "end") payload.aps["dismissal-date"] = b.dismissal_date || now + 60;
     // A push-to-start: the token is the phone's push-to-start token and the activity's fixed
-    // fields travel with it (plain words: title, bot name, colour, avatar choice).
+    // fields travel with it, forwarded as they come (the names sealed by the gateway for an app
+    // that opens them, plain for older apps).
     if (event === "start") {
       if (!b.attributes || typeof b.attributes !== "object") return reply(400, { error: "attributes required for start" });
       payload.aps["attributes-type"] = "HermesTurnAttributes";

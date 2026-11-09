@@ -1635,7 +1635,9 @@ struct TranscriptRow: View, Equatable {
     }
     /// Open states as values with a setter, not Bindings: a Binding made in the parent's body is
     /// a new value every evaluation, and SwiftUI re-ran every visible row for it on each frame
-    /// of a keyboard drag ("reasoningOpen, toolOpen changed", 854 times in one run).
+    /// of a keyboard drag ("reasoningOpen, toolOpen changed", 854 times in one run). The cards'
+    /// Bindings call each setter from a main-actor closure, as the bare function value isn't
+    /// Sendable (#620); the only writer is the card's own button, on the main thread.
     var reasoningOpen = false
     var setReasoningOpen: (Bool) -> Void = { _ in }
     var onSelectText: (String) -> Void = { _ in }
@@ -1754,7 +1756,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1770,7 +1772,7 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: setReasoningOpen), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text)
@@ -1841,7 +1843,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, open: Binding(get: { toolOpen }, set: setToolOpen), showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, open: Binding(get: { toolOpen }, set: { @MainActor in setToolOpen($0) }), showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither

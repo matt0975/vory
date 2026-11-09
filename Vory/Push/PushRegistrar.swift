@@ -295,6 +295,9 @@ final class PushRegistrar: PushRegistrationSyncing {
         #if os(iOS)
         // Quiet while a Mac drives the chat (Settings › Notifications); the Companion reads this.
         payload["mute_desktop_origin"] = .bool(UserDefaults.standard.bool(forKey: Self.muteDesktopOriginKey))
+        // This build's Live Activity opens sealed names and goal lines (#497): a relay-mode Companion seals them for it.
+        // Without this an older app's activity would show them blank, so the Companion keeps them plain for it.
+        payload["la_sealed"] = .number(1)
         #endif
         payload.merge(PushRelay.deviceFileFields()) { $1 }
         do {

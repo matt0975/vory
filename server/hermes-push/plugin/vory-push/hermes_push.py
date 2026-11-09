@@ -54,7 +54,7 @@ except ImportError as exc:  # pragma: no cover
 log = logging.getLogger("hermes-push")
 
 # Keep in step with plugin/vory-push/plugin.yaml; the app compares the two.
-VERSION = "1.0.39"
+VERSION = "1.0.40"
 USER_AGENT = f"Vory-Push/{VERSION} (Hermes companion)"
 try:
     # Fingerprint of the code actually running: the app compares it with the copy it ships, so a
@@ -125,6 +125,25 @@ def encrypt_for_device(device: dict, obj: dict) -> str | None:
     return base64.b64encode(nonce + ct).decode()
 
 
+def seal_live_activity(device: dict, state: dict, attributes: dict | None) -> tuple[dict, dict | None]:
+    """Relay mode, for an app that opens sealed fields (`la_sealed` in its device file): the turn's goal line, and a
+    push-to-start's chat title, bot name, profile, colour and avatar, travel encrypted with the install's key, as the
+    notifications do; the plain ones go empty. The relay and Apple then see the phase, its fixed words, numbers and
+    times, and the random ids that open the chat, but no names and no free text. The phone's Live Activity opens them."""
+    state = dict(state)
+    goal = state.pop("goal", None)
+    if goal and (sealed := encrypt_for_device(device, {"goal": goal})):
+        state["sealed"] = sealed
+    if attributes:
+        names = {"title": attributes.get("sessionTitle") or "", "bot": attributes.get("botName") or "",
+                 "profile": attributes.get("profile") or "", "hex": attributes.get("tintHex") or "",
+                 "avatar": attributes.get("avatar") or ""}
+        attributes = {**attributes, "sessionTitle": "", "botName": "", "profile": "", "tintHex": "", "avatar": ""}
+        if sealed := encrypt_for_device(device, names):
+            attributes["sealed"] = sealed
+    return state, attributes
+
+
 class APNs:
     """Delivery: through the developer's relay when the device registered with one (no APNs key
     needed here), otherwise straight to APNs over HTTP/2 via curl with your own key."""
@@ -167,7 +186,7 @@ class APNs:
             if attributes:
                 body["attributes"] = attributes   # a push-to-start: the activity's fixed fields
             if la_alert:
-                body["alert"] = la_alert   # plain words only: no extension can decrypt a Live Activity push
+                body["alert"] = la_alert   # plain words only: the system draws it and can't open a sealed name
             if dismissal_date:
                 body["dismissal_date"] = dismissal_date
         if self.dry_run:
@@ -208,12 +227,20 @@ class APNs:
             if push_type == "sound":
                 return self.send_via_relay(device, push_type="sound", alert={"thread_id": aps.get("thread-id", "")}, collapse_id=collapse_id)
             if push_type == "liveactivity":
-                # No extension can decrypt a Live Activity update, so only generic words travel.
+                # The detail becomes the phase's fixed words; for an app that opens sealed fields the goal line and the
+                # names go sealed too, so no free text travels plain.
                 state = dict(aps.get("content-state") or {})
                 state["detail"] = {"waiting": "Waiting for you", "done": "Turn finished", "error": "The turn failed", "thinking": "Thinking…",
                                    "streaming": "Writing…", "tool": "Running a tool…"}.get(state.get("phase"), "Working…")
+                attributes, la_alert = aps.get("attributes"), aps.get("alert")
+                if device.get("la_sealed") == 1 and device.get("payload_key"):
+                    # The goal line and the names go sealed; an app without `la_sealed` can't open them and keeps
+                    # today's plain payload. The system draws the alert and can't open a name: it says "Vory".
+                    state, attributes = seal_live_activity(device, state, attributes)
+                    if la_alert:
+                        la_alert = {**la_alert, "title": "Vory"}
                 return self.send_via_relay(device, push_type="liveactivity", token_override=token_override, content_state=state, event=aps.get("event"),
-                                           la_alert=aps.get("alert"), dismissal_date=aps.get("dismissal-date"), attributes=aps.get("attributes"))
+                                           la_alert=la_alert, dismissal_date=aps.get("dismissal-date"), attributes=attributes)
             return self.send_via_relay(device, push_type=push_type)
         if not self.direct:
             return False
@@ -597,8 +624,8 @@ class Gateway:
                 ticket = self._http("POST", "/api/auth/ws-ticket", {})["ticket"]
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", "replace")[:300].lower()
-                hint = " (Cloudflare refused it — the companion needs the Access service token, or use a loopback URL)" if "cloudflare" in body or "cf-" in body \
-                    else " (sign-in rejected — sign in for the companion again)" if exc.code in (401, 403) else ""
+                hint = " (Cloudflare refused it: the companion needs the Access service token, or use a loopback URL)" if "cloudflare" in body or "cf-" in body \
+                    else " (sign-in rejected: sign in for the companion again)" if exc.code in (401, 403) else ""
                 raise RuntimeError(f"HTTP {exc.code} {exc.reason}{hint}") from None
             except urllib.error.URLError as exc:
                 raise RuntimeError(describe_error(exc)) from None
@@ -874,7 +901,7 @@ class Relay:
                      "startedAtUnix": float(d.get("live_activity_started_at") or now), "endedAtUnix": float(now)}
             aps = {"timestamp": now, "event": "update", "content-state": state}
             if env("HERMES_PUSH_FINISH_EXPAND") in {"1", "true", "yes"}:
-                aps["alert"] = {"title": bot, "body": "Finished — tap to read the reply" if phase == "done" else "The turn failed — tap to see why", "sound": "default"}
+                aps["alert"] = {"title": bot, "body": "Finished. Tap to read the reply." if phase == "done" else "The turn failed. Tap to see why.", "sound": "default"}
             ok = self.apns.send(d, {"aps": aps}, push_type="liveactivity", token_override=d["live_activity_token"])
             self._note_la(f"finish update ({phase})", ok)
             if ok:
@@ -1356,7 +1383,7 @@ class Relay:
         if method == "approval":
             body = params.get("description") or params.get("command") or "A command is waiting for your decision"
             via_la = self.update_live_activities(a.get("stored", sid), {**self.la_usage.get(sid, {}), "phase": "waiting", "detail": str(body)[:80], "needsAttention": True},
-                                                 alert={"title": bot, "body": "Approval needed — tap to answer. It waits for you."}, runtime_id=sid)
+                                                 alert={"title": bot, "body": "Approval needed. Tap to answer. It waits for you."}, runtime_id=sid)
             banner: set = set()
             self.push_all("approval", f"{bot} · approval needed", f"{title}: {str(body)[:180]}", {**self.meta(sid), "request_id": params.get("request_id", rid)}, collapse=rid, skip=via_la, reached=banner)
             self.open_approvals[rid] = {"sid": sid, "stored": a.get("stored", sid), "req": str(params.get("request_id") or rid), "at": time.time(),
@@ -1645,7 +1672,7 @@ def main() -> None:
         gw = env("HERMES_PUSH_GATEWAY_URL").rstrip("/")
         devs = load_devices(gw)
         if not devs:
-            sys.exit(f"no devices registered in {devices_dir()} — open Vory › Settings › Notifications › Register now first")
+            sys.exit(f"no devices registered in {devices_dir()}: open Vory › Settings › Notifications › Register now first")
         if not apns.direct and not any(d.get("relay") for d in devs):
             sys.exit("no APNs key configured and no device registered with a relay")
         ok = 0

@@ -34,9 +34,13 @@ final class HandsFreeSession {
     /// The full-screen view is away while the loop goes on (the chat shows a pill to come back).
     var minimized = false
     private(set) var lastError: String?
-    let listener = UtteranceListener()
-    private let player = VoicePlayer()
-    private var engine: VoiceEngine? { chat?.runtime.voice }
+    // The audio, reached only through these four names (`reach`): the listener, the player, Live's microphone and
+    // the gateway's voice engine.
+    var listener: UtteranceListener { reach("listener"); return ears }
+    private let ears = UtteranceListener()
+    private var player: VoicePlayer { reach("player"); return voicePlayer }
+    private let voicePlayer = VoicePlayer()
+    private var engine: VoiceEngine? { reach("engine"); return chat?.runtime.voice }
 
     private var currentReply: SpeechStream?
     /// A reply's stream (open from its first delta), a line of the loop's own (synthesized only
@@ -56,6 +60,30 @@ final class HandsFreeSession {
     private var hadCards = false
     private var fakeTask: Task<Void, Never>?
 
+    // MARK: Demo mode
+
+    /// Demo mode's stand-in ears and voice while a demo session runs (#621); nil otherwise.
+    private var demo: DemoVoice?
+    var isDemo: Bool { demo != nil }
+    /// How fast the demo's person speaks and its bot reads: as people do, or quicker for the tests.
+    var demoTiming = DemoVoice.Timing.real
+    /// The reply being said in a demo session.
+    private var demoReply: DemoVoice.Saying?
+    /// A demo session ended while its turn ran: the reply lands in the chat and is not read aloud after
+    /// (`keepsQuiet`), as the demo makes no sound. Kept until a moment after that reply has come.
+    @ObservationIgnored private weak var quietChat: ChatSession?
+    @ObservationIgnored private var quietObserver: Any?
+    /// What a demo session reached of the audio (`reach`, DEBUG only), in the order first reached: the tests need it
+    /// empty.
+    @ObservationIgnored private(set) var audioReached: [String] = []
+
+    /// Notes a reach for the audio while a demo session runs (DEBUG only), which the demo's own paths never make.
+    private func reach(_ what: String) {
+        #if DEBUG
+        if demo != nil, !audioReached.contains(what) { audioReached.append(what) }
+        #endif
+    }
+
     var isActive: Bool { chat != nil && state.phase != .ended }
     func isActive(for chat: ChatSession) -> Bool { isActive && self.chat === chat }
 
@@ -68,7 +96,8 @@ final class HandsFreeSession {
     var isLive: Bool { live != nil }
     /// What the live provider is called, for the screen ("Live · Gemini").
     private(set) var liveLabel: String?
-    private let liveMic = LiveMic()
+    private var liveMic: LiveMic { reach("liveMic"); return liveMicrophone }
+    private let liveMicrophone = LiveMic()
     private var liveLevels: [Float] = []
     private var liveHeard = ""
     private var liveSaid = ""
@@ -84,15 +113,15 @@ final class HandsFreeSession {
     private var liveBotLine: UUID?
 
     /// The waveform and the live caption, whichever engine is at work.
-    var levels: [Float] { isLive ? liveLevels : listener.levels }
-    var liveText: String { isLive ? liveHeard : listener.liveText }
+    var levels: [Float] { demo?.levels ?? (isLive ? liveLevels : listener.levels) }
+    var liveText: String { demo?.words ?? (isLive ? liveHeard : listener.liveText) }
 
     /// The transcript for the screen: what has been said, plus (Standard) the words being heard
     /// right now and the ones waiting on their transcript, which are not in it yet.
     var transcriptLines: [VoiceLine] {
         var lines = transcript.lines
         if !isLive {
-            if state.hearing, !listener.liveText.isEmpty { lines.append(VoiceLine(id: Self.hearingLineID, isPerson: true, text: listener.liveText, isFinal: false)) }
+            if state.hearing, !liveText.isEmpty { lines.append(VoiceLine(id: Self.hearingLineID, isPerson: true, text: liveText, isFinal: false)) }
             else if state.phase == .transcribing, !heardWords.isEmpty { lines.append(VoiceLine(id: Self.hearingLineID, isPerson: true, text: heardWords, isFinal: false)) }
         }
         return lines
@@ -142,8 +171,6 @@ final class HandsFreeSession {
     // MARK: Start and end
 
     func start(chat: ChatSession) {
-        // Demo mode (#392) has no voice: it needs a real provider, through a gateway of one's own.
-        if chat.runtime.isEphemeral { chat.banner = "Connect a gateway to use voice."; return }
         if isActive { end() }
         // The session follows the chat's turn through observation, with the app away too
         // (a locked phone): the chat keeps telling it, and tells now what it held back.
@@ -164,6 +191,8 @@ final class HandsFreeSession {
         lastReplyHeard = VoiceCoordinator.lastReply(in: chat.items)
         livePersonLine = nil; liveBotLine = nil
         clock = TurnClock()
+        // Demo mode (#392) has scripted ears and voice instead (#621): nothing below it, and no microphone or audio.
+        if chat.runtime.isEphemeral { openDemo(); return }
         // The system's microphone prompt may be up for a while (on a Mac that has never been
         // asked, until the person answers it): the screen says so rather than "Listening…".
         state.note = "Waiting for microphone access…"
@@ -221,6 +250,7 @@ final class HandsFreeSession {
     func end() {
         guard chat != nil else { return }
         chat?.keepsObserversLive = false
+        if let demo { endDemo(demo); return }
         if isLive { closeLive() }
         run(state.handle(.end))
         listener.stop()
@@ -246,9 +276,128 @@ final class HandsFreeSession {
     func mute() { isLive ? liveMute(true) : run(state.handle(.mute)) }
     func unmute() { isLive ? liveMute(false) : run(state.handle(.unmute)) }
     func pause() { isLive ? livePause(true) : run(state.handle(.pause)) }
-    func resume() { player.restartAfterChange(); isLive ? livePause(false) : run(state.handle(.resume)) }
+    func resume() { if demo == nil { player.restartAfterChange() }; isLive ? livePause(false) : run(state.handle(.resume)) }
     func toggleMute() { state.isMuted ? unmute() : mute() }
     func togglePause() { state.phase == .paused ? resume() : pause() }
+
+    // MARK: Demo mode, driven by the script
+
+    /// Demo mode's voice (#621): the same loop, screens and controls, with `DemoVoice` for the ears and the voice and
+    /// no audio at all, so nothing asks for the microphone, opens an audio session or makes a sound. The turn is the
+    /// demo gateway's own, with its one approval card, and the chat keeps it as after a real session. In place of
+    /// `open()`, which it never reaches: no Live, no engine, no lease and no quick answers.
+    private func openDemo() {
+        guard let chat else { return }
+        stopKeepingQuiet()
+        let demo = DemoVoice(timing: demoTiming)
+        demo.onSayingStarted = { [weak self] in self?.run(self?.state.handle(.audioStarted) ?? []) }
+        demo.onSayingEnded = { [weak self] in self?.run(self?.state.handle(.audioFinished) ?? []) }
+        self.demo = demo
+        UtteranceListener.log.notice("voice mode: demo (scripted, no audio)")
+        // Something being read aloud goes quiet; nothing is touched when nothing is.
+        if VoiceCoordinator.shared.isSpeaking { VoiceCoordinator.shared.stop() }
+        watch(chat)
+        observeNotifications(chat, audio: false)
+        run(state.handle(.start))
+    }
+
+    /// End, in a demo session: the loop's own end, and the script stopped. A turn still running is left to finish
+    /// in the chat, as in a real session, and its reply is not read aloud.
+    private func endDemo(_ demo: DemoVoice) {
+        if let chat, chat.isRunning || state.phase == .thinking { keepQuiet(chat) }
+        run(state.handle(.end))
+        demo.stop()
+        self.demo = nil
+        demoReply = nil
+        watchTask?.cancel(); watchTask = nil
+        for o in observers { NotificationCenter.default.removeObserver(o) }
+        observers = []
+        chat = nil
+        minimized = false
+    }
+
+    /// The loop's effects in a demo session: `DemoVoice` takes what would open the microphone, record, transcribe or
+    /// speak. Sending is the real one (false: `perform` goes on), to the demo's own gateway.
+    private func performDemo(_ effect: HandsFreeEffect, _ demo: DemoVoice) -> Bool {
+        switch effect {
+        case .openMic:
+            demo.open()
+        case .closeMic:
+            demo.close()
+        case .captureStart:
+            break
+        case .captureCancel:
+            demo.cancelHearing()
+        case .captureStop:
+            let words = demo.takeWords()
+            heardWords = words
+            demo.afterTranscribing { [weak self] in self?.run(self?.state.handle(.transcript(words)) ?? []) }
+        case .send:
+            return false
+        case .beginReplySpeech:
+            let reply = DemoVoice.Saying()
+            demoReply = reply
+            spoken = ""
+            replyLine = UUID()
+            demo.say(reply)
+        case .feedReply(let delta):
+            demoReply?.send(delta: delta)
+            spoken = demoReply?.text ?? spoken
+            if let line = replyLine { transcript.write(line, isPerson: false, text: spoken) }
+        case .finishReplySpeech:
+            demoReply?.finish()
+            spoken = demoReply?.text ?? spoken
+            demoReply = nil
+            if let line = replyLine { transcript.write(line, isPerson: false, text: spoken, final: true); replyLine = nil }
+        case .speakWhole(let text):
+            let reply = DemoVoice.Saying()
+            reply.send(delta: text)
+            reply.finish()
+            spoken = reply.text
+            transcript.write(UUID(), isPerson: false, text: spoken, final: true)
+            demo.say(reply)
+        case .announce:
+            break   // only said, in a real session; the card is on the screen
+        case .stopSpeaking:
+            demoReply = nil
+            if let line = replyLine { transcript.finish(line); replyLine = nil }
+            demo.stopSaying()
+        }
+        return true
+    }
+
+    /// The person says the demo's line the first time the loop listens, as the stand-in microphone does.
+    private func demoListenIfDue() {
+        guard let demo, state.phase == .listening, !state.isMuted, !state.hearing else { return }
+        demo.hearLineIfDue(started: { [weak self] in self?.run(self?.state.handle(.speechStarted) ?? []) },
+                           ended: { [weak self] in self?.run(self?.state.handle(.speechEnded) ?? []) })
+    }
+
+    /// Whether a finished reply in this chat is a demo voice turn's that ended early, which "Read replies aloud"
+    /// leaves unsaid.
+    func keepsQuiet(_ storedID: String) -> Bool {
+        guard let quietChat, !storedID.isEmpty else { return false }
+        return quietChat.storedID == storedID
+    }
+
+    private func keepQuiet(_ chat: ChatSession) {
+        stopKeepingQuiet()
+        quietChat = chat
+        quietObserver = NotificationCenter.default.addObserver(forName: .hermesReplyCompleted, object: nil, queue: .main) { [weak self] n in
+            guard let id = n.userInfo?["storedID"] as? String else { return }
+            Task { @MainActor in
+                guard let self, self.keepsQuiet(id) else { return }
+                // A moment after: read-aloud reads the same notification first.
+                try? await Task.sleep(for: .seconds(1))
+                if self.keepsQuiet(id) { self.stopKeepingQuiet() }
+            }
+        }
+    }
+
+    private func stopKeepingQuiet() {
+        quietChat = nil
+        if let o = quietObserver { NotificationCenter.default.removeObserver(o); quietObserver = nil }
+    }
 
     // MARK: Live mode, driven by the model's events
 
@@ -601,7 +750,8 @@ final class HandsFreeSession {
         return "your input"
     }
 
-    private func observeNotifications(_ chat: ChatSession) {
+    /// `audio` false (a demo session): no observer of the audio session, which it never opens.
+    private func observeNotifications(_ chat: ChatSession, audio: Bool = true) {
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .hermesStreamDelta, object: nil, queue: .main) { [weak self] n in
             guard let id = n.userInfo?["storedID"] as? String, let text = n.userInfo?["text"] as? String else { return }
@@ -622,7 +772,7 @@ final class HandsFreeSession {
             }
         })
         #if os(iOS)
-        observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] n in
+        if audio { observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] n in
             guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             let options = (n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map(AVAudioSession.InterruptionOptions.init(rawValue:)) ?? []
             Task { @MainActor in
@@ -646,7 +796,7 @@ final class HandsFreeSession {
                 @unknown default: break
                 }
             }
-        })
+        }) }
         #endif
     }
 
@@ -655,18 +805,19 @@ final class HandsFreeSession {
     private func run(_ effects: [HandsFreeEffect]) {
         for e in effects { perform(e) }
         // While the bot speaks, the ears hold the mic to the echo's level (#280).
-        listener.guardingPlayback = state.phase == .speaking
+        if demo == nil { listener.guardingPlayback = state.phase == .speaking }
         updateCue()
         // The Live Activity carries the state (and End) to the Lock Screen and the Island.
         syncSurface()
         if Self.fakeInput { fakeInputIfListening() }
+        demoListenIfDue()
     }
     private var activityLine: String?
 
     /// A soft tick every few seconds while the bot works in silence, so a tool-heavy turn
     /// never feels like a hang.
     private func updateCue() {
-        if state.wantsThinkingCue {
+        if state.wantsThinkingCue, demo == nil {
             guard cueTask == nil else { return }
             cueTask = Task { [weak self] in
                 while let self, !Task.isCancelled, self.state.wantsThinkingCue {
@@ -698,6 +849,7 @@ final class HandsFreeSession {
     }()
 
     private func perform(_ effect: HandsFreeEffect) {
+        if let demo, performDemo(effect, demo) { return }
         switch effect {
         case .openMic:
             listener.start()
@@ -905,7 +1057,7 @@ final class HandsFreeSession {
 
     /// Says the next canned line into the loop as soon as it listens, the way a person would.
     func fakeInputIfListening() {
-        guard state.phase == .listening, !state.isMuted, !state.hearing, fakeTask == nil, fakeTurns < Self.fakeLines.count else { return }
+        guard demo == nil, state.phase == .listening, !state.isMuted, !state.hearing, fakeTask == nil, fakeTurns < Self.fakeLines.count else { return }
         let line = Self.fakeLines[fakeTurns]
         fakeTurns += 1
         let ingest = isLive ? liveMic.ingest : listener.ingest

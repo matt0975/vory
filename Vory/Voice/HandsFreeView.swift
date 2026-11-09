@@ -219,7 +219,7 @@ struct HandsFreeView: View {
                 if state.phase == .thinking, let goal {
                     Text(goal).font(.subheadline).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.center)
                 } else if state.phase == .needsApproval {
-                    Text("Allow or deny on screen. The loop waits.").font(.subheadline).foregroundStyle(.secondary).lineLimit(split == nil ? nil : 2)
+                    Text("Allow or deny it here. The bot waits for your answer.").font(.subheadline).foregroundStyle(.secondary).lineLimit(split == nil ? nil : 2)
                 } else if state.phase == .paused {
                     Text(state.note ?? "Tap Resume to keep going.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(split == nil ? nil : 2)
                 } else if let note = state.note {

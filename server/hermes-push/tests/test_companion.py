@@ -293,3 +293,174 @@ class ComplicationPushTests(unittest.TestCase):
         text = json.dumps(posted[0])
         for word in ("gateway.example", "nightly", "Hermes", "title", "alert", "content_state", "attributes", "enc"):
             self.assertNotIn(word, text)
+
+
+def _have_aesgcm() -> bool:
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+class SealedLiveActivityTests(unittest.TestCase):
+    """#497: in relay mode, for an app that opens sealed fields, a Live Activity push carries the goal line and the chat's
+    names sealed with the install's key. What the Companion posts to the relay is captured (no network). Where the
+    `cryptography` package is missing, a stand-in seals: it records what it was given and returns random bytes of the
+    real length, so the fields' moves and the payload's size are still checked; the blobs are opened only with the real
+    cipher."""
+
+    KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="   # bytes 0 to 31
+    GOAL = "Finding why the nightly export times out"
+    NAMES = {"sessionTitle": "Rewrite the nightly export job", "botName": "Archivist", "profile": "archivist",
+             "tintHex": "#FF8800", "avatar": "animated:pebble"}
+    PLAIN_STATE = {"phase", "detail", "outputTokens", "contextPercent", "contextUsed", "contextMax", "needsAttention",
+                   "startedAtUnix", "endedAtUnix", "sealed"}
+    FIXED_WORDS = {"Waiting for you", "Turn finished", "The turn failed", "Thinking…", "Writing…", "Running a tool…", "Working…"}
+
+    def setUp(self) -> None:
+        import base64, urllib.request
+        self.posted: list[dict] = []
+        self.sealed: list[dict] = []
+
+        class Answer:
+            status = 200
+            def read(self) -> bytes: return b'{"ok":true}'
+            def __enter__(self): return self
+            def __exit__(self, *a) -> None: return None
+
+        def capture(req, timeout=None):
+            self.posted.append(json.loads(req.data.decode()))
+            return Answer()
+
+        self.real_urlopen, urllib.request.urlopen = urllib.request.urlopen, capture
+        self.real_encrypt = hermes_push.encrypt_for_device
+        if not _have_aesgcm():
+            def stand_in(device: dict, obj: dict) -> str | None:
+                if not device.get("payload_key"):
+                    return None
+                self.sealed.append(obj)
+                plain = json.dumps(obj, separators=(",", ":")).encode()
+                return base64.b64encode(os.urandom(12 + len(plain) + 16)).decode()
+            hermes_push.encrypt_for_device = stand_in
+
+    def tearDown(self) -> None:
+        import urllib.request
+        urllib.request.urlopen = self.real_urlopen
+        hermes_push.encrypt_for_device = self.real_encrypt
+
+    def device(self, sealed: bool = True) -> dict:
+        d = {"device_id": "phone-1", "platform": "ios", "bundle_id": "com.vorantx.vory", "payload_key": self.KEY,
+             "relay": {"url": "https://relay.test", "install_id": "i1", "secret": "s" * 48}}
+        if sealed:
+            d["la_sealed"] = 1
+        return d
+
+    def send(self, device: dict, aps: dict) -> dict:
+        apns = hermes_push.APNs()
+        apns.dry_run = False
+        self.assertTrue(apns.send(device, {"aps": aps}, push_type="liveactivity", token_override="la-token"))
+        return self.posted[-1]
+
+    def opened(self, blob: str) -> dict:
+        """A sealed field, opened: with the real cipher and the device's key, else what the stand-in was given."""
+        if not _have_aesgcm():
+            return self.sealed.pop(0)
+        import base64
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        raw = base64.b64decode(blob)
+        return json.loads(AESGCM(base64.b64decode(self.KEY)).decrypt(raw[:12], raw[12:], None))
+
+    def update(self, **extra) -> dict:
+        state = {"phase": "tool", "detail": "terminal: tail -n 200 /var/log/export.log", "outputTokens": 812, "contextPercent": 41,
+                 "needsAttention": False, "startedAtUnix": 1792700000.0, "endedAtUnix": None, "goal": self.GOAL}
+        return {"timestamp": 1792700100, "event": "update", "content-state": state, **extra}
+
+    def start(self) -> dict:
+        state = {"phase": "thinking", "detail": "Thinking…", "outputTokens": 0, "contextPercent": None, "needsAttention": False,
+                 "startedAtUnix": 1792700000.0, "endedAtUnix": None, "goal": self.GOAL}
+        attrs = {"storedSessionID": "3f6c2a1e9b", "connectionID": "C0FFEE00-0000-4000-8000-000000000001", "model": "", **self.NAMES}
+        return {"timestamp": 1792700000, "event": "start", "content-state": state, "attributes-type": "HermesTurnAttributes", "attributes": attrs}
+
+    def assert_no_names(self, body: dict) -> None:
+        text = json.dumps(body, ensure_ascii=False)
+        for word in ("nightly", "export", "Archivist", "archivist", "FF8800", "pebble", "tail -n", "/var/log"):
+            self.assertNotIn(word, text)
+
+    def test_an_update_seals_the_goal_and_keeps_only_fixed_words_plain(self) -> None:
+        body = self.send(self.device(), self.update())
+        state = body["content_state"]
+        self.assertNotIn("goal", state)
+        self.assertLessEqual(set(state), self.PLAIN_STATE)
+        self.assertIn(state["detail"], self.FIXED_WORDS)
+        self.assertEqual(self.opened(state["sealed"]), {"goal": self.GOAL})
+        self.assert_no_names(body)
+
+    def test_a_push_to_start_seals_the_names_and_keeps_the_ids_plain(self) -> None:
+        body = self.send(self.device(), self.start())
+        attrs = body["attributes"]
+        for key in self.NAMES:
+            self.assertEqual(attrs[key], "")
+        self.assertEqual((attrs["storedSessionID"], attrs["connectionID"], attrs["model"]), ("3f6c2a1e9b", "C0FFEE00-0000-4000-8000-000000000001", ""))
+        self.assertEqual(set(attrs), {*self.NAMES, "storedSessionID", "connectionID", "model", "sealed"})
+        self.assertEqual(self.opened(body["content_state"]["sealed"]), {"goal": self.GOAL})
+        self.assertEqual(self.opened(attrs["sealed"]), {"title": self.NAMES["sessionTitle"], "bot": "Archivist", "profile": "archivist",
+                                                         "hex": "#FF8800", "avatar": "animated:pebble"})
+        self.assert_no_names(body)
+
+    def test_an_approvals_alert_is_titled_vory(self) -> None:
+        alert = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you.", "sound": "default"}
+        body = self.send(self.device(), self.update(alert=alert))
+        self.assertEqual(body["alert"], {**alert, "title": "Vory"})
+        self.assert_no_names(body)
+
+    def test_an_app_that_does_not_open_sealed_fields_gets_todays_payload(self) -> None:
+        alert = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you."}
+        body = self.send(self.device(sealed=False), {**self.start(), "alert": alert})
+        self.assertEqual(body["content_state"]["goal"], self.GOAL)
+        self.assertNotIn("sealed", body["content_state"])
+        self.assertEqual({k: body["attributes"][k] for k in self.NAMES}, self.NAMES)
+        self.assertNotIn("sealed", body["attributes"])
+        self.assertEqual(body["alert"]["title"], "Archivist")
+        self.assertEqual(self.sealed, [])
+
+    def test_direct_mode_is_unchanged(self) -> None:
+        apns = hermes_push.APNs()
+        apns.direct, apns.dry_run = True, True
+        device = {k: v for k, v in self.device().items() if k != "relay"}
+        with self.assertLogs(hermes_push.log, level="INFO") as logs:
+            self.assertTrue(apns.send(device, {"aps": self.start()}, push_type="liveactivity", token_override="la-token"))
+        # The dry run logs the payload's first 300 characters: the goal line is among them, plain, and nothing is sealed.
+        self.assertTrue(any(self.GOAL in line for line in logs.output))
+        self.assertFalse(any("sealed" in line for line in logs.output))
+        self.assertEqual((self.posted, self.sealed), ([], []))
+
+    def test_the_longest_push_to_start_fits_apples_limit(self) -> None:
+        # The goal line at its longest (160 characters, each four bytes in UTF-8) and a 300-character chat title.
+        aps = self.start()
+        aps["content-state"]["goal"] = "😀" * 160
+        aps["attributes"]["sessionTitle"] = "T" * 300
+        aps["alert"] = {"title": "Archivist", "body": "Approval needed. Tap to answer. It waits for you.", "sound": "default"}
+        body = self.send(self.device(), aps)
+        # What the relay hands Apple: the aps dictionary rebuilt from the posted fields.
+        forwarded = {"aps": {"timestamp": aps["timestamp"], "event": body["event"], "content-state": body["content_state"],
+                             "attributes-type": "HermesTurnAttributes", "attributes": body["attributes"], "alert": body["alert"],
+                             "dismissal-date": 1792790000}}
+        size = len(json.dumps(forwarded, separators=(",", ":"), ensure_ascii=False).encode())
+        self.assertLess(size, 4096, f"the push is {size} bytes")
+
+    @unittest.skipUnless(_have_aesgcm(), "needs the cryptography package")
+    def test_the_sealing_matches_the_apps_vector(self) -> None:
+        # The sealer itself, with the nonce pinned, against the vector the app's PushRelayCryptoTests opens: a zero key,
+        # a zero nonce and {"title":"hi","body":"there"}. Both sides agree byte for byte.
+        import base64
+        saved, os.urandom = os.urandom, (lambda n: bytes(n))   # the sealer draws its nonce from os.urandom
+        try:
+            blob = self.real_encrypt({"payload_key": base64.b64encode(bytes(32)).decode()}, {"title": "hi", "body": "there"})
+        finally:
+            os.urandom = saved
+        self.assertEqual(blob, APP_VECTOR)
+
+
+#: The vector in the app's PushRelayCryptoTests.decryptsCompanionVector (VoryTests/HermesRemoteTests.swift).
+APP_VECTOR = "AAAAAAAAAAAAAAAAtYU0VDkMDkw9bK26mN+/eh0EeugNhF4ctNCQrAgnBvQ6vurB94SMNXCYlKJV"

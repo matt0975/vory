@@ -16,6 +16,8 @@ public actor DemoGateway {
     /// Allow once and Deny for the onboarding tour's card (#388, Matt's pick), which passes `["once", "deny"]`.
     public static let allApprovalChoices = ["once", "session", "always", "deny"]
     public let approvalChoices: [String]
+    /// The person's line in a demo's voice mode (#621), which the scripted session shows as heard.
+    public static var voiceLine: String { DemoContent.voiceLine }
     /// When the demo started: the chats' times count back from here.
     let started: Double
     let version = "0.21.4"

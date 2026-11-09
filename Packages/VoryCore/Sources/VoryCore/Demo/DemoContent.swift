@@ -427,6 +427,10 @@ enum DemoContent {
             denied: "Understood, I'll leave the logs alone."),
         closing: "")
 
+    /// What the person says in a demo's voice mode (#621): onboarding's ready-made message, so the bot's answer is the
+    /// cleanup turn with its approval. Shown as words; nothing is heard.
+    static let voiceLine = "What\u{2019}s taking up the most space on my server?"
+
     // MARK: Group chat
 
     static let groupName = "Weekend projects"

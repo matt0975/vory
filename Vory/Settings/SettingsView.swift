@@ -970,7 +970,7 @@ struct ResetView: View {
 
 struct AboutView: View {
     static let feedbackAddress = "matt@vory.dev"
-    static let sourceURL = URL(string: "https://github.com/matt0975/vory")!
+    static let sourceURL = URL(string: "https://github.com/vory-dev/vory")!
     @Environment(AppModel.self) private var model
     @State private var copiedAddress = false
     @State private var taps = 0

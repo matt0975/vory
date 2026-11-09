@@ -116,6 +116,12 @@ enum TopBarRoom {
         if barsVertical { return (rowBottom + barPadding(closed: true) + gap).rounded() }
         return statusInCorner ? cornerRoom : 0
     }
+    /// The root row's bottom in the bar's space (`MorphState.rootRowBottom`) from its slots' measured frames: its tallest
+    /// slot's height, as the row stands at that space's top. Not the slots' lowest bottom: each slot's place is measured
+    /// on its own, and after the text size grew and came back (an accessibility audit's Dynamic Type pass) the leading
+    /// slot's last place stayed where the taller row had centred it, 31.5 pt down. The row read 75.5 for 44, and every
+    /// root page on the closed Duo stood 32 pt lower until the row was measured again (#612). Its height stayed right.
+    static func rowBottom(of slots: [CGRect]) -> CGFloat { slots.map(\.height).max() ?? 0 }
     /// The closed iPhone Duo (#591): the system's bars stand in the side strip and the window is taller than wide. On its
     /// side and as a book they stand in a strip too, in a window wider than tall. There the Chats list has no search drawer
     /// (the system's search button stands in the side column, as Messages' does) and keeps the row's room itself.
