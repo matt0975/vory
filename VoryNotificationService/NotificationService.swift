@@ -18,21 +18,33 @@ final class NotificationService: UNNotificationServiceExtension {
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         handler = contentHandler
-        let mutable = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
+        // The keychain read and the decrypt are PushIntake's (#455). Neither the content nor the system's handler is
+        // Sendable; only the outcome's one call touches them.
+        nonisolated(unsafe) let mutable = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         content = mutable
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
-        guard let enc = request.content.userInfo["enc"] as? String else {
-            Self.breadcrumb("plain notification (no enc)")
-            Self.deliverAsMessage(mutable, profile: (request.content.userInfo["hermes"] as? [String: Any])?["profile"] as? String ?? "", handler: contentHandler)
-            return
-        }
-        guard let creds = Keychain.getCodable(PushRelay.Credentials.self, account: PushRelay.credentialsAccount) else {
-            Self.breadcrumb("no relay credentials readable (group \(Keychain.accessGroup ?? "none"))"); contentHandler(mutable); return
-        }
-        let payload: [String: JSONValue]
-        do { payload = try PushRelay.decrypt(enc, keyBase64: creds.payloadKey) }
-        catch { Self.breadcrumb("decrypt failed: \(error.localizedDescription)"); contentHandler(mutable); return }
-        Self.breadcrumb("decrypted OK")
+        let plainProfile = (request.content.userInfo["hermes"] as? [String: Any])?["profile"] as? String ?? ""
+        nonisolated(unsafe) let contentHandler = contentHandler
+        PushIntake.begin(enc: request.content.userInfo["enc"] as? String,
+                         credentials: { Keychain.getCodable(PushRelay.Credentials.self, account: PushRelay.credentialsAccount) },
+                         done: { outcome in
+            switch outcome {
+            case .plain:
+                NotificationService.breadcrumb("plain notification (no enc)")
+                NotificationService.deliverAsMessage(mutable, profile: plainProfile, handler: contentHandler)
+            case .noCredentials:
+                NotificationService.breadcrumb("no relay credentials readable (group \(Keychain.accessGroup ?? "none"))"); contentHandler(mutable)
+            case .failed(let why):
+                NotificationService.breadcrumb("decrypt failed: \(why)"); contentHandler(mutable)
+            case .decrypted(let payload):
+                NotificationService.breadcrumb("decrypted OK")
+                NotificationService.present(payload, in: mutable, handler: contentHandler)
+            }
+        })
+    }
+
+    /// The decrypted fields onto the content, then on as a message.
+    private static func present(_ payload: [String: JSONValue], in mutable: UNMutableNotificationContent, handler: @escaping (UNNotificationContent) -> Void) {
         if let t = payload["title"]?.stringValue { mutable.title = t }
         if let s = payload["subtitle"]?.stringValue { mutable.subtitle = s }
         if let b = payload["body"]?.stringValue { mutable.body = b }
@@ -46,7 +58,7 @@ final class NotificationService: UNNotificationServiceExtension {
             mutable.userInfo = info
             profile = hermes["profile"]?.stringValue ?? ""
         }
-        Self.deliverAsMessage(mutable, profile: profile, handler: contentHandler)
+        deliverAsMessage(mutable, profile: profile, handler: handler)
     }
 
     /// Turn/approval/question notifications come from a bot, so they are presented as a message
