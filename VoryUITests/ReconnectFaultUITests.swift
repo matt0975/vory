@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// #423: stuck on "Reconnecting" behind a Cloudflare Tunnel until the app was quit. Against the mock's fault switch
@@ -39,7 +40,12 @@ final class ReconnectFaultUITests: XCTestCase {
 
     private func launch(url: String, token: String) {
         base = url
-        let args = ["-companionPromptShown", "YES", "-launchTab", "chats", "-colorSchemePreference", "light"]
+        var args = ["-companionPromptShown", "YES", "-launchTab", "chats", "-colorSchemePreference", "light"]
+        // HERMES_E2E_TEXT_SIZE: a text size for the app alone (a UIContentSizeCategory name, the accessibility sizes
+        // included), with nothing changed on the simulator (#641's AX XXXL pass).
+        if let size = ProcessInfo.processInfo.environment["HERMES_E2E_TEXT_SIZE"], !size.isEmpty {
+            args += ["-UIPreferredContentSizeCategoryName", size]
+        }
         if let bundle = ProcessInfo.processInfo.environment["HERMES_E2E_BUNDLE"], !bundle.isEmpty {
             app = XCUIApplication(bundleIdentifier: bundle)
             app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop"] + args
@@ -65,6 +71,27 @@ final class ReconnectFaultUITests: XCTestCase {
         log("fault \(mode)")
     }
 
+    final class FaultRead: @unchecked Sendable {
+        private let lock = NSLock()
+        private var v: (mode: String, count: Int)?
+        func set(_ x: (mode: String, count: Int)) { lock.withLock { v = x } }
+        var value: (mode: String, count: Int)? { lock.withLock { v } }
+    }
+
+    /// The mock's fault switch as it stands (`/mock/fault-state`, which changes nothing): its mode and what's left.
+    private func faultState() -> (mode: String, count: Int)? {
+        guard let u = URL(string: base + "/mock/fault-state") else { return nil }
+        let read = FaultRead()
+        let done = expectation(description: "fault state")
+        URLSession.shared.dataTask(with: u) { data, _, _ in
+            if let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let mode = o["mode"] as? String, let count = o["count"] as? Int { read.set((mode, count)) }
+            done.fulfill()
+        }.resume()
+        wait(for: [done], timeout: 10)
+        return read.value
+    }
+
     private static let known = ["Connected", "Connecting…", "Offline", "Sign in required", "Connection failed",
                                 "Cloudflare can't reach the gateway", "Cloudflare wants a sign-in",
                                 "A web page answered, not the gateway", "The gateway isn't answering"]
@@ -84,11 +111,22 @@ final class ReconnectFaultUITests: XCTestCase {
         }
     }
 
+    /// The Chats menu's chip, the first that can be tapped within 10 s: the top bar's on a phone (chats.profile); on a
+    /// wide window (the iPad's split view) the list's toolbar's, labelled "Profile: …".
+    private func chatsChip() -> XCUIElement? {
+        let chips = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'chats.profile' OR label BEGINSWITH 'Profile: '"))
+        let end = Date().addingTimeInterval(10)
+        repeat {
+            if let c = chips.allElementsBoundByIndex.first(where: { $0.exists && $0.isHittable }) { return c }
+            pause(0.2)
+        } while Date() < end
+        return nil
+    }
+
     /// The connection as the Chats menu shows it, read with the menu open, then the menu closed.
     private func connectionLine(then tapReconnect: Bool = false) -> String {
         closeMenu()
-        let profile = any("chats.profile")
-        guard profile.waitForExistence(timeout: 10) else { return "no Chats menu" }
+        guard let profile = chatsChip() else { return "no Chats menu" }
         profile.tap()
         pause(0.8)
         var seen = "nothing"
@@ -377,15 +415,88 @@ final class ReconnectFaultUITests: XCTestCase {
         XCTAssertTrue(sendAndAnswer("Back after a re-attach lost midway", in: "Rewrite the nightly export"), "the chat did not work after")
     }
 
-    /// U2: the gateway takes the upgrade but isn't ready for 30 s. Only the quiet line, never the banner, back by 40 s,
-    /// and the chat works. Before #641 there was no line at all.
+    /// Drags the open chat to its top: six quick drags down in its column (the composer's width), then a pause. Away from
+    /// its bottom the transcript anchors size changes at its top (TranscriptView's awayFromBottom), so the row coming
+    /// doesn't move the text under the glass top chrome, and the baseline audit and the row's see the same screen.
+    private func toChatTop() {
+        let column = app.textViews["composer.text"].firstMatch.frame
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let h = app.frame.height
+        for _ in 0..<6 {
+            let from = origin.withOffset(CGVector(dx: column.midX, dy: h * 0.35))
+            let to = origin.withOffset(CGVector(dx: column.midX, dy: h * 0.75))
+            from.press(forDuration: 0.05, thenDragTo: to, withVelocity: .fast, thenHoldForDuration: 0)
+            pause(0.4)
+        }
+        pause(1)
+        log("dragged the chat to its top")
+    }
+
+    /// The element-less issues the open chat has before the fault, by type and description, counted (auditBaseline).
+    private var auditBase: [String: Int] = [:]
+
+    /// The same audit on the open chat just before the fault, with no row up and the chat at its top (toChatTop). An issue
+    /// with no element can't be placed, and the screen has its own: the transcript's text blurred under the glass status
+    /// and top bars is legible pixels with no element behind them. So the row's audit flags only element-less issues beyond
+    /// these. Every issue printed.
+    private func auditBaseline() throws {
+        var counts: [String: Int] = [:]
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            if let el = issue.element {
+                print("RF-AUDIT-BASE '\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)")
+            } else {
+                counts["\(issue.auditType.rawValue) \(issue.compactDescription)", default: 0] += 1
+                print("RF-AUDIT-BASE '\(issue.compactDescription)' no element")
+            }
+            return true
+        }
+        auditBase = counts
+    }
+
+    /// The audit gate's three checks (vory-a11y-audit-gate), flagging what falls in the re-attach row, and each issue with
+    /// no element beyond the baseline's count of it (auditBaseline). Contrast isn't one of the checks: on glass it fails
+    /// across the app (the chat's own banner, the bot card's rows, the title), so it's judged from the stills, not this row.
+    private func auditRow() throws -> [String] {
+        let row = any("chat.reattach").frame
+        let base = auditBase
+        var flagged: [String] = []
+        var seen: [String: Int] = [:]
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
+            guard let el = issue.element else {
+                let key = "\(issue.auditType.rawValue) \(issue.compactDescription)"
+                seen[key, default: 0] += 1
+                let beyond = seen[key, default: 0] > base[key, default: 0]
+                let entry = "'\(issue.compactDescription)' no element"
+                print("RF-AUDIT \(entry)\(beyond ? "" : " (as in the baseline)")")
+                if beyond { flagged.append(entry) }
+                return true
+            }
+            let entry = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
+            print("RF-AUDIT \(entry)")
+            if row.intersects(el.frame) { flagged.append(entry) }
+            return true
+        }
+        return flagged
+    }
+
+    /// U2: the gateway takes the upgrade but isn't ready for 30 s. Only the quiet line, pictured and audited while it's
+    /// up; never the banner; back by 40 s, and the chat works. Before #641 there was no line at all.
     func testReadyHeld30sShowsOnlyTheQuietLine() throws {
         try launchConnected()
         open("Disk cleanup")
+        toChatTop()
+        try auditBaseline()
         fault("ready-held", count: 30)
         let start = Date()
-        let reads = readDock(for: 40, from: start)
-        XCTAssertTrue(reads.contains { $0.s == "line" }, "no Reconnecting… line")
+        let line = any("chat.reattach")
+        XCTAssertTrue(line.waitForExistence(timeout: 12), "no Reconnecting… line")
+        pause(1.5)   // the row settled: the still and the audit catch it, not its way in
+        if line.exists && !any("chat.reattach.tryAgain").exists {
+            shot("641-u2-line")
+            let flagged = try auditRow()
+            XCTAssertTrue(flagged.isEmpty, "the audit flags the quiet line: \(flagged)")
+        }
+        let reads = readDock(for: 40 - Date().timeIntervalSince(start), from: start)
         let banner = reads.first { $0.s == "banner" }
         XCTAssertNil(banner, String(format: "a banner at %.0f s", banner?.t ?? 0))
         XCTAssertEqual(reads.last?.s, "none", "not back by 40 s")
@@ -397,7 +508,13 @@ final class ReconnectFaultUITests: XCTestCase {
     /// then gone by itself by 105 s, and the chat works. Before #641 there was no line and no Try again.
     func testReadyHeld90sShowsTryAgainAfterAMinuteThenClearsItself() throws {
         try launchConnected()
+        // HERMES_E2E_REDUCE_MOTION=1: the run set the simulator's Reduce Motion on; the pass counts only if it took.
+        if ProcessInfo.processInfo.environment["HERMES_E2E_REDUCE_MOTION"] == "1" {
+            XCTAssertTrue(UIAccessibility.isReduceMotionEnabled, "Reduce Motion isn't on in the simulator")
+        }
         open("Disk cleanup")
+        toChatTop()
+        try auditBaseline()
         fault("ready-held", count: 90)
         let start = Date()
         let early = readDock(for: 58, from: start)
@@ -406,31 +523,81 @@ final class ReconnectFaultUITests: XCTestCase {
         XCTAssertNil(tooSoon, String(format: "a banner before a minute, at %.0f s", tooSoon?.t ?? 0))
         let tryAgain = any("chat.reattach.tryAgain")
         XCTAssertTrue(tryAgain.waitForExistence(timeout: max(1, 65 - Date().timeIntervalSince(start))), "no Try again by 65 s")
+        pause(1.5)   // the line's cross-fade to the banner done: the still and the audit catch the banner, not the change
         shot("641-u3-banner")
         if tryAgain.exists {
-            let row = any("chat.reattach").frame
-            var flagged: [String] = []
-            // The audit gate's three checks. Contrast isn't one of them: on glass it fails across the app (the chat's own
-            // banner, the bot card's rows, the title), so it's a design question for the app, not this row.
-            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
-                // An issue with no element can't be placed outside the row, so it counts against it.
-                guard let el = issue.element else {
-                    let entry = "'\(issue.compactDescription)' no element"
-                    print("RF-AUDIT \(entry)")
-                    flagged.append(entry)
-                    return true
-                }
-                let entry = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
-                print("RF-AUDIT \(entry)")
-                if row.intersects(el.frame) { flagged.append(entry) }
-                return true
-            }
+            let flagged = try auditRow()
             XCTAssertTrue(flagged.isEmpty, "the audit flags the re-attach banner: \(flagged)")
         }
         let late = readDock(for: 105 - Date().timeIntervalSince(start), from: start)
         XCTAssertEqual(late.last?.s, "none", "the banner didn't go by itself by 105 s")
         shot("641-u3-after")
         XCTAssertTrue(sendAndAnswer("Back after a long hold", in: "Disk cleanup"), "the chat did not work after")
+    }
+
+    /// U3b: Try again tries at once. The gateway refuses the chat's next six re-attaches (the mock's resume-refused 6),
+    /// then the sockets drop: the tries at about 1, 3, 8, 18, 38 and 68 s are refused, and the schedule's seventh can't
+    /// come sooner than 24 s after the sixth. Read from the mock, the sixth refusal and the banner both in, Try again is
+    /// tapped: the chat is back within 5 s of the tap, before that seventh try could have come, and works.
+    func testTryAgainTriesAtOnce() throws {
+        try launchConnected()
+        open("Disk cleanup")
+        fault("resume-refused", count: 6)
+        dropSockets()
+        let start = Date()
+        let tryAgain = any("chat.reattach.tryAgain")
+        var refusing = 0.0, sixth: Double?, last = ""
+        while Date().timeIntervalSince(start) < 110 {
+            let t = Date().timeIntervalSince(start)
+            if sixth == nil, let f = faultState() {
+                if f.mode == "resume-refused" { refusing = t } else { sixth = t; log(String(format: "the sixth refusal by %.1f s (%@)", t, f.mode)) }
+            }
+            let s = reattachState()
+            if s != last { log(String(format: "dock %.1f s: %@", t, s)); last = s }
+            if sixth != nil, s == "banner", tryAgain.exists { break }
+            pause(0.5)
+        }
+        guard sixth != nil, tryAgain.exists else {
+            XCTFail("no sixth refusal with Try again up in 110 s (sixth \(sixth.map { String(format: "%.1f", $0) } ?? "none"), dock \(last))")
+            return
+        }
+        // The sixth refusal came after the last read that still found the mode on, so the seventh try can't come
+        // sooner than that read plus 24 s: the schedule's 30 s less its fifth (ReattachSchedule's jitter).
+        let seventhNoSooner = refusing + 24
+        shot("641-u3b-banner")
+        let tapped = Date(), tapAt = tapped.timeIntervalSince(start)
+        tryAgain.tap()
+        log(String(format: "Try again tapped at %.1f s; the seventh try no sooner than %.1f s", tapAt, seventhNoSooner))
+        let after = readDock(for: 6, from: tapped)
+        let back = after.first { $0.s == "none" }
+        XCTAssertNotNil(back, "not back within 6 s of Try again: \(after.map(\.s))")
+        if let back {
+            XCTAssertLessThan(back.t, 5, String(format: "back %.1f s after Try again", back.t))
+            XCTAssertLessThan(tapAt + back.t, seventhNoSooner, String(format: "back at %.1f s, when the schedule's own try could have come", tapAt + back.t))
+        }
+        shot("641-u3b-after")
+        XCTAssertTrue(sendAndAnswer("Back after Try again", in: "Disk cleanup"), "the chat did not work after")
+    }
+
+    /// U4: ten minutes away. Home; the sockets dropped at 30 s, as iOS drops a suspended app's; back at 600 s. Attached
+    /// again within 20 s, with no banner at any read, and the chat works.
+    func testTenMinutesAwayComesBackAttachedWithoutABanner() throws {
+        try launchConnected()
+        open("Disk cleanup")
+        XCUIDevice.shared.press(.home)
+        log("away")
+        pause(30)
+        dropSockets()
+        pause(570)
+        app.activate()
+        log("back")
+        let start = Date()
+        let reads = readDock(for: 20, from: start)
+        let banner = reads.first { $0.s == "banner" }
+        XCTAssertNil(banner, String(format: "a banner at %.0f s after coming back", banner?.t ?? 0))
+        XCTAssertEqual(reads.last?.s, "none", "not attached again within 20 s of coming back")
+        shot("641-u4-after")
+        XCTAssertTrue(sendAndAnswer("Back after ten minutes away", in: "Disk cleanup"), "the chat did not work after")
     }
 
     /// Changes a chat's preview on the mock, as another device's turn would.

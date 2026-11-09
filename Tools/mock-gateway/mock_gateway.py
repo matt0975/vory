@@ -1785,6 +1785,7 @@ def model_options() -> dict:
 #   drop-on-resume  the next N session.resume calls (default 1) abort their socket instead of answering, as a network
 #                   lost under the re-attach; then all is well; no socket is dropped at the switch (#641)
 #   none            back to normal
+# GET /mock/fault-state answers the switch as it stands and changes nothing (#641: a test reads the refusals left).
 FAULT = {"mode": "none", "status": 523, "count": 0}
 # ready-held's hold: released when its time is up, or by mode=none (#641).
 HELD: dict = {"release": None}
@@ -1869,6 +1870,9 @@ async def process_request(connection, request):
                                                            "steer-rejected", "drop-on-resume") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/fault-state":
+        body = json.dumps(FAULT).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     if base == "/mock/touch":
         # Test only (#423): a chat changed on the gateway while the app is away (GET /mock/touch?title=…&preview=…),
