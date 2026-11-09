@@ -40,4 +40,22 @@ import Testing
         #expect(c.stale)
         #expect(c.banner?.hasPrefix("Reconnected, but the chat could not be re-attached") == true)
     }
+
+    /// #641: a re-attach a newer reconnect superseded says nothing. Its wait for the socket was cancelled, and a
+    /// cancelled wait throws the socket's timeout ("gateway.ready (cancelled)"), not a CancellationError, so it read as a
+    /// slow gateway: tried once more, then the banner.
+    @Test func aReattachCancelledByANewerReconnectSaysNothing() async throws {
+        let c = try chat()
+        c.gatewayStandIn = { _, _ in
+            // As the socket's ready wait does: it waits until its task is cancelled, then throws its timeout.
+            while !Task.isCancelled { try? await Task.sleep(for: .milliseconds(10)) }
+            throw SocketError.timeout("gateway.ready (cancelled)")
+        }
+        let reattach = Task { await c.reattachAfterReconnect() }
+        try await Task.sleep(for: .milliseconds(100))
+        reattach.cancel()
+        await reattach.value
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(c.banner == nil, "a superseded re-attach said: \(c.banner ?? "")")
+    }
 }

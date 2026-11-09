@@ -51,9 +51,10 @@ final class ReconnectFaultUITests: XCTestCase {
     }
 
     /// The mock's fault switch (`/mock/fault?mode=…`).
-    private func fault(_ mode: String, status: Int? = nil) {
+    private func fault(_ mode: String, status: Int? = nil, count: Int? = nil) {
         var s = base + "/mock/fault?mode=" + mode
         if let status { s += "&status=\(status)" }
+        if let count { s += "&count=\(count)" }
         guard let u = URL(string: s) else { return }
         let done = expectation(description: "fault \(mode)")
         URLSession.shared.dataTask(with: u) { data, _, _ in
@@ -305,6 +306,127 @@ final class ReconnectFaultUITests: XCTestCase {
         log("row: \(changed.exists ? changed.label : "not changed")")
         shot("10-away-list-current")
         XCTAssertEqual(waitForLine(seconds: 20) { $0 == "Connected" }, "Connected")
+    }
+
+    // MARK: #641: a chat that can't re-attach keeps trying by itself
+
+    /// The old wording's banner (before #641): "Reconnected, but the chat could not be re-attached: …".
+    private var oldBanner: XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Reconnected, but the chat could not be re-attached'")).firstMatch
+    }
+
+    /// What the open chat's dock says of its attach, read once: "banner" (the re-attach banner with Try again, or the
+    /// old wording's), "line" (the quiet "Reconnecting…"), or "none".
+    private func reattachState() -> String {
+        if any("chat.reattach.tryAgain").exists || oldBanner.exists { return "banner" }
+        if any("chat.reattach").exists { return "line" }
+        return "none"
+    }
+
+    /// Reads the dock about once a second for `seconds`, logging each change; every read, in seconds since `start`.
+    private func readDock(for seconds: Double, from start: Date) -> [(t: Double, s: String)] {
+        var reads: [(t: Double, s: String)] = []
+        var last = ""
+        let end = Date().addingTimeInterval(max(0, seconds))
+        while Date() < end {
+            let s = reattachState(), t = Date().timeIntervalSince(start)
+            reads.append((t, s))
+            if s != last { log(String(format: "dock %.0f s: %@", t, s)); last = s }
+            pause(1)
+        }
+        return reads
+    }
+
+    /// Opens a stored chat from the list (back to the list first when a chat is open).
+    private func open(_ title: String) {
+        if app.buttons["chat.back"].exists { app.buttons["chat.back"].tap(); pause(1) }
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", title)).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "no row \(title)")
+        row.tap()
+        _ = composerClear()
+    }
+
+    private func launchConnected() throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = true
+        fault("none")
+        launch(url: url, token: token)
+        XCTAssertTrue(any("chats.new").waitForExistence(timeout: 40), "the app did not come up")
+        XCTAssertEqual(waitForLine(seconds: 20) { $0 == "Connected" }, "Connected", "not connected at the start")
+    }
+
+    /// U1, Matt's case: two chats open since launch (both re-attach after a reconnect), the second on screen. The
+    /// network goes under the first one's re-attach (the mock aborts the socket on its session.resume). No banner at any
+    /// read, back by 30 s, and the chat works. Before #641: about 42 s after the drop the second chat showed
+    /// "Reconnected, but the chat could not be re-attached: Timed out waiting for gateway.ready."
+    func testAReattachLostMidwayRecoversWithoutABanner() throws {
+        try launchConnected()
+        open("Disk cleanup")
+        open("Rewrite the nightly export")
+        fault("drop-on-resume", count: 1)
+        dropSockets()
+        let start = Date()
+        let reads = readDock(for: 50, from: start)
+        let banner = reads.first { $0.s == "banner" }
+        XCTAssertNil(banner, String(format: "a banner at %.0f s", banner?.t ?? 0))
+        shot("641-u1-after")
+        let lastShown = reads.last { $0.s != "none" }?.t ?? 0
+        XCTAssertLessThan(lastShown, 30, String(format: "not back by 30 s: still shown at %.0f s", lastShown))
+        XCTAssertTrue(sendAndAnswer("Back after a re-attach lost midway", in: "Rewrite the nightly export"), "the chat did not work after")
+    }
+
+    /// U2: the gateway takes the upgrade but isn't ready for 30 s. Only the quiet line, never the banner, back by 40 s,
+    /// and the chat works. Before #641 there was no line at all.
+    func testReadyHeld30sShowsOnlyTheQuietLine() throws {
+        try launchConnected()
+        open("Disk cleanup")
+        fault("ready-held", count: 30)
+        let start = Date()
+        let reads = readDock(for: 40, from: start)
+        XCTAssertTrue(reads.contains { $0.s == "line" }, "no Reconnecting… line")
+        let banner = reads.first { $0.s == "banner" }
+        XCTAssertNil(banner, String(format: "a banner at %.0f s", banner?.t ?? 0))
+        XCTAssertEqual(reads.last?.s, "none", "not back by 40 s")
+        shot("641-u2-after")
+        XCTAssertTrue(sendAndAnswer("Back after a held ready", in: "Disk cleanup"), "the chat did not work after")
+    }
+
+    /// U3: not ready for 90 s. The quiet line only before 58 s; the banner with Try again by 65 s, pictured and audited;
+    /// then gone by itself by 105 s, and the chat works. Before #641 there was no line and no Try again.
+    func testReadyHeld90sShowsTryAgainAfterAMinuteThenClearsItself() throws {
+        try launchConnected()
+        open("Disk cleanup")
+        fault("ready-held", count: 90)
+        let start = Date()
+        let early = readDock(for: 58, from: start)
+        XCTAssertTrue(early.contains { $0.s == "line" }, "no Reconnecting… line before a minute")
+        let tooSoon = early.first { $0.s == "banner" }
+        XCTAssertNil(tooSoon, String(format: "a banner before a minute, at %.0f s", tooSoon?.t ?? 0))
+        let tryAgain = any("chat.reattach.tryAgain")
+        XCTAssertTrue(tryAgain.waitForExistence(timeout: max(1, 65 - Date().timeIntervalSince(start))), "no Try again by 65 s")
+        shot("641-u3-banner")
+        if tryAgain.exists {
+            let row = any("chat.reattach").frame
+            var flagged: [String] = []
+            try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection, .contrast]) { issue in
+                // An issue with no element can't be placed outside the row, so it counts against it.
+                guard let el = issue.element else {
+                    let entry = "'\(issue.compactDescription)' no element"
+                    print("RF-AUDIT \(entry)")
+                    flagged.append(entry)
+                    return true
+                }
+                let entry = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
+                print("RF-AUDIT \(entry)")
+                if row.intersects(el.frame) { flagged.append(entry) }
+                return true
+            }
+            XCTAssertTrue(flagged.isEmpty, "the audit flags the re-attach banner: \(flagged)")
+        }
+        let late = readDock(for: 105 - Date().timeIntervalSince(start), from: start)
+        XCTAssertEqual(late.last?.s, "none", "the banner didn't go by itself by 105 s")
+        shot("641-u3-after")
+        XCTAssertTrue(sendAndAnswer("Back after a long hold", in: "Disk cleanup"), "the chat did not work after")
     }
 
     /// Changes a chat's preview on the mock, as another device's turn would.

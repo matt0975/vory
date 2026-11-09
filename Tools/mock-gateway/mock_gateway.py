@@ -1778,8 +1778,28 @@ def model_options() -> dict:
 #                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
 #   steer-rejected  session.steer answers "rejected" even while a turn runs, as the gateway does when its turn ended a
 #                   moment before the client knew; no socket is dropped (#546: the words go as the next message)
+#   ready-held      the open sockets are dropped, as a return finds them, and for N seconds (default 30) a socket that
+#                   opens gets no gateway.ready and no answers, as a gateway that took the upgrade but isn't ready. At N
+#                   seconds each one still open gets its gateway.ready and is answered from then on, and the mode goes back
+#                   to none by itself; mode=none releases them at once (#641: a chat that can't re-attach for a while)
+#   drop-on-resume  the next N session.resume calls (default 1) abort their socket instead of answering, as a network
+#                   lost under the re-attach; then all is well; no socket is dropped at the switch (#641)
 #   none            back to normal
 FAULT = {"mode": "none", "status": 523, "count": 0}
+# ready-held's hold: released when its time is up, or by mode=none (#641).
+HELD: dict = {"release": None}
+
+
+def release_held(why: str, only=None) -> None:
+    """Ends the hold: its own timer ends only its own hold (`only`), never a later one."""
+    ev = HELD.get("release")
+    if only is not None and ev is not only:
+        return
+    if ev is not None and not ev.is_set():
+        ev.set()
+        print(f"[mock] fault ready-held: released ({why})", flush=True)
+    if FAULT["mode"] == "ready-held":
+        FAULT["mode"] = "none"
 
 
 def _cloudflare_page(status: int, title: str, text: str) -> Response:
@@ -1838,8 +1858,15 @@ async def process_request(connection, request):
         q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
-        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown", "steer-rejected") else 0
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (
+            30 if FAULT["mode"] == "ready-held" else 1 if FAULT["mode"] in ("ticket-expired", "resume-refused", "drop-on-resume") else 0)
+        if FAULT["mode"] == "ready-held":
+            HELD["release"] = asyncio.Event()
+            asyncio.get_running_loop().call_later(FAULT["count"], release_held, "its time is up", HELD["release"])
+        else:
+            release_held("the fault switch")
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown",
+                                                           "steer-rejected", "drop-on-resume") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
@@ -3320,6 +3347,17 @@ class Gateway:
                     FAULT["mode"] = "none"
                 print(f"[mock] fault resume-refused: session.resume {p.get('session_id', '')} refused ({FAULT['count']} left)", flush=True)
                 return err(5000, "session could not be resumed")
+            if method == "session.resume" and FAULT["mode"] == "drop-on-resume" and FAULT["count"] > 0:
+                # #641: the network goes under the re-attach: no answer, the socket aborted.
+                FAULT["count"] -= 1
+                if FAULT["count"] == 0:
+                    FAULT["mode"] = "none"
+                print(f"[mock] fault drop-on-resume: session.resume {p.get('session_id', '')} dropped its socket ({FAULT['count']} left)", flush=True)
+                try:
+                    self.ws.transport.abort()
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
@@ -3736,6 +3774,15 @@ async def ws_handler(ws):
         return
     gw = Gateway(ws)
     GATEWAYS.add(gw)
+    held = HELD.get("release")
+    if FAULT["mode"] == "ready-held" and held is not None and not held.is_set():
+        # #641: the upgrade is taken, but nothing is said or answered until the hold ends (its frames wait unread).
+        print("[mock] fault ready-held: a socket held, no gateway.ready", flush=True)
+        await held.wait()
+        if getattr(ws, "close_code", None) is not None:
+            GATEWAYS.discard(gw)
+            return
+        print("[mock] fault ready-held: a held socket gets its gateway.ready", flush=True)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
         "type": "gateway.ready", "session_id": "",
         "payload": {"skin": {"name": "default", "description": "", "colors": {}, "light_colors": {},
