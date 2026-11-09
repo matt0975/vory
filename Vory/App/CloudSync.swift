@@ -93,7 +93,7 @@ struct CloudMerge {
     /// the app lock and how approvals are confirmed, the tab bar or sidebar, text size, motion,
     /// list filters, caches, and anything that identifies the install.
     static let syncedSettings: [String] = [
-        AppTheme.accentKey, "colorSchemePreference",
+        AppTheme.accentKey, AppTheme.customHexKey, "colorSchemePreference",
         HomeLayout.storageKey, HomeLayout.allBotsKey, nameKey,
         ChatStyle.showToolCalls, ChatStyle.showReasoning, ChatStyle.showTurnStats, ChatStyle.showSystemNotes,
         ChatStyle.showBots, ChatStyle.showToolOutput, ChatStyle.currentStepOnly, ChatStyle.compactTools,
