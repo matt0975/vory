@@ -794,6 +794,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         LiveActivityController.observePushStarts()
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
+        HealthReportsListener.shared.start()   // MetricKit's closes and freezes, kept on the device (#668)
         CloudBackupTask.register()
         BotLooksMirror.mirror()   // so the notification extensions show the right bot from the start
         #if DEBUG

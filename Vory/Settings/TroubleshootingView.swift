@@ -66,6 +66,13 @@ struct TroubleshootingView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Troubleshooting", symbol: "wrench.and.screwdriver", color: .orange, description: "What to check, symptom by symptom. Each item is something to look at on \(DeviceWords.this) or on the gateway machine.")
+            // What the system has told Vory about closes and freezes (#668), on every build: kept on this device only.
+            Section {
+                NavigationLink { HealthReportsView().pushedPage() } label: {
+                    Label("Crash and freeze reports", systemImage: "waveform.path.ecg")
+                }
+                .accessibilityIdentifier("troubleshooting.healthReports")
+            }
             ForEach(topics) { t in
                 Section {
                     ForEach(Array(t.checks.enumerated()), id: \.offset) { i, c in

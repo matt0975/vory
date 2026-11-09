@@ -9,6 +9,7 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
     func applicationDidFinishLaunching(_ notification: Notification) {
         UNUserNotificationCenter.current().delegate = self
         LocalNotifier.registerCategories()
+        HealthReportsListener.shared.start()   // MetricKit's closes and freezes, kept on the device (#668)
         // The daily backup while the app runs (the phone has its background refresh for this).
         Task { @MainActor in BackupScheduler.start() }
         // Continuity Camera only where a photo can go, not in every right-click menu.
