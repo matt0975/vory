@@ -407,9 +407,14 @@ extension GatewayIntegrationTests {
         defer { e.store.delete(id: e.conn.id) }
         let runtime = e.runtime
         let chat = try await runtime.newChat()
+        let created = chat.executionGeneration ?? 0
         _ = await chat.send("long 15")
-        await waitFor(15) { chat.isRunning }
-        try #require(chat.isRunning, "the turn never started")
+        // On the session authority a steer names the running turn, which the chat learns from the turn's claim (its
+        // session.info), a moment after the send: prompt.submit's answer is the admission, before the turn has a
+        // generation. On the old wire, running is enough.
+        func started() -> Bool { chat.isRunning && (!runtime.sessionAuthority || (chat.executionGeneration ?? 0) > created) }
+        await waitFor(15) { started() }
+        try #require(started(), "the turn never started on the gateway")
         chat.queue = [QueuedMessage(text: "and keep the last week's batches")]
         await chat.steerQueued(chat.queue[0].id)
         let steered = chat.items.contains { if case .steer(let t, let s) = $0.kind { return t == "and keep the last week's batches" && s == "queued" }; return false }

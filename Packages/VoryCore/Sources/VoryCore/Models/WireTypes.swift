@@ -81,6 +81,61 @@ public struct SessionLiveInfo: Codable, Hashable, Sendable {
     }
 }
 
+extension Usage {
+    /// The counters Hermes's `session.stats` answers (v0.23.0, its session authority's way to read a chat's usage), as
+    /// its own status bar shows them (gateway/session_usage.py `tui_usage`): the context figures only when the last
+    /// prompt and the context length are both known, the cache hit only with a prompt and a cache read, and its
+    /// rounding (half to even) (#666).
+    public init(stats s: JSONValue) {
+        func int(_ key: String) -> Int? { s[key]?.intValue }
+        func nonzero(_ key: String) -> Int? { int(key).flatMap { $0 == 0 ? nil : $0 } }
+        func percent(_ part: Int, _ whole: Int) -> Int { max(0, min(100, Int((Double(part) / Double(whole) * 100).rounded(.toNearestOrEven)))) }
+        self.init(model: s["model"]?.stringValue ?? "", input: nonzero("input_tokens") ?? int("prompt_tokens") ?? 0,
+                  output: nonzero("output_tokens") ?? int("completion_tokens") ?? 0, reasoning: int("reasoning_tokens") ?? 0,
+                  total: int("total_tokens") ?? 0, calls: int("api_calls") ?? 0)
+        let used = int("last_prompt_tokens") ?? 0, maximum = int("context_length") ?? 0
+        let source = s["context_source"]?.stringValue
+        if used > 0, maximum > 0 {
+            let u = min(used, maximum)
+            contextUsed = u
+            contextMax = maximum
+            contextPercent = percent(u, maximum)
+            contextEstimated = (source ?? "provider_usage") != "provider_usage"
+        }
+        if source != nil { compressions = int("compression_count") ?? 0 }
+        let prompt = int("prompt_tokens") ?? 0, read = int("cache_read_tokens") ?? 0
+        if prompt > 0, read > 0 { cacheHitPct = percent(read, prompt) }
+        if let tps = s["tokens_per_s"]?.doubleValue { avgTps = (tps * 10).rounded(.toNearestOrEven) / 10 }
+        if let n = int("active_subagents") { activeSubagents = n }
+    }
+}
+
+extension SessionLiveInfo {
+    /// `new` over `old`, field by field: what `new` says replaces, what it doesn't say stays. Hermes's session
+    /// authority publishes `session.info` in parts (a claim's running state, a service tier), never the whole (#666).
+    public static func merging(_ old: SessionLiveInfo?, _ new: SessionLiveInfo) -> SessionLiveInfo {
+        guard var m = old else { return new }
+        m.model = new.model ?? m.model
+        m.provider = new.provider ?? m.provider
+        m.reasoningEffort = new.reasoningEffort ?? m.reasoningEffort
+        m.serviceTier = new.serviceTier ?? m.serviceTier
+        m.fast = new.fast ?? m.fast
+        m.yolo = new.yolo ?? m.yolo
+        m.approvalMode = new.approvalMode ?? m.approvalMode
+        m.cwd = new.cwd ?? m.cwd
+        m.branch = new.branch ?? m.branch
+        m.running = new.running ?? m.running
+        m.title = new.title ?? m.title
+        m.storedSessionId = new.storedSessionId ?? m.storedSessionId
+        m.version = new.version ?? m.version
+        m.usage = new.usage ?? m.usage
+        m.profileName = new.profileName ?? m.profileName
+        m.credentialWarning = new.credentialWarning ?? m.credentialWarning
+        m.lazy = new.lazy ?? m.lazy
+        return m
+    }
+}
+
 public struct TranscriptMessage: Codable, Hashable, Sendable {
     public var role: String
     public var text: String?

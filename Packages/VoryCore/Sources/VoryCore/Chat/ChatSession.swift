@@ -506,6 +506,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         let r = try await rpc("session.create", params)
         runtimeID = r["session_id"]?.stringValue ?? ""
         storedID = r["stored_session_id"]?.stringValue ?? runtimeID
+        noteAttach(r)
         info = try? r["info"]?.decode(SessionLiveInfo.self)
         title = info?.title?.isEmpty == false ? info!.title! : "New chat"
         items = []
@@ -740,6 +741,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         // one the gateway gave a new id, and a reply that finished then never ended here.
         if let rid = r["session_id"]?.stringValue, !rid.isEmpty { runtimeID = rid }
         if let sid = r["stored_session_id"]?.stringValue, !sid.isEmpty { storedID = sid }
+        // On Hermes's session authority, its execution, revision and this socket's subscription (#666).
+        noteAttach(r)
         snapshotsAnswered += 1
         let order = snapshotsAnswered
         // Events held so far came before this reply: the snapshot shows them already.
@@ -999,6 +1002,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func loadUsage() async {
+        if runtime.sessionAuthority {
+            // Hermes's session authority doesn't serve session.usage: the counters come from session.stats, shown as its
+            // own status bar shows them (#666). The live session.usage tick is the same on both wires.
+            if let stats = try? await rpc("session.stats", ["session_id": .string(runtimeID)]) { usage = Usage(stats: stats) }
+            return
+        }
         if let u: Usage = try? (await rpc("session.usage", ["session_id": .string(runtimeID)])).decode() { usage = u }
     }
 
@@ -1110,22 +1119,72 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         guard id == lastResendableID else { return .notLast }
         resending = true
         defer { resending = false }
-        do {
-            let r = try await rpc("session.undo", ["session_id": .string(runtimeID), "intent": "retry"])
-            guard (r["removed"]?.intValue ?? 0) > 0 else { return .nothingRemoved }
-        } catch let e as RPCError where e.code == RPCError.methodNotFound {
-            runtime.undoUnsupported = true
-            editingID = nil
-            return .unsupported
-        } catch let e as RPCError where e.code == 4009 {
-            return .busy
-        } catch {
-            return .failed(error.localizedDescription)
+        if runtime.sessionAuthority {
+            if let stopped = await rewindForResend(id) { return stopped }
+        } else {
+            do {
+                let r = try await rpc("session.undo", ["session_id": .string(runtimeID), "intent": "retry"])
+                guard (r["removed"]?.intValue ?? 0) > 0 else { return .nothingRemoved }
+            } catch let e as RPCError where e.code == RPCError.methodNotFound {
+                runtime.undoUnsupported = true
+                editingID = nil
+                return .unsupported
+            } catch let e as RPCError where e.code == 4009 {
+                return .busy
+            } catch {
+                return .failed(error.localizedDescription)
+            }
         }
         editingID = nil
         do { try await resumeFromGateway() } catch { return .reloadFailed(error.localizedDescription) }
         composerHistory.append(text)
         return await submit(text: text, queued: false) ? .sent : .sendFailed
+    }
+
+    /// Edit & resend's take-back on Hermes's session authority, which has no session.undo: a rewind to the edited
+    /// message's row, which takes it and everything after it back (session.mutate, #666). A message sent from here has no
+    /// row until the chat is read again, so it's read first; a chat that moved on meanwhile (its last message of the
+    /// person's own isn't these words any more) is "not last". Nil once the gateway took the turn back, otherwise how
+    /// the resend ends.
+    private func rewindForResend(_ id: String) async -> ResendOutcome? {
+        guard case .user(let words, _)? = items.first(where: { $0.id == id })?.kind else { return .notLast }
+        var known = items.first(where: { $0.id == id })?.rowID
+        if known == nil {
+            do { try await resumeFromGateway() } catch { return .failed(error.localizedDescription) }
+            guard let last = lastOwnMessage(), Self.says(last, words) else { return .notLast }
+            known = last.rowID
+        }
+        guard let row = known else { return .nothingRemoved }
+        do {
+            let r = try await mutate("rewind", ["target_message_id": .number(Double(row))], needsGeneration: true) { [unowned self] in
+                // A fence moved: the chat is read again, and the rewind goes once more only if the message is still the last.
+                try await self.resumeFromGateway()
+                guard let last = self.lastOwnMessage(), Self.says(last, words), last.rowID == row else { throw ResendStop.notLast }
+            }
+            return (r["rewound_count"]?.intValue ?? 0) > 0 ? nil : .nothingRemoved
+        } catch ResendStop.notLast {
+            return .notLast
+        } catch let e as RPCError where e.code == RPCError.methodNotFound {
+            runtime.undoUnsupported = true
+            editingID = nil
+            return .unsupported
+        } catch let e as RPCError where e.message == "session_busy" {
+            return .busy
+        } catch let e as RPCError where e.message == "invalid_params" && e.data?["field"]?.stringValue == "target_message_id" {
+            return .nothingRemoved
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private enum ResendStop: Error { case notLast }
+
+    /// The chat's last message of the person's own that could be edited (`lastResendableID`'s item).
+    private func lastOwnMessage() -> TranscriptItem? { lastResendableID.flatMap { last in items.first { $0.id == last } } }
+
+    private nonisolated static func says(_ item: TranscriptItem, _ words: String) -> Bool {
+        if case .user(let t, _) = item.kind { return t == words }
+        return false
     }
 
     @discardableResult private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async -> Bool {
@@ -1316,6 +1375,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         do {
             guard try await steerSending(text) == "rejected" else { return nil }
             return await send(text)
+        } catch let e as RPCError where runtime.sessionAuthority && e.message == "stale_generation" {
+            // The turn ended between the tap and the call (#666): the words go as the next message.
+            return await send(text)
         } catch {
             banner = error.localizedDescription
             return text
@@ -1333,6 +1395,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             guard try await steerSending(message.text) == "rejected" else { return }
             queue.insert(message, at: min(i, queue.count))
             if !isRunning { drainQueue() }
+        } catch let e as RPCError where runtime.sessionAuthority && e.message == "stale_generation" {
+            // The turn ended between the tap and the call (#666): the words wait their turn in the queue, said nowhere.
+            queue.insert(message, at: min(i, queue.count))
+            if !isRunning { drainQueue() }
         } catch {
             queue.insert(message, at: min(i, queue.count))
             if isRunning { banner = error.localizedDescription } else { drainQueue() }
@@ -1342,12 +1408,31 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// session.steer, and the gateway's answer: "queued" when the running turn takes the words (they go in after its
     /// current tool calls), "rejected" when no turn takes them, for the client to send as its next prompt. A steer row
     /// only for words a turn took.
+    ///
+    /// On Hermes's session authority (#666) a steer names the running turn by its execution, and a plain "rejected" may
+    /// have reached the bot (one whose acknowledgement came late): only one no agent saw (`delivered: false`) is
+    /// "rejected" here, to be sent again. The other is "unsure": not sent again, and said in the chat.
     private func steerSending(_ text: String) async throws -> String {
-        let r = try await rpc("session.steer", ["session_id": .string(runtimeID), "text": .string(text)])
-        let status = r["status"]?.stringValue ?? "queued"
-        if status != "rejected" { items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: status))) }
+        var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(text)]
+        if runtime.sessionAuthority {
+            guard let generation = executionGeneration else {
+                throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"])
+            }
+            params["execution_generation"] = .number(Double(generation))
+        }
+        let r = try await rpc("session.steer", params)
+        if r["voice_stopped"]?.boolValue == true { return "stopped" }
+        var status = r["status"]?.stringValue ?? "queued"
+        if runtime.sessionAuthority, status == "rejected", r["delivered"]?.boolValue != false {
+            status = "unsure"
+            items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: Self.steerUnsureLine, symbol: "questionmark.circle")))
+        } else if status != "rejected" {
+            items.append(TranscriptItem(id: UUID().uuidString, kind: .steer(text: text, status: status)))
+        }
         return status
     }
+
+    nonisolated static let steerUnsureLine = "This may not have reached the bot. It was sent as the turn ended."
 
     public func removeQueued(_ id: UUID) { queue.removeAll { $0.id == id } }
     public func updateQueued(_ id: UUID, text: String) { if let i = queue.firstIndex(where: { $0.id == id }) { queue[i].text = text } }
@@ -1584,7 +1669,18 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
 
     public func rename(_ newTitle: String) async {
-        if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue { title = t }
+        if runtime.sessionAuthority {
+            // Hermes's session authority renames by session.mutate (#666); a refusal is said, without its code.
+            do {
+                let r = try await mutate("rename", ["title": .string(newTitle)])
+                if let t = r["title"]?.stringValue { title = t }
+            } catch {
+                items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: Self.renameFailedLine, symbol: "exclamationmark.circle")))
+                return
+            }
+        } else if let r = try? await rpc("session.title", ["session_id": .string(runtimeID), "title": .string(newTitle)]), let t = r["title"]?.stringValue {
+            title = t
+        }
         if !runtime.isEphemeral { Self.markRenamedByPerson(storedID) }
         // The chat list draws the gateway's stored rows, read again on this notice: without it
         // the row kept the old name until the next open or close (seen at once on the Mac,
@@ -1689,6 +1785,82 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The newest execution the session authority has shown this chat (a snapshot, a prompt): a prompt card from an
     /// earlier one can no longer be answered (#665).
     private(set) var executionGeneration: Int?
+    /// The session's revision as the session authority last showed it (a create, a resume, `session.info`, a mutate's
+    /// answer): what a `session.mutate` presents (#666).
+    private(set) var revision: Int?
+    /// This socket's subscription to the session, from the create or the last resume: what `session.detach` names (#666).
+    private(set) var subscriptionID: String?
+
+    private func noteRevision(_ r: Int?) {
+        guard let r, r > (revision ?? Int.min) else { return }
+        revision = r
+    }
+
+    /// What a create's or a resume's answer says of the session on the authority's wire: its execution, its revision,
+    /// and this socket's subscription (#666).
+    private func noteAttach(_ r: JSONValue) {
+        guard runtime.sessionAuthority else { return }
+        takeFences(revision: r["revision"]?.intValue, generation: r["execution_generation"]?.intValue)
+        if let s = r["subscription_id"]?.stringValue, !s.isEmpty { subscriptionID = s }
+    }
+
+    /// The gateway's present word on the session (an attach's answer, a refusal's data), which comes in socket order:
+    /// taken as it is, lower or not, since a gateway that restarted counts again from its own numbers. `session.info`
+    /// and a mutate's answer only move them on (`noteRevision`, `noteGeneration`) (#666).
+    private func takeFences(revision r: Int?, generation g: Int?) {
+        if let r { revision = r }
+        guard let g else { return }
+        if let old = executionGeneration, g < old {
+            // The executions this chat knew are gone: their prompt cards go quietly, and the snapshot's `prompts` bring
+            // back any still open.
+            forgetPromptCards()
+            executionGeneration = g
+        } else {
+            noteGeneration(g)
+        }
+    }
+
+    /// Every card of the session authority's prompts goes, with no line and nothing kept as answered here.
+    private func forgetPromptCards() {
+        let gone = cards.filter(\.viaPrompt)
+        guard !gone.isEmpty else { return }
+        cards.removeAll { $0.viaPrompt }
+        for card in gone {
+            cardShownAt[card.id] = nil
+            runtime.cardNotifier?.cardSettled(card, chat: self)
+        }
+        cardWent()
+    }
+
+    /// A `session.mutate` of this chat, with its fences; the answer's revision is kept (#666).
+    private func mutate(_ operation: String, _ payload: [String: JSONValue], needsGeneration: Bool = false,
+                        beforeRetry: (@MainActor () async throws -> Void)? = nil) async throws -> JSONValue {
+        let r = try await SessionMutation.send(
+            call: { [unowned self] method, params in try await self.rpc(method, params) },
+            sessionID: runtimeID, operation: operation, payload: payload, revision: revision, generation: executionGeneration,
+            needsGeneration: needsGeneration, beforeRetry: beforeRetry,
+            fences: { [unowned self] rev, gen in self.takeFences(revision: rev, generation: gen) })
+        noteRevision(r["revision"]?.intValue)
+        return r
+    }
+
+    /// Leaves the chat on the gateway (the chat list's close; `GatewayRuntime.closeChat`). On the session authority's
+    /// wire it detaches this socket's subscription, ending the chat as the old wire's close does ("tui_close", #666);
+    /// a late detach of an old subscription only answers `detached: false`. On the old wire, `session.close`, sent as
+    /// before. Nobody waits on its answer.
+    func close() async {
+        if runtime.sessionAuthority {
+            guard let subscriptionID else { return }
+            _ = try? await rpc("session.detach", ["session_id": .string(runtimeID), "subscription_id": .string(subscriptionID),
+                                                  "end_reason": "tui_close"])
+        } else {
+            // As closeChat sent it: straight to the socket, without waiting for a ready, so a late close can't land on
+            // the chat opened again meanwhile.
+            _ = try? await runtime.socket.call("session.close", params: GatewayRuntime.params(["session_id": .string(runtimeID)], owner: profile))
+        }
+    }
+
+    nonisolated static let renameFailedLine = "The chat couldn't be renamed."
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
 
@@ -1973,7 +2145,13 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "session.usage":
             if let u = try? p["usage"]?.decode(Usage.self) { usage = u; activity.update(for: self, attention: !cards.isEmpty) }
         case "session.info":
-            if let i = try? p.decode(SessionLiveInfo.self) { info = i; if let t = i.title, !t.isEmpty { title = t }; if let r = i.running { isRunning = r } }
+            // Hermes's session authority's are mostly partial (a claim's: the running state, the generation, the
+            // revision), so they're merged; the old wire's are the whole projection, taken as they are (#666).
+            if let i = try? p.decode(SessionLiveInfo.self) {
+                info = runtime.sessionAuthority ? SessionLiveInfo.merging(info, i) : i
+                if let t = i.title, !t.isEmpty { title = t }; if let r = i.running { isRunning = r }
+            }
+            if runtime.sessionAuthority { noteGeneration(p["execution_generation"]?.intValue); noteRevision(p["revision"]?.intValue) }
         case "session.title":
             if let t = p["title"]?.stringValue { title = t }
         case "status.update":

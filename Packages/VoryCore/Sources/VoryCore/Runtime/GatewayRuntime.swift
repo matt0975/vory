@@ -649,7 +649,8 @@ public final class GatewayRuntime {
 
     public func closeChat(_ chat: ChatSession) {
         registry.remove(chat)
-        Task { _ = try? await socket.call("session.close", params: Self.params(["session_id": .string(chat.runtimeID)], owner: chat.profile)) }
+        // A detach on Hermes's session authority, session.close on the old wire (#666).
+        Task { await chat.close() }
     }
 
     // MARK: Events

@@ -106,10 +106,11 @@ public final class ProjectsStore {
     }
 
     public enum MoveError: LocalizedError {
-        case unsupported, noFolder(String), stillInProject(String, String)
+        case unsupported, noFolder(String), stillInProject(String, String), busy(String)
         public var errorDescription: String? {
             switch self {
             case .unsupported: return "This gateway's Hermes cannot move a chat yet. Update Hermes on the gateway and try again."
+            case .busy(let title): return "\(title) is running. Move it when the reply ends."
             case .noFolder(let name): return "\(name) has no folder on the gateway to move the chat into."
             case .stillInProject(let folder, let name): return "The bot's own folder (\(folder)) is part of \(name), so there is nowhere outside a project to put the chat."
             }
@@ -119,7 +120,8 @@ public final class ProjectsStore {
     /// Files stored chats under `project`, or under none. On the gateway a chat is in a
     /// project because it works in that project's folder, so this moves the chat's working
     /// folder (`session.workspace.move`): to the project's primary folder, or to the bot's own
-    /// default folder for "no project". A chat that is running follows at once.
+    /// default folder for "no project". A chat that is running follows at once, except on Hermes's session authority,
+    /// which moves it by session.mutate and refuses a running one (`busy`, #666).
     /// `profile`: the bot the chats belong to. Returns how many moved.
     @discardableResult
     public func move(_ sessionIDs: [String], to project: Project?, profile: String? = nil) async throws -> Int {
@@ -137,10 +139,22 @@ public final class ProjectsStore {
         let own = profile == nil || profile == runtime.selectedProfile
         for id in sessionIDs {
             do {
-                _ = try await runtime.rpc("session.workspace.move", ["session_key": .string(id), "cwd": .string(folder)], profile: profile)
+                if runtime.sessionAuthority {
+                    // Fenced by the chat's revision and execution: an open chat's, else 0 and the refusal's (#666).
+                    let open = runtime.registry.all.first { $0.storedID == id }
+                    _ = try await SessionMutation.send(
+                        call: { method, params in try await runtime.rpc(method, params, profile: profile) },
+                        sessionID: id, operation: "workspace", payload: ["cwd": .string(folder)],
+                        revision: open?.revision, generation: open?.executionGeneration, needsGeneration: true)
+                } else {
+                    _ = try await runtime.rpc("session.workspace.move", ["session_key": .string(id), "cwd": .string(folder)], profile: profile)
+                }
             } catch let e as RPCError where e.code == RPCError.methodNotFound {
                 canMove = false
                 throw MoveError.unsupported
+            } catch let e as RPCError where runtime.sessionAuthority && e.message == "session_busy" {
+                if moved > 0 { await refreshAfterMove(profile: profile) }
+                throw MoveError.busy(runtime.registry.all.first { $0.storedID == id }?.title ?? "This chat")
             } catch {
                 // Some went and one did not: the list still has to show the ones that did.
                 if moved > 0 { await refreshAfterMove(profile: profile) }

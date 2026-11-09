@@ -339,6 +339,46 @@ import Testing
         #expect(calls.last("session.steer")?["execution_generation"] == .number(9))
     }
 
+    @Test func aResumeAfterAGatewayRestartIsBelievedWithLowerNumbers() async throws {
+        let (c, calls) = try await chat(authority: true) { method, params in
+            switch method {
+            case "session.resume":
+                // The gateway restarted: a new execution count, a new revision, a new subscription, nothing waiting.
+                return ["session_id": "rt-a", "stored_session_id": "st-a", "running": true, "execution_generation": 2, "revision": 1,
+                        "subscription_id": "sub-9", "messages": [], "prompts": []]
+            case "session.steer":
+                if params["execution_generation"] != .number(2) { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+                return ["status": "queued", "text": params["text"] ?? .null, "execution_generation": 2, "authority_epoch": 2]
+            case "session.mutate":
+                if params["expected_revision"] != .number(1) {
+                    throw RPCError(code: 4001, message: "revision_conflict", data: ["reason": "revision_conflict", "revision": 1, "execution_generation": 2])
+                }
+                return ["session_id": "rt-a", "operation": "rename", "revision": 2, "title": params["payload"]?["title"] ?? .null]
+            default: return .object([:])
+            }
+        }
+        info(c, generation: 9, revision: 12, running: true)
+        c.handle(event: GatewayEvent(type: "approval.request", sessionID: "rt-a", payload: [
+            "kind": "approval", "prompt_id": "p-9", "execution_generation": 9, "command": "make deploy", "description": "",
+            "choices": ["once", "deny"]]))
+        #expect(c.cards.count == 1)
+        try await c.resume()
+        #expect(c.executionGeneration == 2)
+        #expect(c.revision == 1)
+        #expect(c.subscriptionID == "sub-9")
+        // The card of the gone execution can't be answered any more; nothing about it was answered here.
+        #expect(c.cards.isEmpty)
+        c.isRunning = true
+        c.queue = [QueuedMessage(text: "and the tmp folder")]
+        await c.steerQueued(c.queue[0].id)
+        #expect(calls.last("session.steer")?["execution_generation"] == .number(2))
+        #expect(c.queue.isEmpty)
+        await c.rename("Disk cleanup")
+        #expect(calls.all("session.mutate").count == 1)
+        #expect(calls.last("session.mutate")?["expected_revision"] == .number(1))
+        #expect(c.title == "Disk cleanup")
+    }
+
     // MARK: The legacy wire (the guards: green before and after)
 
     @Test func theLegacyWireSendsWhatItSentBefore() async throws {
