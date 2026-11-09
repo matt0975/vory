@@ -2119,7 +2119,14 @@ enum CardFollow {
     /// A hold under way: the thread's other scrolls (landing past the end, the overscroll fix) wait for its end.
     var holding: Bool { correct != nil }
 
+    /// When a card was last toggled (system uptime, the clock a touch's timestamp uses). The thread's tap reads it to leave
+    /// the keyboard up when the tap it saw was a card's (#634, `ThreadKeyboardTap`).
+    private(set) var toggledAt: TimeInterval = 0
+    /// Whether a card was toggled at or after `time` (a touch's start, system uptime).
+    func toggled(since time: TimeInterval) -> Bool { toggledAt >= time }
+
     func arm(_ card: Top) {
+        toggledAt = ProcessInfo.processInfo.systemUptime
         held?.heldAt = nil
         card.heldAt = card.y
         held = card
