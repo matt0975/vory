@@ -150,6 +150,8 @@ struct ConversationView: View {
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear {
+                        // On screen while one of its views is up: its re-attach gets the schedule and the line (#641).
+                        chat.cameOnScreen()
                         model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
                         Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
                     }
@@ -165,6 +167,7 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         Perf.stamp("pop: conversation disappeared")
+                        chat.wentOffScreen()
                         // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
                         guard !model.chatGone(chat, page: pageID) else { return }
                         // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
@@ -603,6 +606,7 @@ struct BottomDock: View {
     var readOnly = false
     /// Under the composer, to the dock's bottom edge.
     static let bottomPadding: CGFloat = 8
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // The container is what lets the composer morph into a card; menus presented from
@@ -610,6 +614,12 @@ struct BottomDock: View {
         // what morphs, and the composer draws its own glass.
         GlassEffectContainer(spacing: 12) {
             VStack(spacing: 10) {
+                // A chat that lost its live attach (#641): a quiet line while it's tried again, a banner with Try again
+                // from a minute. Above the banner, so it's in the same place on the iPhone, the Duo, the iPad and the Mac.
+                if chat.reattachShow != .none {
+                    ReattachRow(chat: chat)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
                 if let banner = chat.banner {
                     HStack {
                         Text(banner).font(.footnote).lineLimit(3)
@@ -662,6 +672,67 @@ struct BottomDock: View {
         }
         .animation(.snappy, value: chat.firstCard?.id)
         .animation(.snappy, value: chat.banner)
+        // With Reduce Motion the row only fades: no spring, nothing that moves (#641).
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .snappy, value: chat.reattachShow)
+        // VoiceOver hears the banner once when it comes, and once that the chat is back if it had come; the quiet line
+        // is read in order, never announced, so a flaky network doesn't chatter (#641).
+        .onChange(of: chat.reattachShow) { was, now in
+            if now == .failed, was != .failed { Self.announce(ChatSession.reattachFailedLine) }
+            if now == .none, was == .failed { Self.announce(ChatSession.reattachBackLine) }
+        }
+    }
+
+    private static func announce(_ words: String) {
+        var spoken = AttributedString(words)
+        spoken.accessibilitySpeechAnnouncementPriority = .low
+        AccessibilityNotification.Announcement(spoken).post()
+    }
+}
+
+/// #641: a chat whose live attach was lost, tried again on its own. A quiet line while it's tried; from a minute, a
+/// banner with Try again. No close button: it's a true state, and it goes when a try works.
+struct ReattachRow: View {
+    @Bindable var chat: ChatSession
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        ZStack {
+            if chat.reattachShow == .failed {
+                banner.transition(.opacity)
+            } else {
+                // Static: no spinner, no moving dots. On a small glass capsule, as everything else in the dock is: the
+                // thread scrolls under the dock, and bare words would sit on its text.
+                Text("Reconnecting…").font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .glassEffect(.regular, in: .capsule)
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+            }
+        }
+        // The quiet line becomes the banner by a cross-fade, never a move.
+        .animation(.easeInOut(duration: 0.2), value: chat.reattachShow)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat.reattach")
+    }
+
+    /// The words and Try again side by side; at the accessibility sizes the button goes under the words.
+    private var banner: some View {
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                                                  : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            Text(ChatSession.reattachFailedLine).font(.footnote).lineLimit(3)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { chat.tryAgain() } label: {
+                Text("Try again").font(.footnote.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Tries to connect this chat now")
+            .accessibilityIdentifier("chat.reattach.tryAgain")
+        }
+        .padding(.leading, 12).padding(.trailing, 8)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 

@@ -81,6 +81,25 @@ public struct PendingCard: Identifiable, Hashable, Sendable {
     }
 }
 
+/// One try's race between its session.resume and its timeout (#641): the first to settle wins; a waiter that comes
+/// after gets it at once.
+@MainActor private final class TryRace {
+    private var outcome: Result<Void, Error>?
+    private var waiter: CheckedContinuation<Result<Void, Error>, Never>?
+
+    func settle(_ r: Result<Void, Error>) {
+        guard outcome == nil else { return }
+        outcome = r
+        waiter?.resume(returning: r)
+        waiter = nil
+    }
+
+    func wait() async -> Result<Void, Error> {
+        if let outcome { return outcome }
+        return await withCheckedContinuation { waiter = $0 }
+    }
+}
+
 /// One live conversation. Owns the transcript, streaming assembly, pending cards, the local send queue and staged attachments.
 @MainActor
 @Observable
@@ -312,6 +331,27 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     private var resumeTask: Task<Void, Never>?
     private var bannerIsReconnect = false
     private var lastActivityUpdate = Date.distantPast
+
+    // The re-attach after a lost live attach (#641).
+    /// What the dock shows of it: nothing, the quiet "Reconnecting…" line, or the banner with Try again.
+    public private(set) var reattachShow: ReattachShow = .none
+    /// When this chat lost its live attach, in this stretch in front; nil while attached.
+    @ObservationIgnored private var troubleSince: Date?
+    /// Failed tries in a row since the trouble began: the schedule's n, and the next try's timeout.
+    @ObservationIgnored private var reattachFailures = 0
+    /// Bumped by every trigger and by an attach: what a try or a timer of an older one comes to is dropped, so a
+    /// superseded try says nothing by construction, whatever it throws.
+    @ObservationIgnored private var reattachGeneration = 0
+    /// The tries' schedule, and the clock that moves the line to the banner.
+    @ObservationIgnored private var reattachTimer: Task<Void, Never>?
+    @ObservationIgnored private var showTimer: Task<Void, Never>?
+    /// The socket went: no try of the chat's own until it's back, or Try again.
+    @ObservationIgnored private var waitingForSocket = false
+    /// How many of this chat's views are up (an iPad split or two Mac windows on one chat both hold it). A chat on
+    /// screen gets the schedule and the line; one off screen re-attaches once per trigger, through the runtime.
+    @ObservationIgnored private var screens = 0
+    /// The re-attach's clock; a test's manual one.
+    @ObservationIgnored var reattachClock = ReattachClock.live
     public var id: String { storedID }
 
     private var assembler = StreamAssembler()
@@ -530,36 +570,183 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         await apply(snapshot: r, listedAt: asked)
     }
 
-    public func reattachAfterReconnect(retrying: Bool = true) async {
-        do {
-            try await resumeFromGateway()
-            stale = false
-            if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
-        } catch is CancellationError {
-            // A newer reconnect superseded this one; it will re-attach the chat itself.
+    // MARK: Re-attach (#641)
+
+    /// The banner's words, from a minute of trouble; the error's own text goes to the log only.
+    public nonisolated static let reattachFailedLine = "This chat isn't connected. Vory keeps trying."
+    /// Said to VoiceOver when a chat whose banner had come is attached again.
+    public nonisolated static let reattachBackLine = "This chat is connected again."
+
+    public var isOnScreen: Bool { screens > 0 }
+    /// In trouble, and not a chat the gateway no longer has: the runtime's triggers try it.
+    var needsReattach: Bool { troubleSince != nil && !attachGone }
+    private var socketOpen: Bool { gatewayStandIn != nil || runtime.socketState.isOpen }
+
+    /// A view of this chat came up. One that comes up while the chat isn't attached gets a try at once, and the
+    /// schedule from then.
+    public func cameOnScreen() {
+        screens += 1
+        if screens == 1, needsReattach { reattachNow() }
+    }
+
+    /// A view of this chat went. Off screen, no more scheduled tries: the runtime's triggers try it once each.
+    public func wentOffScreen() {
+        screens = max(0, screens - 1)
+        if screens == 0 { reattachTimer?.cancel() }
+    }
+
+    /// The socket left .open: a chat attached until now has lost its live attach, and waits for the socket. A chat whose
+    /// open failed, or is still opening, keeps its own path (`retryFailedAttach`).
+    func socketWent() {
+        guard !attachGone, resumeError == nil, !isResuming else { return }
+        waitingForSocket = true
+        if troubleSince == nil { troubleSince = reattachClock.now(); updateShow() }
+    }
+
+    /// Try again (the banner's button): the socket's wait between attempts cut short, and a try now.
+    public func tryAgain() {
+        let socket = runtime.socket
+        Task { await socket?.retryNow() }
+        reattachNow()
+    }
+
+    /// The app went away: the tries and the clock stop.
+    func wentAwayForReattach() {
+        reattachGeneration += 1
+        reattachTimer?.cancel(); reattachTimer = nil
+        showTimer?.cancel(); showTimer = nil
+    }
+
+    /// The app came back: a chat still in trouble counts from now (a fresh minute of the quiet line before any banner),
+    /// and its tries start over. The runtime then tries it at once.
+    func cameBackForReattach() {
+        guard needsReattach else { return }
+        troubleSince = reattachClock.now()
+        reattachFailures = 0
+        updateShow()
+    }
+
+    /// A trigger for a chat on screen: a try now, then the schedule while it fails and the chat stays on screen. While the
+    /// socket isn't open, the chat waits for it instead.
+    func reattachNow() {
+        guard !attachGone else { return }
+        if troubleSince == nil { troubleSince = reattachClock.now() }
+        reattachGeneration += 1
+        let g = reattachGeneration
+        reattachTimer?.cancel()
+        updateShow()
+        guard socketOpen else { waitingForSocket = true; return }
+        reattachTimer = Task { [weak self] in await self?.runTries(generation: g) }
+    }
+
+    /// One try, waited on: after a reconnect for a chat off screen (the runtime runs them one at a time), and the Live
+    /// Activity's re-read. A chat on screen goes on with the schedule if it fails.
+    public func reattachAfterReconnect() async {
+        guard !attachGone else { return }
+        if troubleSince == nil { troubleSince = reattachClock.now() }
+        reattachGeneration += 1
+        let g = reattachGeneration
+        reattachTimer?.cancel()
+        updateShow()
+        guard await oneTry(generation: g) == .failed, isOnScreen, g == reattachGeneration else { return }
+        reattachTimer = Task { [weak self] in
+            guard let self else { return }
+            guard await self.waitOut(generation: g) else { return }
+            await self.runTries(generation: g)
+        }
+    }
+
+    private func runTries(generation g: Int) async {
+        while !Task.isCancelled, g == reattachGeneration {
+            guard await oneTry(generation: g) == .failed, isOnScreen, await waitOut(generation: g) else { return }
+        }
+    }
+
+    /// The schedule's wait after the failures so far, spread by its jitter; false when superseded meanwhile.
+    private func waitOut(generation g: Int) async -> Bool {
+        let d = ReattachSchedule.delay(afterFailures: reattachFailures)
+            * Double.random(in: (1 - ReattachSchedule.jitter)...(1 + ReattachSchedule.jitter))
+        do { try await reattachClock.sleep(d) } catch { return false }
+        return !Task.isCancelled && g == reattachGeneration
+    }
+
+    private enum TryOutcome { case attached, gone, waitingForSocket, failed, superseded }
+
+    /// One session.resume, given up on after the try's timeout (30 s, then 60, then 120). The resume runs in a task of its
+    /// own, so the timeout can end the wait without waiting on it, and the caller's cancellation reaches it.
+    private func oneTry(generation g: Int) async -> TryOutcome {
+        let timeout = ReattachSchedule.tryTimeout(try: reattachFailures + 1)
+        let clock = reattachClock
+        let race = TryRace()
+        let work = Task { [weak self] in
+            guard let self else { race.settle(.failure(CancellationError())); return }
+            do { try await self.resumeFromGateway(); race.settle(.success(())) } catch { race.settle(.failure(error)) }
+        }
+        let timer = Task {
+            do { try await clock.sleep(timeout) } catch { return }
+            race.settle(.failure(SocketError.timeout("session.resume")))
+            work.cancel()
+        }
+        let result = await withTaskCancellationHandler { await race.wait() } onCancel: { work.cancel(); timer.cancel() }
+        timer.cancel()
+        // A try a newer trigger or reconnect superseded, or a cancelled one: whatever it threw is dropped, so it says
+        // nothing (a cancelled ready wait throws the socket's timeout, "gateway.ready (cancelled)", not a cancellation).
+        guard !Task.isCancelled, g == reattachGeneration else { return .superseded }
+        switch result {
+        case .success:
+            reattached()
+            return .attached
+        case .failure(let error):
+            if error is CancellationError { return .superseded }
             stale = true
-        } catch SocketError.notConnected {
-            // The socket went between the reconnect and this call (a network still settling
-            // after the app came back, a socket found dead on return): the reconnect that
-            // follows re-attaches the chat itself, so no banner for a failure the next try
-            // undoes (a tester's "Reconnected, but the chat could not be re-attached: Not
-            // connected to the gateway" after coming back).
-            stale = true
-        } catch SocketError.timeout where retrying {
-            // The gateway was slow to answer once; once more before saying so.
-            try? await Task.sleep(for: .seconds(2))
-            await reattachAfterReconnect(retrying: false)
-        } catch {
-            stale = true
-            if !(error is CancellationError), !error.localizedDescription.contains("CancellationError") {
-                let why = error.localizedDescription
-                if Self.isGone(why) {
-                    banner = Self.goneBanner
-                } else {
-                    banner = "Reconnected, but the chat could not be re-attached: \(why)"
-                }
+            if case SocketError.notConnected = error { waitingForSocket = true; return .waitingForSocket }
+            // The chat waited on the socket's ready itself (the Live Activity's re-read) and the socket didn't come: it
+            // waits for the socket, never a banner on its own.
+            if case SocketError.timeout(let what) = error, what.hasPrefix("gateway.ready") { waitingForSocket = true; return .waitingForSocket }
+            let why = error.localizedDescription
+            if Self.isGone(why) {
+                attachGone = true
+                troubleSince = nil
+                showTimer?.cancel(); showTimer = nil
+                reattachShow = .none
+                banner = Self.goneBanner
                 bannerIsReconnect = true
+                return .gone
             }
+            reattachFailures += 1
+            log.info("re-attach try \(self.reattachFailures) failed: \(why, privacy: .public)")
+            return .failed
+        }
+    }
+
+    /// Attached again: the trouble over, and the line, the banner and a reconnect's own banner gone.
+    private func reattached() {
+        stale = false
+        troubleSince = nil
+        reattachFailures = 0
+        waitingForSocket = false
+        reattachGeneration += 1
+        showTimer?.cancel(); showTimer = nil
+        reattachShow = .none
+        if bannerIsReconnect { banner = nil; bannerIsReconnect = false }
+    }
+
+    /// What shows now, from how long the trouble has lasted, and a timer to the next change (the line at 2 s, the
+    /// banner at 60 s).
+    private func updateShow() {
+        showTimer?.cancel(); showTimer = nil
+        guard let since = troubleSince, !attachGone else { reattachShow = .none; return }
+        let elapsed = reattachClock.now().timeIntervalSince(since)
+        let now = ReattachSchedule.show(after: elapsed)
+        if reattachShow != now { reattachShow = now }
+        let next = elapsed < ReattachSchedule.lineAfter ? ReattachSchedule.lineAfter
+            : elapsed < ReattachSchedule.bannerAfter ? ReattachSchedule.bannerAfter : nil
+        guard let next else { return }
+        let clock = reattachClock
+        showTimer = Task { [weak self] in
+            do { try await clock.sleep(next - elapsed) } catch { return }
+            guard let self, !Task.isCancelled, self.troubleSince == since else { return }
+            self.updateShow()
         }
     }
 

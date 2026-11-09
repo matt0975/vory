@@ -82,6 +82,11 @@ public actor GatewaySocket {
     private var receiveLoop: Task<Void, Never>?
     private var heartbeat: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    /// The re-attach hook of the last reconnect, which runs beside the connect loop (#641). A newer one, or a disconnect,
+    /// cancels it; a teardown doesn't: a chat's re-attach that waits for the socket inside it is answered by the next open.
+    private var hookTask: Task<Void, Never>?
+    /// Bumped by `retryNow()`: the wait between attempts that sees it change ends at once.
+    private var retryNowMark = 0
     private var nextID = 1
     private var pending: [Int: CheckedContinuation<JSONValue, Error>] = [:]
     /// One per pending call: fails it with `timeout` when the reply has not come by then.
@@ -117,6 +122,13 @@ public actor GatewaySocket {
     private var addressStepTimeoutSeconds = GatewaySocket.addressStepTimeout
     /// The tests' shorter wait for the address and ticket.
     func setAddressStepTimeout(_ seconds: Double) { addressStepTimeoutSeconds = seconds }
+    private var readyTimeoutSeconds: Double = 20
+    /// The tests' shorter wait for an attempt's gateway.ready.
+    func setReadyTimeout(_ seconds: Double) { readyTimeoutSeconds = seconds }
+
+    /// Ends the wait between attempts now (coming to the front, Try again): a return no longer sits through up to half a
+    /// minute of backoff. Nothing changes for an open socket or an attempt under way (#641).
+    public func retryNow() { retryNowMark += 1 }
 
     /// Told when an attempt suggests the HTTP connection to the gateway should be made afresh (`ConnectTrouble`).
     public func setTroubleHandler(_ handler: (@Sendable (ConnectTrouble) async -> Void)?) { onTrouble = handler }
@@ -158,6 +170,7 @@ public actor GatewaySocket {
     public func disconnect() {
         wantConnected = false
         reconnectTask?.cancel(); reconnectTask = nil
+        hookTask?.cancel(); hookTask = nil
         teardown(reason: "disconnect")
         setState(.idle)
     }
@@ -214,17 +227,25 @@ public actor GatewaySocket {
                 do { (url, headers) = try await addressAndTicket() }
                 catch { addressStepFailed = true; throw error }
                 try await open(url: url, headers: headers)
-                try await waitUntilReady(timeout: 20)
+                try await waitUntilReady(timeout: readyTimeoutSeconds)
                 let wasReconnect = everConnected
                 everConnected = true
                 attempt = 0
                 problem = nil; problemStreak = 0
                 ticketRetried = false
                 addressStepNoAnswer = false
-                if wasReconnect { await onReconnected() } else { await onFirstConnected() }
-                // The hook runs inside this loop, so a socket lost while it ran (the chats' re-attach calls take a
-                // while) found the loop still here and started no other (`connectionLost`): go round again rather than
-                // end with nothing trying, on "Reconnecting (1)…" for good (#592).
+                if wasReconnect {
+                    // Beside the loop, not inside it (#641): the loop ends now, so a socket lost while the chats
+                    // re-attach finds none and starts one at once. Inside it, the loss started no other, and each chat
+                    // after it waited 20 s on a gateway.ready only the held loop could bring ("Reconnected, but the
+                    // chat could not be re-attached: Timed out waiting for gateway.ready.").
+                    hookTask?.cancel()
+                    let hook = onReconnected
+                    hookTask = Task { await hook() }
+                } else {
+                    await onFirstConnected()
+                }
+                // A socket lost before the loop got here goes round again rather than end with nothing trying (#592).
                 if task == nil, wantConnected { continue }
                 return
             } catch let e as HermesAPIError where e.isUnauthorized {
@@ -280,12 +301,14 @@ public actor GatewaySocket {
             } else {
                 setState(.reconnecting(attempt: attempt, delay: delay))
             }
-            // The wait is cut short by a path change: the route came up, so the attempt goes now.
+            // The wait is cut short by a path change (the route came up, so the attempt goes now), or by `retryNow()`.
             let mark = watch.mark
+            let pressed = retryNowMark
             let deadline = Date().addingTimeInterval(delay)
             while Date() < deadline {
                 if Task.isCancelled { return }
                 if watch.mark != mark { await onTrouble?(.pathChanged); break }
+                if retryNowMark != pressed { break }
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
             }
         }
