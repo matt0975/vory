@@ -102,7 +102,11 @@ extension Color {
     var hexString: String {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         #if canImport(UIKit)
-        UIColor(self).getRed(&r, green: &g, blue: &b, alpha: &a)
+        let ui = UIColor(self)
+        if !ui.getRed(&r, green: &g, blue: &b, alpha: &a) {
+            var w: CGFloat = 0
+            if ui.getWhite(&w, alpha: &a) { r = w; g = w; b = w }
+        }
         #else
         (NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)).getRed(&r, green: &g, blue: &b, alpha: &a)
         #endif
