@@ -3,10 +3,10 @@ import XCTest
 /// What the demo shows outside the app outlives neither the app nor the demo (#632, and #392's Leave demo with a voice
 /// session up). Two cases, picked by HERMES_E2E_LEFT_CASE, each a run of its own; the rig reads the app's own activity
 /// lines around them (`log show`, dev.vory / activity) and keys them by the "DEMO-LEFT … at <epoch>" lines printed here.
-/// - "quit": a Demo voice session, the app sent home before its approval card comes (so the card's notification is
-///   posted while away), then quit from the background; relaunched under `-vory-demo`, then without it: the demo's
-///   notifications read 0 delivered and 0 waiting each time (`-vory-delivered-readout`), and the launch lines say how many
-///   cards and notifications the sweep ended.
+/// - "quit": a Demo voice session to its approval card, hidden; then a plain demo turn sent in another chat and the app
+///   sent home at once, so the turn's end is a notification posted while away; then quit from the background; relaunched
+///   under `-vory-demo`, then without it: the demo's notifications read 0 delivered and 0 waiting each time
+///   (`-vory-delivered-readout`), and the launch lines say how many cards and notifications the sweep ended.
 /// - "leave": a Demo voice session to its card, hidden to its pill, then Settings › Leave demo: no voice screen or pill
 ///   comes back, and a relaunch's sweep finds no card.
 /// - "warm": one launch and quit after an install, so neither case starts on the first launch of a new install; it asks
@@ -76,6 +76,37 @@ final class DemoLeftoversUITests: XCTestCase {
         pause(1.5)
     }
 
+    /// Voice mode hidden to its pill. Hide by its own tap when it stands whole on the screen; else at the middle of its
+    /// part on screen (on the closed Duo of 50 the voice screen's top row sits at the top edge, Hide cut in half). Its
+    /// frame and the window's are printed, a still is kept after, and the voice screen must be gone.
+    private func hideVoice(_ when: String) {
+        let hide = app.buttons["Hide voice mode"].firstMatch
+        XCTAssertTrue(hide.waitForExistence(timeout: 5), "no Hide button")
+        let window = app.windows.firstMatch.frame
+        print("DEMO-LEFT hide \(when) \(hide.frame) window \(window) hittable \(hide.isHittable)")
+        if window.contains(hide.frame) {
+            hide.tap()
+        } else {
+            let part = hide.frame.intersection(window)
+            if part.isNull || part.width < 8 || part.height < 8 {
+                XCTFail("the Hide button is off the screen (\(hide.frame) in \(window))")
+            } else {
+                app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: part.midX, dy: part.midY)).tap()
+                mark("hide \(when) by its part on screen")
+            }
+        }
+        pause(1.5)
+        shot("after-hide-\(when)")
+        XCTAssertFalse(app.buttons["End voice mode"].firstMatch.exists, "the voice screen is still up after Hide (\(when)); the still is after-hide-\(when)")
+    }
+
+    /// Out of the chat to the list. A touch at Back's centre, not the element tap: XCTest can't always compute Back's
+    /// activation point here, while a touch, the app's hit test and VoiceOver all reach it (DemoNotificationsUITests).
+    private func back() {
+        let back = app.buttons["chat.back"].firstMatch
+        if back.waitForExistence(timeout: 5) { back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5) }
+    }
+
     func testDemoLeftovers() throws {
         guard let leftCase = ProcessInfo.processInfo.environment["HERMES_E2E_LEFT_CASE"], !leftCase.isEmpty else {
             throw XCTSkip("HERMES_E2E_LEFT_CASE not set")
@@ -97,17 +128,27 @@ final class DemoLeftoversUITests: XCTestCase {
             pause(3); app.terminate(); mark("warm done")
         case "quit":
             launch(demo: true)
-            // Away before the card: the demo posts a card's notification only when the card arrives with the app out of
-            // the foreground (LocalNotifier.cardArrived); a card already on screen when the app leaves posts none.
-            let mic = app.buttons.matching(identifier: "chats.voice").firstMatch
-            XCTAssertTrue(mic.waitForExistence(timeout: 30), "no mic on the Chats list")
-            mic.tap()
-            XCTAssertTrue(app.buttons["End voice mode"].firstMatch.waitForExistence(timeout: 30), "the voice screen did not open")
-            mark("voice on")
-            let early = app.buttons["Allow once"].firstMatch.exists
+            // The voice session's own card (#632's card half): voice mode to its approval card, in front, then hidden.
+            voiceToTheCard()
+            hideVoice("quit")
+            // Then a plain demo turn in another chat, the app sent home as it is sent: the turn runs on while away (the
+            // app holds itself up for a running turn, AwayWatch) and its end is a local notification there
+            // (LocalNotifier.turnFinished), which the next launch's sweep must take (#632's notification half). A turn's
+            // end, or a card, that comes in front posts none.
+            back()
+            let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Packing list' AND NOT (identifier BEGINSWITH 'chat.')")).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 20), "no demo chat to send in")
+            row.tap()
+            let field = any("composer.text")
+            XCTAssertTrue(field.waitForExistence(timeout: 20), "no composer")
+            field.tap()
+            field.typeText("hello")
+            let send = app.buttons["composer.send"].firstMatch
+            let ready = Date().addingTimeInterval(30)
+            while !(send.exists && send.isEnabled && send.isHittable), Date() < ready { pause(0.3) }
+            send.tap()
             XCUIDevice.shared.press(.home)
             mark("away")
-            XCTAssertFalse(early, "the card came before Home (a fast turn): no notification could be posted, so this run proves nothing")
             // Quit while still away: back in front, the chat clears its own notifications as it shows (ConversationView),
             // and the sweep this case is for (#632) is of what a demo closed in the background left behind.
             pause(15)
@@ -124,11 +165,8 @@ final class DemoLeftoversUITests: XCTestCase {
         case "leave":
             launch(demo: true)
             voiceToTheCard()
-            let hide = app.buttons["Hide voice mode"].firstMatch
-            XCTAssertTrue(hide.waitForExistence(timeout: 5), "no Hide button")
-            hide.tap(); pause(1.5)
-            let back = app.buttons["chat.back"].firstMatch
-            if back.waitForExistence(timeout: 5) { back.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5) }
+            hideVoice("leave")
+            back()
             // Settings from the tab strip. Every "tab.settings" match is listed with its frame and whether it can be tapped,
             // and the screen kept as a still, before one is chosen: on the closed Duo the first match sat past the screen's
             // edge (dl632 tags a and b). The first that can be tapped is; else the first's part on screen, by coordinate;
