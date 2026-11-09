@@ -41,4 +41,33 @@ import Testing
         let rt = await runtime()
         #expect(try await BotChat.storedID(of: "gizmo", on: rt) == DemoContent.botChatID)
     }
+
+    private static let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    private static func source(_ path: String) throws -> String {
+        try String(contentsOf: root.appending(path: path), encoding: .utf8)
+    }
+
+    /// The bot's page: a Bot Chat row under Profile, above its Chats, shown only when the bot has one, that opens it as
+    /// an ordinary chat (no `readOnly`). They are a view's rows, so the check reads the source, as DemoEntryPointsTests does.
+    @Test func botPageOpensItsBotChatToTypeIn() throws {
+        let file = try Self.source("Vory/Bots/BotsView.swift")
+        let page = try #require(file.range(of: "struct BotDetailView").map { String(file[$0.lowerBound...]) })
+        let body = String(page[..<(page.range(of: "private func load()")?.lowerBound ?? page.endIndex)])
+        let profile = try #require(body.range(of: "Text(\"Profile\")"), "the page has no Profile row")
+        let chats = try #require(body.range(of: "Text(\"Chats\")"), "the page has no Chats header")
+        let row = try #require(body.range(of: "BotChat.route("), "the page has no Bot Chat row")
+        #expect(profile.upperBound <= row.lowerBound && row.upperBound <= chats.lowerBound, "the Bot Chat row isn't between Profile and Chats")
+        #expect(body.contains("if let botChatID"), "the Bot Chat row is shown when the bot has none")
+        #expect(page.contains("BotChat.storedID(of: profile.name"), "the page doesn't find the Bot Chat the notice's way")
+    }
+
+    /// The route the page opens is the chat itself, to type in, titled Bot Chat; the notice's stays read-only.
+    @Test func pageRouteIsWritableAndTheNoticesIsNot() throws {
+        let app = try Self.source("Vory/App/AppModel.swift")
+        let notice = try #require(app.range(of: "func openBotChat(").map { String(app[$0.lowerBound...].prefix(1200)) })
+        #expect(notice.contains("BotChat.storedID(of: profile.name, on: rt)"))
+        #expect(notice.contains("route.kind = \"readonly\""), "the notice's Bot Chat is no longer read-only")
+        let bots = try Self.source("Vory/Bots/BotChat.swift")
+        #expect(bots.contains("static func route("), "BotChat has no route for the bot's page")
+    }
 }
