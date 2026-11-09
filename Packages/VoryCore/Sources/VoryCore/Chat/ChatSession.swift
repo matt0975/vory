@@ -494,7 +494,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     // MARK: Lifecycle
 
     public func create(cwd: String? = nil) async throws {
-        var params: [String: JSONValue] = ["cols": 80]
+        // No "cols": Hermes's canonical create (v0.23.0's session authority) refuses a key it doesn't declare, and the
+        // legacy create takes the 80 it would have said by default (#665). session.resume still sends it.
+        var params: [String: JSONValue] = [:]
         if let cwd, !cwd.isEmpty { params["cwd"] = .string(cwd); params["cwd_explicit"] = .bool(true) }
         let r = try await rpc("session.create", params)
         runtimeID = r["session_id"]?.stringValue ?? ""

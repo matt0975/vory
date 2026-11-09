@@ -174,7 +174,7 @@ struct E2EConfig {
         let pong = try await socket.call("ping")
         #expect(pong["pong"]?.boolValue == true)
 
-        let created = try await socket.call("session.create", params: ["cols": 80])
+        let created = try await socket.call("session.create")
         let sid = try #require(created["session_id"]?.stringValue)
         let stored = created["stored_session_id"]?.stringValue ?? sid
         print("e2e session", sid, stored)
