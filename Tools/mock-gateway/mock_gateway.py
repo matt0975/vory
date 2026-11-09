@@ -1429,7 +1429,19 @@ REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 # methods this mock serves; "profile" is declared on each. Handler rules (approval.respond's exact set, steer's
 # execution_generation) and the -32601 for session calls the authority doesn't serve are not mirrored. gateway.ready
 # says "session_authority": true, as v0.23.0's socket does with an authority (tui_gateway/ws.py).
-STRICT_PARAMS = "--strict-params" in sys.argv
+# --authority: a Hermes v0.23.0 socket served by its session authority, beyond the key check (#665, part A). It implies
+# --strict-params. Each turn is an execution with its own generation; an approval or a single question is published as
+# an `approval.request` / `clarify.request` event with its prompt_id and execution_generation (no server request), and
+# answered with `approval.respond` / `clarify.respond`: exactly {session_id, execution_generation, prompt_id,
+# choice|answer} (gateway/session_controls.py), the choice one the prompt offers, the generation the running one
+# (`stale_generation`), the socket attached to the session (`permission_denied`); a prompt already settled answers
+# {"status": "already_resolved"}. Its end is `approval.settled` / `clarify.settled`. session.create and session.resume
+# answer the session's execution_generation, and session.resume its open prompts as `prompts`; approval.pending lists
+# request_id (the prompt id) with no generation (gateway/session_pending_controls.py, session_ancillary.py).
+AUTHORITY = "--authority" in sys.argv
+STRICT_PARAMS = "--strict-params" in sys.argv or AUTHORITY
+GENERATIONS: dict = {}   # live session id -> its newest execution generation
+PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
 STRICT_PARAMS_DECLARED = {
     "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
                        "follow_profile_config", "hidden", "ignore_rules", "ignore_user_config", "max_turns", "model",
@@ -1449,6 +1461,7 @@ STRICT_PARAMS_DECLARED = {
     "profiles.list": {"include_sessions", "profile"},  # CanonicalProfilesParams
     "groups.create": {"members", "name", "profile", "room_id"},  # CanonicalRoomCreateParams
     "image.attach_bytes": {"content_base64", "data", "ext", "filename", "profile", "session_id"},  # ImageAttachBytesParams
+    "clarify.respond": {"answer", "execution_generation", "profile", "prompt_id", "session_id"},  # ClarifyRespondParams
 }
 # MOCK_FENCE=1: a Hermes from about 2026-10-17 on (#467), whose chat edits are fenced (hermes_cli/web_routers/
 # sessions.py, web_server_sessions.py): GET /api/sessions/{id}/mutation-snapshot gives the chat's revision, and a DELETE
@@ -2189,6 +2202,8 @@ class Gateway:
 
     async def ask(self, method: str, sid: str, params: dict, timeout: float = 300) -> dict | None:
         """Server -> client request to EVERY attached client; the first answer settles it."""
+        if AUTHORITY and (method == "approval" or (method == "clarify" and "questions" not in params)):
+            return await self.ask_prompt(method, sid, params, timeout)
         rid = f"srq-{uuid.uuid4().hex[:12]}"
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         live = LIVE.get(sid)
@@ -2215,6 +2230,31 @@ class Gateway:
             return None
         finally:
             self.pending.pop(rid, None)
+
+    async def ask_prompt(self, kind: str, sid: str, params: dict, timeout: float) -> dict | None:
+        """--authority: an approval or a single question as the session authority asks it, by event (#665)."""
+        prompt_id = params.get("request_id") or f"prm-{uuid.uuid4().hex[:12]}"
+        generation = GENERATIONS.setdefault(sid, 1)
+        if kind == "approval":
+            prompt = {"kind": "approval", "prompt_id": prompt_id, "execution_generation": generation,
+                      "command": params.get("command", ""), "description": params.get("description", ""),
+                      "choices": list(params.get("choices") or ["once", "session", "always", "deny"])}
+        else:
+            prompt = {"kind": "clarify", "prompt_id": prompt_id, "execution_generation": generation,
+                      "question": params.get("question", ""), "choices": list(params.get("choices") or []),
+                      "multi_select": bool(params.get("multi_select"))}
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        PROMPTS[prompt_id] = (sid, prompt, fut)
+        print(f"prompt {kind} {sid} prompt={prompt_id} generation={generation}", flush=True)
+        await self.event(f"{kind}.request", sid, prompt)
+        try:
+            answer = await asyncio.wait_for(fut, timeout)
+            print(f"answer {kind} {sid} prompt={prompt_id} {answer!r}", flush=True)
+            return answer
+        except asyncio.TimeoutError:
+            if PROMPTS.pop(prompt_id, None) is not None:
+                await self.event(f"{kind}.settled", sid, {"prompt_id": prompt_id, "execution_generation": generation})
+            return None
 
     # -- streaming ----------------------------------------------------------------------------
 
@@ -2685,6 +2725,13 @@ class Gateway:
         await self.event("message.complete", s.sid, {"text": said, "status": "complete", "usage": usage(s.output_tokens, len(TOOLS_STEPS))})
 
     async def _run_turn(self, s: Session, prompt: str) -> None:
+        if AUTHORITY:
+            # Each turn is an execution of its own (#665): a prompt of an earlier one can no longer be answered.
+            GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+            for pid, (owner, pr, _f) in list(PROMPTS.items()):
+                if owner == s.sid:
+                    PROMPTS.pop(pid, None)
+                    await self.event(f"{pr['kind']}.settled", s.sid, {"prompt_id": pid, "execution_generation": pr["execution_generation"]})
         await asyncio.sleep(0.4)
         # A turn of many tool calls, for the thread's layout checks.
         if prompt.strip().lower().startswith("tools"):
@@ -2959,7 +3006,15 @@ class Gateway:
         profile = p.get("profile") or "default"
 
         def ok(result: dict) -> dict:
+            if AUTHORITY and method in ("session.create", "session.resume") and isinstance(result, dict) and result.get("session_id"):
+                # The session authority's snapshot: the execution, and the prompts still open (#665).
+                live_sid = result["session_id"]
+                result = {**result, "execution_generation": GENERATIONS.get(live_sid, 0),
+                          "prompts": [dict(prompt) for (owner, prompt, _f) in PROMPTS.values() if owner == live_sid]}
             return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+        def refused(reason: str) -> dict:
+            return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": reason, "data": {"reason": reason}}}
 
         def err(code: int, message: str) -> dict:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
@@ -3351,6 +3406,38 @@ class Gateway:
         if method in ("session.close", "session.delete"):
             self.sessions.pop(p.get("session_id", ""), None)
             return ok({"closed": True, "deleted": p.get("session_id", "")})
+        if AUTHORITY and method in ("approval.respond", "clarify.respond"):
+            # gateway/session_controls.py respond / respond_clarify, then session_authority.py and
+            # session_pending_controls.py: the exact keys, the prompt, the generation, the socket, the choice.
+            field = "choice" if method == "approval.respond" else "answer"
+            keys = set(p) - {"profile"}
+            if keys != {"session_id", "execution_generation", "prompt_id", field}:
+                return refused("invalid_params")
+            entry = PROMPTS.get(p.get("prompt_id"))
+            if entry is None:
+                return ok({"status": "already_resolved", "prompt_id": p.get("prompt_id")})
+            owner, prompt, fut = entry
+            generation = p.get("execution_generation")
+            if type(generation) is not int or generation != prompt["execution_generation"] or GENERATIONS.get(owner) != generation:
+                return refused("stale_generation")
+            live = LIVE.get(owner)
+            if live is None or self not in live.members:
+                return refused("permission_denied")
+            if method == "approval.respond" and p.get("choice") not in prompt["choices"]:
+                return refused("invalid_params")
+            if method == "clarify.respond" and (not isinstance(p.get("answer"), str) or len(p["answer"]) > 16384):
+                return refused("invalid_params")
+            PROMPTS.pop(p["prompt_id"], None)
+            if not fut.done():
+                fut.set_result({field: p[field]})
+            await self.event(f"{prompt['kind']}.settled", owner, {"prompt_id": p["prompt_id"], "execution_generation": generation})
+            return ok({"status": "resolved", "prompt_id": p["prompt_id"]})
+        if AUTHORITY and method == "approval.pending":
+            # The session authority's list: request_id is the prompt id, and there is no generation in it.
+            sid_asked = p.get("session_id", "")
+            return ok({"approvals": [{"request_id": pid, "command": pr["command"], "description": pr["description"],
+                                      "choices": list(pr["choices"]), "allow_permanent": "always" in pr["choices"]}
+                                     for pid, (owner, pr, _f) in PROMPTS.items() if owner == sid_asked and pr["kind"] == "approval"]})
         if method == "approval.pending":
             # What still waits on this session: the open approval requests, by their request id.
             live = LIVE.get(p.get("session_id", "")) or next((l for l in LIVE.values() if l.stored == p.get("session_id")), None)
@@ -3457,6 +3544,7 @@ async def main() -> None:
     ap.add_argument("--refuse-pins", action="store_true", help="rows say \"pinned\", but a PATCH of only a pin is refused as an old gateway does")
     ap.add_argument("--no-pins", action="store_true", help="no pins, as a gateway from before Hermes kept them: rows without \"pinned\", a PATCH of only a pin refused")
     ap.add_argument("--strict-params", action="store_true", help="refuse undeclared keys on the canonical methods as Hermes v0.23.0's session authority does: 4001 invalid_params (#665)")
+    ap.add_argument("--authority", action="store_true", help="a Hermes v0.23.0 session authority: approvals and single questions by event, answered with approval.respond / clarify.respond (implies --strict-params; #665)")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")

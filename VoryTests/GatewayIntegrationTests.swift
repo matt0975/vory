@@ -341,6 +341,31 @@ extension GatewayIntegrationTests {
         #expect(!chat.runtimeID.isEmpty, "no session from session.create")
         print("e2e strict create:", chat.runtimeID.isEmpty ? "none" : chat.runtimeID)
     }
+
+    /// #665, part A: an approval is shown and answered on a gateway served by Hermes's session authority, which asks
+    /// by event and takes its answer by approval.respond (the mock with --authority), and on one that asks by request
+    /// (the default mock). The mock's "tour" turn asks one approval, Allow once or Deny, and says "Done." once allowed.
+    @MainActor @Test func anApprovalIsShownAndAnsweredOnEitherWire() async throws {
+        guard let env = Self.env else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e approval wire", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let runtime = GatewayRuntime(connection: conn, store: store)
+        await runtime.start()
+        let chat = try await runtime.newChat()
+        _ = await chat.send("tour")
+        var deadline = Date().addingTimeInterval(20)
+        while chat.cards.first(where: { $0.method == "approval" }) == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+        let card = try #require(chat.cards.first { $0.method == "approval" }, "no approval card in 20 s")
+        print("e2e approval wire: card", card.id, card.approval?.offeredChoices ?? [])
+        await chat.respond(card: card, result: ["choice": "once"])
+        func replied() -> Bool { chat.items.contains { if case .assistant(let t, _, _) = $0.kind { return t.contains("Done.") }; return false } }
+        deadline = Date().addingTimeInterval(20)
+        while !replied(), Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+        #expect(replied(), "the turn didn't go on after Allow once")
+        #expect(chat.cards.isEmpty)
+    }
 }
 
 extension GatewayIntegrationTests {
