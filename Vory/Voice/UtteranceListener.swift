@@ -49,8 +49,7 @@ final class UtteranceListener {
     private var lastSpeechAt: Date?
     private var captureURL: URL?
     #if os(iOS) || os(macOS)
-    /// Type-erased because stored properties cannot themselves be conditionally
-    /// available. Access is restricted to the macOS/iOS 26 availability gates.
+    /// Kept type-erased so this can load on systems before version 26.
     private var analyzer: Any?
     private var analyzerTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
@@ -259,8 +258,7 @@ final class InputPipe: @unchecked Sendable {
     private var file: AVAudioFile?
     private var fileURL: URL?
     private var analyzerFormat: AVAudioFormat?
-    /// These closures erase AnalyzerInput from stored state so InputPipe remains
-    /// loadable on systems where the new Speech framework types do not exist.
+    /// Keeps AnalyzerInput out of stored state before version 26.
     private var analyzerYield: ((AVAudioPCMBuffer) -> Void)?
     private var analyzerFinish: (() -> Void)?
     private var analyzerConverter: AVAudioConverter?

@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// Vory's glass vocabulary with a material fallback for systems before the
-/// native Liquid Glass APIs. Keeping the compatibility boundary here lets the
-/// rest of the shared UI remain one implementation on iOS, macOS and watchOS.
 struct VoryGlass: Sendable {
     enum Kind: Sendable { case regular, clear, identity }
 
@@ -39,8 +36,6 @@ struct VoryGlass: Sendable {
     }
 }
 
-/// The native shared sampling container where it exists; a transparent layout
-/// container on Sequoia and other older systems.
 struct VoryGlassEffectContainer<Content: View>: View {
     private let spacing: CGFloat?
     private let content: Content
@@ -85,9 +80,6 @@ private struct VoryGlassFallback<S: Shape>: ViewModifier {
 }
 
 extension View {
-    /// `safeAreaBar` arrived with macOS 26. Sequoia uses an ordinary inset in
-    /// the same position, keeping the list controls visible without linking a
-    /// Tahoe-only SwiftUI symbol into the macOS 15 path.
     @ViewBuilder
     func vorySafeAreaTopBar<Bar: View>(spacing: CGFloat? = nil, @ViewBuilder content: () -> Bar) -> some View {
         #if os(macOS)

@@ -33,10 +33,6 @@ public enum Keychain {
         return memory[key]
     }
 
-    /// An ad-hoc Mac build cannot write to the data-protection Keychain. Probe the exact operation
-    /// `ConnectionStore` needs before it is created, then keep its gateway and session in memory
-    /// when signing is the only blocker. Other Keychain failures (for example, a locked device)
-    /// stay failures rather than silently becoming temporary storage.
     @discardableResult
     public static func useMemoryIfKeychainIsMissingEntitlement() -> Bool {
         guard !memoryOnly else { return true }
