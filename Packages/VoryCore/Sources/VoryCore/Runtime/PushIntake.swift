@@ -2,7 +2,8 @@ import Foundation
 
 /// A relay push's work in the notification service extensions (#455): the shared Keychain read of this install's
 /// relay credentials and the decrypt of the payload the gateway sealed (#497), handed back once as an outcome. The
-/// extensions call it from `didReceive`, so what `begin` costs before it returns is what `didReceive` costs.
+/// extensions call it from `didReceive`, which returns as soon as `begin` does: the system hears back at once, however
+/// long the Keychain takes.
 public enum PushIntake {
     public enum Outcome: Sendable, Equatable {
         /// No `enc`: a plain push, shown as it came.
@@ -15,11 +16,11 @@ public enum PushIntake {
         case failed(String)
     }
 
-    /// Reads the credentials, opens `enc` with them, and calls `done` once with the outcome, on the caller's thread,
-    /// before it returns.
+    /// Reads the credentials and opens `enc` with them on a queue of its own, then calls `done` once with the outcome,
+    /// there. It returns at once, before any of that work.
     public static func begin(enc: String?, credentials: @escaping @Sendable () -> PushRelay.Credentials?,
                              done: @escaping @Sendable (Outcome) -> Void) {
-        done(outcome(enc: enc, credentials: credentials))
+        DispatchQueue.global(qos: .userInitiated).async { done(outcome(enc: enc, credentials: credentials)) }
     }
 
     static func outcome(enc: String?, credentials: () -> PushRelay.Credentials?) -> Outcome {
