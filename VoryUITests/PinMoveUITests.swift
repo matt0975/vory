@@ -10,7 +10,10 @@ import XCTest
 @MainActor
 final class PinMoveUITests: XCTestCase {
     private var app: XCUIApplication!
-    private let titles = ["Disk cleanup", "Rewrite the nightly export job", "Weekly dependency audit"]
+    /// The row pinned: the oldest of the person's own chats, under "Bot Chat", so a pin moves it up. The mock's
+    /// "Weekly dependency audit" was the row until #673: it's scheduled, and waits in the Scheduled section.
+    private let subject = "Rewrite the nightly export job"
+    private var titles: [String] { ["Disk cleanup", "Bot Chat", subject] }
     private func pause(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
     private func mark(_ s: String) { print("PIN-AT \(s) \(String(format: "%.3f", Date().timeIntervalSince1970))") }
 
@@ -50,7 +53,7 @@ final class PinMoveUITests: XCTestCase {
 
         // Pin: the leading swipe, then Pin.
         mark("pin swipe")
-        row("Weekly dependency audit").swipeRight()
+        row(subject).swipeRight()
         let pin = app.buttons["Pin"].firstMatch
         XCTAssertTrue(pin.waitForExistence(timeout: 5), "no Pin action")
         mark("pin tap")
@@ -58,11 +61,11 @@ final class PinMoveUITests: XCTestCase {
         pause(2.4)
         let pinned = order()
         print("PIN-ORDER pinned \(pinned)")
-        XCTAssertEqual(pinned.firstIndex(of: "Weekly dependency audit").map { $0 < 2 }, true, "the pinned row did not move up into the pinned rows")
+        XCTAssertEqual(pinned.firstIndex(of: subject).map { $0 < 2 }, true, "the pinned row did not move up into the pinned rows")
 
         // The swipe on a pinned row, opened and held.
         mark("reveal")
-        row("Weekly dependency audit").swipeRight()
+        row(subject).swipeRight()
         let unpin = app.buttons["Unpin"].firstMatch
         XCTAssertTrue(unpin.waitForExistence(timeout: 5), "no Unpin action")
         pause(1.5)
@@ -89,15 +92,15 @@ final class PinMoveUITests: XCTestCase {
             app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", title)).allElementsBoundByIndex
                 .first { $0.isHittable && $0.frame.maxX < window.midX } ?? row(title)
         }
-        listRow("Weekly dependency audit").tap()
+        listRow(subject).tap()
         let header = app.descendants(matching: .any).matching(identifier: "chat.header").firstMatch
         XCTAssertTrue(header.waitForExistence(timeout: 15), "the chat did not open beside the list")
-        let opened = header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Weekly dependency audit")).firstMatch
+        let opened = header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", subject)).firstMatch
         pause(2)
         shot("pin-wide-open")
         for (action, name) in [("Pin", "pinned"), ("Unpin", "unpinned")] {
             mark("wide \(name) swipe")
-            listRow("Weekly dependency audit").swipeRight()
+            listRow(subject).swipeRight()
             let b = app.buttons[action].firstMatch
             XCTAssertTrue(b.waitForExistence(timeout: 5), "no \(action) action")
             mark("wide \(name) tap")
@@ -105,7 +108,7 @@ final class PinMoveUITests: XCTestCase {
             pause(2.4)
             shot("pin-wide-\(name)")
             XCTAssertTrue(header.exists, "the chat beside the list closed when it was \(name)")
-            XCTAssertTrue(opened.exists || header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Weekly")).firstMatch.exists,
+            XCTAssertTrue(opened.exists || header.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Rewrite")).firstMatch.exists,
                           "another chat is open beside the list after it was \(name)")
         }
     }
@@ -114,7 +117,7 @@ final class PinMoveUITests: XCTestCase {
     /// the chats' rows. What the audit flags elsewhere is printed (PIN-AUDIT).
     func testChatsAuditWithAPinnedChat() throws {
         try launch()
-        row("Weekly dependency audit").swipeRight()
+        row(subject).swipeRight()
         let pin = app.buttons["Pin"].firstMatch
         XCTAssertTrue(pin.waitForExistence(timeout: 5), "no Pin action")
         pin.tap()
@@ -131,7 +134,7 @@ final class PinMoveUITests: XCTestCase {
         }
         XCTAssertTrue(flagged.isEmpty, "the audit flags the chats' rows: \(flagged)")
         // Put it back for the tests after.
-        row("Weekly dependency audit").swipeRight()
+        row(subject).swipeRight()
         let unpin = app.buttons["Unpin"].firstMatch
         if unpin.waitForExistence(timeout: 5) { unpin.tap(); pause(2.4) }
     }
@@ -149,7 +152,7 @@ final class PinMoveUITests: XCTestCase {
         try launch()
         let before = order()
         mark("menu press")
-        row("Weekly dependency audit").press(forDuration: 1.0)
+        row(subject).press(forDuration: 1.0)
         let pin = app.buttons["Pin"].firstMatch
         XCTAssertTrue(pin.waitForExistence(timeout: 5), "no Pin in the menu")
         mark("menu pin")
@@ -157,9 +160,9 @@ final class PinMoveUITests: XCTestCase {
         pause(2.4)
         let pinned = order()
         print("PIN-ORDER menu pinned \(pinned)")
-        XCTAssertEqual(pinned.firstIndex(of: "Weekly dependency audit").map { $0 < 2 }, true, "the pinned row did not move up into the pinned rows")
+        XCTAssertEqual(pinned.firstIndex(of: subject).map { $0 < 2 }, true, "the pinned row did not move up into the pinned rows")
 
-        row("Weekly dependency audit").press(forDuration: 1.0)
+        row(subject).press(forDuration: 1.0)
         let unpin = app.buttons["Unpin"].firstMatch
         XCTAssertTrue(unpin.waitForExistence(timeout: 5), "no Unpin in the menu")
         mark("menu unpin")

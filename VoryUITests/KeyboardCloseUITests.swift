@@ -308,7 +308,8 @@ final class KeyboardCloseUITests: XCTestCase {
         continueAfterFailure = true
         for (chatTitle, fast) in [("Packing list for the lake weekend", true), ("Morning checks on the home servers", false)] {
             app = XCUIApplication(bundleIdentifier: bundle)
-            app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats"]
+            // "Morning checks" is scheduled (#673): its section open, so its row is in the list.
+            app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats", "-chats.scheduled.open", "YES"]
             app.launch()
             let chat = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", chatTitle)).firstMatch
             XCTAssertTrue(chat.waitForExistence(timeout: 30), "no demo chat '\(chatTitle)'")

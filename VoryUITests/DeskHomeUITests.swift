@@ -186,7 +186,9 @@ final class DeskHomeUITests: XCTestCase {
         // `-restore.openChat none`: the last open chat isn't reopened (its saved record reads as nothing for this launch,
         // the argument domain only), so every launch starts on the tab it asks for, in both copies.
         var args = ["-companionPromptShown", "YES", "-launchTab", waiting > 0 ? "chats" : "dashboard", "-restore.openChat", "none",
-                    "-vory-desk-frames", "-colorSchemePreference", env["HERMES_E2E_SCHEME"] ?? "light"]
+                    "-vory-desk-frames", "-colorSchemePreference", env["HERMES_E2E_SCHEME"] ?? "light",
+                    // "Weekly dependency audit" is scheduled (#673): its section open, so its row is in Chats.
+                    "-chats.scheduled.open", "YES"]
         if deskCase == "oracle" { args.append("-vory-ax-oracle") }
         if (env["HERMES_E2E_ARGS"] ?? "").contains("xxxlarge") { args += ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryXXXL"] }
         if let bundle = env["HERMES_E2E_BUNDLE"], !bundle.isEmpty {

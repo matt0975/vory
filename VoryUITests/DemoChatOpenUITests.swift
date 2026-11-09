@@ -60,7 +60,9 @@ final class DemoChatOpenUITests: XCTestCase {
         continueAfterFailure = true
         let cycles = Int(e["HERMES_E2E_CYCLES"] ?? "") ?? 2
         let app = XCUIApplication(bundleIdentifier: bundle)
-        app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats", "-vory-coldopen-probe"]
+        app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats", "-vory-coldopen-probe",
+                              // Two of the demo's chats are scheduled (#673): their section open, so their rows are in the list.
+                              "-chats.scheduled.open", "YES"]
             + (e["HERMES_E2E_GEOMETRY"] == "1" ? ["-vory-geometry-log"] : [])
         let back = app.buttons["chat.back"].firstMatch
         for c in 1...cycles {

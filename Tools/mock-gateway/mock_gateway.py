@@ -508,10 +508,51 @@ STORED_SESSIONS: list[dict] = [
 ]
 SEEDED_IDS = {r["id"] for r in STORED_SESSIONS}
 
+# --cron-sessions N (#673): a gateway whose scheduled tasks run every 5 minutes. Every run writes a chat; most end with no
+# message (the task's script found nothing to do), so they have no title and no preview. Three have replies, one of each
+# shape the list has to word: a title, a preview only, and neither. And one chat of the person's own from two days ago,
+# which a page of 100 sorted by activity leaves out once the runs fill it. With the fixture on, the page is cut at its
+# limit as the real route cuts it (`rest`, /api/sessions).
+CRON_FIXTURE = [False]
+# (task, title, preview, messages, seconds ago)
+CRON_REPLIES = [
+    ("digest", "Morning digest", "Sum up the night's alerts and anything that needs me today.", 2, 600),
+    ("backup", None, "Check the backup log and say if anything failed.", 2, 2400),
+    ("report", None, None, 1, 4200),
+]
+OLD_CHAT_TITLE = "Plan the storage upgrade"
+
+
+def cron_fixture(n: int) -> list[dict]:
+    """The fixture's rows: `n` empty runs, one every 5 minutes back from now, the three with replies, and the old chat."""
+    now = time.time()
+
+    def run(task: str, i: int, title, preview, count: int, ago: float) -> dict:
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime(now - ago))
+        return {"id": f"cron_{task}_{stamp}_{i:04d}", "title": title, "preview": preview, "source": "cron", "model": MODEL,
+                "started_at": now - ago - 20, "last_active": now - ago, "message_count": count, "is_active": False,
+                "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"}
+
+    rows = [run("heartbeat", i, None, None, 0, 300 * (i + 1) - 30) for i in range(n)]
+    rows += [run(task, n + k, title, preview, count, ago) for k, (task, title, preview, count, ago) in enumerate(CRON_REPLIES)]
+    rows.append({"id": "20261107_101500_store1", "title": OLD_CHAT_TITLE,
+                 "preview": "Two 8 TB drives in a mirror, and the old pair kept as the backup target.", "source": "tui",
+                 "model": MODEL, "started_at": now - 175000, "last_active": now - 172800, "message_count": 4,
+                 "is_active": False, "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"})
+    return rows
+
 
 def seeded_messages(row: dict) -> tuple[str, list[dict]]:
     """A seeded chat's stored rows for GET /api/sessions/{id}/messages, and whose store they are in."""
     iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+    if row.get("source") == "cron" and str(row["id"]).startswith("cron_"):
+        # The fixture's runs (--cron-sessions): the task's prompt and its reply, the reply alone, or nothing.
+        reply = {"id": 2, "role": "assistant", "timestamp": iso(row["last_active"]),
+                 "content": "Nothing new overnight: all six services up, no failed jobs, and the disks under 70%."}
+        prompt = {"id": 1, "role": "user", "content": row.get("preview") or "Run the scheduled check.",
+                  "timestamp": iso(row["started_at"])}
+        count = int(row.get("message_count") or 0)
+        return "default", [prompt, reply] if count >= 2 else [reply] if count == 1 else []
     if row["title"] == "Bot Chat":
         return "work", [
             {"id": 1, "role": "user", "content": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": iso(row["started_at"])},
@@ -764,9 +805,27 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # whose store it is in, as the real gateway's rows do.
         rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS
                 if archived == "include" or bool(s.get("archived")) == (archived == "only")]
+        # The sources and the least number of messages, as the real route takes them (hermes_cli/web_routers/sessions.py,
+        # the same in v0.22.7 and v0.23.0): one source, or several comma-separated, sources left out, and min_messages.
+        # Vory asks for the person's chats without the scheduled ones and for the scheduled ones apart (#673).
+        csv = lambda v: [p.strip() for p in unquote(v or "").split(",") if p.strip()]
+        only = [unquote(query["source"])] if query.get("source") else csv(query.get("sources"))
+        left_out = csv(query.get("exclude_sources"))
+        least = max(0, int(query.get("min_messages") or 0))
+        rows = [r for r in rows if (not only or r.get("source") in only) and r.get("source") not in left_out
+                and int(r.get("message_count") or 0) >= least]
+        total, offset = len(rows), 0
+        # A busy gateway's page (--cron-sessions): newest activity first under order=recent, cut at the limit from the
+        # offset, as the real route pages. Without the fixture every row comes back, as before, so the heavy lists
+        # (--extra-bots) keep all theirs.
+        if CRON_FIXTURE[0]:
+            if query.get("order") == "recent":
+                rows.sort(key=lambda r: r.get("last_active") or 0, reverse=True)
+            offset = int(query.get("offset") or 0)
+            rows = rows[offset:offset + int(query.get("limit") or 20)]
         if NO_PINS:
             rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
-        return 200, {"sessions": rows, "total": len(rows), "limit": 100, "offset": 0}
+        return 200, {"sessions": rows, "total": total, "limit": 100, "offset": offset}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
@@ -3840,6 +3899,7 @@ async def main() -> None:
     ap.add_argument("--authority", action="store_true", help="a Hermes v0.23.0 session authority: approvals and single questions by event, answered with approval.respond / clarify.respond (implies --strict-params; #665)")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
+    ap.add_argument("--cron-sessions", type=int, default=0, metavar="N", help="a busy gateway's scheduled tasks (#673): N empty runs 5 minutes apart, three with replies, and a chat of the person's two days old; the session list's page cut at its limit")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
@@ -3858,6 +3918,10 @@ async def main() -> None:
     for i in range(args.extra_sessions):
         row = extra_session(i, "default")
         STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
+    if args.cron_sessions:
+        CRON_FIXTURE[0] = True
+        for row in cron_fixture(args.cron_sessions):
+            STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     bot_names = ["ops", "research", "writer", "builder", "support", "data", "design", "finance", "legal", "qa", "infra", "growth"]
     global CONTEXT_PERCENT_OVERRIDE
     CONTEXT_PERCENT_OVERRIDE = args.context_percent
