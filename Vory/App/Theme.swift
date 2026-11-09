@@ -62,67 +62,83 @@ extension Color {
     static var vory: Color { AppTheme.current }
 }
 
-/// Settings › Appearance: one swatch per accent, the chosen one ringed.
+/// Settings › Appearance: one swatch per accent in a 2-row grid, the chosen one ringed.
 struct AccentPicker: View {
     @AppStorage(AppTheme.accentKey) private var accentID = "blue"
     @AppStorage(AppTheme.customHexKey) private var customHex = AppTheme.defaultCustomHex
     @State private var customColor: Color = .blue
 
+    @ViewBuilder
+    private func swatch(for a: AppTheme.Accent) -> some View {
+        Button { withAnimation(.snappy) { accentID = a.id } } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle().fill(a.color).frame(width: 34, height: 34)
+                    if accentID == a.id { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.white) }
+                }
+                .overlay(Circle().strokeBorder(accentID == a.id ? a.color.opacity(0.5) : .clear, lineWidth: 3).padding(-4))
+                Text(a.name).font(.caption2).foregroundStyle(accentID == a.id ? .primary : .secondary)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(a.name)
+        .accessibilityAddTraits(accentID == a.id ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func customSwatch(accent customAccent: AppTheme.Accent, selected customSelected: Bool) -> some View {
+        VStack(spacing: 6) {
+            ZStack {
+                ColorPicker("Custom accent color", selection: $customColor, supportsOpacity: false)
+                    .labelsHidden()
+                    .frame(width: 34, height: 34)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1))
+                    .accessibilityLabel("Custom color picker")
+                    .accessibilityHint("Double tap to choose a custom color")
+
+                if customSelected {
+                    Image(systemName: "checkmark")
+                        .font(.footnote.weight(.bold))
+                        .foregroundStyle(customAccent.contrastForeground)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(Circle().strokeBorder(customSelected ? customAccent.color.opacity(0.5) : .clear, lineWidth: 3).padding(-4).allowsHitTesting(false))
+
+            Button {
+                withAnimation(.snappy) { accentID = "custom" }
+            } label: {
+                Text("Custom")
+                    .font(.caption2)
+                    .foregroundStyle(customSelected ? .primary : .secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Custom")
+            .accessibilityAddTraits(customSelected ? .isSelected : [])
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     var body: some View {
         let customAccent = AppTheme.accent("custom")
         let customSelected = accentID == "custom"
 
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 14) {
-                ForEach(AppTheme.accents) { a in
-                    Button { withAnimation(.snappy) { accentID = a.id } } label: {
-                        VStack(spacing: 6) {
-                            ZStack {
-                                Circle().fill(a.color).frame(width: 34, height: 34)
-                                if accentID == a.id { Image(systemName: "checkmark").font(.footnote.weight(.bold)).foregroundStyle(.white) }
-                            }
-                            .overlay(Circle().strokeBorder(accentID == a.id ? a.color.opacity(0.5) : .clear, lineWidth: 3).padding(-4))
-                            Text(a.name).font(.caption2).foregroundStyle(accentID == a.id ? .primary : .secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(a.name)
-                    .accessibilityAddTraits(accentID == a.id ? .isSelected : [])
-                }
-
-                VStack(spacing: 6) {
-                    ZStack {
-                        ColorPicker("Custom accent color", selection: $customColor, supportsOpacity: false)
-                            .labelsHidden()
-                            .frame(width: 34, height: 34)
-                            .clipShape(Circle())
-                            .overlay(Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1))
-                            .accessibilityLabel("Custom color picker")
-                            .accessibilityHint("Double tap to choose a custom color")
-
-                        if customSelected {
-                            Image(systemName: "checkmark")
-                                .font(.footnote.weight(.bold))
-                                .foregroundStyle(customAccent.contrastForeground)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .overlay(Circle().strokeBorder(customSelected ? customAccent.color.opacity(0.5) : .clear, lineWidth: 3).padding(-4).allowsHitTesting(false))
-
-                    Button {
-                        withAnimation(.snappy) { accentID = "custom" }
-                    } label: {
-                        Text("Custom")
-                            .font(.caption2)
-                            .foregroundStyle(customSelected ? .primary : .secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Custom")
-                    .accessibilityAddTraits(customSelected ? .isSelected : [])
+        Grid(horizontalSpacing: 8, verticalSpacing: 14) {
+            GridRow {
+                ForEach(AppTheme.accents.prefix(5)) { a in
+                    swatch(for: a)
                 }
             }
-            .padding(.vertical, 6)
+            GridRow {
+                ForEach(AppTheme.accents.dropFirst(5)) { a in
+                    swatch(for: a)
+                }
+                customSwatch(accent: customAccent, selected: customSelected)
+            }
         }
+        .padding(.vertical, 6)
         .onAppear {
             customColor = Color(hex: customHex) ?? .blue
         }
