@@ -368,6 +368,94 @@ extension GatewayIntegrationTests {
     }
 }
 
+/// #666: the session calls on either wire. Against the mock with --authority, the five calls Hermes v0.23.0's session
+/// authority doesn't serve answer -32601 and a steer needs the running turn's generation, so these were red until the
+/// app took the 0.23 ways (session.stats, session.mutate, session.detach). Against the default mock they're green either
+/// way. Move to project is `aChatMovesToAProjectAndOut` (ProjectsAndGoalsTests.swift), on either wire as well.
+extension GatewayIntegrationTests {
+    /// A started runtime on the mock, and what to remove after.
+    struct E2ERuntime { let runtime: GatewayRuntime; let store: ConnectionStore; let conn: GatewayConnection }
+
+    @MainActor private func e2eRuntime(_ name: String) async throws -> E2ERuntime? {
+        guard let env = Self.env, env.token == "mock-token" else { return nil }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: name, gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        let runtime = GatewayRuntime(connection: conn, store: store)
+        await runtime.start()
+        return E2ERuntime(runtime: runtime, store: store, conn: conn)
+    }
+
+    @MainActor private func waitFor(_ seconds: TimeInterval, _ done: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+    }
+
+    @MainActor @Test func theRingFillsOnOpenOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e ring") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        print("e2e ring: authority \(runtime.sessionAuthority), usage \(String(describing: chat.usage))")
+        #expect(chat.usage?.contextMax != nil, "no context figures on open")
+        #expect((chat.usage?.contextUsed ?? 0) > 0)
+        await runtime.stop()
+    }
+
+    @MainActor @Test func aSteerReachesARunningTurnOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e steer") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        _ = await chat.send("long 15")
+        await waitFor(15) { chat.isRunning }
+        try #require(chat.isRunning, "the turn never started")
+        chat.queue = [QueuedMessage(text: "and keep the last week's batches")]
+        await chat.steerQueued(chat.queue[0].id)
+        let steered = chat.items.contains { if case .steer(let t, let s) = $0.kind { return t == "and keep the last week's batches" && s == "queued" }; return false }
+        print("e2e steer: authority \(runtime.sessionAuthority), steered \(steered), queue \(chat.queue.map(\.text)), banner \(chat.banner ?? "none")")
+        #expect(steered, "the steer didn't reach the running turn")
+        #expect(chat.queue.isEmpty)
+        #expect(chat.banner == nil)
+        await chat.stop()
+        await runtime.stop()
+    }
+
+    @MainActor @Test func aRenameSticksOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e rename") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        let name = "E2E rename \(UUID().uuidString.prefix(6))"
+        await chat.rename(name)
+        print("e2e rename: authority \(runtime.sessionAuthority), title \(chat.title)")
+        #expect(chat.title == name)
+        await runtime.stop()
+    }
+
+    @MainActor @Test func anEditAndResendTakesTheTurnBackOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e edit resend") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        _ = await chat.send("short link")
+        await waitFor(5) { chat.isRunning }
+        await waitFor(30) { !chat.isRunning }
+        try #require(!chat.isRunning, "the first turn didn't end")
+        let id = try #require(chat.lastResendableID, "nothing to edit")
+        #expect(chat.beginEdit(id))
+        let outcome = await chat.resend("short link, edited")
+        let undos: JSONValue = try await runtime.api.get("/api/_mock/undos", profile: runtime.selectedProfile)
+        let mine = (undos["undos"]?.arrayValue ?? []).filter { $0["session_id"]?.stringValue == chat.runtimeID }
+        print("e2e edit resend: authority \(runtime.sessionAuthority), outcome \(outcome), taken back \(mine)")
+        #expect(outcome == .sent)
+        #expect(mine.count == 1, "the gateway should have taken back exactly one turn")
+        #expect((mine.first?["removed"]?.intValue ?? 0) >= 2)
+        await waitFor(30) { !chat.isRunning }
+        await runtime.stop()
+    }
+}
+
 extension GatewayIntegrationTests {
     /// Two devices with the same chat open: one sends, and the other shows the prompt as well as
     /// the reply. The gateway fans a chat's events out to everyone attached, but the events

@@ -773,6 +773,9 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base == "/api/_mock/undos":
         # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
         return 200, {"undos": UNDOS}
+    if base == "/api/_mock/authority":
+        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered.
+        return 200, AUTHORITY_LOG
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
         return 200, {"triggers": CRON_TRIGGERS}
@@ -1427,7 +1430,7 @@ REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 # dispatcher refuses it (canonical_param_problems in tui_gateway/contracts/registry.py): code 4001, "invalid_params",
 # the unknown keys in data.fields. The key sets are v0.23.0's (NousResearch/hermes-agent at the tag), for the canonical
 # methods this mock serves; "profile" is declared on each. Handler rules (approval.respond's exact set, steer's
-# execution_generation) and the -32601 for session calls the authority doesn't serve are not mirrored. gateway.ready
+# execution_generation) and the -32601 for session calls the authority doesn't serve come with --authority. gateway.ready
 # says "session_authority": true, as v0.23.0's socket does with an authority (tui_gateway/ws.py).
 # --authority: a Hermes v0.23.0 socket served by its session authority, beyond the key check (#665, part A). It implies
 # --strict-params. Each turn is an execution with its own generation; an approval or a single question is published as
@@ -1438,10 +1441,35 @@ REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 # {"status": "already_resolved"}. Its end is `approval.settled` / `clarify.settled`. session.create and session.resume
 # answer the session's execution_generation, and session.resume its open prompts as `prompts`; approval.pending lists
 # request_id (the prompt id) with no generation (gateway/session_pending_controls.py, session_ancillary.py).
+# --authority, the session calls (#666): session.usage, session.title, session.undo, session.close and
+# session.workspace.move answer -32601, as v0.23.0's authority serves none of them and gives a session.* call no legacy
+# fallback. Their 0.23 ways are served instead:
+#   session.steer   exactly {session_id, text, execution_generation} (an int, the running turn's, else
+#                   `stale_generation`; no turn running is stale too), as gateway/session_busy_controls.py's correct();
+#                   "queued" while a turn runs, and with the steer-rejected fault a plain "rejected" (no `delivered`),
+#                   which may follow delivery and is never sent again
+#   session.stats   the counters gateway/session_usage.py's usage_stats() answers, from this mock's usage figures
+#   session.mutate  exactly {session_id, request_id, expected_revision, operation, payload} and expected_generation
+#                   (gateway/session_mutations.py): a request_id seen before answers its first receipt again; a revision
+#                   not the session's is `revision_conflict`, a generation not its own `stale_generation`, both with the
+#                   current revision and execution_generation in error.data (gateway/session_controls.py mutate()).
+#                   rename {title}; rewind {target_message_id} (a user row: that row and every one after it go, the
+#                   generation moves on, and the rewind is filed in UNDOS); workspace {cwd} (a stored chat's folder).
+#                   rewind and workspace need the generation and are `session_busy` while a turn runs.
+#   session.detach  exactly {session_id, subscription_id, end_reason?}: the socket's current subscription answers
+#                   detached true, a stale one false (gateway/session_controls.py detach()).
+# Each turn's claim moves the revision on and publishes a partial `session.info` {stored_session_id, running,
+# execution_generation, revision} (gateway/session_authority.py _publish_pending); its end publishes it again.
+# session.create and session.resume answer `revision` and a new `subscription_id`. GET /api/_mock/authority reads back
+# every mutate, detach and steer.
 AUTHORITY = "--authority" in sys.argv
 STRICT_PARAMS = "--strict-params" in sys.argv or AUTHORITY
 GENERATIONS: dict = {}   # live session id -> its newest execution generation
 PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
+REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
+RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
+AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": []}
+AUTHORITY_UNSERVED = {"session.usage", "session.title", "session.undo", "session.close", "session.workspace.move"}
 STRICT_PARAMS_DECLARED = {
     "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
                        "follow_profile_config", "hidden", "ignore_rules", "ignore_user_config", "max_turns", "model",
@@ -1456,6 +1484,10 @@ STRICT_PARAMS_DECLARED = {
                       "model_override", "profile", "queued", "session_id", "submission_id", "surface", "text",
                       "title_preview", "turn_author", "unattended", "voice_context", "voice_turn"},  # CanonicalSubmitParams
     "approval.respond": {"choice", "execution_generation", "profile", "prompt_id", "session_id"},  # CanonicalApprovalParams
+    "session.stats": {"profile", "session_id"},  # SessionStatsParams
+    "session.mutate": {"expected_generation", "expected_revision", "operation", "payload", "profile", "request_id",
+                       "session_id"},  # SessionMutateParams
+    "session.detach": {"end_reason", "profile", "session_id", "subscription_id"},  # SessionDetachParams
     "config.get": {"cwd", "key", "profile", "session_id"},  # ConfigGetParams
     "config.set": {"confirm_expensive_model", "key", "profile", "scope", "session_id", "value"},  # CanonicalConfigSetParams
     "profiles.list": {"include_sessions", "profile"},  # CanonicalProfilesParams
@@ -2174,6 +2206,7 @@ class Gateway:
         self.ws = ws
         self.sessions: dict[str, Session] = {}
         self.pending: dict[str, asyncio.Future] = {}
+        self.subscriptions: dict[str, str] = {}   # --authority: live session id -> this socket's subscription (#666)
 
     async def send(self, frame: dict) -> None:
         await self.ws.send(neutral(json.dumps(frame)))
@@ -2288,6 +2321,149 @@ class Gateway:
         finally:
             s.running = False
             s.inflight = None
+            if AUTHORITY:
+                await self.authority_info(s)
+
+    async def authority_info(self, s: Session) -> None:
+        """--authority: the partial session.info a claim and a settle publish, the one place a viewer learns the
+        revision a mutate must present (#666)."""
+        await self.event("session.info", s.sid, {"stored_session_id": s.stored, "pending": [], "running": s.running,
+                                                 "authority_epoch": 1, "desktop_protocol": "hermes-gateway-v1",
+                                                 "execution_generation": GENERATIONS.get(s.sid, 0),
+                                                 "revision": REVISIONS.get(s.sid, 0)})
+
+    async def authority_session_call(self, method: str, p: dict, ok, refused) -> dict:
+        """--authority: session.steer, session.stats, session.mutate and session.detach as v0.23.0's session authority
+        answers them (#666; the rules are in the comment above AUTHORITY)."""
+        sid_asked = p.get("session_id", "")
+        live = LIVE.get(sid_asked) or next((l for l in LIVE.values() if l.stored == sid_asked), None)
+
+        def fenced(reason: str, key: str) -> dict:
+            out = refused(reason)
+            out["error"]["data"].update(revision=REVISIONS.get(key, 0), execution_generation=GENERATIONS.get(key, 0))
+            return out
+
+        if method == "session.steer":
+            text = p.get("text")
+            if (set(p) - {"session_id", "profile", "text", "execution_generation"} or not isinstance(text, str)
+                    or not text.strip() or type(p.get("execution_generation")) is not int):
+                return refused("invalid_params")
+            if live is None:
+                return refused("session_not_found")
+            generation = p["execution_generation"]
+            if not live.running or generation != GENERATIONS.get(live.sid, 0):
+                return refused("stale_generation")
+            AUTHORITY_LOG["steers"].append({"session_id": live.sid, "text": text, "execution_generation": generation, "at": time.time()})
+            if FAULT["mode"] == "steer-rejected":
+                # A plain "rejected": it may follow delivery, so a client never sends it again.
+                return ok({"status": "rejected", "text": text, "execution_generation": generation, "authority_epoch": 1})
+            if live.inflight is not None:
+                live.inflight["corrections"] = [*(live.inflight.get("corrections") or []), text]
+            print(f"session.steer {text!r} session={live.sid} generation={generation}", flush=True)
+            return ok({"status": "queued", "text": text, "execution_generation": generation, "authority_epoch": 1})
+
+        if method == "session.stats":
+            if set(p) - {"session_id", "profile"}:
+                return refused("invalid_params")
+            out_tokens = live.output_tokens if live else 0
+            u = usage(out_tokens, 1)
+            return ok({"input_tokens": u["input"], "output_tokens": out_tokens, "cache_read_tokens": u["cache_read"],
+                       "cache_write_tokens": u["cache_write"], "prompt_tokens": u["input"], "completion_tokens": out_tokens,
+                       "total_tokens": u["input"] + out_tokens, "reasoning_tokens": 0, "api_calls": 1,
+                       "last_prompt_tokens": u["context_used"], "context_tokens": u["context_used"],
+                       "context_length": CONTEXT_MAX, "config_context_length": None, "context_source": u["context_source"],
+                       "compression_count": 0, "avg_latency_s": 1.4, "tokens_per_s": u["avg_tps"], "last_turn_tokens": out_tokens,
+                       "rate_limit": None, "active_subagents": 0, "model": MODEL, "provider": PROVIDER})
+
+        if method == "session.detach":
+            end = p.get("end_reason")
+            if (set(p) - {"end_reason", "profile"} != {"session_id", "subscription_id"}
+                    or not isinstance(p["subscription_id"], str) or not p["subscription_id"] or not sid_asked
+                    or (end is not None and not (isinstance(end, str) and re.fullmatch(r"[a-z][a-z_]{0,31}", end)))):
+                return refused("invalid_params")
+            result = {"session_id": sid_asked, "subscription_id": p["subscription_id"], "detached": False}
+            if self.subscriptions.get(sid_asked) == p["subscription_id"]:
+                del self.subscriptions[sid_asked]
+                if live is not None:
+                    live.members.discard(self)
+                self.sessions.pop(sid_asked, None)
+                result["detached"] = True
+            AUTHORITY_LOG["detaches"].append({**result, "end_reason": end, "at": time.time()})
+            print(f"session.detach {sid_asked} end_reason={end!r} detached={result['detached']}", flush=True)
+            return ok(result)
+
+        # session.mutate
+        if set(p) - {"profile", "expected_generation"} != {"session_id", "request_id", "expected_revision", "operation", "payload"}:
+            return refused("invalid_params")
+        if p["request_id"] in RECEIPTS:
+            return ok(RECEIPTS[p["request_id"]])
+        row = next((r for r in STORED_SESSIONS if r["id"] == (live.stored if live else sid_asked)), None)
+        if live is None and row is None:
+            return refused("session_not_found")
+        key = live.sid if live is not None else row["id"]
+        if live is None:
+            # A stored chat no client has open: a real one has been edited and run before, so its fences aren't 0, and a
+            # client that guesses 0 meets the refusal and the retry it carries.
+            REVISIONS.setdefault(key, 1)
+            GENERATIONS.setdefault(key, 1)
+        operation, payload = p["operation"], p["payload"]
+        needs_generation = operation in ("rewind", "workspace")
+        valid = isinstance(payload, dict) and (
+            (operation == "rename" and set(payload) == {"title"} and isinstance(payload["title"], str))
+            or (operation == "rewind" and "target_message_id" in payload
+                and not set(payload) - {"target_message_id", "preserve_compaction_handoff"}
+                and type(payload["target_message_id"]) is int and payload["target_message_id"] > 0)
+            or (operation == "workspace" and set(payload) == {"cwd"} and isinstance(payload["cwd"], str) and payload["cwd"].strip()))
+        if not valid or (needs_generation and p.get("expected_generation") is None):
+            return refused("invalid_params")
+        if type(p["expected_revision"]) is not int or p["expected_revision"] != REVISIONS.get(key, 0):
+            return fenced("revision_conflict", key)
+        if needs_generation and p.get("expected_generation") != GENERATIONS.get(key, 0):
+            return fenced("stale_generation", key)
+        if needs_generation and live is not None and live.running:
+            return refused("session_busy")
+        result = {"session_id": sid_asked, "operation": operation}
+        if operation == "rename":
+            title = payload["title"]
+            if live is not None:
+                live.title = title
+            if row is not None:
+                row["title"] = title
+            result["title"] = title
+        elif operation == "rewind":
+            target = payload["target_message_id"]
+            at = next((i for i, r in enumerate(live.history) if r.get("row_id") == target), None) if live is not None else None
+            if at is None or live.history[at].get("role") != "user":
+                out = refused("invalid_params")
+                out["error"]["data"].update(field="target_message_id", detail="target user message is no longer in session history")
+                return out
+            taken = live.history[at:]
+            del live.history[at:]
+            live.db_rows = [r for r in live.db_rows if r["id"] < target]
+            GENERATIONS[key] = GENERATIONS.get(key, 0) + 1
+            UNDOS.append({"session_id": live.sid, "intent": "rewind", "removed": len(taken), "at": time.time()})
+            result.update(rewound_count=len(taken), target_message={"role": "user", "content": taken[0].get("text", ""), "row_id": target},
+                          new_head_id=(live.history[-1].get("row_id") if live.history else None), replacement_message_id=None)
+        else:
+            cwd = payload["cwd"]
+            if row is None:
+                return refused("session_not_found")
+            if cwd.startswith("/nowhere"):
+                out = refused("invalid_params")
+                out["error"]["data"].update(field="cwd", detail=f"working directory does not exist: {cwd}")
+                return out
+            row["cwd"] = cwd
+            print(f"moved {row['id']} to {cwd}", flush=True)
+        REVISIONS[key] = REVISIONS.get(key, 0) + 1
+        result["revision"] = REVISIONS[key]
+        RECEIPTS[p["request_id"]] = result
+        AUTHORITY_LOG["mutations"].append({**result, "request_id": p["request_id"], "at": time.time()})
+        print(f"session.mutate {operation} {sid_asked} revision={result['revision']}", flush=True)
+        if live is not None and operation == "rename":
+            # A committed edit publishes the session's whole info (gateway/session_mutations.py _project_committed).
+            await self.event("session.info", live.sid, {**session_info(live.title, live.running, live.profile),
+                                                        "execution_generation": GENERATIONS.get(key, 0), "revision": REVISIONS[key]})
+        return ok(result)
 
     @staticmethod
     def store_turn(s: Session, prompt: str, layout: list) -> None:
@@ -2728,10 +2904,12 @@ class Gateway:
         if AUTHORITY:
             # Each turn is an execution of its own (#665): a prompt of an earlier one can no longer be answered.
             GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+            REVISIONS[s.sid] = REVISIONS.get(s.sid, 0) + 1
             for pid, (owner, pr, _f) in list(PROMPTS.items()):
                 if owner == s.sid:
                     PROMPTS.pop(pid, None)
                     await self.event(f"{pr['kind']}.settled", s.sid, {"prompt_id": pid, "execution_generation": pr["execution_generation"]})
+            await self.authority_info(s)
         await asyncio.sleep(0.4)
         # A turn of many tool calls, for the thread's layout checks.
         if prompt.strip().lower().startswith("tools"):
@@ -3011,6 +3189,9 @@ class Gateway:
                 live_sid = result["session_id"]
                 result = {**result, "execution_generation": GENERATIONS.get(live_sid, 0),
                           "prompts": [dict(prompt) for (owner, prompt, _f) in PROMPTS.values() if owner == live_sid]}
+                # The revision a mutate presents, and this attach's subscription, new on each one (#666).
+                self.subscriptions[live_sid] = f"sub-{uuid.uuid4().hex[:12]}"
+                result.update(revision=REVISIONS.get(live_sid, 0), subscription_id=self.subscriptions[live_sid])
             return {"jsonrpc": "2.0", "id": rid, "result": result}
 
         def refused(reason: str) -> dict:
@@ -3024,6 +3205,10 @@ class Gateway:
             if unknown:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": "invalid_params",
                                                                "data": {"reason": "invalid_params", "fields": unknown}}}
+        if AUTHORITY and method in AUTHORITY_UNSERVED:
+            return err(-32601, f"unknown method: {method}")   # no authority handler and no legacy fallback (#666)
+        if AUTHORITY and method in ("session.steer", "session.stats", "session.mutate", "session.detach"):
+            return await self.authority_session_call(method, p, ok, refused)
 
         if method == "ping":
             return ok({"pong": True})
