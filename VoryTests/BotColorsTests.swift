@@ -29,6 +29,16 @@ struct BotColorsTests {
         #expect(orange.hexString.uppercased() == "#FF8000")
     }
 
+    #if canImport(UIKit)
+    @Test func wideGamutComponentsClampToValidHexLength() {
+        // Display P3 values can exceed 1.0 in extended sRGB
+        let p3Color = Color(uiColor: UIColor(displayP3Red: 1.2, green: -0.1, blue: 0.5, alpha: 1.0))
+        let hex = p3Color.hexString
+        #expect(hex.hasPrefix("#"))
+        #expect(hex.count == 7) // "#" + 6 hex chars
+    }
+    #endif
+
     @Test func hexParsingSucceedsForValidStrings() {
         let color = Color(hex: "#007AFF")
         #expect(color != nil)

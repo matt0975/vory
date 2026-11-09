@@ -110,7 +110,8 @@ extension Color {
         #else
         (NSColor(self).usingColorSpace(.sRGB) ?? NSColor(self)).getRed(&r, green: &g, blue: &b, alpha: &a)
         #endif
-        return String(format: "#%02X%02X%02X", Int(round(r * 255)), Int(round(g * 255)), Int(round(b * 255)))
+        let clamp: (CGFloat) -> Int = { max(0, min(255, Int(round($0 * 255)))) }
+        return String(format: "#%02X%02X%02X", clamp(r), clamp(g), clamp(b))
     }
 }
 

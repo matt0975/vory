@@ -92,11 +92,13 @@ struct AccentPicker: View {
 
                 VStack(spacing: 6) {
                     ZStack {
-                        ColorPicker("", selection: $customColor, supportsOpacity: false)
+                        ColorPicker("Custom accent color", selection: $customColor, supportsOpacity: false)
                             .labelsHidden()
                             .frame(width: 34, height: 34)
                             .clipShape(Circle())
                             .overlay(Circle().stroke(Color.primary.opacity(0.18), lineWidth: 1))
+                            .accessibilityLabel("Custom color picker")
+                            .accessibilityHint("Double tap to choose a custom color")
 
                         if customSelected {
                             Image(systemName: "checkmark")
@@ -115,16 +117,19 @@ struct AccentPicker: View {
                             .foregroundStyle(customSelected ? .primary : .secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Custom")
+                    .accessibilityAddTraits(customSelected ? .isSelected : [])
                 }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Custom accent color")
-                .accessibilityHint("Double tap to choose a custom color")
-                .accessibilityAddTraits(customSelected ? .isSelected : [])
             }
             .padding(.vertical, 6)
         }
         .onAppear {
             customColor = Color(hex: customHex) ?? .blue
+        }
+        .onChange(of: customHex) { _, newHex in
+            if let c = Color(hex: newHex), c.hexString.uppercased() != customColor.hexString.uppercased() {
+                customColor = c
+            }
         }
         .onChange(of: customColor) { _, c in
             let newHex = c.hexString
