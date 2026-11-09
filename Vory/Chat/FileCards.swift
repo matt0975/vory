@@ -8,7 +8,7 @@ import UIKit
 
 /// Files a reply hands back that are not pictures (#309): one card each under the reply, with
 /// the file's kind, its name and its size once it is here. A tap fetches the file through the
-/// gateway (the same route pictures use, kept in the same cache) and opens it in Quick Look;
+/// gateway (its download route, #638, kept in the pictures' cache) and opens it in Quick Look;
 /// a long press or the Mac's right-click offers Share and, on the iPhone, Save to Files (the
 /// Mac has Save to Downloads). Only the paths the reply itself names are ever fetched.
 struct FileCardStrip: View {
@@ -72,7 +72,7 @@ struct FileCard: View {
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(ref.name).font(.subheadline.weight(.medium)).lineLimit(2).multilineTextAlignment(.leading)
-                    Text(line).font(.caption).foregroundStyle(failure == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red)).lineLimit(3).multilineTextAlignment(.leading)
+                    Text(line).font(.caption).foregroundStyle(failure == nil || failure == FileFetchFailure.refused ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red)).lineLimit(3).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
             }
@@ -161,10 +161,16 @@ struct FileCard: View {
 
 /// Why a file did not come, in plain words (the style of the attachment refusals, #284).
 enum FileFetchFailure {
+    /// A path the gateway won't share (its secrets, its session stores; #638): an answer, not a fault.
+    /// Assumed: the gateway refuses these with 403, as the mock and the demo do. Not yet checked against a real
+    /// gateway's download route.
+    static let refused = "This file can't be shared from the gateway"
+
     static func describe(_ error: Error, name: String) -> String {
         if let e = error as? HermesAPIError, case .http(let status, _) = e {
             switch status {
-            case 403, 401: return "The gateway did not allow reading \(name)."
+            case 403: return refused
+            case 401: return "The gateway did not allow reading \(name)."
             case 404: return "\(name) is no longer on the gateway."
             case 413: return "\(name) is too large for the gateway to send."
             default: break

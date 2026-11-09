@@ -663,6 +663,39 @@ def _pdf_bytes(title: str, line: str) -> bytes:
     return bytes(out)
 
 
+def files_download(query: dict) -> Response:
+    """GET /api/files/download (#638), as the gateway's files router sends it: the file's raw bytes with its media
+    type and an attachment disposition naming it. The refusal is ASSUMED: 403 "Access denied" for a secret or a
+    session store, as the demo gateway sends it; the real gateway's answer for those isn't checked yet.
+    MOCK_NO_DOWNLOAD=1: the route isn't there (Starlette's 404 "Not Found"), for the app's fallback to the picture
+    routes."""
+    from urllib.parse import unquote
+    if os.environ.get("MOCK_NO_DOWNLOAD"):
+        return _json_response(404, {"detail": "Not Found"})
+    p = unquote(query.get("path", ""))
+    if p.startswith("~/"):
+        p = "/home/hermes/" + p[2:]
+    name = p.rsplit("/", 1)[-1].replace('"', "")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if "/.hermes/sessions/" in p or "/.ssh/" in p or p.startswith("/etc/") or name == "auth.json":
+        return _json_response(403, {"detail": "Access denied"})
+    if "gone" in p:
+        return _json_response(404, {"detail": "File not found"})
+    import base64
+    if ext in ("md", "markdown", "txt"):
+        body, mime = f"# {name}\n\nA few lines the mock wrote for {p}.\n".encode(), "text/markdown"
+    elif ext == "pdf":
+        body, mime = _pdf_bytes("Mock " + name, "Served by the download route."), "application/pdf"
+    elif ext == "png":
+        body, mime = base64.b64decode(_png_data_url(sum(ord(c) for c in p)).split(",", 1)[1]), "image/png"
+    elif ext == "csv":
+        body, mime = b"shard,errors,slowest_ms\n001,3,200\n002,7,253\n003,0,306\n", "text/csv"
+    else:
+        return _json_response(404, {"detail": "File not found"})
+    return Response(200, "OK", Headers([("Content-Type", mime), ("Content-Disposition", f'attachment; filename="{name}"'),
+                                        ("Content-Length", str(len(body)))]), body)
+
+
 def rest(path: str, query: dict) -> tuple[int, object] | None:
     base = path.split("?")[0]
     if base in ("/api/media", "/api/files/read"):
@@ -879,6 +912,66 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
 
 RESTART: dict = {}
 PROFILE_RENAMES: list[dict] = []
+
+# The companion update (#635, test only; off unless --companion is given): Settings › Software Update over the mock.
+# The gateway reports an older companion (its plugin.yaml, an older hermes_push.py and a connected heartbeat). The
+# app's upload is kept in memory and read back, so the bundled script's hash matches after it; the heartbeat reports
+# the uploaded version 3 s after the last file lands (the companion reloading itself in place) or, with
+# --companion-restart, only once a gateway restart asked after the upload has run 4 s.
+COMPANION: dict = {"version": None, "restart": False, "files": {}, "uploaded_at": None}
+COMPANION_OLD_SCRIPT = b"# vory-push companion: an older build, as the mock serves it\n"
+COMPANION_FILES = ("/plugins/vory-push/plugin.yaml", "/plugins/vory-push/hermes_push.py", "/plugins/vory-push/__init__.py",
+                   "/push/status.json")
+
+
+def _companion_file(p: str) -> str | None:
+    return next((tail for tail in COMPANION_FILES if p.endswith(tail)), None)
+
+
+def companion_heartbeat() -> dict:
+    files, up = COMPANION["files"], COMPANION["uploaded_at"]
+    new = False
+    if up is not None and "/plugins/vory-push/plugin.yaml" in files and "/plugins/vory-push/hermes_push.py" in files:
+        if COMPANION["restart"]:
+            started = RESTART.get("started", 0)
+            new = started > up and time.time() - started >= 4
+        else:
+            new = time.time() - up >= 3
+    if new:
+        m = re.search(rb'version: "([^"]+)"', files["/plugins/vory-push/plugin.yaml"])
+        version, script = (m.group(1).decode() if m else "?"), files["/plugins/vory-push/hermes_push.py"]
+    else:
+        version, script = COMPANION["version"], COMPANION_OLD_SCRIPT
+    return {"version": version, "script_sha256": hashlib.sha256(script).hexdigest(), "profile": "default",
+            "updated_at": time.time(), "connected": True, "transport": "websocket", "attached": 1, "devices": 1}
+
+
+def companion_read(p: str) -> tuple[int, object]:
+    """GET /api/files/read for the companion's files, as the gateway's files route answers."""
+    tail = _companion_file(p)
+    if tail == "/push/status.json":
+        body, mime = json.dumps(companion_heartbeat()).encode(), "application/json"
+    elif tail in COMPANION["files"]:
+        body, mime = COMPANION["files"][tail], "text/plain"
+    elif tail == "/plugins/vory-push/plugin.yaml":
+        body, mime = f'name: vory-push\nversion: "{COMPANION["version"]}"\n'.encode(), "text/yaml"
+    elif tail == "/plugins/vory-push/hermes_push.py":
+        body, mime = COMPANION_OLD_SCRIPT, "text/x-python"
+    else:
+        return 404, {"detail": "File not found"}
+    return 200, {"name": p.rsplit("/", 1)[-1], "path": p, "size": len(body), "mime_type": mime,
+                 "data_url": f"data:{mime};base64," + base64.b64encode(body).decode()}
+
+
+def companion_upload(payload: dict) -> tuple[int, object]:
+    """POST /api/files/upload of a companion file: kept, and read back from then on."""
+    p, url = str(payload.get("path") or ""), str(payload.get("data_url") or "")
+    tail = _companion_file(p)
+    if tail is None or tail == "/push/status.json" or "," not in url:
+        return 200, {"ok": True, "path": "(mock)"}
+    COMPANION["files"][tail] = base64.b64decode(url.split(",", 1)[1])
+    COMPANION["uploaded_at"] = time.time()
+    return 200, {"ok": True, "path": p}
 
 
 def create_profile(payload: dict) -> tuple[int, object]:
@@ -1765,6 +1858,8 @@ def _process_request(connection, request):
     auth = auth_rest(method, base, query, body_json if isinstance(body_json, dict) else {}, request.headers)
     if auth is not None:
         result = auth
+    elif method == "GET" and base == "/api/files/download":
+        return files_download(query)
     elif base.startswith("/api/plugins/kanban/") or base.startswith("/api/audio/"):
         try:
             payload = json.loads(getattr(request, "body", b"") or b"{}")
@@ -1881,6 +1976,10 @@ def _process_request(connection, request):
                 "updated_at": time.time(), "disbanded_at": None, "latest_seq": 0}
         ROOMS.append(room)
         result = (200, {"room": room})
+    elif COMPANION["version"] and method == "POST" and base == "/api/files/upload":
+        result = companion_upload(body_json if isinstance(body_json, dict) else {})
+    elif COMPANION["version"] and base == "/api/files/read" and _companion_file(unquote(query.get("path", ""))):
+        result = companion_read(unquote(query.get("path", "")))
     else:
         result = rest(path, query)
     if result and result[0] == 302 and isinstance(result[1], dict) and "location" in result[1]:
@@ -2634,6 +2733,24 @@ class Gateway:
             s.inflight = None
             await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
             return
+        if prompt.strip().lower().startswith("files inline"):
+            # Files a reply names in a sentence, in inline code and on a line of their own (#638): a note, a PDF and a
+            # picture each way, by names that say which; a session store the gateway won't share; and words that only
+            # start with a slash.
+            await self.event("message.start", s.sid)
+            text = ("Everything for the review is ready.\n\n"
+                    "The notes are in /home/hermes/out/notes-sentence.md, the summary in /home/hermes/out/summary-sentence.pdf, "
+                    "and the chart is /home/hermes/out/chart-sentence.png.\n\n"
+                    "In code: `/home/hermes/out/notes-code.md`, `/home/hermes/out/summary-code.pdf` and "
+                    "`/home/hermes/out/chart-code.png`.\n\n"
+                    "/home/hermes/out/notes-line.md\n/home/hermes/out/summary-line.pdf\n/home/hermes/out/chart-line.png\n\n"
+                    "The session log at /home/hermes/.hermes/sessions/s1.jsonl stays where it is.\n\n"
+                    "Not files: /var/log, /help, and/or, /api/files/download, https://example.com/a/guide.pdf. That is all.\n")
+            await self.stream_words(s, text)
+            self.store_turn(s, prompt, [text])
+            s.inflight = None
+            await self.event("message.complete", s.sid, {"text": text, "status": "complete", "usage": usage(s.output_tokens, 1)})
+            return
         if prompt.strip().lower().startswith("files"):
             # Files handed back by a reply (#309): a PDF on a MEDIA line, a CSV with a space in
             # its name as a markdown link, and a path that only looks like one.
@@ -3309,7 +3426,10 @@ async def main() -> None:
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
+    ap.add_argument("--companion", default=None, metavar="VERSION", help="the gateway has this older companion, and Software Update's install over it is served (test only, #635)")
+    ap.add_argument("--companion-restart", action="store_true", help="with --companion: the new companion reports in only after a gateway restart")
     args = ap.parse_args()
+    COMPANION.update(version=args.companion, restart=args.companion_restart)
     PROFILES_DELAY[0] = args.profiles_delay
     EXTRA_MODELS[0] = args.extra_models
     titles = ["Rename the staging bucket", "Backup verification", "Standup notes", "Rotate the API keys", "Trim the CI cache", "Plan the migration"]

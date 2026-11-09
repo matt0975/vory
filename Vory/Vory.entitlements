@@ -12,6 +12,10 @@
 	<!-- Notifications from a bot are presented as messages from it (its avatar as the icon). -->
 	<key>com.apple.developer.usernotifications.communication</key>
 	<true/>
+	<!-- Approvals and questions are time-sensitive notifications: they can break through a Focus and the
+	     notification summary, unless the person turns that off for Vory. -->
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.vorantx.vory.shared</string>

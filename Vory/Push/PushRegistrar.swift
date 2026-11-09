@@ -338,6 +338,9 @@ final class PushRegistrar: PushRegistrationSyncing {
     /// every gateway, the relay with them, whether a gateway is open or not (#509; with none open, off left the relay
     /// holding the token).
     func notificationsTurned(on: Bool, runtime: GatewayRuntime?) async {
+        // Never in the demo (#392): it has no gateway and no relay, and the relay's credentials, minted when there are
+        // none, would be saved and sent for it. Settings greys the toggle there too.
+        guard !AppModel.shared.isInDemo, runtime?.isEphemeral != true else { return }
         guard on else { await removeEverywhere(runtime: runtime); return }
         guard let runtime else { return }
         await registerWithRelay()
@@ -396,12 +399,23 @@ final class LocalCardNotifier: CardNotifying {
 /// Local notifications for cards and finished turns while the app is not in the foreground.
 enum LocalNotifier {
     /// Removes every notification a gateway's chats left, delivered or waiting: leaving the demo (#392) leaves none.
-    static func removeAll(connection: UUID) {
-        let center = UNUserNotificationCenter.current()
+    /// With `deliveredBefore`, a delivered one only if it came before then (the launch sweep's, #632). `done` gets how many
+    /// went, delivered and waiting.
+    static func removeAll(connection: UUID, deliveredBefore before: Date? = nil, done: (@Sendable (Int) -> Void)? = nil) {
         let id = connection.uuidString
-        @Sendable func ours(_ c: UNNotificationContent) -> Bool { (c.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String == id }
-        center.getDeliveredNotifications { d in center.removeDeliveredNotifications(withIdentifiers: d.filter { ours($0.request.content) }.map(\.request.identifier)) }
-        center.getPendingNotificationRequests { p in center.removePendingNotificationRequests(withIdentifiers: p.filter { ours($0.content) }.map(\.identifier)) }
+        @Sendable func entry(_ r: UNNotificationRequest, _ date: Date?) -> DemoLeftovers.Entry {
+            DemoLeftovers.Entry(id: r.identifier, connection: (r.content.userInfo["hermes"] as? [String: Any])?["connection_id"] as? String, date: date)
+        }
+        // The center asked for again inside each answer, not captured: it isn't Sendable.
+        UNUserNotificationCenter.current().getDeliveredNotifications { d in
+            let delivered = DemoLeftovers.notifications(d.map { entry($0.request, $0.date) }, of: id, before: before)
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: delivered)
+            UNUserNotificationCenter.current().getPendingNotificationRequests { p in
+                let waiting = DemoLeftovers.notifications(p.map { entry($0, nil) }, of: id, before: nil)
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: waiting)
+                done?(delivered.count + waiting.count)
+            }
+        }
     }
 
     static let approvalCategory = "HERMES_APPROVAL"
@@ -552,6 +566,76 @@ enum LocalNotifier {
         let req = UNNotificationRequest(identifier: id, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)
     }
+}
+
+/// What the demo showed outside the app (#632): its turns' Live Activities (iOS) and its notifications. Leave demo takes
+/// them away (`takeAway`). A demo that ended with the app (quit or killed inside it) could not, so every launch takes
+/// what is left (`sweepAtLaunch`). The demo lives in memory only, so nothing of the demo's at a launch is this process's,
+/// even under a test build's `-vory-demo`: unlike `DemoTraces.sweepAtLaunch`, this runs with the demo in use too. It
+/// matches the demo's gateway id only: a card's `connectionID`, a notification's `hermes.connection_id`.
+enum DemoLeftovers {
+    /// When this process started, as near as the app model's first moment (`AppModel.init` reads it first).
+    static let launchedAt = Date()
+
+    /// At launch, before the demo's runtime can start (it starts after the app model): the demo's cards, its
+    /// notifications delivered before this launch, and its waiting ones. One activity line for each, with the count.
+    @MainActor static func sweepAtLaunch() {
+        let before = launchedAt
+        #if DEBUG
+        sweepsForTests += 1
+        #endif
+        #if os(iOS)
+        let cards = LiveActivityController.endAll(connection: GatewayConnection.demoID)
+        #else
+        let cards = 0   // the Mac has no Live Activity
+        #endif
+        LiveActivityController.note("launch: the demo's leftovers: \(cards) cards ended")
+        LocalNotifier.removeAll(connection: GatewayConnection.demoID, deliveredBefore: before) { n in
+            LiveActivityController.note("launch: the demo's leftovers: \(n) notifications removed")
+        }
+    }
+
+    /// Leave demo's: every card and notification of the demo's, whenever it showed them.
+    @MainActor static func takeAway() {
+        #if DEBUG
+        takenAwayForTests += 1
+        #endif
+        #if os(iOS)
+        LiveActivityController.endAll(connection: GatewayConnection.demoID)
+        #endif
+        LocalNotifier.removeAll(connection: GatewayConnection.demoID)
+    }
+
+    /// One delivered or waiting notification, as the filter reads it.
+    struct Entry: Sendable {
+        let id: String
+        /// Its `hermes.connection_id`; nil when it has none.
+        let connection: String?
+        /// When it was delivered; nil for one still waiting.
+        let date: Date?
+    }
+
+    /// The notifications of a gateway to take: each one of its own, a delivered one only if it came before `before`
+    /// (all of them with no `before`).
+    static func notifications(_ all: [Entry], of connection: String, before: Date?) -> [String] {
+        all.filter { e in
+            guard e.connection == connection else { return false }
+            guard let before, let date = e.date else { return true }
+            return date < before
+        }.map(\.id)
+    }
+
+    /// The cards of a gateway to end, from (id, connection id) pairs: its own only. A card from before cards carried
+    /// their gateway has an empty connection id, and is left to `settleAtForeground`.
+    static func cards(_ all: [(id: String, connection: String)], of connection: String) -> [String] {
+        all.filter { $0.connection == connection }.map(\.id)
+    }
+
+    #if DEBUG
+    /// For the units: how many times the launch sweep ran in this process, and Leave demo's clean-up.
+    @MainActor static var sweepsForTests = 0
+    @MainActor static var takenAwayForTests = 0
+    #endif
 }
 
 #if DEBUG && os(iOS)

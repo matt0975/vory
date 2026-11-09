@@ -1084,8 +1084,12 @@ public final class BotAmbient {
     /// as that page lands. Used up when it plays; three seconds at most.
     @ObservationIgnored public private(set) var pendingArrival: (profile: String, at: Date)?
     /// `-vory-tap-arrival-off` leaves the arriving face
-    /// still (the tapped face still reacts).
+    /// still (the tapped face still reacts). DEBUG only: Release never reads it.
+    #if DEBUG
     public static let arrivalOff = ProcessInfo.processInfo.arguments.contains("-vory-tap-arrival-off")
+    #else
+    public static let arrivalOff = false
+    #endif
     public func markArrival(profile: String) {
         // The Mac has no tap reaction (Matt, 2026-10-13), so no arrival either: its pages never
         // reported their landing, and a waiting arrival only held faces back.

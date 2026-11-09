@@ -81,7 +81,8 @@ final class TopBarRoomUITests: XCTestCase {
         // Home has no search: its first row (the greeting) starts under the row.
         launch(url: url, token: token, tab: "dashboard")
         guard let bottom = barBottom() else { throw XCTSkip("no morph bar (a wide window)") }
-        let greeting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Good '")).firstMatch
+        // Its greeting: "Good ..." by day, "Still up?" from 22:00 to 5:00 (DashboardView's dayPart).
+        let greeting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Good ' OR label BEGINSWITH 'Still up'")).firstMatch
         XCTAssertTrue(greeting.waitForExistence(timeout: 15), "Home: no greeting")
         XCTAssertGreaterThanOrEqual(greeting.frame.minY, bottom, "Home: the greeting (\(greeting.frame)) starts under the bar's row (bottom \(bottom))")
     }

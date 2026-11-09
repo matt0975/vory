@@ -31,8 +31,16 @@ public final class VoiceEngine {
     private var gatewayVoice: GatewayVoiceAPI? { runtime.map { GatewayVoiceAPI(api: $0.api, profile: profile ?? $0.selectedProfile) } }
 
     public func route(for job: VoiceJob) -> VoiceRoute {
-        VoiceRouting.route(for: VoiceSettings.speech, gatewayConnected: gatewayConnected,
-                           gatewayUnableUntil: job == .transcribe ? gatewaySTTUnableUntil : gatewayTTSUnableUntil)
+        Self.route(for: job, inDemo: runtime?.isEphemeral == true, setting: VoiceSettings.speech, gatewayConnected: gatewayConnected,
+                   gatewayUnableUntil: job == .transcribe ? gatewaySTTUnableUntil : gatewayTTSUnableUntil)
+    }
+    /// The route, from what it rests on. The demo (#392) has no gateway voice: what it says is the device's, whatever the
+    /// setting, so nothing opens a speech socket for it. Its words to text keep the gateway first, where the demo answers
+    /// that it has none.
+    nonisolated static func route(for job: VoiceJob, inDemo: Bool, setting: SpeechSource, gatewayConnected: Bool,
+                                  gatewayUnableUntil: Date?) -> VoiceRoute {
+        if job == .speak, inDemo { return .device }
+        return VoiceRouting.route(for: setting, gatewayConnected: gatewayConnected, gatewayUnableUntil: gatewayUnableUntil)
     }
     public enum VoiceJob { case transcribe, speak }
 

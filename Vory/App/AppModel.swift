@@ -334,6 +334,9 @@ final class AppModel {
         #endif
         // What an older build kept of the demo, gone before anything reads it (#493); not while a demo runs.
         DemoTraces.sweepAtLaunch(store: store)
+        // What a demo ended with the app showed outside it, its cards and notifications (#632); with a demo in use too,
+        // since none of them can be this process's.
+        DemoLeftovers.sweepAtLaunch()
         // The bots' own names (#315) before anything reads a label.
         BotNames.install()
         CloudSync.shared.start(store: store)
@@ -401,20 +404,21 @@ final class AppModel {
     }
 
     /// Leaves the demo: its runtime stops (its files for the moment go with it), its looks go, and the saved gateway that
-    /// was in use comes back, or the first screen when there is none.
-    func endDemo() async {
+    /// was in use comes back, or the first screen when there is none. With `next`, that gateway comes in its place: another
+    /// one picked while the demo runs leaves it this way too (`activate`, #632).
+    func endDemo(then next: GatewayConnection? = nil) async {
         guard isInDemo else { return }
+        // A voice session in one of its chats ends first (#392): left up, its script ran on over the stopped runtime, the
+        // Mac's voice window stayed, and a change of its state could raise a card after the ones taken away below.
+        if HandsFreeSession.shared.chat?.runtime.isEphemeral == true { HandsFreeSession.shared.end() }
         // What it showed outside the app goes too: its turns' Live Activities and its notifications; and its drafts.
-        #if os(iOS)
-        LiveActivityController.endAll(connection: GatewayConnection.demoID)
-        #endif
-        LocalNotifier.removeAll(connection: GatewayConnection.demoID)
+        DemoLeftovers.takeAway()
         ComposerDrafts.forgetDemo()
         await deactivate()
         DemoTraces.sweep()
         DemoTraces.sweepKeychain(store: store)
         store.leaveDemo()
-        if let c = store.active { await activate(c) }
+        if let c = next ?? store.active { await activate(c) }
         // The extensions' and the Watch's copy of the looks, if a change of the person's own was held back meanwhile (#494).
         BotLooksMirror.mirrorIfOwed()
     }
@@ -470,6 +474,9 @@ final class AppModel {
     /// The tests' stand-in for the system's question (#501), which in the unit-test host would put an alert up that
     /// nothing answers; it can take its time, as the system's can. DEBUG only, checked absent from Release at each cut.
     nonisolated(unsafe) static var demoNotificationsAskForTests: (() async -> Void)?
+    /// The units' stand-in for `activate`'s runtime (#632): set, a gateway past the demo's guard is handed to it and no
+    /// runtime starts, so nothing connects and nothing is written. DEBUG only, checked absent from Release at each cut.
+    static var activateStandInForTests: ((GatewayConnection) -> Void)?
     #endif
 
     func activateSavedConnection() async {
@@ -526,6 +533,15 @@ final class AppModel {
     }
 
     func activate(_ connection: GatewayConnection) async {
+        // Another gateway while the demo runs (Settings › Gateways, the chat list's Switch gateway, a handoff, a gateway
+        // saved or signed in to): the demo is left as Leave demo leaves it, its cards, notifications, drafts and traces
+        // going with it (#632), then that gateway comes. Setting the gateway in use alone dropped the demo with all of
+        // those left. `endDemo` activates once the demo is gone, so this never comes back here.
+        if isInDemo, !connection.isDemo { await endDemo(then: connection); return }
+        #if DEBUG
+        // The units' stand-in for what follows (#632's): a runtime started here would connect and write the widgets' snapshot.
+        if let standIn = Self.activateStandInForTests { standIn(connection); return }
+        #endif
         if let rt = runtime {
             if rt.connection.id == connection.id { return }
             await rt.stop()

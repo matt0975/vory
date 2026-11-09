@@ -16,6 +16,13 @@ struct MacVoiceHUD: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let size = CGSize(width: 340, height: 220)
+    /// The layout's widths, which the units measure against (#627): the face's column, the gap beside it, the sides, and
+    /// the control row's sides.
+    static let faceColumn: CGFloat = 84, columnGap: CGFloat = 14, sidePadding: CGFloat = 16, rowPadding: CGFloat = 14
+    /// The text column's width at the window's default (and least) width: where the approval's Show Chat sits.
+    static var textColumnWidth: CGFloat { size.width - 2 * sidePadding - faceColumn - columnGap }
+    /// The control row's room at the default width.
+    static var controlRowWidth: CGFloat { size.width - 2 * rowPadding }
 
     var body: some View {
         Group {
@@ -53,7 +60,7 @@ struct MacVoiceHUD: View {
         return ZStack {
             LinearGradient(colors: [tint.opacity(0.45), Color.black.opacity(0.92)], startPoint: .top, endPoint: .bottom)
             VStack(spacing: 10) {
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .top, spacing: Self.columnGap) {
                     ZStack {
                         // The ring pulses only while it should and the window can be seen: a
                         // repeating animation kept running after its value went false (#248).
@@ -67,7 +74,7 @@ struct MacVoiceHUD: View {
                         }
                         BotAvatar(profile: chat.profileName, size: 64, active: p.faceActive, mood: mood(p.mood, chat))
                     }
-                    .frame(width: 84)
+                    .frame(width: Self.faceColumn)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(spacing: 6) {
                             // The state never wraps: the badges keep their width and the chat's
@@ -94,6 +101,11 @@ struct MacVoiceHUD: View {
                         if let line = p.line {
                             Text(line).font(.caption).foregroundStyle(p.lineIsWarning ? Color.orange : Color.secondary).lineLimit(2)
                         }
+                        if p.showsApproval {
+                            // The approval's own place, under its line (#627): in the control row, beside Mute, Pause
+                            // and End, it was cut to "Show…" at the window's default width.
+                            VoiceShowChatButton { showChat() }
+                        }
                         // The whole conversation, scrolling, following the newest words until the
                         // person scrolls up to read back; the window can be made taller for it.
                         VoiceTranscriptView(lines: session.transcriptLines, prompt: VoiceHUDPresentation.prompt(live: session.isLive))
@@ -103,39 +115,16 @@ struct MacVoiceHUD: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16).padding(.top, 14)
+                .padding(.horizontal, Self.sidePadding).padding(.top, 14)
                 Spacer(minLength: 0)
-                HStack(spacing: 10) {
-                    control(p.muteSymbol, label: p.muteLabel, on: session.state.isMuted) { session.toggleMute() }
-                        .disabled(!p.muteEnabled)
-                        .accessibilityIdentifier("voice.mute")
-                    control(p.pauseSymbol, label: p.pauseLabel, on: session.state.phase == .paused) { session.togglePause() }
-                        .accessibilityIdentifier("voice.pause")
-                    if p.showsApproval {
-                        Button { showChat() } label: { Label("Show Chat", systemImage: "checkmark.shield") }
-                            .buttonStyle(.borderedProminent).controlSize(.small)
-                            .help("The approval waits in the chat")
-                            .accessibilityIdentifier("voice.showChat")
-                    }
-                    Spacer(minLength: 0)
-                    Button { session.end() } label: { Label("End", systemImage: "xmark") }
-                        .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
-                        .keyboardShortcut(.escape, modifiers: [])
-                        .accessibilityIdentifier("voice.end")
-                }
-                .padding(.horizontal, 14).padding(.bottom, 12)
+                VoiceControlRow(p: p, muted: session.state.isMuted, paused: session.state.phase == .paused,
+                                mute: { session.toggleMute() }, pause: { session.togglePause() }, end: { session.end() })
+                    .padding(.horizontal, Self.rowPadding).padding(.bottom, 12)
             }
         }
         .animation(.snappy, value: session.state.phase)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Voice mode, \(p.title)")
-    }
-
-    private func control(_ symbol: String, label: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Label(label, systemImage: symbol) }
-            .buttonStyle(.bordered).controlSize(.small)
-            .tint(on ? .accentColor : nil)
-            .help(label)
     }
 
     private func mood(_ m: VoiceHUDPresentation.Mood, _ chat: ChatSession) -> BotFaceView.Mood {
@@ -159,6 +148,52 @@ struct MacVoiceHUD: View {
             model.pendingRoute = PendingRoute(connectionID: model.runtime?.connection.id, storedSessionID: chat.storedID, profile: chat.profileName)
             model.selectedTab = .chats
         }
+    }
+}
+
+/// The voice window's controls, the same in every state (#627): Mute, Pause and End. The approval's Show Chat sits under
+/// its line instead (`VoiceShowChatButton`).
+struct VoiceControlRow: View {
+    var p: VoiceHUDPresentation
+    var muted: Bool
+    var paused: Bool
+    var mute: () -> Void
+    var pause: () -> Void
+    var end: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            control(p.muteSymbol, label: p.muteLabel, on: muted, action: mute)
+                .disabled(!p.muteEnabled)
+                .accessibilityIdentifier("voice.mute")
+            control(p.pauseSymbol, label: p.pauseLabel, on: paused, action: pause)
+                .accessibilityIdentifier("voice.pause")
+            Spacer(minLength: 0)
+            Button(action: end) { Label("End", systemImage: "xmark") }
+                .buttonStyle(.borderedProminent).tint(.red).controlSize(.small)
+                .keyboardShortcut(.escape, modifiers: [])
+                .accessibilityIdentifier("voice.end")
+        }
+    }
+
+    private func control(_ symbol: String, label: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Label(label, systemImage: symbol) }
+            .buttonStyle(.bordered).controlSize(.small)
+            .tint(on ? .accentColor : nil)
+            .help(label)
+    }
+}
+
+/// The approval's way to the chat, where its card is (#627): its whole label at every text size, never cut.
+struct VoiceShowChatButton: View {
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) { Label("Show Chat", systemImage: "checkmark.shield") }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+            .fixedSize()
+            .help("The approval waits in the chat")
+            .accessibilityIdentifier("voice.showChat")
     }
 }
 

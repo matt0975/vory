@@ -130,6 +130,8 @@ struct VoryMacApp: App {
             // Settings… (⌘,) is the Settings tab of the window; the app has one state, not two windows.
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { model.selectedTab = .settings }.keyboardShortcut(",", modifiers: .command)
+                // In the demo (#392), the way out is in the app's menu too, as Settings' Leave demo.
+                if model.isInDemo { Button("Leave Demo") { Task { await model.endDemo() } } }
             }
             // File › Import from iPhone or iPad: Continuity Camera into the composer.
             ImportFromDevicesCommands()

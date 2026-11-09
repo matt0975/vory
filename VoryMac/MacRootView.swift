@@ -137,6 +137,8 @@ private struct MainSplitView: View {
     static let popOnLeaveKey = "mac.pages.popOnLeave"
     /// Bumped to re-create a page left behind when `popOnLeaveKey` is set.
     @State private var resets: [AppModel.AppTab: Int] = [:]
+    /// What each page had the keyboard focus on when it was left, given back when it shows again (#640).
+    @State private var pageFocus = PageFocus()
     /// How long after the window appears a page that the gateway has to vouch for (the Board)
     /// may still take the start: its plugin is probed once the gateway answers, a second or two in.
     private static let launchTabGrace: TimeInterval = 8
@@ -205,10 +207,14 @@ private struct MainSplitView: View {
             }
             // The keyboard focus leaves the page that hides: it stays mounted, and its composer,
             // list or field kept the focus (keys and pastes aimed at a page not on show). The
-            // window holds it, as when the page was torn down.
-            if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }), w.firstResponder !== w,
-               !w.makeFirstResponder(nil) {
-                Perf.stamp("page: the focus stayed with \(String(describing: w.firstResponder))")
+            // window holds it, as when the page was torn down. What the page had is kept for it, and
+            // the page that shows gets back what it had (#640), once it is on show.
+            if let w = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix(MacWindow.main) == true }) {
+                if !pageFocus.leave(was, in: w) {
+                    Perf.stamp("page: the focus stayed with \(String(describing: w.firstResponder))")
+                }
+                let focus = pageFocus
+                Task { @MainActor in focus.back(now, in: w) }
             }
         }
         .onChange(of: chatPath) { _, _ in Smooth.animate("chatOpen") }

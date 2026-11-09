@@ -44,8 +44,9 @@ import Testing
         #expect(MediaScan.images(in: "See:\r\n/tmp/shot.png.\r\n").map(\.name) == ["shot.png"])
         #expect(MediaScan.images(in: "/tmp/shot.png)\n").map(\.name) == ["shot.png"])
         #expect(MediaScan.textWithoutMedia("Here:\r\n/tmp/shot.png.\r\nDone.") == "Here:\nDone.")
-        // Not a picture line: a path mid-sentence is prose.
-        #expect(MediaScan.images(in: "See /tmp/shot.png now").isEmpty)
+        // Not a picture line: to the scan of lines a path mid-sentence is prose; the scan of sentences (#638) finds it.
+        #expect(MediaScan.images(in: "See /tmp/shot.png now", prose: false).isEmpty)
+        #expect(MediaScan.images(in: "See /tmp/shot.png now").map(\.name) == ["shot.png"])
     }
 }
 

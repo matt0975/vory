@@ -1200,9 +1200,13 @@ struct InteractivePopEnabler: UIViewControllerRepresentable {
 /// Marks a pushed page whose own Cancel is the only way back (`.cancelIsTheWayBack()`): neither
 /// the edge swipe nor the full-screen pan pops it. A hidden child of the page's controller, read
 /// by FullScreenPop. `-vory-form-swipe-on` lets the
-/// swipe pop these pages again.
+/// swipe pop these pages again, in DEBUG only: Release never reads it.
 struct NoSwipeBackMarker: UIViewControllerRepresentable {
+    #if DEBUG
     static let off = ProcessInfo.processInfo.arguments.contains("-vory-form-swipe-on")
+    #else
+    static let off = false
+    #endif
     final class Controller: UIViewController {
         override func loadView() { let v = UIView(); v.isUserInteractionEnabled = false; v.isHidden = true; view = v }
     }

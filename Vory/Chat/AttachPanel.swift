@@ -83,14 +83,20 @@ struct AttachPanel: View {
 }
 
 
-/// The panel's surface: glass, or a plain material under `-vory-plain-panel` (a frame-rate experiment).
+/// The panel's surface: glass, or a plain material under `-vory-plain-panel` (a frame-rate experiment, DEBUG only:
+/// Release never reads it, nor `-vory-solid-panel`).
 struct PanelSurface: ViewModifier {
     var on = true
     /// The glass shape: the panel's own corners, or the growing shape the composer animates.
     var shape: RoundedRectangle = .rect(cornerRadius: 30)
+    #if DEBUG
     static let plain = ProcessInfo.processInfo.arguments.contains("-vory-plain-panel")
     /// `-vory-solid-panel`: a flat colour, no material at all (the same spring drives it).
     static let solid = ProcessInfo.processInfo.arguments.contains("-vory-solid-panel")
+    #else
+    static let plain = false
+    static let solid = false
+    #endif
     func body(content: Content) -> some View {
         // One modifier whatever `on` says (`.identity` glass when off): switching between a
         // glass branch and a plain one changed the subtree's identity inside the glass

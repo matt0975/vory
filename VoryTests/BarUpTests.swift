@@ -47,11 +47,24 @@ import Testing
         #expect(!TopBarRoom.statusCorner(barUp: false, regions: ReservedRegions(occlusions: [CGRect(x: 817, y: 0, width: 134, height: 82)]), size: onItsSide))
     }
 
+    /// #648: a standard iPhone with the floating top bar keeps the system's bar while a search is open, so the field and
+    /// its buttons stay under the row; without the bar (a wide window) and on the closed Duo's strip, the system's own way.
+    @Test func aPhoneWithTheFloatingBarKeepsItsBarWhileSearching() {
+        let phone = CGSize(width: 402, height: 874), closed = CGSize(width: 466, height: 678)
+        #expect(TopBarRoom.floatingBarOverBand(barOn: true, barsVertical: false, size: phone))
+        #expect(!TopBarRoom.floatingBarOverBand(barOn: false, barsVertical: false, size: phone), "no floating bar")
+        #expect(!TopBarRoom.floatingBarOverBand(barOn: true, barsVertical: true, size: closed), "the closed Duo's strip")
+        #expect(TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: false, floatingBar: true))
+        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: false, floatingBar: false))
+        // The open Duo upright keeps it, as before (#516).
+        #expect(TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: true, floatingBar: true))
+    }
+
     @Test func everythingElseLeavesTheBarWhereItIs() {
         // Matt's iPhone 18 Pro: no regions, safe top 62. The bar stays put and nothing moves.
         #expect(!barUp([], CGSize(width: 402, height: 874), safeTop: 62))
         #expect(TopBarRoom.lift(barUp: false, safeTop: 62) == 0)
-        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: false), "a phone's search keeps the system's own way")
+        #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: false), "without the floating bar, a phone's search keeps the system's own way")
         // The Duo on its side, open flat or half open like a book: the fold runs up the window.
         let upFold = Reported(kind: .fold, frame: CGRect(x: 455.5, y: 0, width: 40, height: 669), active: false)
         #expect(!barUp([upFold, covered], onItsSide, safeTop: 0))

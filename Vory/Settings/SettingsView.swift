@@ -313,6 +313,9 @@ struct ProfileView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Profile", symbol: "person.crop.circle", color: .indigo, description: "Which bot the Settings screens read and write, and new bots on this gateway.")
+            // In the demo no bot is made or removed here (#392): the demo keeps neither, and the list read the old one
+            // back. Choosing which bot the Settings screens show stays: that is the app's own.
+            DemoReadOnlyNote()
             if let rt = model.runtime {
                 Section("Active profile in this app") {
                     ForEach(rt.profiles) { p in
@@ -328,21 +331,22 @@ struct ProfileView: View {
                             }
                         }
                         .tint(.primary)
+                        .accessibilityIdentifier("profile.row")
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             // The default profile is the gateway's own home; Hermes refuses to delete it.
-                            if p.isDefault != true, p.name != "default" {
+                            if p.isDefault != true, p.name != "default", !model.isInDemo {
                                 Button(role: .destructive) { pendingDelete = p } label: { Label("Delete", systemImage: "trash") }
                             }
                         }
                         .contextMenu {
-                            if p.isDefault != true, p.name != "default" {
+                            if p.isDefault != true, p.name != "default", !model.isInDemo {
                                 Button(role: .destructive) { pendingDelete = p } label: { Label("Delete profile…", systemImage: "trash") }
                             }
                         }
                     }
                 }
                 Section {
-                    Button { showCreate = true } label: { Label("Create Profile", systemImage: "plus") }
+                    if !model.isInDemo { Button { showCreate = true } label: { Label("Create Profile", systemImage: "plus") } }
                     if let error { Text(error).foregroundStyle(.red).font(.footnote) }
                 } footer: { Text("Profiles are separate Hermes homes on the gateway machine (config, skills, sessions). Settings screens read and write the profile selected here.") }
             }
@@ -350,8 +354,8 @@ struct ProfileView: View {
         .reloadable { await model.runtime?.loadProfiles() }
         // Add profile at the top as on every page that can make something (#428), with a gateway to make it on: the bar
         // draws it beside its Back where the morph bar is up; the page's own toolbar has it elsewhere. The row stays.
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), model.runtime != nil { Button { showCreate = true } label: { Label("Add profile", systemImage: "plus") }.accessibilityIdentifier("profile.add") } } }
-        .morphPageActions([MorphPageAction(id: "profile.add", symbol: "plus", label: "Add profile") { showCreate = true }],
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), model.runtime != nil, !model.isInDemo { Button { showCreate = true } label: { Label("Add profile", systemImage: "plus") }.accessibilityIdentifier("profile.add") } } }
+        .morphPageActions(model.isInDemo ? [] : [MorphPageAction(id: "profile.add", symbol: "plus", label: "Add profile") { showCreate = true }],
                           on: MorphTopBar.active(model) && model.runtime != nil)
         .alert("Delete \(pendingDelete?.label ?? "profile")?", isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })) {
             Button(deleting ? "Deleting…" : "Delete", role: .destructive) { if let p = pendingDelete { Task { await delete(p) } } }.disabled(deleting)
@@ -408,12 +412,19 @@ struct NotificationsView: View {
         SettingsList {
             SettingsHeaderSection(title: "Notifications", symbol: "bell.badge", color: .red, description: "Permission\(!DeviceWords.isMac ? ", Live Activities and haptics" : "") on \(DeviceWords.this).")
             Section {
-                Toggle("Notifications", isOn: $notificationsOn)
+                // In the demo (#392) it reads off and can't be turned: it registers with the person's own gateway and the
+                // relay, and the demo has neither (its notifications are the app's own, on this device).
+                Toggle("Notifications", isOn: model.isInDemo ? .constant(false) : $notificationsOn)
+                    .disabled(model.isInDemo)
                     .onChange(of: notificationsOn) { _, on in
                         Task { await push.notificationsTurned(on: on, runtime: model.runtime) }
                     }
             } footer: {
-                Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
+                if model.isInDemo {
+                    Text("The demo's notifications come from the demo itself, on \(DeviceWords.this). This switch is for your own gateway, once you leave the demo.")
+                } else {
+                    Text(notificationsOn ? "\(DeviceWords.this.capitalized) is registered with the gateway for approvals, questions, finished turns and errors while Vory is closed." : "Off: \(DeviceWords.this) is removed from the gateway's device list, so the Companion sends it nothing. Turn it on to register again.")
+                }
             }
             #if os(iOS)
             Section {
@@ -1165,23 +1176,27 @@ struct SoftwareUpdateView: View {
                                 }
                             }
                         }
-                    } else if setup.updateAvailable || setup.updating || setup.showUpdateConsole || setup.updateOutcome != nil {
-                        CompanionUpdateRows(setup: setup, runtime: rt)
+                    } else if CompanionUpdatePhase.of(available: setup.updateAvailable, updating: setup.updating,
+                                                      console: setup.showUpdateConsole, outcome: setup.updateOutcome) == .upToDate {
+                        // "Up to date" and the update card are two rows (#635), swapped inside the closing transaction:
+                        // the List animates a row deleted and one inserted, where a row's change of height jumps.
+                        CompanionUpToDateRow(setup: setup)
+                            .updateProbe("card")
                     } else {
-                        VStack(spacing: 8) {
-                            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
-                            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
-                            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
-                                .contentTransition(.numericText())
+                        CompanionUpdateRows(setup: setup, runtime: rt)
+                            .updateProbe("card")
+                            .listRowSeparator(.hidden, edges: .bottom)
+                        // Update Complete's line, a row inserted inside that transaction rather than the card growing.
+                        if setup.updateOutcome?.ok == true {
+                            CompanionInstalledRow().listRowSeparator(.hidden, edges: .top)
                         }
-                        .frame(maxWidth: .infinity).padding(.vertical, 10)
-                        .animation(.snappy, value: setup.checkingCompanion)
                     }
                 } header: { sectionHeader("Vory Companion") } footer: {
                     Text("A small plugin on your gateway. It sends replies as notifications, \(DeviceWords.keepsActivity)and gets approval cards to \(DeviceWords.your) the moment a bot needs a yes. Installs in place; no restart unless it says so.")
                 }
                 Section {
                     LabeledContent("On the gateway", value: setup.installedVersion.map { "v\($0)" } ?? "—")
+                        .updateProbe("row")
                     if let hb = setup.heartbeat { LabeledContent("Running", value: "v\(hb.version)") }
                     LabeledContent("This build ships", value: "v\(PushSetupModel.bundledPluginVersion)")
                     Button { Task { await setup.checkCompanion(runtime: rt) } } label: {
@@ -1195,6 +1210,9 @@ struct SoftwareUpdateView: View {
         }
         .listSectionSpacing(28)
         .animation(.smooth, value: setup.updateOutcome == nil)
+        #if DEBUG && os(iOS)
+        .overlay(alignment: .topLeading) { if UpdateMotionProbe.isOn { UpdateMotionProbe.Readout().frame(width: 1, height: 1) } }
+        #endif
         .task { if let rt = model.runtime { await setup.prepare(runtime: rt) } }
         .reloadable { if let rt = model.runtime { await setup.checkCompanion(runtime: rt) } }
         // The cloud squints while it checks and turns once the answer is in.

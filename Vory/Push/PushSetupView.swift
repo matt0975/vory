@@ -492,17 +492,31 @@ struct PushSetupView: View {
     }
 }
 
+/// Where the companion's update stands (#635): Software Update shows the update card in every phase but the last, and
+/// the "up to date" row in that one; the two swap inside the closing transaction.
+enum CompanionUpdatePhase: Equatable {
+    case available, working, complete, upToDate
+    static func of(available: Bool, updating: Bool, console: Bool, outcome: (ok: Bool, text: String)?) -> Self {
+        if let outcome, outcome.ok { return .complete }
+        if updating || console || outcome != nil { return .working }
+        return available ? .available : .upToDate
+    }
+}
+
 /// The companion update, in the voice of iOS Software Update: what is available, one Install Now
 /// button, a progress bar with a stage and time remaining, then "Update Complete". A small console
 /// underneath shows what the gateway is doing and fades out a few seconds after success.
 struct CompanionUpdateRows: View {
     @Bindable var setup: PushSetupModel
     var runtime: GatewayRuntime
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var version: String { PushSetupModel.bundledPluginVersion }
     private var sizeText: String { ByteCountFormatter.string(fromByteCount: Int64(PushSetupModel.bundledScriptSize), countStyle: .file) }
 
-    var body: some View {
+    var body: some View { card }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 ZStack {
@@ -549,11 +563,8 @@ struct CompanionUpdateRows: View {
                     if let o = setup.updateOutcome, !o.ok {
                         Label(o.text, systemImage: "xmark.octagon").font(.footnote).foregroundStyle(.red).transition(.opacity)
                     }
-                    if let o = setup.updateOutcome, o.ok {
-                        Text("Vory Companion \(version) is installed and running.").font(.footnote).foregroundStyle(.secondary).transition(.opacity)
-                    }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
             }
 
             if setup.showUpdateConsole {
@@ -564,17 +575,18 @@ struct CompanionUpdateRows: View {
                                 Text(line).font(.caption2.monospaced())
                                     .foregroundStyle(line.contains("FAILED") ? Color.red : Color.secondary)
                                     .id(i)
-                                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .bottom)))
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
+                        .updateProbe("log", cell: false)
                     }
                     .frame(height: 110)
                     .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.35)))
                     .onChange(of: setup.updateConsole.count) { _, n in withAnimation(.snappy) { proxy.scrollTo(max(0, n - 1), anchor: .bottom) } }
                 }
-                .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
             }
 
             if setup.updateNeedsRestart, !setup.updating {
@@ -594,6 +606,231 @@ struct CompanionUpdateRows: View {
         .animation(.snappy, value: setup.updateConsole.count)
         .animation(.smooth, value: setup.showUpdateConsole)
         .animation(.smooth, value: setup.updating)
+    }
+}
+
+/// "Your gateway is up to date." (#635): its own row on Software Update's page, after the update card's. The List
+/// animates a row deleted and another inserted inside a transaction, where a row's change of height in place jumps, so
+/// the hand-over swaps the two rows inside the closing ease.
+struct CompanionUpToDateRow: View {
+    var setup: PushSetupModel
+    var body: some View {
+        VStack(spacing: 8) {
+            BotFaceView(spec: AboutView.voryBot, size: 56, mood: BotFaceView.Mood(profile: "vory-update", state: .guide, squint: setup.checkingCompanion))
+            Text("Vory Companion \(PushSetupModel.bundledPluginVersion)").font(.headline)
+            Text(setup.checkingCompanion ? "Checking for updates…" : "Your gateway is up to date.").font(.subheadline).foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 10)
+        .animation(.snappy, value: setup.checkingCompanion)
+    }
+}
+
+/// Update Complete's line (#635): its own row under the update card, inserted inside Update Complete's transaction, so
+/// the rows below ease down rather than the card growing in place.
+struct CompanionInstalledRow: View {
+    var body: some View {
+        Text("Vory Companion \(PushSetupModel.bundledPluginVersion) is installed and running.").font(.footnote).foregroundStyle(.secondary)
+    }
+}
+
+#if DEBUG
+/// DEBUG, for the update's checks (#635): with `-vory-update-probe`, Settings › Software Update's card, its first
+/// version row and the console's content write their frames at every layout (`updateProbe`: SwiftUI's layout, which
+/// lands on a list row's final height in one pass while Core Animation eases what is drawn), and on iOS what is on
+/// screen as well: from the first of them on screen (the page's rest before Install Now) to 2 s after `updating` goes
+/// false (again from a restart's start), at each display frame and when it moved 0.1 pt or more, each one's
+/// presentation frame in the window's ("<key>-p": the list cell's for the card and the row, the content's own for the
+/// console). The update's own steps mark when they happen (`mark`). A self-check proves the presentation sampler sees
+/// eased motion: at the start a 1 pt view of its own, outside the app's views and invisible, is moved 100 pt over 0.5 s
+/// by UIView.animate (its model at the end at once, its presentation eased), sampled as "selfcheck-p". Read by a UI test
+/// from a 1 pt element ("debug.updatemotion") after the update, and written to the perf log ("update-motion …").
+/// Step 1b: what is drawn or nothing (never the model's frame in its place), and each instance under a key its own
+/// series ("<key>-p", then "<key>#2-p" for another on screen at once). Step 1c: each anchor numbered once (its instance),
+/// carried by every drawn sample, and drawn samples timed by their display frames.
+@MainActor
+enum UpdateMotionProbe {
+    nonisolated static let isOn = ProcessInfo.processInfo.arguments.contains("-vory-update-probe")
+    /// Each key's top and height at each layout, in seconds from the first sample; a mark has a zero frame. A drawn
+    /// sample ("-p") carries its anchor's instance and its display frame's time (step 1c); the others 0 and now.
+    private(set) static var samples: [(key: String, t: Double, top: CGFloat, height: CGFloat, inst: Int)] = []
+    private static var began: Date?
+    /// Where each key's last sample is in `samples`: one instance's two samples at one frame time collapse to the last.
+    private static var lastIndex: [String: Int] = [:]
+    static func note(_ key: String, _ f: CGRect, frame: Double? = nil, inst: Int = 0) {
+        guard isOn else { return }
+        let start = began ?? Date()
+        began = start
+        let t = frame ?? Date().timeIntervalSince(start)
+        if let i = lastIndex[key], samples[i].inst == inst, samples[i].t == t {
+            samples[i] = (key, t, f.minY, f.height, inst)
+        } else {
+            lastIndex[key] = samples.count
+            samples.append((key, t, f.minY, f.height, inst))
+        }
+        Perf.note("update-motion \(key) top \(String(format: "%.2f", f.minY)) height \(String(format: "%.2f", f.height))")
+    }
+    /// A step of the update itself (its start, Update Complete, the closing ease, `updating` going false).
+    static func mark(_ what: String) {
+        note("mark:" + what, .zero)
+        #if os(iOS)
+        sampling(what)
+        #endif
+    }
+    /// "key,t,top,height,instance;…", read by a UI test (`Readout`).
+    static var summary: String {
+        samples.map { "\($0.key)," + String(format: "%.3f,%.2f,%.2f,%d", $0.t, $0.top, $0.height, $0.inst) }.joined(separator: ";")
+    }
+
+    #if os(iOS)
+    // The presentation sampler.
+    private struct Weak { weak var view: PresentationAnchorView? }
+    private static var anchors: [Weak] = []
+    private static var link: CADisplayLink?
+    /// Sampling until then; nil when not sampling.
+    private static var until: Date?
+    private static var last: [String: CGRect] = [:]
+    /// The sampling ended (2 s after `updating` went false); an anchor coming on screen after it doesn't start it again.
+    private static var ended = false
+    /// The last instance number given (step 1c): each anchor is numbered once, from 1.
+    private static var instances = 0
+    /// The display link's frame times on the probe's clock (step 1c), mapped once.
+    private static var mediaToProbe: Double?
+    static func register(_ a: PresentationAnchorView) {
+        anchors.removeAll { $0.view == nil || $0.view === a }
+        if a.instance == 0 { instances += 1; a.instance = instances }
+        // Each instance its own series (step 1b): when a list swaps one row for another under the same key (the update's
+        // card for "up to date" at its end), both cells are on screen through the swap, and one series carried both, two
+        // values a tick. The first on screen keeps "<key>-p"; another on screen at once is "<key>#2-p", and so on.
+        let others = anchors.compactMap(\.view).filter { $0.key == a.key && $0.window != nil }.count
+        a.series = others == 0 ? a.key + "-p" : a.key + "#\(others + 1)-p"
+        anchors.append(Weak(view: a))
+        // From the first anchor on screen, so the page's rest before Install Now is drawn too: a change that lands
+        // in one pass at the start shows as a step from it, not as a first sample.
+        if until == nil, !ended { startSampling() }
+    }
+    private static func startSampling() {
+        until = .distantFuture
+        guard link == nil else { return }
+        let l = CADisplayLink(target: Ticker.shared, selector: #selector(Ticker.tick(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    private static func sampling(_ what: String) {
+        switch what {
+        case "start", "restart-start":
+            ended = false
+            startSampling()
+            if what == "start" { selfCheck() }
+        case "updating-false":
+            until = Date().addingTimeInterval(2)
+        default:
+            break
+        }
+    }
+    fileprivate static func tick(_ frameTime: CFTimeInterval) {
+        guard let until, Date() < until else { link?.invalidate(); link = nil; self.until = nil; ended = true; return }
+        // Step 1c: the drawn frame's own time on the probe's clock.
+        let start = began ?? Date()
+        began = start
+        if mediaToProbe == nil { mediaToProbe = Date().timeIntervalSince(start) - CACurrentMediaTime() }
+        let t = frameTime + (mediaToProbe ?? 0)
+        for a in anchors {
+            guard let v = a.view, let f = v.screenFrame() else { continue }
+            let key = v.series
+            if let p = last[key], abs(p.minY - f.minY) < 0.1, abs(p.height - f.height) < 0.1 { continue }
+            if last[key] == nil { mark("\(key) on \(v.measuredView)") }
+            last[key] = f
+            note(key, f, frame: t, inst: v.instance)
+        }
+    }
+    /// The sampler's own check: a 1 pt view on the window, invisible and outside the app's views, eased 100 pt down
+    /// over 0.5 s by UIView.animate, then removed.
+    private static func selfCheck() {
+        guard let w = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+        let v = PresentationAnchorView(frame: CGRect(x: 0, y: 200, width: 1, height: 1))
+        v.key = "selfcheck"; v.measuresCell = false
+        v.alpha = 0.011; v.isUserInteractionEnabled = false; v.accessibilityElementsHidden = true
+        w.addSubview(v)
+        UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseInOut]) { v.frame.origin.y = 300 } completion: { _ in v.removeFromSuperview() }
+    }
+    @MainActor final class Ticker: NSObject {
+        static let shared = Ticker()
+        @objc func tick(_ l: CADisplayLink) { UpdateMotionProbe.tick(l.timestamp) }
+    }
+    /// A view in the background of what it measures; on screen, its list cell's presentation frame (the card and the
+    /// row, as the list animates them) or its own (the console's content, as its scroll view moves it), in the window's
+    /// presentation space.
+    final class PresentationAnchorView: UIView {
+        var key = ""
+        var measuresCell = true
+        /// Its series: "<key>-p", or "<key>#2-p" for a second instance on screen at once (step 1b).
+        var series = ""
+        /// Its number, given once when it first comes on screen (step 1c), carried by its drawn samples.
+        var instance = 0
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { UpdateMotionProbe.register(self) }
+        }
+        private var target: UIView {
+            guard measuresCell else { return self }
+            var v = superview
+            while let s = v { if s is UICollectionViewCell { return s }; v = s.superview }
+            return self
+        }
+        var measuredView: String { target === self ? "itself" : "its list cell" }
+        func screenFrame() -> CGRect? {
+            guard let w = window else { return nil }
+            let t = target
+            // Step 1b: what is drawn, or nothing; never the model's frame in its place (before its first commit a layer
+            // has no presentation, and the model then gave the self-check's end, 300, as its first sample).
+            guard let l = t.layer.presentation() else { return nil }
+            let wl = w.layer.presentation() ?? w.layer
+            return l.convert(l.bounds, to: wl)
+        }
+    }
+    struct PresentationAnchor: UIViewRepresentable {
+        var key: String
+        var cell: Bool
+        func makeUIView(context: Context) -> PresentationAnchorView {
+            let v = PresentationAnchorView()
+            v.key = key; v.measuresCell = cell; v.isUserInteractionEnabled = false; v.accessibilityElementsHidden = true
+            return v
+        }
+        func updateUIView(_ v: PresentationAnchorView, context: Context) { v.key = key; v.measuresCell = cell }
+    }
+
+    /// A 1 pt element ("debug.updatemotion") whose value is `summary`, taken when it is read.
+    final class ReadoutView: UIView {
+        override var isAccessibilityElement: Bool { get { true } set {} }
+        override var accessibilityIdentifier: String? { get { "debug.updatemotion" } set {} }
+        override var accessibilityLabel: String? { get { "Update motion" } set {} }
+        override var accessibilityValue: String? { get { MainActor.assumeIsolated { UpdateMotionProbe.summary } } set {} }
+    }
+    struct Readout: UIViewRepresentable {
+        func makeUIView(context: Context) -> ReadoutView { ReadoutView() }
+        func updateUIView(_ v: ReadoutView, context: Context) {}
+    }
+    #endif
+}
+#endif
+
+extension View {
+    /// `UpdateMotionProbe`'s reading of this view's frame at each layout under `key`, and on iOS of what is on screen
+    /// under "<key>-p" (its list cell's when `cell`): DEBUG with `-vory-update-probe` only, and the view itself otherwise.
+    @ViewBuilder func updateProbe(_ key: String, cell: Bool = true) -> some View {
+        #if DEBUG
+        if UpdateMotionProbe.isOn {
+            onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { _, f in UpdateMotionProbe.note(key, f) }
+                #if os(iOS)
+                .background(UpdateMotionProbe.PresentationAnchor(key: key, cell: cell))
+                #endif
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 
@@ -1356,20 +1593,44 @@ final class PushSetupModel {
         if updateConsole.count > 40 { updateConsole.removeFirst(updateConsole.count - 40) }
     }
 
+    /// The update card's animations (#635): smooth, or a 0.2 s ease with Reduce Motion (an instant change would be the
+    /// same one-frame step of the rows below). MorphTopBar's way, with the Mac's own flag, as BotColors' StillBlink reads it.
+    static var reduceMotion: Bool {
+        #if os(iOS)
+        UIAccessibility.isReduceMotionEnabled
+        #else
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        #endif
+    }
+    static var growing: Animation { reduceMotion ? .easeInOut(duration: 0.2) : .smooth }
+    static var closing: Animation { reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.7) }
+    /// An update's outcome, in one eased transaction (#635), so the line it adds grows the card rather than stepping it.
+    func setOutcome(_ o: (ok: Bool, text: String)) { withAnimation(Self.growing) { updateOutcome = o } }
+
     /// Upload the plugin files, enable, restart the gateway and wait for the new heartbeat, reporting
     /// each step under a progress bar. The console stays for a moment after success, then goes away.
     func updateCompanion(runtime rt: GatewayRuntime) async {
         guard !updating else { return }
         updating = true; updateProgress = 0; updateConsole = []; updateOutcome = nil; showUpdateConsole = true
-        defer { updating = false }
+        #if DEBUG
+        UpdateMotionProbe.mark("start")
+        // #635: what the app sees of Reduce Motion, so a Reduce Motion leg proves the setting reached it.
+        UpdateMotionProbe.mark(Self.reduceMotion ? "reduce-motion" : "full-motion")
+        #endif
+        defer {
+            updating = false
+            #if DEBUG
+            UpdateMotionProbe.mark("updating-false")
+            #endif
+        }
         let target = Self.bundledPluginVersion
-        guard let home = rt.profileHome else { updateOutcome = (false, "The gateway did not report its home folder."); return }
+        guard let home = rt.profileHome else { setOutcome((false, "The gateway did not report its home folder.")); return }
         let base = "\(home)/plugins/vory-push"
         guard let script = Bundle.main.url(forResource: "hermes_push", withExtension: "py", subdirectory: "hermes-push") ?? Bundle.main.url(forResource: "hermes_push", withExtension: "py"),
               let manifest = Bundle.main.url(forResource: "plugin", withExtension: "yaml", subdirectory: "hermes-push/plugin") ?? Bundle.main.url(forResource: "plugin", withExtension: "yaml"),
               let entry = Bundle.main.url(forResource: "__init__", withExtension: "py", subdirectory: "hermes-push/plugin") ?? Bundle.main.url(forResource: "__init__", withExtension: "py"),
               let s = try? Data(contentsOf: script), let m = try? Data(contentsOf: manifest), let e = try? Data(contentsOf: entry) else {
-            updateOutcome = (false, "The plugin files are missing from this build."); return
+            setOutcome((false, "The plugin files are missing from this build.")); return
         }
         let files = [("hermes_push.py", s, "text/x-python"), ("plugin.yaml", m, "text/yaml"), ("__init__.py", e, "text/x-python")]
         let total = Double(files.count + 3)   // files + enable + restart + heartbeat
@@ -1383,16 +1644,16 @@ final class PushSetupModel {
                 console("wrote \(base)/\(name) (\(data.count) bytes)")
             } catch {
                 console("FAILED \(name): \(error.localizedDescription)")
-                updateOutcome = (false, "Could not write \(name): \(error.localizedDescription)"); return
+                setOutcome((false, "Could not write \(name): \(error.localizedDescription)")); return
             }
             done += 1; withAnimation(.snappy) { updateProgress = done / total }
         }
         updateStage = "Installing…"
         do {
             let r: JSONValue = try await rt.api.send("POST", "/api/dashboard/agent-plugins/vory-push/enable", body: EmptyBody())
-            if r["ok"]?.boolValue == false { let msg = r["error"]?.stringValue ?? "Hermes refused to enable the plugin."; console("FAILED enable: \(msg)"); updateOutcome = (false, msg); return }
+            if r["ok"]?.boolValue == false { let msg = r["error"]?.stringValue ?? "Hermes refused to enable the plugin."; console("FAILED enable: \(msg)"); setOutcome((false, msg)); return }
             console("plugin vory-push enabled")
-        } catch { console("FAILED enable: \(error.localizedDescription)"); updateOutcome = (false, error.localizedDescription); return }
+        } catch { console("FAILED enable: \(error.localizedDescription)"); setOutcome((false, error.localizedDescription)); return }
         done += 1; withAnimation(.snappy) { updateProgress = done / total }
 
         // Companions from 1.0.12 on pick new code up by themselves; give that half a minute first.
@@ -1406,13 +1667,24 @@ final class PushSetupModel {
                 withAnimation(.snappy) { updateProgress = 5 / total }
                 updateStage = "Verifying…"
                 for _ in 0..<10 where !companionHealthy { try? await Task.sleep(for: .seconds(3)); await checkCompanion(runtime: rt) }
-                guard companionHealthy else { break }
+                // #635: finished only when the gateway's files are this build's, the version read back as the restart path
+                // checks and the script (companionHealthy needs installedScriptMatches). So `updateAvailable` is false
+                // from here on, and the card's last phase after the closing ease is "up to date", never "available".
+                guard companionHealthy, installedVersion == target else { break }
                 withAnimation(.snappy) { updateProgress = 1 }
-                updateStage = "Update Complete"
+                #if DEBUG
+                UpdateMotionProbe.mark("complete")
+                #endif
                 console("companion v\(target) running and connected")
-                updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
+                // #635: Update Complete in one eased transaction, so its line grows the card rather than stepping it.
+                withAnimation(Self.growing) { updateStage = "Update Complete"; updateOutcome = (true, "Updated to v\(target). The companion is running and connected.") }
                 try? await Task.sleep(for: .seconds(4))
-                withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
+                #if DEBUG
+                UpdateMotionProbe.mark("ease")
+                #endif
+                // #635: `updating` goes false inside the closing ease (the defer, after it, did it unanimated), so the
+                // card hands over to "up to date" in this one transaction.
+                withAnimation(Self.closing) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = ""; updating = false }
                 return
             }
         }
@@ -1428,7 +1700,15 @@ final class PushSetupModel {
         let total = 6.0
         var done = 4.0
         updating = true; showUpdateConsole = true
-        defer { updating = false }
+        #if DEBUG
+        UpdateMotionProbe.mark("restart-start")
+        #endif
+        defer {
+            updating = false
+            #if DEBUG
+            UpdateMotionProbe.mark("updating-false")
+            #endif
+        }
         updateStage = "Restarting Gateway…"
         console("POST /api/gateway/restart (profile \(heartbeat?.profile ?? "default"))")
         let mirror = Task { [weak self] in
@@ -1442,7 +1722,7 @@ final class PushSetupModel {
         }
         await rt.maintenance.restartGateway(runtime: rt, profile: heartbeat?.profile == "default" ? nil : heartbeat?.profile)
         mirror.cancel()
-        if case .failed(let why) = rt.maintenance.phase { console("FAILED restart: \(why)"); updateOutcome = (false, "Restart failed: \(why)"); return }
+        if case .failed(let why) = rt.maintenance.phase { console("FAILED restart: \(why)"); setOutcome((false, "Restart failed: \(why)")); return }
         console("gateway restart finished")
         restartPending = false; updateNeedsRestart = false
         done += 1; withAnimation(.snappy) { updateProgress = done / total }
@@ -1467,15 +1747,22 @@ final class PushSetupModel {
         guard companionHealthy, installedVersion == target else {
             updateStage = "Not verified"
             let seen = heartbeat.map { "The last heartbeat is from v\($0.version)\($0.connected == true ? ", connected" : ", not connected")." } ?? "No heartbeat has been read."
-            updateOutcome = (false, "The files are on the gateway but the new companion did not report in within two minutes. \(seen) Restart the gateway once more (Settings › Gateway), then Check again here; if it still does not report, open the Companion page and run the setup's Test.")
+            setOutcome((false, "The files are on the gateway but the new companion did not report in within two minutes. \(seen) Restart the gateway once more (Settings › Gateway), then Check again here; if it still does not report, open the Companion page and run the setup's Test."))
             return
         }
         withAnimation(.snappy) { updateProgress = 1 }
-        updateStage = "Update Complete"
+        #if DEBUG
+        UpdateMotionProbe.mark("complete")
+        #endif
         console("companion v\(target) running and connected")
-        updateOutcome = (true, "Updated to v\(target). The companion is running and connected.")
+        // #635: as in place. The guard above (companionHealthy, installedVersion == target) makes `updateAvailable`
+        // false here; Update Complete eased; `updating` false inside the closing ease.
+        withAnimation(Self.growing) { updateStage = "Update Complete"; updateOutcome = (true, "Updated to v\(target). The companion is running and connected.") }
         try? await Task.sleep(for: .seconds(4))
-        withAnimation(.smooth(duration: 0.7)) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = "" }
+        #if DEBUG
+        UpdateMotionProbe.mark("ease")
+        #endif
+        withAnimation(Self.closing) { showUpdateConsole = false; updateOutcome = nil; updateProgress = 0; updateStage = ""; updating = false }
     }
 
     // MARK: Test notification

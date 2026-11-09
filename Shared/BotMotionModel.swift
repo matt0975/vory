@@ -188,8 +188,12 @@ public final class BotMotionModel {
         public static let blinkLength = 0.16
         public static let squash = 1.1
         /// `-vory-tap-reaction-off` leaves a tapped
-        /// face still (the tap still does what it did).
+        /// face still (the tap still does what it did). DEBUG only: Release never reads it.
+        #if DEBUG
         public static let off = ProcessInfo.processInfo.arguments.contains("-vory-tap-reaction-off")
+        #else
+        public static let off = false
+        #endif
         /// Whether a tap plays at all: not off, and the bots not still (Settings › Bots › Style ›
         /// Still, or their motion turned off). Reduce Motion is the view's: it snaps the face.
         /// Never on the Mac (Matt, 2026-10-13: "You can keep Mac as is"): there a click on a face

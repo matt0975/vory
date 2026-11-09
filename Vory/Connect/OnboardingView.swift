@@ -33,27 +33,27 @@ struct OnboardingView: View {
         var p = Self.basePages
         if ChatSummarizer.isAvailable {
             // Before the last page, the one that connects.
-            p.insert(Page(title: "Summaries, on your \(Self.device).", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your \(Self.device). Optional — your call.", demo: .summaries), at: p.count - 1)
+            p.insert(Page(title: "Summaries, on your \(Self.device).", says: "With Apple Intelligence I can give every chat a short title and a two-line summary, right in the list. It all stays on your \(Self.device). Optional, your call.", demo: .summaries), at: p.count - 1)
         }
         return p
     }
     #if os(macOS)
     // No Dynamic Island page: the menu bar takes that job on the Mac and gets its page with it.
     private static let basePages: [Page] = [
-        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your Mac. Every bot you run lives here — step through to see what we can do together.", demo: .bots),
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on your Mac. Every bot you run lives here. Step through to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
-        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands right here. Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands right here. Once, for the session, always, or deny. It waits for you.", demo: .approval),
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
-        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your network, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
+        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard, whether it's on your network, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
     ]
     #else
     private static let basePages: [Page] = [
-        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on \(DeviceWords.your). Every bot you run lives here — swipe to see what we can do together.", demo: .bots),
+        Page(title: "Hi, I'm Vory.", says: "I'm your Hermes gateway, on \(DeviceWords.your). Every bot you run lives here. Swipe to see what we can do together.", demo: .bots),
         Page(title: "Chats that stream.", says: "Replies arrive word by word, code and tool calls render as they happen, and every chat is a real session on your gateway.", demo: .chat),
-        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on \(DeviceWords.your). Once, for the session, always, or deny — it waits for you.", demo: .approval),
+        Page(title: "A yes from anywhere.", says: "When a bot needs permission, the card lands on \(DeviceWords.your). Once, for the session, always, or deny. It waits for you.", demo: .approval),
         Page(title: "I keep you posted.", says: "A Live Activity follows every turn in the Dynamic Island, and the reply comes as a notification you can answer right there.", demo: .island),
         Page(title: "Make each bot yours.", says: "Give every bot its own body, eyes and colour in the Creator Studio. They blink, glance, and move while they work.", demo: .studio),
-        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard — on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
+        Page(title: "Let's connect.", says: "Point me at your Hermes dashboard, whether it's on your Wi‑Fi, over Tailscale, or behind Cloudflare. Your credentials stay in the Keychain.", demo: .connect),
     ]
     #endif
 
@@ -104,30 +104,37 @@ struct OnboardingView: View {
             BotFaceView(spec: BotLookSpec.vory, size: 150, active: true, mood: BotFaceView.Mood(profile: "vory-welcome", state: .guide))
             Text("Vory").font(.system(size: 46, weight: .bold, design: .rounded)).padding(.top, 6)
             Text("Your Hermes bots, on \(DeviceWords.your).")
-                .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 2)
+                .font(.title3).foregroundStyle(.primary).multilineTextAlignment(.center).padding(.top, 2)
             Spacer(minLength: 24)
+            // In the order of their weight (#392), as on the iPhone's first screen: the tour, the demo, then Restore.
             GlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button {
                         withAnimation(reduceMotion ? nil : .snappy) { welcomed = true }
                     } label: {
-                        Text("Get Started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Text("Get Started").font(.headline).foregroundStyle(Color.onOnboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glassProminent)
+                    .tint(Color.onboardingAccent)
                     .accessibilityIdentifier("onboarding.getStarted")
-                    Button { showRestore = true } label: {
-                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("onboarding.restore")
                     // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
+                    // The two below take the accent in their words only: on the Mac a tinted glass button is filled, and
+                    // all three read as Get Started.
                     Button { Task { await model.startDemo() } } label: {
-                        Label("Try a demo", systemImage: "sparkles").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        Label("Try a demo", systemImage: "sparkles").font(.headline).foregroundStyle(Color.onboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
                     .buttonStyle(.glass)
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")
+                    Button { showRestore = true } label: {
+                        Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).foregroundStyle(Color.onboardingAccent)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.glass)
+                    .accessibilityIdentifier("onboarding.restore")
                 }
             }
             .frame(maxWidth: 380)
@@ -179,7 +186,7 @@ struct OnboardingView: View {
                         if isLast { showForm = true } else { page += 1 }
                     } label: {
                         Text(isLast ? "Connect your gateway" : "Continue")
-                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                            .font(.headline).foregroundStyle(Color.onOnboardingAccent).frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.glassProminent)
                     .accessibilityIdentifier(isLast ? "onboarding.addGateway" : "onboarding.continue")
@@ -187,10 +194,17 @@ struct OnboardingView: View {
                         Button("Skip") { page = pages.count - 1 }
                             .font(.subheadline).foregroundStyle(.secondary)
                             .accessibilityIdentifier("onboarding.skip")
+                    } else if model.demoAvailable {
+                        // Past the welcome screen, the demo is still a way in (#392): Get Started led here, with no way back.
+                        Button("Try a demo") { Task { await model.startDemo() } }
+                            .font(.subheadline)
+                            .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
+                            .accessibilityIdentifier("onboarding.tryDemo.last")
                     } else {
                         Text(" ").font(.subheadline)
                     }
                 }
+                .tint(Color.onboardingAccent)
                 .padding(.horizontal, 24)
                 .padding(.bottom, 16)
             }
@@ -210,6 +224,38 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 20).padding(.top, 10)
     }
+}
+
+extension Color {
+    /// The onboarding's accent, on its buttons and links on the first screen and past it (the tour on iPhone and iPad,
+    /// the welcome and pages on the Mac): the system blue read under 4.5:1 on the glow (#392). Darker in light, lighter
+    /// in dark, so its words read at 4.5:1 or better on either ground.
+    #if canImport(UIKit)
+    static let onboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0x9A / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1)
+        : UIColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1) })
+    /// The words on a button filled with that accent: white in light; in dark, where the accent is light, near-black,
+    /// since no blue reads at 4.5:1 both under white words and as words on a dark ground.
+    static let onOnboardingAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white })
+    /// A grey for the onboarding's second lines (the connect card's): still read as under their titles, and at 4.5:1 or
+    /// better on its ground in light and dark, where the secondary label read about 2.9:1.
+    static let onboardingCaption = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(white: 0xBA / 255, alpha: 1) : UIColor(white: 0x66 / 255, alpha: 1) })
+    #else
+    static let onboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0x9A / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1)
+            : NSColor(red: 0x00 / 255, green: 0x55 / 255, blue: 0xC4 / 255, alpha: 1)
+    })
+    static let onOnboardingAccent = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(red: 0x0B / 255, green: 0x1A / 255, blue: 0x33 / 255, alpha: 1) : .white
+    })
+    static let onboardingCaption = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? NSColor(white: 0xBA / 255, alpha: 1) : NSColor(white: 0x66 / 255, alpha: 1)
+    })
+    #endif
 }
 
 enum TourDemoKind { case bots, chat, approval, island, studio, summaries, connect }
@@ -268,7 +314,7 @@ private struct ChatDemo: View {
     @State private var toolDone = false
     @State private var reply2 = ""
     private let full = "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone."
-    private let full2 = "Done — 4.2 GB freed. Want log rotation set up so it stays that way?"
+    private let full2 = "Done, 4.2 GB freed. Want log rotation set up so it stays that way?"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -426,7 +472,7 @@ private struct IslandDemo: View {
                 BotFaceView(spec: bot, size: 36, active: false, mood: BotFaceView.Mood(profile: "tour-note"))
                 VStack(alignment: .leading, spacing: 2) {
                     HStack { Text("Ada").font(.subheadline.weight(.semibold)); Spacer(); Text("now").font(.caption2).foregroundStyle(.secondary) }
-                    Text("Done — 4.2 GB freed. Want me to set up log rotation?").font(.caption).lineLimit(2)
+                    Text("Done, 4.2 GB freed. Want me to set up log rotation?").font(.caption).lineLimit(2)
                 }
             }
             .padding(12)
@@ -576,7 +622,7 @@ private struct SummariesDemo: View {
                         if summarized { Image(systemName: "sparkles").font(.caption2).foregroundStyle(.secondary).transition(.scale.combined(with: .opacity)).accessibilityLabel("Summarized") }
                     }
                     Text(summarized ? "Freed 4.2 GB of rotated logs; the bot offered to set up log rotation and is waiting on a yes."
-                                    : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done — 4.2 GB freed. Want log rotation set up so it")
+                                    : "Found 4.2 GB of rotated logs older than 90 days. Clearing those and leaving today's alone. Done, 4.2 GB freed. Want log rotation set up so it")
                         .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
                         .contentTransition(.numericText())
                     Text("Ada · 2 min ago").font(.caption2).foregroundStyle(.tertiary)
@@ -634,7 +680,7 @@ private struct ConnectDemo: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text(title).font(.subheadline.weight(.semibold))
-                Text(text).font(.caption).foregroundStyle(.secondary)
+                Text(text).font(.caption).foregroundStyle(Color.onboardingCaption)
             }
             Spacer(minLength: 0)
         }

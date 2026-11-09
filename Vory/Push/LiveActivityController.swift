@@ -327,9 +327,14 @@ final class LiveActivityController: TurnActivityReporting {
         }
     }
 
-    /// Ends every card a gateway's chats have up: leaving the demo (#392) leaves none of its turns on the Lock Screen.
-    static func endAll(connection: UUID) {
-        for a in Activity<HermesTurnAttributes>.activities where a.attributes.connectionID == connection.uuidString { endNow(a) }
+    /// Ends every card a gateway's chats have up: leaving the demo (#392) leaves none of its turns on the Lock Screen, nor
+    /// does a launch after the app ended inside it (#632). Returns how many it ended.
+    @discardableResult
+    static func endAll(connection: UUID) -> Int {
+        let all = Activity<HermesTurnAttributes>.activities
+        let ids = Set(DemoLeftovers.cards(all.map { (id: $0.id, connection: $0.attributes.connectionID) }, of: connection.uuidString))
+        for a in all where ids.contains(a.id) { endNow(a) }
+        return ids.count
     }
 
     private static func endNow(_ a: Activity<HermesTurnAttributes>) {

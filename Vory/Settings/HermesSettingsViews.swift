@@ -1,6 +1,31 @@
 import SwiftUI
 import VoryCore
 
+// MARK: The demo's read-only pages (#392)
+
+/// In the demo the gateway is the app's own sample, which keeps nothing it is sent: a change on these pages looked
+/// accepted, then the page read the old value back. So in the demo they are read-only, under this line saying why, on
+/// iPhone, iPad and the Mac; out of the demo they are as they were.
+struct DemoReadOnlyNote: View {
+    @Environment(AppModel.self) private var model
+    static let words = "This is the demo's sample setup. Connect your own gateway to make changes."
+    var body: some View {
+        if model.isInDemo {
+            Section {
+                // The symbol beside the words, hidden from accessibility (it is decoration), and the words a plain Text of
+                // their own: the element VoiceOver and the audit read is that Text, its label its own words, with no
+                // symbol, stack or label of ours in it (with either, the audit read the line's Dynamic Type as partly
+                // unsupported at every size, while it grew). Both scale with the text size; the words wrap, no line limit.
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Image(systemName: "info.circle").foregroundStyle(.tint).accessibilityHidden(true)
+                    Text(Self.words).accessibilityIdentifier("demo.readonly")
+                }
+                .font(.subheadline)
+            }
+        }
+    }
+}
+
 // MARK: Model
 
 struct ModelSettingsView: View {
@@ -24,6 +49,7 @@ struct ModelSettingsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Model", symbol: "cpu", color: .blue, description: "The default model and provider for this bot.")
+            DemoReadOnlyNote()
             if let o = options {
                 Section {
                     // The gateway's model id carries its provider ("anthropic/…"): shown as it is,
@@ -74,6 +100,7 @@ struct ModelSettingsView: View {
                 }
             }
         } label: { Text(title) }
+        .disabled(model.isInDemo)
     }
 
     private func load(refresh: Bool = false) async {
@@ -128,6 +155,7 @@ struct ConfigFormView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Config", symbol: "slider.horizontal.3", color: .gray, description: "Every setting in this bot's config, grouped the way the gateway reports them.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(categories, id: \.0) { cat, fields in
                 Section(cat.capitalized) {
@@ -149,17 +177,30 @@ struct ConfigFormView: View {
             switch field.type {
             case "boolean":
                 Toggle(key, isOn: Binding(get: { current?.boolValue ?? false }, set: { v in Task { await write(key, .bool(v)) } }))
+                    .disabled(model.isInDemo)
+            // In the demo a choice, a number or a string is a value to read, in the stock read-only row (as the model
+            // page's Current), not a disabled picker or field: disabled, their values drew dimmed without telling
+            // VoiceOver they aren't enabled (the audit's missing NotEnabled trait). The toggle stays a disabled control.
             case "select":
-                Picker(key, selection: Binding(get: { current?.displayText ?? "" }, set: { v in Task { await write(key, .string(v)) } })) {
-                    ForEach(field.options ?? [], id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
+                if model.isInDemo {
+                    let v = current?.displayText ?? ""
+                    LabeledContent(key, value: v.isEmpty ? "(none)" : v)
+                } else {
+                    Picker(key, selection: Binding(get: { current?.displayText ?? "" }, set: { v in Task { await write(key, .string(v)) } })) {
+                        ForEach(field.options ?? [], id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
+                    }
                 }
             case "number":
-                LabeledContent(key) {
-                    NumberField(value: current?.doubleValue ?? 0) { v in Task { await write(key, .number(v)) } }
+                if model.isInDemo { LabeledContent(key, value: NumberField.shown(current?.doubleValue ?? 0)) } else {
+                    LabeledContent(key) {
+                        NumberField(value: current?.doubleValue ?? 0) { v in Task { await write(key, .number(v)) } }
+                    }
                 }
             default:
-                LabeledContent(key) {
-                    StringField(value: current?.displayText ?? "") { v in Task { await write(key, .string(v)) } }
+                if model.isInDemo { LabeledContent(key, value: current?.displayText ?? "") } else {
+                    LabeledContent(key) {
+                        StringField(value: current?.displayText ?? "") { v in Task { await write(key, .string(v)) } }
+                    }
                 }
             }
             if let d = field.description, !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
@@ -210,9 +251,14 @@ struct NumberField: View {
     var value: Double
     var commit: (Double) -> Void
     @State private var text = ""
+    /// A whole number without its ".0"; anything Int can't hold (infinite, NaN or past 1e15) as Double prints it. Also
+    /// the demo's read-only rows' value.
+    static func shown(_ value: Double) -> String {
+        value.isFinite && abs(value) < 1e15 && value.rounded() == value ? String(Int(value)) : String(value)
+    }
     var body: some View {
         TextField("", text: $text).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-            .onAppear { text = value.rounded() == value ? String(Int(value)) : String(value) }
+            .onAppear { text = Self.shown(value) }
             .onSubmit { if let d = Double(text), d != value { commit(d) } }
     }
 }
@@ -239,6 +285,7 @@ struct EnvView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "API Keys & Environment", symbol: "key.fill", color: .orange, description: "Provider keys and environment variables the gateway uses.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             Section {
                 Text("These are the keys in the .env file of the bot \((rt?.selectedProfile).map { "\"\($0)\"" } ?? "selected"). Each bot has its own file. A key the gateway gets from its environment or from a login is used but not listed here.")
@@ -258,8 +305,9 @@ struct EnvView: View {
                             }
                         }
                         .tint(.primary)
+                        .disabled(model.isInDemo)
                         .rowActions {
-                            if vars[k]?.hasValue == true { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
+                            if vars[k]?.hasValue == true, !model.isInDemo { Button(role: .destructive) { Task { await clear(k) } } label: { Label("Clear", systemImage: "trash") } }
                         }
                     }
                 }
@@ -269,8 +317,9 @@ struct EnvView: View {
         // Never a tab's root: under the morph bar (a page pushed from Settings) the bar draws its Add
         // beside its Back, in the one morph as the page comes in (#435); elsewhere it is the page's
         // own. Hidden under the bar with nothing drawing it, a variable could not be added (#426).
-        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model) { Button { showAdd = true } label: { Label("Add variable", systemImage: "plus") }.accessibilityIdentifier("env.add") } } }
-        .morphPageActions([MorphPageAction(id: "env.add", symbol: "plus", label: "Add variable") { showAdd = true }], on: MorphTopBar.active(model))
+        .pageToolbar { ToolbarItem(placement: .primaryAction) { if !MorphTopBar.active(model), !model.isInDemo { Button { showAdd = true } label: { Label("Add variable", systemImage: "plus") }.accessibilityIdentifier("env.add") } } }
+        // No Add in the demo (#392): nothing it is given is kept.
+        .morphPageActions(model.isInDemo ? [] : [MorphPageAction(id: "env.add", symbol: "plus", label: "Add variable") { showAdd = true }], on: MorphTopBar.active(model))
         .reloadable { await load() }
         .task(id: rt?.selectedProfile) { await load() }
         .alert(editing ?? "", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
@@ -324,6 +373,7 @@ struct ToolsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Tools", symbol: "wrench.and.screwdriver", color: .teal, description: "What the bot may do: each tool on or off.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(toolsets) { t in
                 Toggle(isOn: Binding(get: { t.enabled }, set: { v in Task { await toggle(t, v) } })) {
@@ -333,6 +383,7 @@ struct ToolsView: View {
                         if let tools = t.tools, !tools.isEmpty { Text(tools.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                     }
                 }
+                .disabled(model.isInDemo)
                 .accessibilityIdentifier("tool.toggle.\(t.name)")
             }
         }
@@ -366,6 +417,7 @@ struct SkillsView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Skills", symbol: "sparkles", color: .purple, description: "The skills installed for this bot and what they add.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             ForEach(skills.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { s in
                 Toggle(isOn: Binding(get: { s.enabled ?? true }, set: { v in Task { await toggle(s, v) } })) {
@@ -374,6 +426,7 @@ struct SkillsView: View {
                         if let d = s.description { Text(d).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
                     }
                 }
+                .disabled(model.isInDemo)
             }
         }
         .pageSearchable(text: $search, always: true)
@@ -407,6 +460,7 @@ struct MCPView: View {
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "MCP Servers", symbol: "point.3.connected.trianglepath.dotted", color: .mint, description: "External tool servers the bot can call, and whether each is on.")
+            DemoReadOnlyNote()
             if let error { Text(error).foregroundStyle(.red).font(.footnote) }
             if let testResult { Text(testResult).font(.footnote) }
             ForEach(servers) { s in
@@ -416,9 +470,12 @@ struct MCPView: View {
                         Text(s.url ?? ([s.command].compactMap { $0 } + (s.args ?? [])).joined(separator: " ")).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
+                .disabled(model.isInDemo)
                 .rowActions {
-                    Button(role: .destructive) { pendingDelete = s } label: { Label("Remove", systemImage: "trash") }
-                    Button { Task { await test(s) } } label: { Label("Test", systemImage: "bolt") }.tint(.blue)
+                    if !model.isInDemo {
+                        Button(role: .destructive) { pendingDelete = s } label: { Label("Remove", systemImage: "trash") }
+                        Button { Task { await test(s) } } label: { Label("Test", systemImage: "bolt") }.tint(.blue)
+                    }
                 }
             }
         }
@@ -486,17 +543,25 @@ struct ApprovalsView: View {
     @State private var error: String?
     @State private var loaded = false
     private var rt: GatewayRuntime? { model.runtime }
+    /// The picker's titles by the gateway's mode, for the demo's read-only row.
+    static let modeTitles = ["smart": "Smart", "manual": "Manual", "off": "Off"]
 
     var body: some View {
         SettingsList {
             SettingsHeaderSection(title: "Approvals", symbol: "checkmark.shield", color: .green, description: "How commands get approved — manual, smart or off — and what is always allowed.")
+            DemoReadOnlyNote()
             Section {
-                Picker("Mode", selection: $mode) {
-                    Text("Smart").tag("smart"); Text("Manual").tag("manual"); Text("Off").tag("off")
+                // In the demo the mode and the timeout are values to read, as the config page's.
+                if model.isInDemo { LabeledContent("Mode", value: Self.modeTitles[mode] ?? mode) } else {
+                    Picker("Mode", selection: $mode) {
+                        Text("Smart").tag("smart"); Text("Manual").tag("manual"); Text("Off").tag("off")
+                    }
+                    .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
                 }
-                .onChange(of: mode) { _, v in if loaded { Task { await write(["mode": .string(v)]) } } }
-                LabeledContent("Timeout (seconds)") {
-                    NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
+                if model.isInDemo { LabeledContent("Timeout (seconds)", value: NumberField.shown(timeout)) } else {
+                    LabeledContent("Timeout (seconds)") {
+                        NumberField(value: timeout) { v in Task { await write(["timeout": .number(v)]) } }
+                    }
                 }
             } header: { Text("approvals") } footer: {
                 Text("Smart lets a guardian model auto-approve routine commands and escalate risky ones. Manual asks you for every dangerous command. Off disables the gate. YOLO (skip approvals) is per session, default off, and lives in the chat's model menu.")
@@ -512,12 +577,13 @@ struct ApprovalsView: View {
                         }
                         #if os(macOS)
                         .contextMenu {
-                            Button(role: .destructive) {
+                            if !model.isInDemo { Button(role: .destructive) {
                                 let next = allowlist.filter { $0 != rule }
                                 Task { await write(["command_allowlist": .array(next.map { .string($0) })], topLevel: true) }
-                            } label: { Label("Remove rule", systemImage: "trash") }
+                            } label: { Label("Remove rule", systemImage: "trash") } }
                         }
                         #endif
+                        .deleteDisabled(model.isInDemo)
                     }
                     .onDelete { offsets in
                         var next = allowlist; next.remove(atOffsets: offsets)

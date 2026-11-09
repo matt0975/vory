@@ -205,7 +205,8 @@ import Testing
         let snapshotAfter = WidgetSnapshot.load()
         #expect(snapshotAfter == snapshotBefore, "the widgets' snapshot changed: \(snapshotBefore.map { "\($0.gatewayName) \($0.connectionID) at \($0.updatedAt.timeIntervalSince1970)" } ?? "none") -> \(snapshotAfter.map { "\($0.gatewayName) \($0.connectionID) at \($0.updatedAt.timeIntervalSince1970)" } ?? "none")")
         let ownAfter = ownKeys.map { UserDefaults.standard.object(forKey: $0).map { "\($0)" } }
-        #expect(ownAfter == ownBefore, "the demo changed the person's own settings: \(zip(ownKeys, zip(ownBefore, ownAfter)).filter { $0.1.0 != $0.1.1 }.map(\.0))")
+        // A change names its writer when it went through the chat list's prefs (#512); none listed: the writer is elsewhere.
+        #expect(ownAfter == ownBefore, "the demo changed the person's own settings: \(zip(ownKeys, zip(ownBefore, ownAfter)).filter { $0.1.0 != $0.1.1 }.map(\.0)); the chat list's last writes: \(ChatListPrefs.ownWritesForTests)")
         #expect(Keychain.get(account: BotLooks.account) == looksBefore, "the looks' copy for the extensions and the Watch changed")
         #expect(Self.files(in: Self.botPhotos) == photosBefore, "the bots' photos changed")
         #expect(!FileManager.default.fileExists(atPath: scratch.path), "the demo's scratch folder is still there")
@@ -452,6 +453,55 @@ import Testing
         prefs.inDemo = false
         #expect(keys.allSatisfy { UserDefaults.standard.object(forKey: $0) == nil }, "leaving the demo wrote \(keys.compactMap { k in UserDefaults.standard.object(forKey: k).map { "\(k)=\($0)" } })")
         #expect(prefs.projectFilter == "" && prefs.collapsedRaw == "" && prefs.archivedRoomsRaw == "")
+    }
+
+    /// A number or a Bool under one of the chat list's own keys (#512) reads as no value, and leaving a demo that had set
+    /// its own wrote "" over it: the prefs read each key as a String or nothing, and the write compared against
+    /// `string(forKey:)`, which turns a number into "1". Each key keeps what it held.
+    @Test func aNumberUnderTheChatListsOwnKeysIsNotWrittenOverOnLeavingTheDemo() {
+        let prefs = ChatListPrefs.shared
+        let d = UserDefaults.standard
+        let keys = ["chats.filter.project", "chats.byProject.collapsed", "chats.archivedRooms"]
+        let before = keys.map { d.object(forKey: $0) }
+        defer {
+            prefs.inDemo = false
+            for (k, v) in zip(keys, before) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
+        }
+        for held in [NSNumber(value: 1), NSNumber(value: true)] {
+            prefs.inDemo = false
+            for k in keys { d.set(held, forKey: k) }
+            prefs.inDemo = true
+            prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
+            prefs.inDemo = false
+            for k in keys {
+                #expect(!(d.object(forKey: k) is String) && (d.object(forKey: k) as? NSNumber) == held,
+                        "\(k) was written over on leaving the demo: now \(d.string(forKey: k).map { "\"\($0)\"" } ?? "absent")")
+            }
+        }
+    }
+
+    /// Leaving the demo puts the person's own back from the defaults, and that writes nothing (#512), with their values
+    /// there and with none: no write of the three keys goes through the prefs, as their write trace counts them.
+    @Test func puttingThePersonsOwnBackFromTheDefaultsWritesNothing() {
+        let prefs = ChatListPrefs.shared
+        let d = UserDefaults.standard
+        let keys = ["chats.filter.project", "chats.byProject.collapsed", "chats.archivedRooms"]
+        let before = keys.map { d.object(forKey: $0) }
+        defer {
+            prefs.inDemo = false
+            for (k, v) in zip(keys, before) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } }
+        }
+        for own in [["mine", "a", "r1"], nil] {
+            prefs.inDemo = false
+            for (i, k) in keys.enumerated() { if let own { d.set(own[i], forKey: k) } else { d.removeObject(forKey: k) } }
+            prefs.inDemo = true
+            prefs.projectFilter = "proj-lake"; prefs.collapsedRaw = "proj-lab"; prefs.archivedRoomsRaw = "room-weekend"
+            let writes = ChatListPrefs.ownWriteCountForTests
+            prefs.inDemo = false
+            #expect(ChatListPrefs.ownWriteCountForTests == writes, "leaving the demo wrote: \(ChatListPrefs.ownWritesForTests.suffix(ChatListPrefs.ownWriteCountForTests - writes))")
+            #expect([prefs.projectFilter, prefs.collapsedRaw, prefs.archivedRoomsRaw] == (own ?? ["", "", ""]), "the person's own didn't come back")
+            #expect(keys.map { d.string(forKey: $0) } == (own.map { $0.map { Optional($0) } } ?? [nil, nil, nil]), "the defaults changed")
+        }
     }
 
     #if os(iOS)

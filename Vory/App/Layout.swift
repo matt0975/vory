@@ -132,13 +132,24 @@ enum TopBarRoom {
     /// and XXXL, 2026-11-02): 52.
     static let stripPitch: CGFloat = 52
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
-    /// (.avoidHidingContent)`): under a status in a top corner, and with the bar up in the status band (#516). There the
-    /// field stands at the safe area's top under the row; with the bar's band hidden by an active search the field and its
-    /// Cancel rode up under the row's capsules (into the status band, y 24, with the bar up), and a room changed to follow
-    /// the search arrived after UIKit had moved the field (the page jumped as the search started and ended). Keeping the
-    /// bar, the field stays where it is and nothing changes late. Everywhere else (phones, iPads, the closed Duo) the
-    /// system's own behaviour, unchanged.
-    static func keepsBarWhileSearching(statusInCorner: Bool, barUp: Bool = false) -> Bool { statusInCorner || barUp }
+    /// (.avoidHidingContent)`): under a status in a top corner, with the bar up in the status band (#516), and wherever
+    /// the floating top bar stands over the system's band (`floatingBar`, `floatingBarOverBand`: a standard iPhone too,
+    /// #648). There the field stands at the safe area's top under the row; with the bar's band hidden by an active search
+    /// the field and its Cancel rode up under the row's capsules (into the status band, y 24, with the bar up), and a
+    /// room changed to follow the search arrived after UIKit had moved the field (the page jumped as the search started
+    /// and ended). On a standard iPhone the field rode up from under the row (y 116) to the band (y 62), its Close under
+    /// the row's trailing capsule (+ / Sort / Filters on Chats), which took the tap: the search couldn't be ended until a
+    /// relaunch (#648). Keeping the bar, the field stays where it is and nothing changes late. Elsewhere (an iPad or a
+    /// wide window, where the floating bar is off; the closed Duo's strip) the system's own behaviour, unchanged.
+    static func keepsBarWhileSearching(statusInCorner: Bool, barUp: Bool = false, floatingBar: Bool = false) -> Bool {
+        statusInCorner || barUp || floatingBar
+    }
+    /// Whether the floating top bar stands over the system's navigation bar band (#648): the bar is on (`MorphTopBar
+    /// .active`: not a wide window), and the system's bars aren't in the closed Duo's side strip (`closedStrip`), where the
+    /// pages keep the row's room themselves. The one rule both search callers use (ChatListView, PhonePageSearchable).
+    static func floatingBarOverBand(barOn: Bool, barsVertical: Bool, size: CGSize) -> Bool {
+        barOn && !closedStrip(barsVertical: barsVertical, size: size)
+    }
     /// The room under a status in a top corner. ASSUMPTION (iOS 27.1 to 27.2, the open Duo upright and as a laptop): UIKit
     /// brings the navigation bar's own title band (58 pt) back under the safe area once any additional inset is set, so
     /// the smallest inset puts the search drawer just under the row: 1 pt leaves it at 141 against the row's 130, where
@@ -493,6 +504,275 @@ enum VoiceSplit {
         guard top >= minTop(for: size), bottom >= minBottom else { return nil }
         return (top, fold.height, bottom)
     }
+
+    /// The least a waiting card gets in one column (#631): its heading and its choices with a few lines of its words over
+    /// them, which scroll from their start when there are more.
+    static func cardFloor(for size: DynamicTypeSize) -> CGFloat { size.isAccessibilitySize ? 300 : 220 }
+    /// What the bot's block gives up at the split's sizes: its ring (with the motion engine off) or its face.
+    static func compactSaving(ring: Bool) -> CGFloat { ring ? 196 - VoiceSplit.ring : 164 - VoiceSplit.face }
+    /// One column with a card waiting (#631): the bot's block lean (at the split's sizes, its state lines gone: the card's
+    /// heading says the same) when, at its full size, it would leave the card too little between the top row and the
+    /// controls (the closed Duo's 382 pt column ran 23 pt past the screen at both ends, which clipped the card's words and
+    /// put the top row under the status bar). `botFull` is the block at full size. `card` is the card's whole height once
+    /// it is measured (`cardWhole`): the conversation gives way to nothing first, and the bot goes lean only when the
+    /// whole card still doesn't fit. Until then the card's floor decides. The card is held to what is left either way, so
+    /// nothing runs off the screen.
+    static func compactOneColumn(room: CGFloat, row: CGFloat, botFull: CGFloat, controls: CGFloat, card: CGFloat = 0,
+                                 size: DynamicTypeSize) -> Bool {
+        guard room > 0 else { return false }
+        let left = room - row - botFull - controls
+        return card > 0 ? left - transcriptTop < card : left < cardFloor(for: size)
+    }
+
+    /// The conversation's padding over its first line in voice mode (`HandsFreeView`): all it keeps when it gives way.
+    static let transcriptTop: CGFloat = 6
+    /// The conversation's scroll in voice mode (`VoiceTranscriptView`, round 3l): its padding over its first row, the space
+    /// between its rows, and what stands under its newest row (its padding 6, the marker it follows and the space over it).
+    static let conversationTop: CGFloat = 20
+    static let conversationGap: CGFloat = 12
+    static let conversationBottom: CGFloat = 6 + 1 + 12
+    /// How much of the conversation shows on the voice screen (round 3l): whole lines only, at its top edge too. Its newest
+    /// rows stand at the bottom (the screen follows them), so the rows are walked from the newest up, and when the top edge
+    /// would fall inside a row, the height is cut down to where one of its lines starts; the rest stays blank above it.
+    /// `rows` are the rows' heights, newest first; `line` one line of them. The room as it is when everything fits, when
+    /// the edge falls between rows or under the newest one, and until the line and every row are measured.
+    static func conversationShown(room: CGFloat, rows: [CGFloat], line: CGFloat) -> CGFloat {
+        guard room > 0, line > 0, !rows.isEmpty, !rows.contains(where: { $0 <= 0 }),
+              conversationTop + rows.reduce(0, +) + CGFloat(rows.count - 1) * conversationGap + conversationBottom > room
+        else { return max(0, room) }
+        var y = conversationBottom
+        for h in rows {
+            if room <= y { return room }
+            if room < y + h { return max(y, y + h - ((y + h - room) / line - 0.01).rounded(.up) * line) }
+            y += h + conversationGap
+        }
+        return room
+    }
+    /// The space between the bot's face and its state lines (`HandsFreeView`), which goes with them when the bot is lean.
+    static let botLinesGap: CGFloat = 18
+    /// The bot's block in one column with a card waiting (#631): full (its face and its state lines), lean (the split's
+    /// face alone, the lines gone: the card's heading says the same; the mic muted a badge on the face), or hidden (no face
+    /// either, whenever what must show wouldn't stand whole beside the lean face, round 3l; the badge on the top row).
+    enum BotLevel: Equatable { case full, lean, hidden }
+    /// The block's natural height at a level, the 12 over it included: at full the face (164, or its ring's 196 with the
+    /// motion engine off) and the state lines (`lines`, the mic muted's capsule among them while muted) with the space
+    /// over them; lean the split's face or ring alone, the same height muted or not; hidden nothing.
+    static func botBlock(_ level: BotLevel, ring: Bool, lines: CGFloat) -> CGFloat {
+        let face: CGFloat = ring ? 196 : 164
+        switch level {
+        case .full: return 12 + face + botLinesGap + lines
+        case .lean: return 12 + face - compactSaving(ring: ring)
+        case .hidden: return 0
+        }
+    }
+    /// The bot's level in one column with a card waiting (#631): full while the whole card fits beside the full block (the
+    /// conversation gives way first); lean when it doesn't (`compactOneColumn`); hidden when even what must show (what's
+    /// asked and the choices) wouldn't stand whole beside the lean face, at any size (round 3l: it was XXXL and larger only,
+    /// and the closed Duo at XXL cut the command under the words' fade), within `faceMargin`. The blocks are their natural
+    /// heights (`botBlock`), and the controls theirs too (round 3: never squeezed).
+    static func oneColumnBotLevel(room: CGFloat, row: CGFloat, full: CGFloat, lean: CGFloat, controls: CGFloat,
+                                  whole: CGFloat, need: CGFloat, size: DynamicTypeSize) -> BotLevel {
+        guard compactOneColumn(room: room, row: row, botFull: full, controls: controls, card: whole, size: size) else { return .full }
+        guard need > 0 else { return .lean }
+        return room - row - lean - controls - transcriptTop < need + faceMargin ? .hidden : .lean
+    }
+    /// How close what must show may come to what's left beside the lean face before the face hides (round 3l): the
+    /// decision errs to hiding, as the choices' one-line check errs to wrapping (`choiceFitScale`), so a measure a point
+    /// short never leaves what's asked under the fade. Nothing it reads changes with the level (the card's width, its parts
+    /// and the controls are the same either way), so the face can't flicker between the two.
+    static let faceMargin: CGFloat = 8
+    /// The card's padding (`PendingCardView`) and the space between an approval's parts (`ApprovalCardView`).
+    static let cardPadding: CGFloat = 14
+    static let cardGap: CGFloat = 10
+
+    /// A waiting approval's parts in one column (#631), as `ApprovalCardView` measures them: what's asked (the heading,
+    /// the description, the command, the tool, the guardian's flag), what each answer covers, and the choices. 0 until
+    /// measured.
+    struct CardHeights: Equatable {
+        var asked: CGFloat = 0
+        var covers: CGFloat = 0
+        var choices: CGFloat = 0
+        /// One line of what each answer covers (round 3k), so its scroll shows whole lines only. 0 until measured.
+        var coversLine: CGFloat = 0
+    }
+    /// What must show of the card: what's asked and the choices, with the card's padding and the spaces either side of
+    /// what each answer covers (scrolled down to nothing). 0 until measured.
+    static func cardNeed(_ h: CardHeights) -> CGFloat {
+        h.asked > 0 && h.choices > 0 ? h.asked + h.choices + 2 * cardGap + 2 * cardPadding : 0
+    }
+    /// The whole card, what each answer covers too. 0 until measured.
+    static func cardWhole(_ h: CardHeights) -> CGFloat {
+        let need = cardNeed(h)
+        return need > 0 ? need + h.covers : 0
+    }
+    /// How a measured card stands in one column (#631): its height, and which of its parts scroll.
+    struct OneColumnFit: Equatable {
+        var height: CGFloat
+        /// What's asked doesn't fit with the choices: it scrolls from the heading, the choices under it.
+        var wordsScroll: Bool
+        /// Even the choices don't fit with the card's padding (the largest sizes on a short screen): everything scrolls,
+        /// from the heading. The last resort, so nothing runs past the screen.
+        var allScroll: Bool
+    }
+    /// The card's height in one column once it is measured (#631): the whole card when what the top row, the bot's
+    /// block and the controls leave holds it (the conversation gets the rest, if any), else exactly what is left, so the
+    /// column never runs past the screen (round 3: no floor once measured; the floor let the column run long at the
+    /// accessibility sizes). nil until measured. Round 3k: when the card is short of its whole height yet holds what must
+    /// show, what each answer covers shows whole lines only: its share is cut down to a whole number of its lines, the card
+    /// is that much shorter, and the conversation takes the rest (a line cut through under the fade read as clipped text).
+    static func oneColumnCard(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, heights: CardHeights) -> OneColumnFit? {
+        let whole = cardWhole(heights)
+        guard room > 0, whole > 0 else { return nil }
+        var height = min(whole, max(0, room - row - bot - controls - transcriptTop))
+        let need = cardNeed(heights)
+        if heights.coversLine > 0, height < whole, height >= need {
+            height = need + ((height - need) / heights.coversLine + 0.01).rounded(.down) * heights.coversLine
+        }
+        let choicesAlone = heights.choices + cardGap + 2 * cardPadding
+        return OneColumnFit(height: height, wordsScroll: height < cardNeed(heights), allScroll: height < choicesAlone)
+    }
+    /// The card's height in one column: what the top row, the bot's block and the controls leave, never under its floor.
+    static func oneColumnCardMax(room: CGFloat, row: CGFloat, bot: CGFloat, controls: CGFloat, size: DynamicTypeSize) -> CGFloat? {
+        guard room > 0 else { return nil }
+        return max(cardFloor(for: size), room - row - bot - controls)
+    }
+
+    /// Voice mode's choices, all the same size (#631, round 3f): how many to a row, and whether their names stand on one
+    /// line or wrap. The cells share the row evenly and are all as tall as the tallest (`ChoiceCells`), so the widest name
+    /// and the longest word decide. `columns` is 4 (a row), 2 (two by two) or 1 (a column) for four choices.
+    struct ChoiceArrangement: Equatable {
+        var columns: Int
+        /// The names stand on one line, each shrunk only as far as its cell needs and never under `minScale`.
+        var oneLine: Bool
+        var minScale: CGFloat
+        /// Before the measures are in: two by two, wrapping.
+        static let unmeasured = ChoiceArrangement(columns: 2, oneLine: false, minScale: 1)
+        /// Before the measures are in at the accessibility sizes: one column, wrapping (round 3i). A half cell there can be
+        /// narrower than a word, and no frame should ever break one.
+        static let unmeasuredAccessible = ChoiceArrangement(columns: 1, oneLine: false, minScale: 1)
+    }
+    /// The furthest a choice's name shrinks to stay on one line, under the accessibility sizes (round 3f).
+    static let choiceMinScale: CGFloat = 0.8
+    /// The scale the one-line check measures a name at (round 3j), above the drawing bound: a name shrunk to its floor
+    /// draws wider than a copy set at that size measures (the closed Duo at XXL: "Allow for this chat" measured 129.7 at
+    /// 0.8 against a room of 133, and was cut when drawn). A name stands on one line only where it measures as fitting
+    /// here; it still draws down to `choiceMinScale`.
+    static let choiceFitScale: CGFloat = 0.85
+    /// The space between the choices, across and down.
+    static let choiceGap: CGFloat = 8
+    /// The choices' arrangement across `width` (round 3f), from the widest name's and the longest word's one-line widths
+    /// at the text size, the widest name's at `choiceFitScale` (`widestAtFit`; round 3i, 3j) and the capsule's own insets
+    /// (its width less its name's), all measured off screen: one line, in as many columns as there are choices or else
+    /// two, when the widest name fits its cell at the fit scale (at the accessibility sizes, at its own size: nothing
+    /// shrinks there); else two columns whose names wrap on words, when a half cell holds the longest word; else one
+    /// column, wrapping. No name is cut and none breaks inside a word. The width at the fit scale is measured at that
+    /// point size, not worked out from the name's own (text grows relatively wider as it shrinks: upright at XL a name the
+    /// estimate put on one line was cut, round 3i), and at a scale above the bound the name draws down to (a name drawn
+    /// at its floor is wider still: the closed Duo at XXL, round 3j). Before the measures are in, two by two, wrapping, or
+    /// one column at the accessibility sizes.
+    static func choiceArrangement(width: CGFloat, widestName: CGFloat, widestAtFit: CGFloat, longestWord: CGFloat, insets: CGFloat,
+                                  count: Int, accessibility: Bool) -> ChoiceArrangement {
+        guard count > 1 else { return ChoiceArrangement(columns: 1, oneLine: false, minScale: 1) }
+        guard width > 0, widestName > 0, accessibility || widestAtFit > 0, longestWord > 0, insets > 0 else {
+            return accessibility ? .unmeasuredAccessible : .unmeasured
+        }
+        func room(_ columns: Int) -> CGFloat { (width - CGFloat(columns - 1) * choiceGap) / CGFloat(columns) - insets }
+        let minScale = accessibility ? 1 : choiceMinScale
+        let need = accessibility ? widestName : widestAtFit
+        for columns in [count, 2] where need <= room(columns) {
+            return ChoiceArrangement(columns: columns, oneLine: true, minScale: minScale)
+        }
+        return ChoiceArrangement(columns: longestWord <= room(2) ? 2 : 1, oneLine: false, minScale: 1)
+    }
+
+    /// The caps the side controls' captions step down through, largest first (#631, round 3f).
+    static let captionCaps: [DynamicTypeSize] = [.accessibility4, .accessibility3, .accessibility2, .accessibility1]
+    /// The one cap both side captions take (round 3f), so they are always the same size, whichever words they show:
+    /// none when the widest caption (`current`) with 8 pt of margin fits the side's `room`; else the largest of
+    /// `captionCaps` at which it does (`capped`: the widest caption's width under each); else the smallest. None until
+    /// every width is measured, so a cap is never picked from part of them.
+    static func captionCap(room: CGFloat, current: CGFloat, capped: [CGFloat]) -> DynamicTypeSize? {
+        guard room > 0, current > 0, current + 8 > room, capped.count == captionCaps.count, !capped.contains(0) else { return nil }
+        for (cap, width) in zip(captionCaps, capped) where width + 8 <= room { return cap }
+        return captionCaps.last
+    }
+}
+
+/// Voice mode's colours, chosen for contrast (#631). The screen is always dark, under a gradient from the bot's colour at
+/// the top to black; with a light bot colour (yellow, cyan, white) the top was bright enough that white words under 4.5:1
+/// failed the audit, and the card's translucent glass took on whatever stood behind it. Everything here is sRGB, 0 to 1,
+/// composited as the screen draws it (a colour at an opacity over what is under it), so the unit tests check the very
+/// colours drawn. Light bot colours get a darker top; dark ones keep 1.5's.
+enum VoiceLook {
+    /// The mic muted, in words (#234): the capsule under the bot's title, and VoiceOver's label for the lean bot's badge
+    /// (#631).
+    static let micMuted = "Mic muted"
+    /// The solid fill under the choices other than Allow once in voice mode (#631, round 3): a dark grey that white words
+    /// and Deny's red both pass 4.5:1 on, and that, unlike glass, doesn't take on what stands behind the card.
+    static let choiceFill = RGB(r: 0.2, g: 0.2, b: 0.2)
+    struct RGB: Equatable {
+        var r: Double, g: Double, b: Double
+        static let white = RGB(r: 1, g: 1, b: 1), black = RGB(r: 0, g: 0, b: 0)
+        init(r: Double, g: Double, b: Double) { self.r = r; self.g = g; self.b = b }
+        /// "#RRGGBB" (or "RRGGBB"); nil for anything else.
+        init?(hex: String) {
+            let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+            guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+            r = Double((v >> 16) & 0xFF) / 255; g = Double((v >> 8) & 0xFF) / 255; b = Double(v & 0xFF) / 255
+        }
+        var color: Color { Color(.sRGB, red: r, green: g, blue: b) }
+    }
+    /// WCAG relative luminance.
+    static func luminance(_ c: RGB) -> Double {
+        func lin(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+    static func contrast(_ a: RGB, _ b: RGB) -> Double {
+        let la = luminance(a), lb = luminance(b)
+        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+    }
+    /// `fg` at `alpha` over `bg`.
+    static func over(_ fg: RGB, _ alpha: Double, _ bg: RGB) -> RGB {
+        RGB(r: fg.r * alpha + bg.r * (1 - alpha), g: fg.g * alpha + bg.g * (1 - alpha), b: fg.b * alpha + bg.b * (1 - alpha))
+    }
+
+    /// The gradient's top: the bot's colour at this opacity over black (1.5's 0.55 unless that is too bright).
+    static let fullTopOpacity = 0.55
+    /// The brightest the top may be (its luminance), so the secondary words pass 4.5:1 there with room to spare.
+    static let topLuminanceCap = 0.12
+    /// The top's opacity for a bot colour: 0.55, or the most under it that keeps the top under the cap.
+    static func topOpacity(for tint: RGB) -> Double {
+        if luminance(over(tint, fullTopOpacity, .black)) <= topLuminanceCap { return fullTopOpacity }
+        var lo = 0.0, hi = fullTopOpacity
+        for _ in 0..<30 { let mid = (lo + hi) / 2; if luminance(over(tint, mid, .black)) <= topLuminanceCap { lo = mid } else { hi = mid } }
+        return lo
+    }
+    static func top(for tint: RGB) -> RGB { over(tint, topOpacity(for: tint), .black) }
+
+    /// The screen's quieter words (what the bot is about, "Tap Resume to keep going.", the controls' names, the empty
+    /// conversation's prompt, the person's own words): white at this opacity, in place of `.secondary`.
+    static let secondaryOpacity = 0.85
+    static var secondary: Color { Color.white.opacity(secondaryOpacity) }
+    /// The top row's first line ("Voice mode", or the live provider's name): full white (#631, round 3f). It stands on
+    /// the gradient's brightest part; at 0.85 it passed over every tint's top on paper, at under 5:1 for the light ones,
+    /// yet the accessibility audit flagged it at the largest text size. Full white has 6.18:1 at worst, as the chat's
+    /// name under it has.
+    static let topTitle = RGB.white
+    /// A note or an error under the bot: orange on a dark capsule of its own, as "Mic muted" stands on one.
+    static let orange = RGB(r: 1, g: 0.624, b: 0.039)
+    static let noteBackingOpacity = 0.55
+
+    /// The card in voice mode: black at this opacity under its words, over its glass, so it reads the same whatever is
+    /// behind it. The glass is taken as a light veil over the backdrop (white at 0.08) for the checks.
+    static let cardFillOpacity = 0.6
+    static let glassVeil = 0.08
+    static func cardSurface(over backdrop: RGB) -> RGB { over(.black, cardFillOpacity, over(.white, glassVeil, backdrop)) }
+    /// The card's words in voice mode: its heading in orange, its quieter lines in white at 0.8, Deny's name in a light red,
+    /// the other choices' names in white, and Allow once white on a deep blue of its own.
+    static let cardSecondaryOpacity = 0.8
+    static var cardSecondary: Color { Color.white.opacity(cardSecondaryOpacity) }
+    static let deny = RGB(r: 1, g: 0.45, b: 0.42)
+    static let allowOnceFill = RGB(r: 0, g: 0.35, b: 0.8)
 }
 
 /// The Board's column chips (KanbanView): `count` to a row in even columns. On a window that can fold up its middle (the

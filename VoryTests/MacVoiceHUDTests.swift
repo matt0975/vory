@@ -1,5 +1,7 @@
 #if os(macOS)
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Vory
 @testable import VoryCore
@@ -87,6 +89,39 @@ import Testing
         #expect(VoiceHUDPresentation.prompt(live: false) == VoiceHUDPresentation.prompt)
         #expect(VoiceHUDPresentation.prompt(live: true) == VoiceHUDPresentation.livePrompt)
         #expect(VoiceHUDPresentation.prompt.contains("pause") && !VoiceHUDPresentation.livePrompt.contains("pause"))
+    }
+
+    /// The text sizes the window is measured at (#627), the default first: macOS's SwiftUI may draw some of them alike.
+    private static let sizes: [DynamicTypeSize] = [.large, .xLarge, .xxLarge, .xxxLarge, .accessibility1, .accessibility3]
+
+    /// A view's own width, as laid out with nothing pressing on it, at one text size.
+    @MainActor private static func idealWidth(_ v: some View, _ size: DynamicTypeSize) -> CGFloat {
+        NSHostingView(rootView: v.environment(\.dynamicTypeSize, size)).fittingSize.width
+    }
+
+    /// The approval's Show Chat at the window's default width (#627): in the control row it was cut to "Show…". Under
+    /// the approval's line it has the text column (210 pt at 340), and its whole label fits there at every text size.
+    @MainActor @Test func theApprovalsShowChatFitsItsColumnAtTheDefaultWidthAtEveryTextSize() {
+        #expect(MacVoiceHUD.textColumnWidth == 210)
+        let widths = Self.sizes.map { Self.idealWidth(VoiceShowChatButton {}, $0) }
+        print("VOICE-627 Show Chat: \(zip(Self.sizes, widths).map { "\($0.0) \(Int($0.1.rounded()))" }.joined(separator: ", ")); column \(MacVoiceHUD.textColumnWidth)")
+        for (size, w) in zip(Self.sizes, widths) {
+            #expect(w > 0 && w <= MacVoiceHUD.textColumnWidth, "Show Chat needs \(w) pt at \(size); the column has \(MacVoiceHUD.textColumnWidth)")
+        }
+    }
+
+    /// The control row at the window's default width (#627), with its longest labels (Unmute, Resume) and End: it fits its
+    /// room (312 pt at 340) at every text size, with nothing cut.
+    @MainActor @Test func theControlRowFitsTheDefaultWidthAtEveryTextSize() {
+        #expect(MacVoiceHUD.controlRowWidth == 312)
+        var p = VoiceHUDPresentation(title: "Paused")
+        p.muteLabel = "Unmute"; p.muteSymbol = "mic.slash.fill"; p.pauseLabel = "Resume"; p.pauseSymbol = "play.fill"
+        let row = VoiceControlRow(p: p, muted: true, paused: true, mute: {}, pause: {}, end: {})
+        let widths = Self.sizes.map { Self.idealWidth(row, $0) }
+        print("VOICE-627 control row: \(zip(Self.sizes, widths).map { "\($0.0) \(Int($0.1.rounded()))" }.joined(separator: ", ")); room \(MacVoiceHUD.controlRowWidth)")
+        for (size, w) in zip(Self.sizes, widths) {
+            #expect(w > 0 && w <= MacVoiceHUD.controlRowWidth, "the control row needs \(w) pt at \(size); it has \(MacVoiceHUD.controlRowWidth)")
+        }
     }
 }
 #endif

@@ -1713,7 +1713,7 @@ struct TranscriptRow: View, Equatable {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.horizontal, 14).padding(.vertical, 9)
                             .foregroundStyle(.white)
-                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed") {
+                            .bubble(AppTheme.current, side: .trailing, tailed: botShown && bubbleStyle == "tailed", wholeOnMac: true) {
                                 Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                                 Button { onSelectText(text) } label: { Label("Select Text", systemImage: "selection.pin.in.out") }
                                 // The last message can be edited and sent in its own place, since only the last turn can be
@@ -1775,10 +1775,11 @@ struct TranscriptRow: View, Equatable {
                     if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
-                    let media = TranscriptMedia.images(in: text)
-                    // Other files the bot hands back are cards under the words (#309).
-                    let files = TranscriptMedia.files(in: text)
-                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : MediaScan.textWithoutMedia(text), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
+                    let media = TranscriptMedia.images(in: text, streaming: streaming)
+                    // Other files the bot hands back are cards under the words (#309); one named in a sentence once
+                    // the reply is done (#638).
+                    let files = TranscriptMedia.files(in: text, streaming: streaming)
+                    MarkdownView(text: media.isEmpty && files.isEmpty ? text : TranscriptMedia.words(in: text, streaming: streaming), streaming: streaming, inlineSelection: false, onShowAll: onShowAll).equatable()
                     if !media.isEmpty { MediaThumbStrip(refs: media, profile: bot) }
                     if !files.isEmpty { FileCardStrip(refs: files, profile: bot) }
                     if showStats, let s = item.stats {
@@ -1824,7 +1825,7 @@ struct TranscriptRow: View, Equatable {
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .bubble(Color(.systemGray4), side: .trailing) {
+                        .bubble(Color(.systemGray4), side: .trailing, wholeOnMac: true) {
                             Button { UIPasteboard.general.string = text } label: { Label("Copy", systemImage: "doc.on.doc") }
                             // A steer isn't a turn the gateway can take back: its words go into a new message.
                             Button { onEdit(text, nil) } label: { Label("Copy to message", systemImage: "square.and.pencil") }

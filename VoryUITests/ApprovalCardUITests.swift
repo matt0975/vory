@@ -128,16 +128,72 @@ final class ApprovalCardUITests: XCTestCase {
         XCTAssertEqual(cardChoices(), names, "the card's choices, in VoiceOver's order")
         shot("approval-card")
 
-        // The audit on the chat with the card up: anything inside the card fails it, except
-        // "Text clipped", which on iOS 27 lands on different whole words of the card each run
-        // (the screenshots show them in full), and contrast, whose one finding (the orange
-        // "Approval needed") is 1.5 (25)'s and outside this change; those are reported only.
-        let dock = app.otherElements["chat.dock"].firstMatch.frame
-        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection, .textClipped, .contrast]) { issue in
-            let inCard = issue.element.map { dock.intersects($0.frame) } ?? false
-            print("CARD-AUDIT \(inCard ? "card" : "chat") '\(issue.compactDescription)' label '\(issue.element?.label ?? "")' id '\(issue.element?.identifier ?? "")'")
-            return !inCard || issue.auditType == .textClipped || issue.auditType == .contrast
+        // The audit on the chat with the card up, once the chat has settled, so every run audits the
+        // same screen. The turn waits on the approval, so its "Writing…" stays as long as the card does
+        // and can't be waited out: the chat has settled when two reads of its words outside the dock,
+        // 2 s apart, are the same (the turn statistics line, whose numbers can change, left out), within
+        // 30 s. Anything inside the card fails the audit, except "Text clipped", which on iOS 27 lands on
+        // different whole words of the card each run (the screenshots show them in full), and contrast,
+        // whose one finding (the orange "Approval needed") is 1.5 (25)'s and outside this change; those
+        // are reported only. A finding is the card's when the dock holds its element: by its label, else
+        // its identifier, else (neither) its frame wholly inside the dock's. One outside the dock is the
+        // chat's ("Writing…" among them), or behind the chat when it isn't hittable (another page's rows
+        // the audit reaches); a clipped card element is still the card's.
+        let dockElement = app.otherElements["chat.dock"].firstMatch
+        let dock = dockElement.frame
+        func chatWords() -> [String] {
+            guard let root = try? app.snapshot() else { return [] }
+            var words: [String] = []
+            func walk(_ s: XCUIElementSnapshot) {
+                if s.elementType == .staticText, !dock.contains(s.frame), !s.label.hasPrefix("Turn statistics:") { words.append(s.label) }
+                s.children.forEach(walk)
+            }
+            walk(root)
+            return words
         }
+        var lastWords = chatWords(), previousWords: [String] = [], settled = false
+        let settleBy = Date().addingTimeInterval(30)
+        while !settled, Date() < settleBy {
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+            let words = chatWords()
+            // An empty read (a snapshot that failed) never counts as settled.
+            settled = !words.isEmpty && words == lastWords
+            previousWords = lastWords
+            lastWords = words
+        }
+        if !settled {
+            // Which words kept changing, so a label that ticks shows itself.
+            let before = Set(previousWords), after = Set(lastWords)
+            print("CHAT-SETTLE still changing: only before \(before.subtracting(after).sorted()), only after \(after.subtracting(before).sorted())")
+        }
+        XCTAssertTrue(settled, "the chat was still changing after 30 s")
+        // The audit runs with failures recorded but not stopping the test, so its "CARD-AUDIT ran" line is printed
+        // whatever it finds (a run's reader tells an audit that ran clean from one that never ran by that line); the
+        // checks after it then run too, and the test still fails on any finding it doesn't allow.
+        continueAfterFailure = true
+        var auditIssues = 0
+        try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection, .textClipped, .contrast]) { issue in
+            auditIssues += 1
+            guard let element = issue.element else {
+                print("CARD-AUDIT none '\(issue.compactDescription)' label '' id '' frame none hittable false")
+                return true
+            }
+            let label = element.label, id = element.identifier, frame = element.frame
+            let hittable = element.exists && element.isHittable
+            let inDock: Bool
+            if !label.isEmpty {
+                inDock = dockElement.descendants(matching: .any).matching(NSPredicate(format: "label == %@", label)).firstMatch.exists
+            } else if !id.isEmpty {
+                inDock = dockElement.descendants(matching: .any).matching(identifier: id).firstMatch.exists
+            } else {
+                inDock = dock.contains(frame)
+            }
+            let place = inDock ? "card" : (hittable ? "chat" : "behind")
+            print("CARD-AUDIT \(place) '\(issue.compactDescription)' label '\(label)' id '\(id)' frame \(frame) hittable \(hittable)")
+            return !inDock || issue.auditType == .textClipped || issue.auditType == .contrast
+        }
+        print("CARD-AUDIT ran: \(auditIssues) issues")
+        continueAfterFailure = false
 
         // A long press on the card opens nothing and answers nothing.
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Approval needed'")).firstMatch
