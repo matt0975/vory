@@ -321,6 +321,29 @@ enum E2ECleanup {
 }
 
 extension GatewayIntegrationTests {
+    /// #665: a new chat opens on a gateway that refuses keys a method's contract doesn't declare, as Hermes v0.23.0's
+    /// session authority does (4001 "invalid_params"). Against the mock with --strict-params it was refused while
+    /// session.create sent "cols"; against the default mock it opens either way.
+    @MainActor @Test func aNewChatOpensOnAGatewayThatRefusesUnknownKeys() async throws {
+        guard let env = Self.env else { return }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: "e2e strict create", gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        defer { store.delete(id: conn.id) }
+        let runtime = GatewayRuntime(connection: conn, store: store)
+        await runtime.start()
+        let chat = ChatSession.draft(runtime: runtime, profile: runtime.selectedProfile)
+        do {
+            try await chat.create()
+        } catch let e as RPCError {
+            Issue.record("session.create refused: \(e.code) \(e.message) \(e.data.map { "\($0)" } ?? "")")
+        }
+        #expect(!chat.runtimeID.isEmpty, "no session from session.create")
+        print("e2e strict create:", chat.runtimeID.isEmpty ? "none" : chat.runtimeID)
+    }
+}
+
+extension GatewayIntegrationTests {
     /// Two devices with the same chat open: one sends, and the other shows the prompt as well as
     /// the reply. The gateway fans a chat's events out to everyone attached, but the events
     /// carry the reply only; the watching device fetches the prompt when the turn starts.

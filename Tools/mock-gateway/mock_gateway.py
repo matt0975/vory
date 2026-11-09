@@ -1422,6 +1422,34 @@ NO_PDF_TOOLS = "--no-pdf-tools" in sys.argv
 NO_PINS = "--no-pins" in sys.argv
 # Rows that say "pinned" but a pin refused all the same, for the app's refusal path (#406).
 REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
+# --strict-params: a Hermes v0.23.0 socket served by its session authority (#665). Before any handler, a call to one of
+# its canonical methods with a key the method's contract doesn't declare is refused, as gateway/session_controls.py's
+# dispatcher refuses it (canonical_param_problems in tui_gateway/contracts/registry.py): code 4001, "invalid_params",
+# the unknown keys in data.fields. The key sets are v0.23.0's (NousResearch/hermes-agent at the tag), for the canonical
+# methods this mock serves; "profile" is declared on each. Handler rules (approval.respond's exact set, steer's
+# execution_generation) and the -32601 for session calls the authority doesn't serve are not mirrored. gateway.ready
+# says "session_authority": true, as v0.23.0's socket does with an authority (tui_gateway/ws.py).
+STRICT_PARAMS = "--strict-params" in sys.argv
+STRICT_PARAMS_DECLARED = {
+    "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
+                       "follow_profile_config", "hidden", "ignore_rules", "ignore_user_config", "max_turns", "model",
+                       "pass_session_id", "profile", "provider", "reasoning", "request_id", "row_cwd", "run_budget",
+                       "safe_mode", "service_tier", "skills", "source", "title", "toolsets", "verbose", "yolo"},  # CanonicalCreateParams
+    "session.resume": {"api_key", "cols", "defer_history", "display_projection", "editor", "latest", "omit_messages",
+                       "profile", "session_id", "source", "title", "workspace"},  # CanonicalResumeParams
+    "session.list": {"include_hidden", "limit", "profile", "scope", "title"},  # CanonicalListParams
+    "session.interrupt": {"execution_generation", "profile", "session_id"},  # CanonicalControlParams
+    "session.steer": {"execution_generation", "profile", "session_id", "text"},  # CanonicalCorrectionParams
+    "prompt.submit": {"api_text", "attachments", "clarify_batch", "display_kind", "finite", "input_id", "interrupted",
+                      "model_override", "profile", "queued", "session_id", "submission_id", "surface", "text",
+                      "title_preview", "turn_author", "unattended", "voice_context", "voice_turn"},  # CanonicalSubmitParams
+    "approval.respond": {"choice", "execution_generation", "profile", "prompt_id", "session_id"},  # CanonicalApprovalParams
+    "config.get": {"cwd", "key", "profile", "session_id"},  # ConfigGetParams
+    "config.set": {"confirm_expensive_model", "key", "profile", "scope", "session_id", "value"},  # CanonicalConfigSetParams
+    "profiles.list": {"include_sessions", "profile"},  # CanonicalProfilesParams
+    "groups.create": {"members", "name", "profile", "room_id"},  # CanonicalRoomCreateParams
+    "image.attach_bytes": {"content_base64", "data", "ext", "filename", "profile", "session_id"},  # ImageAttachBytesParams
+}
 # MOCK_FENCE=1: a Hermes from about 2026-10-17 on (#467), whose chat edits are fenced (hermes_cli/web_routers/
 # sessions.py, web_server_sessions.py): GET /api/sessions/{id}/mutation-snapshot gives the chat's revision, and a DELETE
 # (identity in the query) or PATCH (in the body) without request_id and expected_revision is refused. Without it, the
@@ -2936,6 +2964,12 @@ class Gateway:
         def err(code: int, message: str) -> dict:
             return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
+        if STRICT_PARAMS and method in STRICT_PARAMS_DECLARED and isinstance(p, dict):
+            unknown = sorted(set(p) - STRICT_PARAMS_DECLARED[method])
+            if unknown:
+                return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": "invalid_params",
+                                                               "data": {"reason": "invalid_params", "fields": unknown}}}
+
         if method == "ping":
             return ok({"pong": True})
         if method == "profiles.list":
@@ -3378,7 +3412,8 @@ async def ws_handler(ws):
         "payload": {"skin": {"name": "default", "description": "", "colors": {}, "light_colors": {},
                              "dark_colors": {}, "branding": {}, "banner_logo": "", "banner_hero": "",
                              "tool_prefix": "", "help_header": ""},
-                    "change_events": True, "replay_epoch": uuid.uuid4().hex[:8], "heartbeat": True}}})
+                    "change_events": True, "replay_epoch": uuid.uuid4().hex[:8], "heartbeat": True,
+                    **({"session_authority": True} if STRICT_PARAMS else {})}}})
     try:
         async for raw in ws:
             for line in str(raw).splitlines():
@@ -3421,6 +3456,7 @@ async def main() -> None:
     ap.add_argument("--no-pdf-tools", action="store_true", help="refuse every PDF, as a gateway without poppler-utils does")
     ap.add_argument("--refuse-pins", action="store_true", help="rows say \"pinned\", but a PATCH of only a pin is refused as an old gateway does")
     ap.add_argument("--no-pins", action="store_true", help="no pins, as a gateway from before Hermes kept them: rows without \"pinned\", a PATCH of only a pin refused")
+    ap.add_argument("--strict-params", action="store_true", help="refuse undeclared keys on the canonical methods as Hermes v0.23.0's session authority does: 4001 invalid_params (#665)")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
