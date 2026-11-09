@@ -89,14 +89,18 @@ final class SearchUnderBarUITests: XCTestCase {
     }
 
     /// The button that ends the search: beside the field on its row, to its right ("Cancel" on older systems, a closing
-    /// glyph on newer ones), never one under the bar (the bar's own + / Sort / Filters stand on that row once a search has
-    /// moved up under it). None while the search is at rest.
-    private func endSearch(_ c: [String: CGRect]) -> XCUIElement? {
+    /// glyph, "Close", on newer ones), never one of the bar's own (+ / Sort / Filters stand on that row once a search
+    /// has moved up under it). Never one under the bar either, unless `underTheBarToo`: that's for telling whether the
+    /// search is still open (its Close can stand under the bar's trailing capsule), never for a tap. None while the search
+    /// is at rest.
+    private func endSearch(_ c: [String: CGRect], underTheBarToo: Bool = false) -> XCUIElement? {
         guard field.exists else { return nil }
         let f = field.frame
+        let own = element("morph.bar").buttons.allElementsBoundByIndex.map(\.frame)
         return app.buttons.allElementsBoundByIndex.first { b in
             b.exists && abs(b.frame.midY - f.midY) < 12 && b.frame.minX >= f.maxX - 4 && b.frame.minX < f.maxX + 60
-                && !underTheBar(CGPoint(x: b.frame.midX, y: b.frame.midY), c)
+                && !own.contains(b.frame)
+                && (underTheBarToo || !underTheBar(CGPoint(x: b.frame.midX, y: b.frame.midY), c))
         }
     }
 
@@ -168,7 +172,7 @@ final class SearchUnderBarUITests: XCTestCase {
         let value = (field.value as? String) ?? ""
         print("SEARCHBAR \(state) cleared field \(field.frame) value '\(value)'")
         XCTAssertTrue(value.isEmpty || value == field.placeholderValue, "\(state) cleared: the field still reads '\(value)'")
-        let stillOpen = endSearch(c)
+        let stillOpen = endSearch(c, underTheBarToo: true)
         XCTAssertNotNil(stillOpen, "\(state) cleared: the search closed")
         clearOfTheBar("\(state) cleared", "field", field, c)
         XCTAssertEqual(field.frame.minY, rest.minY, accuracy: 1, "\(state) cleared: the field moved from \(rest.minY) to \(field.frame.minY)")
@@ -179,7 +183,7 @@ final class SearchUnderBarUITests: XCTestCase {
         pause(1.2)
         c = caps()
         print("SEARCHBAR \(state) ended field \(field.exists ? "\(field.frame)" : "none")")
-        let after = endSearch(c)
+        let after = endSearch(c, underTheBarToo: true)
         XCTAssertFalse(after?.isHittable == true, "\(state): the search didn't end")
         XCTAssertEqual(field.frame.minY, rest.minY, accuracy: 1, "\(state) ended: the field isn't back at rest: \(field.frame) against \(rest)")
         clearOfTheBar("\(state) ended", "field", field, c)

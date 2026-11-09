@@ -132,13 +132,24 @@ enum TopBarRoom {
     /// and XXXL, 2026-11-02): 52.
     static let stripPitch: CGFloat = 52
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
-    /// (.avoidHidingContent)`): under a status in a top corner, and with the bar up in the status band (#516). There the
-    /// field stands at the safe area's top under the row; with the bar's band hidden by an active search the field and its
-    /// Cancel rode up under the row's capsules (into the status band, y 24, with the bar up), and a room changed to follow
-    /// the search arrived after UIKit had moved the field (the page jumped as the search started and ended). Keeping the
-    /// bar, the field stays where it is and nothing changes late. Everywhere else (phones, iPads, the closed Duo) the
-    /// system's own behaviour, unchanged.
-    static func keepsBarWhileSearching(statusInCorner: Bool, barUp: Bool = false) -> Bool { statusInCorner || barUp }
+    /// (.avoidHidingContent)`): under a status in a top corner, with the bar up in the status band (#516), and wherever
+    /// the floating top bar stands over the system's band (`floatingBar`, `floatingBarOverBand`: a standard iPhone too,
+    /// #648). There the field stands at the safe area's top under the row; with the bar's band hidden by an active search
+    /// the field and its Cancel rode up under the row's capsules (into the status band, y 24, with the bar up), and a
+    /// room changed to follow the search arrived after UIKit had moved the field (the page jumped as the search started
+    /// and ended). On a standard iPhone the field rode up from under the row (y 116) to the band (y 62), its Close under
+    /// the row's trailing capsule (+ / Sort / Filters on Chats), which took the tap: the search couldn't be ended until a
+    /// relaunch (#648). Keeping the bar, the field stays where it is and nothing changes late. Elsewhere (an iPad or a
+    /// wide window, where the floating bar is off; the closed Duo's strip) the system's own behaviour, unchanged.
+    static func keepsBarWhileSearching(statusInCorner: Bool, barUp: Bool = false, floatingBar: Bool = false) -> Bool {
+        statusInCorner || barUp || floatingBar
+    }
+    /// Whether the floating top bar stands over the system's navigation bar band (#648): the bar is on (`MorphTopBar
+    /// .active`: not a wide window), and the system's bars aren't in the closed Duo's side strip (`closedStrip`), where the
+    /// pages keep the row's room themselves. The one rule both search callers use (ChatListView, PhonePageSearchable).
+    static func floatingBarOverBand(barOn: Bool, barsVertical: Bool, size: CGSize) -> Bool {
+        barOn && !closedStrip(barsVertical: barsVertical, size: size)
+    }
     /// The room under a status in a top corner. ASSUMPTION (iOS 27.1 to 27.2, the open Duo upright and as a laptop): UIKit
     /// brings the navigation bar's own title band (58 pt) back under the safe area once any additional inset is set, so
     /// the smallest inset puts the search drawer just under the row: 1 pt leaves it at 141 against the row's 130, where

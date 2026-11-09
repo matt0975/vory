@@ -233,9 +233,11 @@ struct ChatListView: View {
             .searchToolbarBehavior(closedStrip ? .minimize : .automatic)
             // Its toolbar integration kept right at the navigation item as the window enters or leaves the closed strip
             // (`ChatsSearchPlacement`).
-            // The bar kept while searching under a status in a top corner or with the bar up in the band, as on the other
-            // pages (#516).
-            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0) ? .avoidHidingContent : .automatic)
+            // The bar kept while searching under a status in a top corner, with the bar up in the band (#516), and wherever
+            // the floating bar stands over the system's band (a standard iPhone too, #648), as on the other pages.
+            .searchPresentationToolbarBehavior(TopBarRoom.keepsBarWhileSearching(statusInCorner: statusInCorner, barUp: barLift > 0,
+                floatingBar: TopBarRoom.floatingBarOverBand(barOn: MorphTopBar.active(model), barsVertical: model.tabBarVertical,
+                                                            size: windowGeometry.bounds.size)) ? .avoidHidingContent : .automatic)
             .textInputAutocapitalization(.never).autocorrectionDisabled()
             #endif
             // One column on a window wider than a phone (the open Duo upright, 669 pt): the
