@@ -1661,6 +1661,20 @@ struct TranscriptRow: View, Equatable {
     var botLabel: String? = nil
     var toolOpen = false
     var setToolOpen: (Bool) -> Void = { _ in }
+    private var reasoningOpenBinding: Binding<Bool> {
+        #if compiler(>=6.3)
+        Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) })
+        #else
+        Binding(get: { reasoningOpen }, set: setReasoningOpen)
+        #endif
+    }
+    private var toolOpenBinding: Binding<Bool> {
+        #if compiler(>=6.3)
+        Binding(get: { toolOpen }, set: { @MainActor in setToolOpen($0) })
+        #else
+        Binding(get: { toolOpen }, set: setToolOpen)
+        #endif
+    }
     var showToolOutput = true
     var compactTools = false
     /// Reply bubbles run to the right edge.
@@ -1770,7 +1784,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: reasoningOpenBinding, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1786,7 +1800,7 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: reasoningOpenBinding, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text, streaming: streaming)
@@ -1858,7 +1872,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, open: Binding(get: { toolOpen }, set: { @MainActor in setToolOpen($0) }), showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, open: toolOpenBinding, showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither
