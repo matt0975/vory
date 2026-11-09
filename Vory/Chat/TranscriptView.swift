@@ -198,7 +198,10 @@ struct TranscriptView: View {
 
     var body: some View {
         let _ = Perf.tick("transcript")
-        return Group {
+        return transcriptLifecycle
+    }
+
+    @ViewBuilder private var transcriptBase: some View {
             ScrollView {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
@@ -280,6 +283,10 @@ struct TranscriptView: View {
                 .background(ScrollViewProbe(metrics: metrics, dockTop: dockTop, headerBottom: headerBottom))
                 }
             }
+    }
+
+    private var transcriptObserved: some View {
+            transcriptBase
             .scrollPosition($scrollPosition)
             // `bottomInset` is the dock's measured reach into the thread, keyboard included; the
             // scroll view adds its own safe-area inset under that.
@@ -378,6 +385,10 @@ struct TranscriptView: View {
                 BotAmbient.shared.scrolling = touching
                 if !touching, metrics.distanceFromBottom < 4 { metrics.stickToBottom = true }
             }
+    }
+
+    private var transcriptPresented: some View {
+            transcriptObserved
             // The working bot: one spot at the bottom-left of the thread for the whole turn, in
             // the same pose as the bot on the header pill, gone once the turn ends. It used to sit
             // beside whichever row was live and hopped between them as the turn went on.
@@ -434,6 +445,10 @@ struct TranscriptView: View {
             // that write ran the transcript's body a second time on every token. A new message
             // fades in where it belongs and the thread eases up to it (`followRows`).
             .onChange(of: rows.count) { old, new in historyLanding(from: old, to: new); followRows(from: old, to: new) }
+    }
+
+    private var transcriptLifecycle: some View {
+            transcriptPresented
             // Again when the turn ends: rows cross into the lazy stack between turns only.
             .task(id: [rows.count, chat.isRunning ? 1 : 0]) { await settleTail() }
             .onAppear {
@@ -481,7 +496,6 @@ struct TranscriptView: View {
                     else { withAnimation(.easeOut(duration: 0.2)) { scrollPosition.scrollTo(edge: .bottom) } }
                 }
             }
-        }
     }
 }
 
@@ -1647,6 +1661,20 @@ struct TranscriptRow: View, Equatable {
     var botLabel: String? = nil
     var toolOpen = false
     var setToolOpen: (Bool) -> Void = { _ in }
+    private var reasoningOpenBinding: Binding<Bool> {
+        #if compiler(>=6.3)
+        Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) })
+        #else
+        Binding(get: { reasoningOpen }, set: setReasoningOpen)
+        #endif
+    }
+    private var toolOpenBinding: Binding<Bool> {
+        #if compiler(>=6.3)
+        Binding(get: { toolOpen }, set: { @MainActor in setToolOpen($0) })
+        #else
+        Binding(get: { toolOpen }, set: setToolOpen)
+        #endif
+    }
     var showToolOutput = true
     var compactTools = false
     /// Reply bubbles run to the right edge.
@@ -1756,7 +1784,7 @@ struct TranscriptRow: View, Equatable {
                     // same place, so an open card stays open (#424); no reply, so no menu.
                     VStack(alignment: .leading, spacing: 6) {
                         if showReasoning, let reasoning, !reasoning.isEmpty {
-                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
+                            ReasoningDisclosure(text: reasoning, streaming: streaming, open: reasoningOpenBinding, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) })
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .background(bubbleStyle == "plain" ? Color.clear : replyFill, in: MessageBubbleShape(side: .leading, tailed: false))
                         }
@@ -1772,7 +1800,7 @@ struct TranscriptRow: View, Equatable {
                     Spacer(minLength: wide ? 0 : 40)
                 } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: Binding(get: { reasoningOpen }, set: { @MainActor in setReasoningOpen($0) }), onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
+                    if showReasoning, let reasoning, !reasoning.isEmpty { ReasoningDisclosure(text: reasoning, streaming: streaming, open: reasoningOpenBinding, onShowAll: { onShowAll("\(botLabel ?? "Bot") · Reasoning", $0) }) }
                     // Pictures the bot sent (MEDIA: lines, markdown images, bare paths) show under
                     // the words as thumbnails fetched through the gateway.
                     let media = TranscriptMedia.images(in: text, streaming: streaming)
@@ -1844,7 +1872,7 @@ struct TranscriptRow: View, Equatable {
                 }
             }
         case .tool(let act):
-            ToolCardView(activity: act, open: Binding(get: { toolOpen }, set: { @MainActor in setToolOpen($0) }), showOutput: showToolOutput, compact: compactTools)
+            ToolCardView(activity: act, open: toolOpenBinding, showOutput: showToolOutput, compact: compactTools)
         case .system(let text, let symbol) where symbol == "terminal":
             // A slash command's reply: reading size, selectable, with Copy; the terminal mark
             // and a quiet background keep it apart from the bot's words (a tester could neither
@@ -1953,7 +1981,7 @@ struct SubagentRow: View {
         }
         .font(.footnote)
         .padding(10)
-        .glassEffect(.regular, in: .rect(cornerRadius: 12))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 12))
         .contentShape(.rect)
         .onTapGesture { if activity.summary?.isEmpty == false { withAnimation(.snappy) { open.toggle() } } }
         // The detail line changes as the helper reports in, without an animation of its own: one
@@ -2016,7 +2044,7 @@ struct InjectedNoteRow: View {
             .clipShape(.rect(cornerRadius: open ? 14 : 20))
             // Plain glass, not interactive: the button inside takes the tap, and interactive glass
             // on the wrapper hid that button from accessibility (and the UI test).
-            .glassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: open ? 14 : 20))
             .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 2)
@@ -2329,7 +2357,7 @@ struct BotMessageNotice: View {
                     if pending { ProgressView().controlSize(.mini) }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 5)
-                .glassEffect(.regular.interactive(), in: .capsule)
+                .voryGlassEffect(.regular.interactive(), in: .capsule)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(headline). Opens \(label)'s chat")
@@ -3059,7 +3087,7 @@ struct AttachmentStrip: View {
                     } else {
                         Label(a.name, systemImage: a.kind == .pdf ? "doc.richtext" : a.kind == .audio ? "waveform" : a.kind == .video ? "video" : "doc")
                             .font(.caption).lineLimit(1)
-                            .padding(8).glassEffect(.regular, in: .rect(cornerRadius: 10))
+                            .padding(8).voryGlassEffect(.regular, in: .rect(cornerRadius: 10))
                     }
                 }
                 .buttonStyle(.plain)

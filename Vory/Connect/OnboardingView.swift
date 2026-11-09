@@ -107,7 +107,7 @@ struct OnboardingView: View {
                 .font(.title3).foregroundStyle(.primary).multilineTextAlignment(.center).padding(.top, 2)
             Spacer(minLength: 24)
             // In the order of their weight (#392), as on the iPhone's first screen: the tour, the demo, then Restore.
-            GlassEffectContainer(spacing: 14) {
+            VoryGlassEffectContainer(spacing: 14) {
                 VStack(spacing: 14) {
                     Button {
                         withAnimation(reduceMotion ? nil : .snappy) { welcomed = true }
@@ -115,7 +115,7 @@ struct OnboardingView: View {
                         Text("Get Started").font(.headline).foregroundStyle(Color.onOnboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
                     .tint(Color.onboardingAccent)
                     .accessibilityIdentifier("onboarding.getStarted")
                     // Demo mode (#392): Vory with the demo's bots and chats, no gateway needed (App Review's way in too).
@@ -125,7 +125,7 @@ struct OnboardingView: View {
                         Label("Try a demo", systemImage: "sparkles").font(.headline).foregroundStyle(Color.onboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                     .disabled(!model.demoAvailable)
                     .accessibilityHint("Opens Vory with demo bots, no gateway needed.")
                     .accessibilityIdentifier("onboarding.tryDemo")
@@ -133,7 +133,7 @@ struct OnboardingView: View {
                         Label("Restore from iCloud", systemImage: "icloud.and.arrow.down").font(.headline).foregroundStyle(Color.onboardingAccent)
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                     }
-                    .buttonStyle(.glass)
+                    .voryGlassButtonStyle()
                     .accessibilityIdentifier("onboarding.restore")
                 }
             }
@@ -188,7 +188,7 @@ struct OnboardingView: View {
                         Text(isLast ? "Connect your gateway" : "Continue")
                             .font(.headline).foregroundStyle(Color.onOnboardingAccent).frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
-                    .buttonStyle(.glassProminent)
+                    .voryGlassButtonStyle(prominent: true)
                     .accessibilityIdentifier(isLast ? "onboarding.addGateway" : "onboarding.continue")
                     if !isLast {
                         Button("Skip") { page = pages.count - 1 }
@@ -298,7 +298,7 @@ private struct BotsDemo: View {
             }
         }
         .padding(.vertical, 22).padding(.horizontal, 18)
-        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 26))
     }
 }
 
@@ -342,7 +342,7 @@ private struct ChatDemo: View {
                     if toolDone { Text("1.4s").font(.caption2).foregroundStyle(.tertiary) }
                 }
                 .padding(12)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 14))
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if !reply2.isEmpty {
@@ -356,7 +356,7 @@ private struct ChatDemo: View {
         }
         .frame(maxWidth: .infinity, minHeight: 250, alignment: .top)
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 24))
         .task(id: live) {
             guard live else { return }
             while !Task.isCancelled {
@@ -432,7 +432,7 @@ private struct ApprovalDemo: View {
             }
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 20))
         .offset(y: shown ? 0 : 60).opacity(shown ? 1 : 0)
         .task(id: live) {
             guard live else { return }
@@ -573,7 +573,7 @@ private struct StudioDemo: View {
         }
         .padding(.vertical, 18).padding(.horizontal, 22)
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 26))
         .task(id: live) {
             guard live, !reduceMotion else { return }
             var i = 0
@@ -630,7 +630,7 @@ private struct SummariesDemo: View {
                 Spacer(minLength: 0)
             }
             .padding(14)
-            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: 18))
             Toggle(isOn: $enabled) {
                 HStack(spacing: 6) {
                     Text("Vory Summaries").font(.subheadline.weight(.medium))
@@ -639,7 +639,7 @@ private struct SummariesDemo: View {
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .glassEffect(.regular, in: .rect(cornerRadius: 18))
+            .voryGlassEffect(.regular, in: .rect(cornerRadius: 18))
             Text("You can change this later in Settings › Vory Summaries.").font(.caption).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 4)
@@ -671,7 +671,7 @@ private struct ConnectDemo: View {
             row("globe", "Other", "Any https address that reaches the dashboard.")
         }
         .padding(16)
-        .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 20))
     }
     private func row(_ symbol: String, _ title: String, _ text: String) -> some View {
         HStack(spacing: 12) {

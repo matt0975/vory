@@ -44,6 +44,13 @@ struct RememberedSignInTests {
         return SecItemCopyMatching(q as CFDictionary, &out) != errSecMissingEntitlement
     }()
 
+    @Test func onlyMissingEntitlementSelectsTemporaryMemoryStorage() {
+        #expect(Keychain.needsMemoryFallback(status: errSecMissingEntitlement))
+        #expect(!Keychain.needsMemoryFallback(status: errSecSuccess))
+        #expect(!Keychain.needsMemoryFallback(status: errSecItemNotFound))
+        #expect(!Keychain.needsMemoryFallback(status: errSecInteractionNotAllowed))
+    }
+
     /// A clock the test moves by hand.
     @MainActor final class Clock { var now = Date(timeIntervalSince1970: 1_800_000_000) }
 

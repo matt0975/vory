@@ -107,7 +107,9 @@ struct BotLooksGatewaySideTests {
             let copy = BotLooksMirror.build()
             let all = (try? JSONEncoder().encode(copy))?.count ?? 0
             let top = (try? JSONEncoder().encode(BotLooks(colors: copy.colors, avatars: copy.avatars, photos: copy.photos)))?.count ?? 0
-            let photos = copy.photos.count + (copy.gateways?.values.map(\.photos.count).reduce(0, +) ?? 0) + (copy.shared?.photos.count ?? 0)
+            let gatewayPhotos = copy.gateways?.values.map(\.photos.count).reduce(0, +) ?? 0
+            let sharedPhotos = copy.shared?.photos.count ?? 0
+            let photos = copy.photos.count + gatewayPhotos + sharedPhotos
             print("BOTLOOKS-COPY-SIZE: \(all) bytes with \(copy.gateways?.count ?? 0) gateways and the looks from before, \(photos) photos; the top level alone \(top) bytes")
             #expect(copy.gateways?.count == 3 && copy.shared?.photos.count == names.count)
         }

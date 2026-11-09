@@ -390,7 +390,7 @@ struct SlashMenuList: View {
         // A fixed height; the dock's keyboard handling is manual (ConversationView) so this
         // scroll view cannot swallow the keyboard inset.
         .frame(height: min(cap, CGFloat(max(items.count, loading ? 1 : 0)) * Self.rowHeight + 8))
-        .glassEffect(glass ? .regular : .identity, in: .rect(cornerRadius: 16))
+        .voryGlassEffect(glass ? .regular : .identity, in: .rect(cornerRadius: 16))
     }
 
     private func reveal(_ ids: [String], _ proxy: ScrollViewProxy) {

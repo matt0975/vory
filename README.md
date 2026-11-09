@@ -282,8 +282,10 @@ gateway restart (one tap in the same screen). The systemd/launchd installer rema
 
 ## Vory for Mac
 
-A native macOS app (`VoryMac` target, same bundle id, macOS 26) built from the same views as the phone.
+A native macOS app (`VoryMac` target, same bundle id, macOS 15 or later) built from the same views as the phone.
 Shared files carry `#if os(iOS)` / `#if os(macOS)` where the platforms differ; Mac-only pieces live in `VoryMac/`.
+On macOS 26 it uses native Liquid Glass, Foundation Models, and the newer Speech framework. On macOS 15 it
+uses material controls and gateway-backed fallbacks for features whose system frameworks are unavailable.
 
 - **Window**: a rail of pages on the left with the same icons as the phone's tab bar (any number of pages:
   *More* at the foot of the rail switches them on and off, Settings › Appearance › Sidebar sets their order,

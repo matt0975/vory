@@ -106,118 +106,7 @@ struct ConversationView: View {
         let _ = Perf.tick("conversation-body")
         Group {
             if let chat {
-                framed(chat)
-                    #if os(iOS)
-                    // The page's own bar (below) gives the page a top inset of its own there (24 pt on its side, which
-                    // moved the header and the thread down; the window's own top is 0, the status in the strip): the
-                    // chat lays out as with the bar hidden.
-                    .ignoresSafeArea(.container, edges: model.tabBarVertical ? .top : [])
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { paneMinX = $0 }
-                    #endif
-                    .handsOff(chat)
-                    #if os(iOS)
-                    // The Duo's side strip (#555; the system's bars vertical there, `model.tabBarVertical`): the page's own
-                    // bar shows, with no title and no system back, to carry the markers the system lays out under the
-                    // status (`StripMarkerReader`; no Back beside the list). Everywhere else hidden, as ever.
-                    .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
-                    .navigationBarBackButtonHidden(model.tabBarVertical)
-                    .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
-                    // On the Duo's side and as a book, this chat for the catchers over the system's floating bar
-                    // (`SideStripCatchers`), while it's on show with its tab in front.
-                    .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side) }
-                    .onAppear { onScreen = true }
-                    .onDisappear { onScreen = false; publishStripSide(nil) }
-                    .background {
-                        if model.tabBarVertical {
-                            StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1, onSide: stripSide(chat) != nil)
-                                .frame(width: 0, height: 0)
-                        }
-                    }
-                    #else
-                    .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
-                    .toolbar(.hidden, for: .navigationBar)
-                    #endif
-                    .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
-                    // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
-                    .onChange(of: model.modelChooser?.id) { _, _ in
-                        guard let r = model.modelChooser, r.chat === chat, !showProfile else { return }
-                        model.modelChooser = nil
-                        choosingModel = true
-                    }
-                    .sheet(isPresented: $choosingModel) { ModelChooserSheet(chat: chat).sheetFrame().withAppModel() }
-                    // Approve/Deny from the Live Activity or a notification, with "Confirm
-                    // approvals" on: asked once more here, on the card it concerns.
-                    .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
-                    .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
-                    .onAppear {
-                        model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
-                        Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
-                    }
-                    // What arrived for this chat while it was away is read now: its notifications
-                    // leave Notification Center (a tester: "notifications won't stop even after
-                    // attending to chat"). In a view of its own: read here, the items made the whole
-                    // page run again on every streamed token.
-                    .background { ClearsDelivered(chat: chat) }
-                    .onReceive(NotificationCenter.default.publisher(for: .hermesNewChatRequested)) { n in
-                        guard model.visibleChatID == chat.storedID else { return }
-                        model.composeProfile = (n.userInfo?["profile"] as? String) ?? chat.profileName
-                        model.newChatRequest = UUID()
-                    }
-                    .onDisappear {
-                        Perf.stamp("pop: conversation disappeared")
-                        // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
-                        guard !model.chatGone(chat, page: pageID) else { return }
-                        // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
-                        chat.cancelEdit()
-                        // Leaving a chat: back to the default bot, when one is chosen.
-                        model.runtime?.returnToDefaultProfile()
-                    }
-                    .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
-                    .onChange(of: showProfile) { _, _ in Smooth.animate("botCard") }
-                    .onChange(of: chat.isRunning, initial: true) { _, running in if running { Smooth.begin("turn") } else { Smooth.end("turn") } }
-                    .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
-                    .alert("Replace your draft?", isPresented: Binding(get: { replacingDraft != nil }, set: { if !$0 { replacingDraft = nil } }),
-                           presenting: replacingDraft) { r in
-                        Button("Replace", role: .destructive) { takeIntoComposer(r.text, r.id) }
-                        Button("Cancel", role: .cancel) {}
-                    } message: { _ in
-                        Text("The words you've typed will be replaced with the message.")
-                    }
-                    // A tapped "@bot" opens that bot's card; every other link goes its usual way.
-                    .environment(\.openURL, OpenURLAction { url in
-                        if let b = Mentions.bot(from: url) { mentionedBot = b; return .handled }
-                        return .systemAction
-                    })
-                    .sheet(isPresented: Binding(get: { mentionedBot != nil }, set: { if !$0 { mentionedBot = nil } })) {
-                        if let b = mentionedBot { ProfileInfoSheet(chat: nil, profileName: b).sheetFrame().withAppModel() }
-                    }
-                    .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
-                    // The morph prototype's Back, drawn outside the stack (MorphTopBar).
-                    // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
-                    // here; only the chat the bar shows answers.
-                    .onChange(of: model.chatRequest) { _, r in
-                        // On the Duo's side and as a book, the chat the catchers act for, and no other; elsewhere the
-                        // morph's.
-                        #if os(iOS)
-                        let mine = StripMarkers.shared.side.map { $0.chat == ObjectIdentifier(chat) } ?? (MorphState.shared.chat === chat)
-                        #else
-                        let mine = MorphState.shared.chat === chat
-                        #endif
-                        guard let r, mine else { return }
-                        model.chatRequest = nil
-                        switch r.kind {
-                        case .back: dismiss()
-                        case .profile: showProfile = true
-                        case .rename: renaming = true
-                        case .context: showContext = true
-                        case .newChat: Task { await newChat() }
-                        case .close: model.runtime?.closeChat(chat); dismiss()
-                        }
-                    }
-                    .onAppear { handle(route: model.pendingRoute, chat: chat) }
-                    // Whatever was typed survives leaving the chat: saved per session as it changes,
-                    // restored when the chat opens, cleared by a send (the composer empties the text).
-                    .onChange(of: composerText) { _, t in ComposerDrafts.save(t, for: chat) }
+                conversationContent(chat)
             } else if let loadError {
                 ContentUnavailableView("Could not open chat", systemImage: "exclamationmark.triangle", description: Text(loadError))
             } else {
@@ -229,6 +118,126 @@ struct ConversationView: View {
         // The navigation bar is hidden, which switches off UIKit's edge-swipe back; put it back.
         .background(InteractivePopEnabler())
         .task { await open() }
+    }
+
+    // Keep the updated modifier chain within the Xcode 26.3 type checker limits.
+    private func conversationLifecycle(_ chat: ChatSession) -> some View {
+        framed(chat)
+            #if os(iOS)
+            // The page's own bar (below) gives the page a top inset of its own there (24 pt on its side, which
+            // moved the header and the thread down; the window's own top is 0, the status in the strip): the
+            // chat lays out as with the bar hidden.
+            .ignoresSafeArea(.container, edges: model.tabBarVertical ? .top : [])
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minX } action: { paneMinX = $0 }
+            #endif
+            .handsOff(chat)
+            #if os(iOS)
+            // The Duo's side strip (#555; the system's bars vertical there, `model.tabBarVertical`): the page's own
+            // bar shows, with no title and no system back, to carry the markers the system lays out under the
+            // status (`StripMarkerReader`; no Back beside the list). Everywhere else hidden, as ever.
+            .navigationTitle(model.tabBarVertical ? "" : (pageShown ? chat.title : model.selectedTab.title))
+            .navigationBarBackButtonHidden(model.tabBarVertical)
+            .toolbar(model.tabBarVertical ? .visible : .hidden, for: .navigationBar)
+            // On the Duo's side and as a book, this chat for the catchers over the system's floating bar
+            // (`SideStripCatchers`), while it's on show with its tab in front.
+            .onChange(of: stripSide(chat), initial: true) { _, side in publishStripSide(side) }
+            .onAppear { onScreen = true }
+            .onDisappear { onScreen = false; publishStripSide(nil) }
+            .background {
+                if model.tabBarVertical {
+                    StripMarkerReader(back: paneMinX <= windowGeometry.safeArea.leading + 1, onSide: stripSide(chat) != nil)
+                        .frame(width: 0, height: 0)
+                }
+            }
+            #else
+            .navigationTitle(pageShown ? chat.title : model.selectedTab.title)
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
+            .sheet(isPresented: $showContext) { ContextBreakdownSheet(chat: chat).sheetFrame().withAppModel() }
+            // "All Models…" from a model menu for this chat (#401); the bot card opens it itself while it is up.
+            .onChange(of: model.modelChooser?.id) { _, _ in
+                guard let r = model.modelChooser, r.chat === chat, !showProfile else { return }
+                model.modelChooser = nil
+                choosingModel = true
+            }
+            .sheet(isPresented: $choosingModel) { ModelChooserSheet(chat: chat).sheetFrame().withAppModel() }
+            // Approve/Deny from the Live Activity or a notification, with "Confirm
+            // approvals" on: asked once more here, on the card it concerns.
+            .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
+            .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
+            .onAppear {
+                model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
+                Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
+            }
+            // What arrived for this chat while it was away is read now: its notifications
+            // leave Notification Center (a tester: "notifications won't stop even after
+            // attending to chat"). In a view of its own: read here, the items made the whole
+            // page run again on every streamed token.
+            .background { ClearsDelivered(chat: chat) }
+            .onReceive(NotificationCenter.default.publisher(for: .hermesNewChatRequested)) { n in
+                guard model.visibleChatID == chat.storedID else { return }
+                model.composeProfile = (n.userInfo?["profile"] as? String) ?? chat.profileName
+                model.newChatRequest = UUID()
+            }
+            .onDisappear {
+                Perf.stamp("pop: conversation disappeared")
+                // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
+                guard !model.chatGone(chat, page: pageID) else { return }
+                // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
+                chat.cancelEdit()
+                // Leaving a chat: back to the default bot, when one is chosen.
+                model.runtime?.returnToDefaultProfile()
+            }
+    }
+
+    private func conversationContent(_ chat: ChatSession) -> some View {
+        conversationLifecycle(chat)
+            .sheet(isPresented: $showProfile) { ProfileInfoSheet(chat: chat, profileName: chat.profileName).sheetFrame().withAppModel() }
+            .onChange(of: showProfile) { _, _ in Smooth.animate("botCard") }
+            .onChange(of: chat.isRunning, initial: true) { _, running in if running { Smooth.begin("turn") } else { Smooth.end("turn") } }
+            .sheet(isPresented: $renaming) { RenameChatSheet(chat: chat).sheetFrame(.compact).withAppModel() }
+            .alert("Replace your draft?", isPresented: Binding(get: { replacingDraft != nil }, set: { if !$0 { replacingDraft = nil } }),
+                   presenting: replacingDraft) { r in
+                Button("Replace", role: .destructive) { takeIntoComposer(r.text, r.id) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The words you've typed will be replaced with the message.")
+            }
+            // A tapped "@bot" opens that bot's card; every other link goes its usual way.
+            .environment(\.openURL, OpenURLAction { url in
+                if let b = Mentions.bot(from: url) { mentionedBot = b; return .handled }
+                return .systemAction
+            })
+            .sheet(isPresented: Binding(get: { mentionedBot != nil }, set: { if !$0 { mentionedBot = nil } })) {
+                if let b = mentionedBot { ProfileInfoSheet(chat: nil, profileName: b).sheetFrame().withAppModel() }
+            }
+            .onChange(of: model.pendingRoute) { _, r in handle(route: r, chat: chat) }
+            // The morph prototype's Back, drawn outside the stack (MorphTopBar).
+            // The morph prototype's bar, drawn outside the stack, asks for the chat's actions
+            // here; only the chat the bar shows answers.
+            .onChange(of: model.chatRequest) { _, r in
+                // On the Duo's side and as a book, the chat the catchers act for, and no other; elsewhere the
+                // morph's.
+                #if os(iOS)
+                let mine = StripMarkers.shared.side.map { $0.chat == ObjectIdentifier(chat) } ?? (MorphState.shared.chat === chat)
+                #else
+                let mine = MorphState.shared.chat === chat
+                #endif
+                guard let r, mine else { return }
+                model.chatRequest = nil
+                switch r.kind {
+                case .back: dismiss()
+                case .profile: showProfile = true
+                case .rename: renaming = true
+                case .context: showContext = true
+                case .newChat: Task { await newChat() }
+                case .close: model.runtime?.closeChat(chat); dismiss()
+                }
+            }
+            .onAppear { handle(route: model.pendingRoute, chat: chat) }
+            // Whatever was typed survives leaving the chat: saved per session as it changes,
+            // restored when the chat opens, cleared by a send (the composer empties the text).
+            .onChange(of: composerText) { _, t in ComposerDrafts.save(t, for: chat) }
     }
 
     /// The thread with its dock and header. On the phone both float over the thread (the text
@@ -608,7 +617,7 @@ struct BottomDock: View {
         // The container is what lets the composer morph into a card; menus presented from
         // inside it (the + button) did not take taps on the phone, so the container only wraps
         // what morphs, and the composer draws its own glass.
-        GlassEffectContainer(spacing: 12) {
+        VoryGlassEffectContainer(spacing: 12) {
             VStack(spacing: 10) {
                 if let banner = chat.banner {
                     HStack {
@@ -624,7 +633,7 @@ struct BottomDock: View {
                     // The words keep their padding; the button's square sets the banner's height where it's taller, its
                     // glyph where it was.
                     .padding(.leading, 12)
-                    .glassEffect(.regular, in: .rect(cornerRadius: 16))
+                    .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if !chat.queue.isEmpty { QueueStrip(chat: chat) }
@@ -634,8 +643,8 @@ struct BottomDock: View {
                     Label("Read-only", systemImage: "lock")
                         .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                         .padding(.horizontal, 16).padding(.vertical, 10)
-                        .glassEffect(.regular, in: .capsule)
-                        .glassEffectID("dock", in: namespace)
+                        .voryGlassEffect(.regular, in: .capsule)
+                        .voryGlassEffectID("dock", in: namespace)
                         .accessibilityLabel("Read-only: this is another bot's chat")
                 } else if let card = chat.firstCard {
                     // No long-press menu on any card: an approval is answered on its own buttons,
@@ -643,7 +652,7 @@ struct BottomDock: View {
                     // approval card had (all four choices, Always without a question) never opened
                     // inside this glass container anyway (26).
                     PendingCardView(chat: chat, card: card)
-                        .glassEffectID("dock", in: namespace)
+                        .voryGlassEffectID("dock", in: namespace)
                 } else {
                     ComposerView(chat: chat, text: $text, quote: $quote, namespace: namespace)
                 }
@@ -706,7 +715,7 @@ struct QueueStrip: View {
             }
         }
         .padding(12)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .voryGlassEffect(.regular, in: .rect(cornerRadius: 16))
         .alert("Edit queued message", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             TextField("Message", text: $draft)
             Button("Save") { if let e = editing { chat.updateQueued(e.id, text: draft) }; editing = nil }
@@ -824,7 +833,7 @@ struct ChatHeader: View {
             if back {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
                 .accessibilityShowsLargeContentViewer { Label("Back", systemImage: "chevron.left") }
@@ -908,7 +917,7 @@ struct ChatHeader: View {
             ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
         } label: {
             Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
         }
         .menuStyle(.button).buttonStyle(.plain)
         .accessibilityLabel("Chat options")
@@ -926,7 +935,7 @@ struct ChatHeader: View {
             if showBack {
                 Button(action: onBack) {
                     Image(systemName: "chevron.left").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .buttonStyle(.plain).accessibilityLabel("Back").accessibilityIdentifier("chat.back")
                 .accessibilityFocused($backFocused)
@@ -981,7 +990,7 @@ struct ChatHeader: View {
                     // larger text the lines end in "…" (a pill that kept its width pushed the back
                     // circle off the screen).
                     .fixedSize(horizontal: false, vertical: true)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .voryGlassEffect(.regular.interactive(), in: .capsule)
                 }
                 .contentShape(.rect)
             }
@@ -1006,7 +1015,7 @@ struct ChatHeader: View {
                     ChatMenuItems(chat: chat, onProfile: onProfile, onRename: onRename, onContext: onContext, onNewChat: onNewChat, onClose: onClose)
                 } label: {
                     Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                        .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
+                        .frame(width: 44, height: 44).voryGlassEffect(.regular.interactive(), in: .circle)
                 }
                 .menuStyle(.button).buttonStyle(.plain)
                 .accessibilityIdentifier("chat.more")

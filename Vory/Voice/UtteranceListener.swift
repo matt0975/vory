@@ -49,7 +49,8 @@ final class UtteranceListener {
     private var lastSpeechAt: Date?
     private var captureURL: URL?
     #if os(iOS) || os(macOS)
-    private var analyzer: SpeechAnalyzer?
+    /// Kept type-erased so this can load on systems before version 26.
+    private var analyzer: Any?
     private var analyzerTask: Task<Void, Never>?
     private var resultsTask: Task<Void, Never>?
     private var wordsTask: Task<Void, Never>?
@@ -143,7 +144,8 @@ final class UtteranceListener {
 
     private var detectorRunning: Bool {
         #if os(iOS) || os(macOS)
-        return analyzer != nil
+        if #available(iOS 26.0, macOS 26.0, *) { return analyzer != nil }
+        return false
         #else
         return false
         #endif
@@ -151,6 +153,7 @@ final class UtteranceListener {
 
     private func startDetector() {
         #if os(iOS) || os(macOS)
+        guard #available(iOS 26.0, macOS 26.0, *) else { return }
         let pipe = self.pipe
         analyzerTask = Task { @MainActor [weak self] in
             do {
@@ -208,12 +211,16 @@ final class UtteranceListener {
 
     private func stopDetector() {
         #if os(iOS) || os(macOS)
-        pipe.setAnalyzer(format: nil, continuation: nil)
-        analyzerTask?.cancel(); analyzerTask = nil
-        resultsTask?.cancel(); resultsTask = nil
-        wordsTask?.cancel(); wordsTask = nil
-        if let a = analyzer { Task { try? await a.finalizeAndFinishThroughEndOfInput() } }
-        analyzer = nil
+        if #available(iOS 26.0, macOS 26.0, *) {
+            pipe.setAnalyzer(format: nil, continuation: nil)
+            analyzerTask?.cancel(); analyzerTask = nil
+            resultsTask?.cancel(); resultsTask = nil
+            wordsTask?.cancel(); wordsTask = nil
+            if let a = analyzer as? SpeechAnalyzer {
+                Task { try? await a.finalizeAndFinishThroughEndOfInput() }
+            }
+            analyzer = nil
+        }
         #endif
     }
 
@@ -251,7 +258,9 @@ final class InputPipe: @unchecked Sendable {
     private var file: AVAudioFile?
     private var fileURL: URL?
     private var analyzerFormat: AVAudioFormat?
-    private var analyzerIn: AsyncStream<AnalyzerInput>.Continuation?
+    /// Keeps AnalyzerInput out of stored state before version 26.
+    private var analyzerYield: ((AVAudioPCMBuffer) -> Void)?
+    private var analyzerFinish: (() -> Void)?
     private var analyzerConverter: AVAudioConverter?
     private var fileConverter: AVAudioConverter?
     static let leadIn: Double = 0.6
@@ -290,11 +299,18 @@ final class InputPipe: @unchecked Sendable {
         if speech { detectorSpeechUntil = Date().timeIntervalSinceReferenceDate + 0.35 }
     }
 
+    @available(iOS 26.0, macOS 26.0, *)
     func setAnalyzer(format: AVAudioFormat?, continuation: AsyncStream<AnalyzerInput>.Continuation?) {
         lock.lock(); defer { lock.unlock() }
-        analyzerIn?.finish()
+        analyzerFinish?()
         analyzerFormat = format
-        analyzerIn = continuation
+        if let continuation {
+            analyzerYield = { buffer in continuation.yield(AnalyzerInput(buffer: buffer)) }
+            analyzerFinish = { continuation.finish() }
+        } else {
+            analyzerYield = nil
+            analyzerFinish = nil
+        }
         analyzerConverter = nil
         if format == nil { detectorSeen = false }
     }
@@ -366,8 +382,8 @@ final class InputPipe: @unchecked Sendable {
                 ring.removeFirst()
             }
         }
-        if let format = analyzerFormat, let input = analyzerIn {
-            if let converted = convert(buffer, to: format, using: &analyzerConverter) { input.yield(AnalyzerInput(buffer: converted)) }
+        if let format = analyzerFormat, let yield = analyzerYield {
+            if let converted = convert(buffer, to: format, using: &analyzerConverter) { yield(converted) }
         }
         lock.unlock()
     }

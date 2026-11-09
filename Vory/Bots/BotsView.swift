@@ -223,7 +223,7 @@ struct BotCard: View {
             }
             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 7)
             .frame(maxWidth: .infinity)
-            .glassEffect(.regular.interactive(), in: .capsule)
+            .voryGlassEffect(.regular.interactive(), in: .capsule)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -275,7 +275,7 @@ private struct ShapeSeatGrid: View {
                             .zIndex(1)
                         VStack(spacing: 2) { Text(shape).font(.subheadline.weight(.semibold)); Text("model").font(.caption2).foregroundStyle(.secondary) }
                             .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 7).frame(maxWidth: .infinity)
-                            .glassEffect(.regular, in: .capsule)
+                            .voryGlassEffect(.regular, in: .capsule)
                     }
                 }
             }
@@ -336,8 +336,8 @@ struct MotionDemoView: View {
                 }
                 .padding(16)
                 HStack(spacing: 12) {
-                    Button(holding ? "Release states" : "Hold states") { holding.toggle() }.buttonStyle(.glass)
-                    Button("Finish spin (all)") { for c in (bench ? Self.benchCells : cells) { BotAmbient.shared.turnFinished(profile: "demo-\(c.id)") } }.buttonStyle(.glass)
+                    Button(holding ? "Release states" : "Hold states") { holding.toggle() }.voryGlassButtonStyle()
+                    Button("Finish spin (all)") { for c in (bench ? Self.benchCells : cells) { BotAmbient.shared.turnFinished(profile: "demo-\(c.id)") } }.voryGlassButtonStyle()
                 }
                 .padding(.bottom, 120)
             }
@@ -366,7 +366,7 @@ struct RoomCard: View {
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(14)
-        .glassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
+        .voryGlassEffect(.regular.interactive(), in: .rect(cornerRadius: 18))
         .padding(.horizontal, 16)
     }
 }
@@ -683,10 +683,10 @@ struct RoomView: View {
             .safeAreaInset(edge: .bottom) {
                 HStack {
                     TextField("Message the group", text: $text, axis: .vertical).lineLimit(1...4).padding(.vertical, 6)
-                    Button { Task { await send() } } label: { Image(systemName: "arrow.up").font(.body.weight(.bold)) }.buttonStyle(.glassProminent).disabled(text.isEmpty)
+                    Button { Task { await send() } } label: { Image(systemName: "arrow.up").font(.body.weight(.bold)) }.voryGlassButtonStyle(prominent: true).disabled(text.isEmpty)
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
-                .glassEffect(.regular, in: .rect(cornerRadius: 24))
+                .voryGlassEffect(.regular, in: .rect(cornerRadius: 24))
                 .padding(12)
                 .readingColumn(ChatStyle.readingColumn)
                 #if os(macOS)

@@ -10,7 +10,7 @@ struct ConnectionPill: View {
             Text(state.label).font(.caption).foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .glassEffect(.regular, in: .capsule)
+        .voryGlassEffect(.regular, in: .capsule)
         .accessibilityLabel("Connection: \(state.label)")
     }
     private var color: Color {
