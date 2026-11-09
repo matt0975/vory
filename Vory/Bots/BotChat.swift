@@ -9,6 +9,13 @@ enum BotChat {
     /// The title the gateway gives every Bot Chat.
     static let title = "Bot Chat"
 
+    /// The bot's page's way in: the chat itself, to type in, as any of the bot's chats opens.
+    /// A turn sent there joins the Bot Chat's own queue on the gateway, behind whatever the bot
+    /// is doing in it, and the desktop app showing it sees the same turn.
+    static func route(_ storedID: String, profile: String) -> ChatRoute {
+        ChatRoute(storedID: storedID, title: title, profile: profile)
+    }
+
     /// The stored id of `profile`'s Bot Chat, nil when it has none. The gateway names it itself
     /// (`profiles.list` → `canonical_session`, the live tip of the lineage), which is how the
     /// companion finds it too. The recent list is the fallback for a gateway without that field,

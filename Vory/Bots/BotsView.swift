@@ -473,15 +473,21 @@ struct BotRow: View {
     }
 }
 
-/// One bot: its instructions up top, then its sessions. Opening a session switches the app's
-/// selected profile to this bot first, because every session RPC is profile-scoped.
+/// One bot: its instructions up top, its Bot Chat when it has one, then its sessions. Opening a
+/// session switches the app's selected profile to this bot first, because every session RPC is
+/// profile-scoped.
 struct BotDetailView: View {
     @Environment(AppModel.self) private var model
     var profile: ProfileInfo
     @State private var sessions: [StoredSession] = []
+    /// The bot's own Bot Chat (#653), which the gateway keeps out of its list: nil when it has none.
+    @State private var botChatID: String?
     @State private var error: String?
     @State private var pendingDelete: StoredSession?
     @State private var composing = false
+
+    /// The bot's chats, its Bot Chat left out when a list carries it (it has its own row).
+    private var chats: [StoredSession] { sessions.filter { $0.id != botChatID } }
 
     var body: some View {
         SettingsList {
@@ -492,13 +498,27 @@ struct BotDetailView: View {
                         Text("Profile")
                     }
                 }
+                // The main conversation with a bot run from the desktop app, opened to type in;
+                // a "Messaged X" notice still opens it read-only.
+                if let botChatID {
+                    NavigationLink(value: BotChat.route(botChatID, profile: profile.name)) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bubble.left.and.text.bubble.right")
+                                .font(.title3)
+                                .foregroundStyle(.tint)
+                                .frame(width: 36, height: 36)
+                            Text(BotChat.title)
+                        }
+                    }
+                    .accessibilityIdentifier("bot.botChat")
+                }
             }
             Section {
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
-                if sessions.isEmpty, error == nil {
+                if chats.isEmpty, error == nil {
                     Text("No chats with this bot yet.").foregroundStyle(.secondary).font(.footnote)
                 }
-                ForEach(sessions) { s in
+                ForEach(chats) { s in
                     NavigationLink(value: ChatRoute(storedID: s.id, title: s.displayTitle, profile: profile.name)) {
                         SessionRow(session: s, needsYou: model.runtime?.needsAttention.contains(s.id) ?? false, live: model.runtime?.chatForStored(s.id)?.isRunning ?? false)
                     }
@@ -528,11 +548,14 @@ struct BotDetailView: View {
 
     private func load() async {
         guard let rt = model.runtime else { return }
+        // The Bot Chat the way a "Messaged X" notice finds it; not finding it only hides its row.
+        async let botChat = try? BotChat.storedID(of: profile.name, on: rt)
         do {
             let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
             sessions = r.sessions
             error = nil
         } catch { self.error = error.localizedDescription }
+        botChatID = await botChat
     }
 
     private func delete(_ s: StoredSession) async {

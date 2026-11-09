@@ -70,4 +70,13 @@ import Testing
         let bots = try Self.source("Vory/Bots/BotChat.swift")
         #expect(bots.contains("static func route("), "BotChat has no route for the bot's page")
     }
+
+    /// What the page's row pushes: the stored chat on its bot, titled, and writable.
+    @Test func pageRouteOpensTheChatToTypeIn() {
+        let r = BotChat.route("tip", profile: "work")
+        #expect(r.storedID == "tip")
+        #expect(r.profile == "work")
+        #expect(r.title == "Bot Chat")
+        #expect(!r.readOnly, "the bot's page opened its Bot Chat read-only")
+    }
 }
