@@ -332,9 +332,14 @@ struct ReservedRegions: Equatable {
     /// closes (the decision: the dock rides above the fold while the list is open), so
     /// the list's own resizing after the lift cannot drop the dock back under it. `restingBottom`
     /// is where the dock's bottom edge stands with no keyboard (window space), nil where it isn't known.
+    /// A dock standing there and on the fold stays (#669): at rest it's on the fold only because it's
+    /// taller than the room under it, and the half above can't hold it either (on the half-open Duo
+    /// about 420 pt under the fold and 380 above it, under the top bar). Lifted, it went over the top
+    /// bar and into the status band; where it rests, its controls stay in the flat bottom half.
     func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false, restingBottom: CGFloat? = nil) -> CGFloat {
         guard let fold = horizontalFold, dock.height > 0 else { return 0 }
         let onFold = dock.minY < fold.maxY + Self.margin && dock.maxY > fold.minY - Self.margin
+        if onFold, let rest = restingBottom, dock.maxY >= rest - 0.5 { return 0 }
         let underFold = dock.minY >= fold.maxY + Self.margin
         let listCrosses = listTop.map { held || $0 < fold.maxY + Self.margin } ?? false
         guard onFold || (underFold && listCrosses) else { return 0 }

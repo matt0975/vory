@@ -325,7 +325,7 @@ struct ConversationView: View {
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
-            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity, alignment: .bottom).padding(.bottom, barReserve + foldLift)
                 .environment(\.chatHeaderBottom, chatHeaderBottom)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockSlotBottom = $0 }
                 .onPreferenceChange(ComposerListReach.self) { listReach = $0 }
@@ -467,8 +467,11 @@ struct ConversationView: View {
     }
 
     /// Whether the dock's measured height is kept: over 0, since a zero-height report (the dock not yet laid out) must not
-    /// empty the thread's fallback margin, and under 400 pt. `window` is the window's height.
-    static func keepsDockHeight(_ height: CGFloat, window: CGFloat) -> Bool { height > 0 && height < 400 }
+    /// empty the thread's fallback margin, and under the window's height, so a measure of the whole window isn't taken.
+    /// `window` is the window's height, 0 where it isn't measured (the Mac's views get none): any height over 0 there.
+    /// The bound was 400 pt, which the dock passes at the accessibility sizes; the half-open Duo's lift then read a stale
+    /// height (#669).
+    static func keepsDockHeight(_ height: CGFloat, window: CGFloat) -> Bool { height > 0 && (window <= 0 || height < window) }
 
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
