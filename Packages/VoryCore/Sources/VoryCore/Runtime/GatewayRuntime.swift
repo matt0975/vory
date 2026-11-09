@@ -668,6 +668,8 @@ public final class GatewayRuntime {
     nonisolated static let signposter = OSSignposter(subsystem: "Vory", category: .pointsOfInterest)
 
     private func handle(event: GatewayEvent) {
+        // Each ready says which wire this socket speaks; a reconnect may reach another gateway.
+        if event.type == "gateway.ready" { sessionAuthority = event.payload["session_authority"]?.boolValue == true }
         if let chat = registry.byRuntime(event.sessionID) {
             chat.handle(event: event)
             return
@@ -694,6 +696,10 @@ public final class GatewayRuntime {
     /// connected, and the last one: the diagnostics page shows them, so "I cannot see approvals"
     /// can be told apart as "none arrive" versus "they arrive and are not drawn".
     public private(set) var serverRequestsReceived = 0
+    /// True when the socket is served by Hermes's session authority (gateway.ready's `session_authority`; Hermes
+    /// v0.23.0 on a dashboard the gateway hosts): approvals and single questions come as `approval.request` and
+    /// `clarify.request` events and are answered with `approval.respond` and `clarify.respond` (#665).
+    public internal(set) var sessionAuthority = false
     public private(set) var lastServerRequest: String?
 
     private func answer(serverRequest req: ServerRequest) async -> JSONValue? {
