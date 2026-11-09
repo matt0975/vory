@@ -46,6 +46,11 @@ public struct PendingCard: Identifiable, Hashable, Sendable {
     public var params: JSONValue
     /// True when the card came from `pending_approval` and must be answered with `approval.respond`.
     public var viaApprovalRPC = false
+    /// A prompt of Hermes's session authority (an `approval.request` or `clarify.request` event, or a snapshot's
+    /// `prompts`): its id and the turn's execution it belongs to, both of which its answer names (#665).
+    public var promptID: String?
+    public var generation: Int?
+    public var viaPrompt: Bool { promptID != nil }
 
     public init(id: String, method: String, params: JSONValue, viaApprovalRPC: Bool = false) {
         self.id = id; self.method = method; self.params = params; self.viaApprovalRPC = viaApprovalRPC
@@ -494,7 +499,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     // MARK: Lifecycle
 
     public func create(cwd: String? = nil) async throws {
-        var params: [String: JSONValue] = ["cols": 80]
+        // No "cols": Hermes's canonical create (v0.23.0's session authority) refuses a key it doesn't declare, and the
+        // legacy create takes the 80 it would have said by default (#665). session.resume still sends it.
+        var params: [String: JSONValue] = [:]
         if let cwd, !cwd.isEmpty { params["cwd"] = .string(cwd); params["cwd_explicit"] = .bool(true) }
         let r = try await rpc("session.create", params)
         runtimeID = r["session_id"]?.stringValue ?? ""
@@ -888,6 +895,15 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             params["session_id"] = .string(runtimeID)
             listed.append(PendingCard(id: "queue-\(rid)", method: "approval", params: .object(params), viaApprovalRPC: true))
         }
+        // Hermes's session authority lists its open prompts (approvals, questions) with the turn's execution (#665).
+        if runtime.sessionAuthority {
+            noteGeneration(r["execution_generation"]?.intValue)
+            for prompt in r["prompts"]?.arrayValue ?? [] {
+                guard let card = Self.promptCard(prompt, sessionID: runtimeID), !listed.contains(where: { $0.id == card.id }),
+                      !removedHere(card.id, since: listedAt) else { continue }
+                listed.append(card)
+            }
+        }
         // One question, under its own id or the approval queue's.
         func same(_ a: PendingCard, _ b: PendingCard) -> Bool {
             if a.id == b.id { return true }
@@ -945,6 +961,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// The fallback the gateway offers for a missed approval frame: anything still waiting on
     /// this session becomes a card answered through `approval.respond`.
     public func pollPendingApprovals() async {
+        // The session authority's prompts come and go by event, and its list carries no execution to answer with.
+        guard !runtime.sessionAuthority else { return }
         let asked = Date()
         lastApprovalCheck = asked
         let asking = askingForList(at: asked)
@@ -1603,6 +1621,53 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
 
+    /// A card for one of the session authority's prompts (an event's payload, or an entry of a snapshot's `prompts`),
+    /// in the shape the cards read: an approval's `request_id` is its prompt id, so a notification or the watch that
+    /// names the request finds it. Nil for anything else (#665).
+    nonisolated static func promptCard(_ prompt: JSONValue, sessionID: String) -> PendingCard? {
+        guard let id = prompt["prompt_id"]?.stringValue, !id.isEmpty, let generation = prompt["execution_generation"]?.intValue else { return nil }
+        var params: [String: JSONValue] = ["session_id": .string(sessionID)]
+        let method: String
+        switch prompt["kind"]?.stringValue {
+        case "approval":
+            method = "approval"
+            params["request_id"] = .string(id)
+            for key in ["command", "description", "choices", "timeout_s"] { if let v = prompt[key], !v.isNull { params[key] = v } }
+        case "clarify":
+            method = "clarify"
+            for key in ["question", "choices", "multi_select", "timeout_s"] { if let v = prompt[key], !v.isNull { params[key] = v } }
+        default:
+            return nil
+        }
+        var card = PendingCard(id: id, method: method, params: .object(params))
+        card.promptID = id
+        card.generation = generation
+        return card
+    }
+
+    /// The newest execution the session authority has shown this chat. A prompt card from an earlier one can't be
+    /// answered any more (the gateway would say `stale_generation`), so it goes, as the gateway's own settle would
+    /// take it.
+    private func noteGeneration(_ generation: Int?) {
+        guard let generation, generation > (executionGeneration ?? Int.min) else { return }
+        executionGeneration = generation
+        for card in cards where card.viaPrompt && (card.generation ?? generation) < generation { noLongerWaiting(card) }
+    }
+
+    /// A prompt card whose turn is over: it goes, with a line saying so.
+    private func noLongerWaiting(_ card: PendingCard) {
+        noteRemovedHere(card)
+        cards.removeAll { $0.id == card.id }
+        cardShownAt[card.id] = nil
+        cardWent()
+        runtime.cardNotifier?.cardSettled(card, chat: self)
+        items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: Self.noLongerWaitingLine(card), symbol: "clock")))
+    }
+
+    nonisolated static func noLongerWaitingLine(_ card: PendingCard) -> String {
+        card.method == "approval" ? "This approval is no longer waiting" : "This question is no longer waiting"
+    }
+
     /// When each card appeared here.
     private var cardShownAt: [String: Date] = [:]
     /// When the gateway last said each card's question was waiting: when the question came, or
@@ -1621,6 +1686,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     /// last, put it back.
     private var listsAskedAt: [UUID: Date] = [:]
     private var lastApprovalCheck = Date.distantPast
+    /// The newest execution the session authority has shown this chat (a snapshot, a prompt): a prompt card from an
+    /// earlier one can no longer be answered (#665).
+    private(set) var executionGeneration: Int?
     /// A card this fresh is never taken for answered elsewhere.
     static let cardGrace: TimeInterval = 2
 
@@ -1741,6 +1809,10 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if card.method == "approval" {
             runtime.pushRegistrar?.noteAnswer(requestID: card.approval?.requestId ?? card.id, session: storedID, runtime: runtime)
         }
+        if card.viaPrompt, let promptID = card.promptID, let generation = card.generation {
+            await respondToPrompt(card, promptID: promptID, generation: generation, result: result)
+            return
+        }
         if card.viaApprovalRPC, let rid = card.approval?.requestId {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "request_id": .string(rid)]
             params["choice"] = result["choice"] ?? "deny"
@@ -1752,6 +1824,49 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         if card.method == "approval" {
             items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Approval: \(result["choice"]?.stringValue ?? "?")", symbol: "checkmark.shield")))
         }
+    }
+
+    /// An answer to one of the session authority's prompts: the four keys it takes and no other (#665). A turn already
+    /// over leaves the card down with a line; one answered elsewhere says so; a socket not attached again yet (an
+    /// answer from a notification right after a reconnect) waits once for the chat's re-attach. Anything else puts the
+    /// card back, with why.
+    private func respondToPrompt(_ card: PendingCard, promptID: String, generation: Int, result: JSONValue) async {
+        let isApproval = card.method == "approval"
+        var params: [String: JSONValue] = ["session_id": .string(runtimeID), "execution_generation": .number(Double(generation)),
+                                           "prompt_id": .string(promptID)]
+        if isApproval { params["choice"] = result["choice"] ?? "deny" } else { params["answer"] = result["answer"] ?? "" }
+        for attempt in 0..<2 {
+            do {
+                let r = try await rpc(isApproval ? "approval.respond" : "clarify.respond", params)
+                if r["status"]?.stringValue == "already_resolved" {
+                    items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Answered on another device", symbol: "checkmark.shield")))
+                } else if isApproval {
+                    items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: "Approval: \(result["choice"]?.stringValue ?? "?")", symbol: "checkmark.shield")))
+                }
+                return
+            } catch let e as RPCError where e.message == "stale_generation" {
+                items.append(TranscriptItem(id: UUID().uuidString, kind: .system(text: Self.noLongerWaitingLine(card), symbol: "clock")))
+                return
+            } catch let e as RPCError where e.message == "permission_denied" && attempt == 0 {
+                let deadline = Date().addingTimeInterval(10)
+                while isResuming, Date() < deadline { try? await Task.sleep(for: .milliseconds(250)) }
+            } catch {
+                restoreCard(card)
+                items.append(TranscriptItem(id: UUID().uuidString, kind: .error(text: error.localizedDescription)))
+                return
+            }
+        }
+        restoreCard(card)
+    }
+
+    /// A prompt card whose answer didn't go: up again, asking for attention, with no second notification.
+    private func restoreCard(_ card: PendingCard) {
+        guard !cards.contains(where: { $0.id == card.id }) else { return }
+        removedHereAt[card.id] = nil
+        cards.append(card)
+        cardShownAt[card.id] = Date()
+        runtime.setAttention(storedID: storedID, needed: true)
+        activity.update(for: self, attention: true)
     }
 
     private func cancelCard(id: String, reason: String) {
@@ -1912,6 +2027,16 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             if let t = p["text"]?.stringValue, !t.trimmingCharacters(in: .whitespaces).isEmpty { banner = t; bannerIsReconnect = false }
         case "notification.clear":
             banner = nil
+        case "approval.request", "clarify.request":
+            // Hermes's session authority asks by event, not by request (#665).
+            guard runtime.sessionAuthority, let card = Self.promptCard(p, sessionID: runtimeID) else { break }
+            noteGeneration(card.generation)
+            guard removedHereAt[card.id] == nil, (card.generation ?? 0) >= (executionGeneration ?? 0) else { break }
+            addCard(card)
+        case "approval.settled", "clarify.settled":
+            // Answered here, the card went already; answered elsewhere, timed out or its turn over, it goes now.
+            guard runtime.sessionAuthority, let id = p["prompt_id"]?.stringValue, let card = cards.first(where: { $0.id == id }) else { break }
+            settleElsewhere(card)
         case "request.cancel":
             cancelCard(id: p["id"]?.stringValue ?? "", reason: p["reason"]?.stringValue ?? "cancelled")
         case "session.reclaimed":
@@ -1978,7 +2103,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         case "session.reclaimed":
             // Only when the snapshot is of the session that went: a resume after it is on a new one.
             if (p["session_id"]?.stringValue ?? ev.sessionID) == runtimeID { handle(event: ev) }
-        case "session.usage", "notification.show", "notification.clear":
+        case "session.usage", "notification.show", "notification.clear", "approval.settled", "clarify.settled":
             handle(event: ev)
         default:
             // The rest change only what the snapshot shows.

@@ -1,4 +1,5 @@
 import Intents
+import os
 import SwiftUI
 #if canImport(UIKit)
 import UIKit
@@ -13,26 +14,55 @@ import VoryCore
 /// presents the result like a message from the bot (its avatar as the large icon, the app icon
 /// small on it), the way Messages notifications look.
 final class NotificationService: UNNotificationServiceExtension {
-    private var handler: ((UNNotificationContent) -> Void)?
-    private var content: UNMutableNotificationContent?
+    private var once: HandlerOnce?
 
+    override init() {
+        super.init()
+        NSELog.line("nse init t+\(NSELog.sinceStart())")
+    }
+
+    /// Returns at once (#455): the keychain read and the decrypt run on PushIntake's own queue, and what they find
+    /// fills the content there, so the system hears back from `didReceive` however long the Keychain takes.
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
-        handler = contentHandler
-        let mutable = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
-        content = mutable
+        let enc = request.content.userInfo["enc"] as? String
+        NSELog.line("nse receive t+\(NSELog.sinceStart()) enc \(enc == nil ? 0 : 1)")
+        let once = HandlerOnce(contentHandler, asItCame: request.content)
+        self.once = once
+        // Not Sendable: only the outcome's one path touches it; the expiry gets it only once it's filled (`HandlerOnce`).
+        nonisolated(unsafe) let mutable = (request.content.mutableCopy() as? UNMutableNotificationContent) ?? UNMutableNotificationContent()
         Keychain.accessGroup = Keychain.sharedGroupFromBundle()
-        guard let enc = request.content.userInfo["enc"] as? String else {
-            Self.breadcrumb("plain notification (no enc)")
-            Self.deliverAsMessage(mutable, profile: (request.content.userInfo["hermes"] as? [String: Any])?["profile"] as? String ?? "", handler: contentHandler)
-            return
-        }
-        guard let creds = Keychain.getCodable(PushRelay.Credentials.self, account: PushRelay.credentialsAccount) else {
-            Self.breadcrumb("no relay credentials readable (group \(Keychain.accessGroup ?? "none"))"); contentHandler(mutable); return
-        }
-        let payload: [String: JSONValue]
-        do { payload = try PushRelay.decrypt(enc, keyBase64: creds.payloadKey) }
-        catch { Self.breadcrumb("decrypt failed: \(error.localizedDescription)"); contentHandler(mutable); return }
-        Self.breadcrumb("decrypted OK")
+        let plainProfile = (request.content.userInfo["hermes"] as? [String: Any])?["profile"] as? String ?? ""
+        let read = NSELog.Mark()
+        PushIntake.begin(enc: enc, credentials: {
+            let began = DispatchTime.now().uptimeNanoseconds
+            let creds = Keychain.getCodable(PushRelay.Credentials.self, account: PushRelay.credentialsAccount)
+            NSELog.line("nse credentials \(NSELog.ms(since: began)) ms found \(creds == nil ? 0 : 1)")
+            read.at = DispatchTime.now().uptimeNanoseconds
+            return creds
+        }, done: { outcome in
+            switch outcome {
+            case .plain:
+                NotificationService.breadcrumb("plain notification (no enc)")
+                NotificationService.deliverAsMessage(mutable, profile: plainProfile, handler: { once.call($0, via: "plain") })
+            case .noCredentials:
+                NotificationService.breadcrumb("no relay credentials readable (group \(Keychain.accessGroup ?? "none"))")
+                once.call(mutable, via: "fallback")
+            case .failed(let why):
+                NSELog.line("nse decrypt \(NSELog.ms(since: read.at)) ms ok 0")
+                NotificationService.breadcrumb("decrypt failed: \(why)")
+                once.call(mutable, via: "fallback")
+            case .decrypted(let payload):
+                NSELog.line("nse decrypt \(NSELog.ms(since: read.at)) ms ok 1")
+                NotificationService.breadcrumb("decrypted OK")
+                let profile = NotificationService.fill(mutable, from: payload)
+                once.filled(mutable)
+                NotificationService.deliverAsMessage(mutable, profile: profile, handler: { once.call($0, via: "decrypted") })
+            }
+        })
+    }
+
+    /// The decrypted fields onto the content; the bot's profile, for the message look.
+    private static func fill(_ mutable: UNMutableNotificationContent, from payload: [String: JSONValue]) -> String {
         if let t = payload["title"]?.stringValue { mutable.title = t }
         if let s = payload["subtitle"]?.stringValue { mutable.subtitle = s }
         if let b = payload["body"]?.stringValue { mutable.body = b }
@@ -46,7 +76,7 @@ final class NotificationService: UNNotificationServiceExtension {
             mutable.userInfo = info
             profile = hermes["profile"]?.stringValue ?? ""
         }
-        Self.deliverAsMessage(mutable, profile: profile, handler: contentHandler)
+        return profile
     }
 
     /// Turn/approval/question notifications come from a bot, so they are presented as a message
@@ -81,7 +111,10 @@ final class NotificationService: UNNotificationServiceExtension {
         let bot = content.title.components(separatedBy: " · ").first ?? content.title
         let key = looks.key(profile: profile, label: bot) ?? profile
         breadcrumb("look for profile '\(profile)' / bot '\(bot)' → \(key.isEmpty ? "none" : key) (mirror has \(looks.avatars.count) bots)")
+        NSELog.line("nse render begin")
+        let rendering = DispatchTime.now().uptimeNanoseconds
         let png = AvatarRender.image(profile: key, name: bot, looks: looks)
+        NSELog.line("nse render \(NSELog.ms(since: rendering)) ms")
         let handle = INPersonHandle(value: profile.isEmpty ? bot : profile, type: .unknown)
         let sender = INPerson(personHandle: handle, nameComponents: nil, displayName: bot, image: png.map { INImage(imageData: $0) },
                               contactIdentifier: nil, customIdentifier: profile.isEmpty ? bot : profile, isMe: false, suggestionType: .none)
@@ -107,13 +140,84 @@ final class NotificationService: UNNotificationServiceExtension {
 
     /// One line the app reads back (Background Notifications page) to show what happened last time.
     static func breadcrumb(_ what: String) {
+        let began = DispatchTime.now().uptimeNanoseconds
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(what)"
         try? Keychain.set(Data(line.utf8), account: "push.nse.last")
+        NSELog.line("nse breadcrumb \(NSELog.ms(since: began)) ms")
     }
 
     override func serviceExtensionTimeWillExpire() {
-        if let handler, let content { handler(content) }
+        once?.expire()
     }
+}
+
+/// The system's handler, called once (#455): the outcome's path and the expiry can both reach it, the work running on a
+/// queue of its own, so whichever comes first delivers and the other is logged as late. It also keeps what the expiry
+/// delivers: the push as it came, until the outcome has filled the content (`filled`), so the expiry never hands over
+/// a content the queue is still writing.
+private final class HandlerOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: ((UNNotificationContent) -> Void)?
+    private var latest: UNNotificationContent
+    init(_ handler: @escaping (UNNotificationContent) -> Void, asItCame: UNNotificationContent) {
+        self.handler = handler
+        latest = asItCame
+    }
+
+    /// The content with the decrypted fields in, for the expiry from now on.
+    func filled(_ content: UNNotificationContent) {
+        lock.lock()
+        latest = content
+        lock.unlock()
+    }
+
+    func expire() {
+        lock.lock()
+        let content = latest
+        lock.unlock()
+        call(content, via: "expire")
+    }
+
+    func call(_ content: UNNotificationContent, via: String) {
+        lock.lock()
+        let handler = self.handler
+        self.handler = nil
+        lock.unlock()
+        guard let handler else { NSELog.line("nse handler late via \(via)"); return }
+        NSELog.line("nse handler t+\(NSELog.sinceStart()) via \(via)")
+        handler(content)
+    }
+}
+
+/// The extension's timing (#455), to the system log under dev.vory, category nse: fixed words and numbers only, never
+/// a payload, title, body, profile, bot or thread name, key or install id, so every line is public. In Release too: the
+/// Mac that was too slow to start is a tester's, and their own log is the only one that shows where the time went.
+enum NSELog {
+    private static let log = Logger(subsystem: "dev.vory", category: "nse")
+
+    /// When this process started, from the kernel (wall clock, seconds), read once.
+    private static let started: Double? = {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let t = info.kp_proc.p_un.__p_starttime   // `p_starttime` in C, a macro Swift doesn't import
+        return Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000
+    }()
+
+    /// A moment in the work, kept for the next step's time: written by the credentials read, read by the outcome after
+    /// it, on the same queue in turn.
+    final class Mark: @unchecked Sendable { var at: UInt64 = DispatchTime.now().uptimeNanoseconds }
+
+    static func line(_ words: String) { log.notice("\(words, privacy: .public)") }
+
+    /// Milliseconds since the process started (-1 if the kernel didn't say).
+    static func sinceStart() -> Int {
+        guard let started else { return -1 }
+        return Int((Date().timeIntervalSince1970 - started) * 1000)
+    }
+
+    static func ms(since t: UInt64) -> Int { Int((DispatchTime.now().uptimeNanoseconds &- t) / 1_000_000) }
 }
 
 /// Renders the bot's avatar (photo thumbnail, or the studio bot as a still frame) to PNG for the
