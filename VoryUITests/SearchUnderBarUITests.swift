@@ -10,7 +10,8 @@ import XCTest
 /// Nothing that stands under a capsule is tapped: the tap would go to the bar. A page whose search can't be ended stops
 /// there, and the next page starts from a fresh launch.
 /// With each search open (the first round): the accessibility audit, every issue printed (SEARCHBAR-AUDIT) and one on the
-/// field, its clear button or the end of the search a failure; and a screenshot kept ("<tab> searching").
+/// field, its clear button or the end of the search a failure (the system field's own clear button's hit region aside);
+/// and a screenshot kept ("<tab> searching").
 /// Every frame is printed (SEARCHBAR). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set (the mock gateway), and
 /// where the bar isn't up (a wide window).
 @MainActor
@@ -120,13 +121,21 @@ final class SearchUnderBarUITests: XCTestCase {
     }
 
     /// The accessibility audit with the search open: every issue printed; one on the field, its clear button or the end of
-    /// the search fails the test.
-    private func audit(_ tab: String, near frames: [CGRect]) throws {
+    /// the search fails the test. One finding is skipped by its exact terms: the system search field's own clear button
+    /// (UISearchTextField's "Clear text", 20 pt) has a hit region smaller than the audit's minimum. It's the system's
+    /// control, not one this app draws or sizes. Skipped as ComposerFieldAuditUITests skips a known finding; anything else
+    /// on the search, that button included, still fails.
+    private func audit(_ tab: String, fieldFrame: CGRect, near frames: [CGRect]) throws {
         var flagged: [String] = []
         try app.performAccessibilityAudit(for: [.sufficientElementDescription, .hitRegion, .elementDetection]) { issue in
             guard let el = issue.element else { print("SEARCHBAR-AUDIT \(tab) '\(issue.compactDescription)' no element"); return true }
             let line = "'\(issue.compactDescription)' type \(el.elementType.rawValue) id '\(el.identifier)' label '\(el.label)' frame \(el.frame)"
             print("SEARCHBAR-AUDIT \(tab) \(line)")
+            if issue.auditType == .hitRegion, issue.compactDescription == "Hit area is too small", el.label == "Clear text",
+               fieldFrame.contains(el.frame) {
+                print("SEARCHBAR-AUDIT \(tab) ignored: the system search field's own clear button")
+                return true
+            }
             if frames.contains(where: { $0.intersects(el.frame) }) { flagged.append(line) }
             return true
         }
@@ -161,7 +170,7 @@ final class SearchUnderBarUITests: XCTestCase {
             shot.name = "\(tab) searching"
             shot.lifetime = .keepAlways
             add(shot)
-            try audit(tab, near: [field.frame, clear.exists ? clear.frame : .null, end?.frame ?? .null].filter { !$0.isNull })
+            try audit(tab, fieldFrame: field.frame, near: [field.frame, clear.exists ? clear.frame : .null, end?.frame ?? .null].filter { !$0.isNull })
         }
 
         // Cleared: the search stays open where it was.
