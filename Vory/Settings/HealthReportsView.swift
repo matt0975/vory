@@ -63,8 +63,15 @@ struct HealthReportsView: View {
                     }
                 }
                 Section {
-                    Button { copy() } label: { Label(copied ? "Copied" : "Copy report", systemImage: "doc.on.doc") }
-                        .accessibilityIdentifier("healthReports.copy")
+                    Button { copy() } label: {
+                        Label(copied ? "Copied" : "Copy report", systemImage: "doc.on.doc")
+                            #if os(macOS)
+                            // The Mac's form draws a button row only as tall as its text (16 pt): at least 28 pt, all of it a place to click.
+                            .frame(minHeight: 28)
+                            .contentShape(Rectangle())
+                            #endif
+                    }
+                    .accessibilityIdentifier("healthReports.copy")
                 } footer: {
                     Text("Copies the counts and the crash details as text, with no messages, names or keys, to paste into an email or a TestFlight comment.")
                 }
