@@ -1546,6 +1546,11 @@ PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as publishe
 REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
 RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
 AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": [], "interrupts": []}
+# MOCK_INTERRUPT_MOVED_ON=<count> (with --authority, #684): the next <count> session.interrupt calls find that the
+# session's execution has moved on since the client last heard (a newer one claimed between what it knew and its Stop):
+# the generation and revision move on and the partial session.info is published, as a claim does, and the Stop is then
+# refused by the generation check as stale_generation. A Stop sent after that names the newer execution and is taken.
+INTERRUPT_MOVED_ON = {"left": int(os.environ.get("MOCK_INTERRUPT_MOVED_ON", "0") or 0)}
 # The keys the authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in v0.22.7 and
 # v0.23.0). It also needs a non-empty submission_id or input_id; either miss is a bare 4001 "invalid_params" (#682).
 SUBMISSION_KEYS = {"session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended",
@@ -3734,6 +3739,15 @@ class Gateway:
                 # key names None, never the current one (#683).
                 if s is None:
                     return refused("not_found")
+                if INTERRUPT_MOVED_ON["left"] > 0:
+                    # MOCK_INTERRUPT_MOVED_ON (#684): a newer execution claimed just before this Stop, published as a
+                    # claim publishes it; the check below then finds the Stop's generation out of date.
+                    INTERRUPT_MOVED_ON["left"] -= 1
+                    GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+                    REVISIONS[s.sid] = REVISIONS.get(s.sid, 0) + 1
+                    await self.authority_info(s)
+                    print(f"[mock] session.interrupt: the execution moved on to {GENERATIONS[s.sid]} first "
+                          f"({INTERRUPT_MOVED_ON['left']} more)", flush=True)
                 current = GENERATIONS.get(s.sid, 0)
                 if p.get("execution_generation") != current:
                     print(f"[mock] session.interrupt refused stale_generation: sent {p.get('execution_generation')!r}, "

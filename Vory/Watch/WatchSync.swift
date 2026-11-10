@@ -204,10 +204,17 @@ final class WatchSync: NSObject, WCSessionDelegate {
             // watch runs no model), else the step it is on.
             return ["ok": true, "running": chat.isRunning, "status": ChatGoals.shared.goal(for: chat.storedID) ?? chat.statusLine ?? "", "cards": cards]
         case "stop":
-            await chat.stop(); return ["ok": true]
+            return await stopAnswer(chat)
         default:
             return ["ok": false, "error": "unknown op"]
         }
+    }
+
+    /// The Watch's Stop, on this phone's chat, and the answer the Watch gets (#684).
+    @MainActor
+    static func stopAnswer(_ chat: ChatSession) async -> [String: Any] {
+        await chat.stop()
+        return ["ok": true]
     }
 
     /// An HTTP call the watch makes through this phone: signed with this phone's credentials
