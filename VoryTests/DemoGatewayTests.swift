@@ -391,4 +391,24 @@ import Testing
         let none: JSONValue = try await fresh.api.get("/api/cron/jobs")
         #expect(none["jobs"]?.arrayValue?.isEmpty == true)
     }
+
+    /// Characterisation (#502), green before and after it: the calls the Apple Watch makes through its iPhone while the
+    /// demo runs (`WatchSync.relay`: the phone's demo runtime forwarding them, `HermesAPI.forward`), answered in
+    /// process with the demo's bots and chats. The phone's side needs no change for the Watch to read the demo.
+    @Test func characterisationTheWatchsRelayedCallsAreAnswered() async throws {
+        let rt = runtime()
+        await rt.start()
+        defer { Task { await rt.stop() } }
+        let bot = try #require(DemoContent.bots.first?.name)
+        let list = try await rt.api.forward(RelayedRequest(method: "GET", path: "/api/sessions",
+            query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "8"), URLQueryItem(name: "profile", value: bot)],
+            body: nil, contentType: nil, authenticated: true))
+        #expect(list.status == 200)
+        let sessions = try JSONDecoder().decode(SessionListResponse.self, from: list.body)
+        #expect(!sessions.sessions.isEmpty, "the demo listed no chats for \(bot)")
+        let profiles = try await rt.api.forward(RelayedRequest(method: "GET", path: "/api/profiles", query: [], body: nil, contentType: nil, authenticated: true))
+        #expect(profiles.status == 200)
+        let bots = try JSONDecoder().decode(ProfilesResponse.self, from: profiles.body)
+        #expect(bots.profiles.map(\.name) == DemoContent.bots.map(\.name))
+    }
 }

@@ -55,6 +55,13 @@ enum DemoLooks {
             return true
         }
     }
+
+    /// The looks the phone sends the Apple Watch (#502), `demo` being the context's own word that the gateway in use is the
+    /// demo. Today's: the stored looks of the gateway in use, in the demo too.
+    static func watchLooks(demo: Bool) -> BotLooks {
+        var looks = BotLooks.load(); looks.gateways = nil; looks.shared = nil
+        return looks
+    }
 }
 
 /// The demo's looks for the views of one chat only (#490): onboarding's tour over a gateway in use, whose demo bots would
