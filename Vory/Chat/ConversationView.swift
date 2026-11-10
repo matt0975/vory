@@ -58,7 +58,12 @@ struct ConversationView: View {
         let bottom = dockSlotBottom - barReserve
         let dock = CGRect(x: 0, y: bottom - dockHeight, width: 1, height: dockHeight)
         let listTop = listReach > 0 ? bottom - BottomDock.bottomPadding - listReach : nil
-        return regions.dockLift(dock: dock, listTop: listTop, held: liftHeldForList)
+        return regions.dockLift(dock: dock, listTop: listTop, held: liftHeldForList, restingBottom: restingDockBottom)
+    }
+    /// Where the dock's bottom edge stands with no keyboard, in the same space as `foldLift`'s `bottom` (window space, the
+    /// bar's reserve taken off): the window's safe bottom less the bar's reserve. Nil until the window is measured.
+    private var restingDockBottom: CGFloat? {
+        windowGeometry.bounds.height > 0 ? windowGeometry.bounds.height - windowGeometry.safeArea.bottom - barReserve : nil
     }
     #endif
     /// The floating header's height on iOS; the Mac's header is the window toolbar, outside the thread.
@@ -150,6 +155,8 @@ struct ConversationView: View {
                     .alert(confirmTitle, isPresented: confirmShown) { confirmButtons(chat: chat) } message: { confirmMessage(chat: chat) }
                     .onChange(of: model.approvalConfirm, initial: true) { _, c in if let c, c.storedID == chat.storedID { confirming = c } }
                     .onAppear {
+                        // On screen while one of its views is up: its re-attach gets the schedule and the line (#641).
+                        chat.cameOnScreen()
                         model.chatAppeared(chat, page: pageID); LocalNotifier.clearDelivered(for: chat.storedID)
                         Perf.stamp("notifications: cleared for \(chat.storedID) (chat shown)")
                     }
@@ -165,6 +172,7 @@ struct ConversationView: View {
                     }
                     .onDisappear {
                         Perf.stamp("pop: conversation disappeared")
+                        chat.wentOffScreen()
                         // Another page still shows this chat (across a fold): it stays on screen, with its edit and its bot.
                         guard !model.chatGone(chat, page: pageID) else { return }
                         // Leaving the chat ends an edit: its words stay as the chat's draft, to send as a new message.
@@ -317,7 +325,7 @@ struct ConversationView: View {
             // Above the tab bar when the bar stands under the chat (a wide layout with the bar
             // along the bottom: the open Duo upright, the iPad): the pages do not pick up the
             // bar's inset on this iOS (see MainTabView), and the dock sat under the bar.
-            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity).padding(.bottom, barReserve + foldLift)
+            dock(chat).frame(maxWidth: wide ? ChatStyle.readingColumn : .infinity, alignment: .bottom).padding(.bottom, barReserve + foldLift)
                 .environment(\.chatHeaderBottom, chatHeaderBottom)
                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: { dockSlotBottom = $0 }
                 .onPreferenceChange(ComposerListReach.self) { listReach = $0 }
@@ -458,14 +466,22 @@ struct ConversationView: View {
             }
     }
 
+    /// Whether the dock's measured height is kept: over 0, since a zero-height report (the dock not yet laid out) must not
+    /// empty the thread's fallback margin, and under the window's height, so a measure of the whole window isn't taken.
+    /// `window` is the window's height, 0 where it isn't measured (the Mac's views get none): any height over 0 there.
+    /// The bound was 400 pt, which the dock passes at the accessibility sizes; the half-open Duo's lift then read a stale
+    /// height (#669).
+    static func keepsDockHeight(_ height: CGFloat, window: CGFloat) -> Bool { height > 0 && (window <= 0 || height < window) }
+
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
             // Demo mode's chats put the keyboard away after a send (#490, Matt: swiping it away was hard); the app's own
             // chats keep it up for the next message.
             .environment(\.composerFocusesAfterSend, !chat.runtime.connection.isDemo)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
-            // A zero-height report (the dock not yet laid out) must not empty the thread's fallback margin.
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { if $0 > 0, $0 < 400 { dockHeight = $0 } }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                if Self.keepsDockHeight($0, window: windowGeometry.bounds.height) { dockHeight = $0 }
+            }
             // The dock's top edge on screen, keyboard included: the thread measures its
             // own bottom edge the same way and keeps its last line above this. It follows
             // every frame of an interactive keyboard dismiss too: the thread's rows no longer
@@ -603,6 +619,7 @@ struct BottomDock: View {
     var readOnly = false
     /// Under the composer, to the dock's bottom edge.
     static let bottomPadding: CGFloat = 8
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         // The container is what lets the composer morph into a card; menus presented from
@@ -610,6 +627,12 @@ struct BottomDock: View {
         // what morphs, and the composer draws its own glass.
         GlassEffectContainer(spacing: 12) {
             VStack(spacing: 10) {
+                // A chat that lost its live attach (#641): a quiet line while it's tried again, a banner with Try again
+                // from a minute. Above the banner, so it's in the same place on the iPhone, the Duo, the iPad and the Mac.
+                if chat.reattachShow != .none {
+                    ReattachRow(chat: chat)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
                 if let banner = chat.banner {
                     HStack {
                         Text(banner).font(.footnote).lineLimit(3)
@@ -662,6 +685,67 @@ struct BottomDock: View {
         }
         .animation(.snappy, value: chat.firstCard?.id)
         .animation(.snappy, value: chat.banner)
+        // With Reduce Motion the row only fades: no spring, nothing that moves (#641).
+        .animation(reduceMotion ? .easeInOut(duration: 0.2) : .snappy, value: chat.reattachShow)
+        // VoiceOver hears the banner once when it comes, and once that the chat is back if it had come; the quiet line
+        // is read in order, never announced, so a flaky network doesn't chatter (#641).
+        .onChange(of: chat.reattachShow) { was, now in
+            if now == .failed, was != .failed { Self.announce(ChatSession.reattachFailedLine) }
+            if now == .none, was == .failed { Self.announce(ChatSession.reattachBackLine) }
+        }
+    }
+
+    private static func announce(_ words: String) {
+        var spoken = AttributedString(words)
+        spoken.accessibilitySpeechAnnouncementPriority = .low
+        AccessibilityNotification.Announcement(spoken).post()
+    }
+}
+
+/// #641: a chat whose live attach was lost, tried again on its own. A quiet line while it's tried; from a minute, a
+/// banner with Try again. No close button: it's a true state, and it goes when a try works.
+struct ReattachRow: View {
+    @Bindable var chat: ChatSession
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        ZStack {
+            if chat.reattachShow == .failed {
+                banner.transition(.opacity)
+            } else {
+                // Static: no spinner, no moving dots. On a small glass capsule, as everything else in the dock is: the
+                // thread scrolls under the dock, and bare words would sit on its text.
+                Text("Reconnecting…").font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .glassEffect(.regular, in: .capsule)
+                    .frame(maxWidth: .infinity)
+                    .transition(.opacity)
+            }
+        }
+        // The quiet line becomes the banner by a cross-fade, never a move.
+        .animation(.easeInOut(duration: 0.2), value: chat.reattachShow)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat.reattach")
+    }
+
+    /// The words and Try again side by side; at the accessibility sizes the button goes under the words.
+    private var banner: some View {
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 0))
+                                                  : AnyLayout(HStackLayout(spacing: 8))
+        return layout {
+            Text(ChatSession.reattachFailedLine).font(.footnote).lineLimit(3)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button { chat.tryAgain() } label: {
+                Text("Try again").font(.footnote.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44).contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Tries to connect this chat now")
+            .accessibilityIdentifier("chat.reattach.tryAgain")
+        }
+        .padding(.leading, 12).padding(.trailing, 8)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
     }
 }
 

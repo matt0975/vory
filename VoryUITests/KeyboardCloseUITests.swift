@@ -1,11 +1,12 @@
 import XCTest
 
 /// #350: the keyboard closes from the chat, on the iPhone and the iPad. A tap in the thread closes the on-screen keyboard,
-/// and the tapped thing still does what it does: a tool card opens (once, staying on screen where it was tapped),
-/// Reasoning opens, a link opens; a long press still shows its menu; a tap on the dock's own blank glass leaves the
-/// keyboard up; a drag still scrolls. Close keyboard after sending, off by default: on, Send closes the keyboard; off, it
-/// stays up. Settings › Appearance with the new row passes the audit. A chat over the mock (`-vory-demo-gateway`), not
-/// Demo mode, which closes after a send either way (#490). The Mac has no on-screen keyboard and none of this.
+/// and the tapped thing still does what it does: a link opens; a long press still shows its menu; a tap on the dock's own
+/// blank glass leaves the keyboard up; a drag still scrolls. A tool card's or Reasoning's tap is the exception (#634): it
+/// opens the card, once, where it was tapped, and leaves the keyboard up. Close keyboard after sending, off by default:
+/// on, Send closes the keyboard; off, it stays up. Settings › Appearance with the new row passes the audit. A chat over
+/// the mock (`-vory-demo-gateway`), not Demo mode, which closes after a send either way (#490). The Mac has no on-screen
+/// keyboard and none of this.
 ///
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are set (the mock and the demo copy).
 @MainActor
@@ -118,9 +119,8 @@ final class KeyboardCloseUITests: XCTestCase {
         XCTAssertTrue(keyboard(up: false), "a tap in the chat left the keyboard up")
     }
 
-    /// With the keyboard up and the thread at its end, a tool card's header tapped: the keyboard closes (the thread comes
-    /// down with the dock, as in Messages) and the card opens, once, ending on screen with its header under the tapped
-    /// point's column.
+    /// With the keyboard up and the thread at its end, a tool card's header tapped: the card opens, once, ending on screen
+    /// with its header under the tapped point's column, and the keyboard stays up (#634).
     func testACardTappedWithTheKeyboardUpOpensOnceAndStaysOnScreen() throws {
         try launch()
         chatWithCards()
@@ -128,8 +128,9 @@ final class KeyboardCloseUITests: XCTestCase {
         let before = card.frame
         let tap = card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 16))
         tap.tap()
-        XCTAssertTrue(keyboard(up: false), "the keyboard stayed up after a card was tapped")
         pause(1.5)
+        // Read once the tap's own turn has passed, when #350's close would have run (#634).
+        XCTAssertGreaterThan(app.keyboards.count, 0, "a card's tap closed the keyboard: it leaves it up (#634)")
         let samples = cardSamples()
         print("KEYBOARD-CLOSE card \(before) samples \(samples.mapValues { $0.map { String(format: "%.2f:%.0f/%.0f", $0.t, $0.top, $0.height) } })")
         XCTAssertEqual(samples.count, 1, "not one card toggled: \(samples.keys.sorted())")
@@ -148,13 +149,15 @@ final class KeyboardCloseUITests: XCTestCase {
         XCTAssertEqual(cardSamples().count, 1, "a second toggle after the first")
     }
 
-    /// Reasoning tapped with the keyboard up: the keyboard closes and Reasoning opens.
+    /// Reasoning tapped with the keyboard up: Reasoning opens and the keyboard stays up (#634).
     func testReasoningTappedWithTheKeyboardUpOpens() throws {
         try launch()
         chatWithCards()
         guard let reasoning = cards(NSPredicate(format: "label == 'Show reasoning'")).last else { XCTFail("no Reasoning above the bar"); return }
         reasoning.tap()
-        XCTAssertTrue(keyboard(up: false), "the keyboard stayed up after Reasoning was tapped")
+        pause(1)
+        // Read once the tap's own turn has passed, when #350's close would have run (#634).
+        XCTAssertGreaterThan(app.keyboards.count, 0, "Reasoning's tap closed the keyboard: it leaves it up (#634)")
         XCTAssertTrue(app.buttons["Hide reasoning"].firstMatch.waitForExistence(timeout: 3), "Reasoning did not open")
     }
 
@@ -305,7 +308,8 @@ final class KeyboardCloseUITests: XCTestCase {
         continueAfterFailure = true
         for (chatTitle, fast) in [("Packing list for the lake weekend", true), ("Morning checks on the home servers", false)] {
             app = XCUIApplication(bundleIdentifier: bundle)
-            app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats"]
+            // "Morning checks" is scheduled (#673): its section open, so its row is in the list.
+            app.launchArguments = ["-vory-demo", "-companionPromptShown", "YES", "-launchTab", "chats", "-chats.scheduled.open", "YES"]
             app.launch()
             let chat = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", chatTitle)).firstMatch
             XCTAssertTrue(chat.waitForExistence(timeout: 30), "no demo chat '\(chatTitle)'")

@@ -60,6 +60,8 @@ extension UIResponder {
     var headerBottom: CGFloat = 0
     private weak var scrollView: UIScrollView?
     private var tap: UITapGestureRecognizer?
+    /// When the touch this tap watches began (its timestamp, system uptime): a card toggled since then was this tap's.
+    private var touchBegan: TimeInterval = .infinity
 
     func attach(to sv: UIScrollView) {
         guard sv !== scrollView else { return }
@@ -90,9 +92,19 @@ extension UIResponder {
         // On the next turn, once whatever else took the same tap has acted on the layout it was touched on: closing
         // the keyboard moves the thread (at its end, down by the keyboard's height), and a link in the last reply,
         // resolved after the move, was no longer under the finger. The keyboard went and the link didn't open.
+        // A tap that opened or closed a card leaves the keyboard up (#634): closing it moved the thread's bottom margin under
+        // the card's hold, and the card dropped by the keyboard's height. The card's toggle ran on the same tap, before this
+        // turn, so a toggle since the touch began was this tap's.
+        let began = touchBegan
         DispatchQueue.main.async {
+            guard !CardHold.shared.toggled(since: began) else { return }
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
+    }
+
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        touchBegan = touch.timestamp
+        return true
     }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }

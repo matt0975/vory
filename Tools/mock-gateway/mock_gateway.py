@@ -357,6 +357,24 @@ def math_examples(n: int, cards: bool = True) -> str:
     return "\n\n".join(parts)
 
 
+# A small table and a code block in one reply (#643): the two cards' headers one above the other, each with its wrap
+# switch, for stills of the two side by side.
+CODE_TABLE_REPLY = """Two places fill the disk:
+
+| Path | Size | Kept |
+|---|---|---|
+| /var/log | 4.2 GB | 90 days |
+| /srv/backups | 1.1 GB | 8 weeks |
+
+And the command that measures them:
+
+```bash
+du -sh /var/log /srv/backups
+```
+
+That's the table and the command together."""
+
+
 # A table wider than a phone's bubble (six columns, emoji, bold, star ratings), with markdown
 # in the reasoning before it: what the app's scrolling table card and Reasoning card are
 # checked against.
@@ -508,10 +526,51 @@ STORED_SESSIONS: list[dict] = [
 ]
 SEEDED_IDS = {r["id"] for r in STORED_SESSIONS}
 
+# --cron-sessions N (#673): a gateway whose scheduled tasks run every 5 minutes. Every run writes a chat; most end with no
+# message (the task's script found nothing to do), so they have no title and no preview. Three have replies, one of each
+# shape the list has to word: a title, a preview only, and neither. And one chat of the person's own from two days ago,
+# which a page of 100 sorted by activity leaves out once the runs fill it. With the fixture on, the page is cut at its
+# limit as the real route cuts it (`rest`, /api/sessions).
+CRON_FIXTURE = [False]
+# (task, title, preview, messages, seconds ago)
+CRON_REPLIES = [
+    ("digest", "Morning digest", "Sum up the night's alerts and anything that needs me today.", 2, 600),
+    ("backup", None, "Check the backup log and say if anything failed.", 2, 2400),
+    ("report", None, None, 1, 4200),
+]
+OLD_CHAT_TITLE = "Plan the storage upgrade"
+
+
+def cron_fixture(n: int) -> list[dict]:
+    """The fixture's rows: `n` empty runs, one every 5 minutes back from now, the three with replies, and the old chat."""
+    now = time.time()
+
+    def run(task: str, i: int, title, preview, count: int, ago: float) -> dict:
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime(now - ago))
+        return {"id": f"cron_{task}_{stamp}_{i:04d}", "title": title, "preview": preview, "source": "cron", "model": MODEL,
+                "started_at": now - ago - 20, "last_active": now - ago, "message_count": count, "is_active": False,
+                "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"}
+
+    rows = [run("heartbeat", i, None, None, 0, 300 * (i + 1) - 30) for i in range(n)]
+    rows += [run(task, n + k, title, preview, count, ago) for k, (task, title, preview, count, ago) in enumerate(CRON_REPLIES)]
+    rows.append({"id": "20261107_101500_store1", "title": OLD_CHAT_TITLE,
+                 "preview": "Two 8 TB drives in a mirror, and the old pair kept as the backup target.", "source": "tui",
+                 "model": MODEL, "started_at": now - 175000, "last_active": now - 172800, "message_count": 4,
+                 "is_active": False, "archived": False, "pinned": False, "profile": "default", "cwd": "/srv/app"})
+    return rows
+
 
 def seeded_messages(row: dict) -> tuple[str, list[dict]]:
     """A seeded chat's stored rows for GET /api/sessions/{id}/messages, and whose store they are in."""
     iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t))
+    if row.get("source") == "cron" and str(row["id"]).startswith("cron_"):
+        # The fixture's runs (--cron-sessions): the task's prompt and its reply, the reply alone, or nothing.
+        reply = {"id": 2, "role": "assistant", "timestamp": iso(row["last_active"]),
+                 "content": "Nothing new overnight: all six services up, no failed jobs, and the disks under 70%."}
+        prompt = {"id": 1, "role": "user", "content": row.get("preview") or "Run the scheduled check.",
+                  "timestamp": iso(row["started_at"])}
+        count = int(row.get("message_count") or 0)
+        return "default", [prompt, reply] if count >= 2 else [reply] if count == 1 else []
     if row["title"] == "Bot Chat":
         return "work", [
             {"id": 1, "role": "user", "content": "Message from 🤖 default: Heads up, I'm auditing the nightly export's query plan this week.", "timestamp": iso(row["started_at"])},
@@ -701,7 +760,6 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base in ("/api/media", "/api/files/read"):
         # hermes_cli/web_routers/files.py: a gateway-local image as a data URL. Any image path
         # gets a picture here; anything else is refused as the real one would.
-        from urllib.parse import unquote
         p = unquote(query.get("path", ""))
         ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
         if ext not in ("png", "jpg", "jpeg", "gif", "webp"):
@@ -764,15 +822,37 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # whose store it is in, as the real gateway's rows do.
         rows = [{**s, "profile": s.get("profile") or "default"} for s in STORED_SESSIONS
                 if archived == "include" or bool(s.get("archived")) == (archived == "only")]
+        # The sources and the least number of messages, as the real route takes them (hermes_cli/web_routers/sessions.py,
+        # the same in v0.22.7 and v0.23.0): one source, or several comma-separated, sources left out, and min_messages.
+        # Vory asks for the person's chats without the scheduled ones and for the scheduled ones apart (#673).
+        csv = lambda v: [p.strip() for p in unquote(v or "").split(",") if p.strip()]
+        only = [unquote(query["source"])] if query.get("source") else csv(query.get("sources"))
+        left_out = csv(query.get("exclude_sources"))
+        least = max(0, int(query.get("min_messages") or 0))
+        rows = [r for r in rows if (not only or r.get("source") in only) and r.get("source") not in left_out
+                and int(r.get("message_count") or 0) >= least]
+        total, offset = len(rows), 0
+        # A busy gateway's page (--cron-sessions): newest activity first under order=recent, cut at the limit from the
+        # offset, as the real route pages. Without the fixture every row comes back, as before, so the heavy lists
+        # (--extra-bots) keep all theirs.
+        if CRON_FIXTURE[0]:
+            if query.get("order") == "recent":
+                rows.sort(key=lambda r: r.get("last_active") or 0, reverse=True)
+            offset = int(query.get("offset") or 0)
+            rows = rows[offset:offset + int(query.get("limit") or 20)]
         if NO_PINS:
             rows = [{k: v for k, v in r.items() if k != "pinned"} for r in rows]
-        return 200, {"sessions": rows, "total": len(rows), "limit": 100, "offset": 0}
+        return 200, {"sessions": rows, "total": total, "limit": 100, "offset": offset}
     if base == "/api/_mock/resumes":
         # Every session.resume as it arrived, for checking which bot a client resumed a chat under.
         return 200, {"resumes": RESUMES}
     if base == "/api/_mock/undos":
         # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
         return 200, {"undos": UNDOS}
+    if base == "/api/_mock/authority":
+        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered, every
+        # prompt.submit admitted, with its ids (#682), and every session.interrupt taken (#683).
+        return 200, AUTHORITY_LOG
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
         return 200, {"triggers": CRON_TRIGGERS}
@@ -1427,7 +1507,7 @@ REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 # dispatcher refuses it (canonical_param_problems in tui_gateway/contracts/registry.py): code 4001, "invalid_params",
 # the unknown keys in data.fields. The key sets are v0.23.0's (NousResearch/hermes-agent at the tag), for the canonical
 # methods this mock serves; "profile" is declared on each. Handler rules (approval.respond's exact set, steer's
-# execution_generation) and the -32601 for session calls the authority doesn't serve are not mirrored. gateway.ready
+# execution_generation) and the -32601 for session calls the authority doesn't serve come with --authority. gateway.ready
 # says "session_authority": true, as v0.23.0's socket does with an authority (tui_gateway/ws.py).
 # --authority: a Hermes v0.23.0 socket served by its session authority, beyond the key check (#665, part A). It implies
 # --strict-params. Each turn is an execution with its own generation; an approval or a single question is published as
@@ -1438,10 +1518,40 @@ REFUSE_PINS = NO_PINS or "--refuse-pins" in sys.argv
 # {"status": "already_resolved"}. Its end is `approval.settled` / `clarify.settled`. session.create and session.resume
 # answer the session's execution_generation, and session.resume its open prompts as `prompts`; approval.pending lists
 # request_id (the prompt id) with no generation (gateway/session_pending_controls.py, session_ancillary.py).
+# --authority, the session calls (#666): session.usage, session.title, session.undo, session.close and
+# session.workspace.move answer -32601, as v0.23.0's authority serves none of them and gives a session.* call no legacy
+# fallback. Their 0.23 ways are served instead:
+#   session.steer   exactly {session_id, text, execution_generation} (an int, the running turn's, else
+#                   `stale_generation`; no turn running is stale too), as gateway/session_busy_controls.py's correct();
+#                   "queued" while a turn runs, and with the steer-rejected fault a plain "rejected" (no `delivered`),
+#                   which may follow delivery and is never sent again
+#   session.stats   the counters gateway/session_usage.py's usage_stats() answers, from this mock's usage figures
+#   session.mutate  exactly {session_id, request_id, expected_revision, operation, payload} and expected_generation
+#                   (gateway/session_mutations.py): a request_id seen before answers its first receipt again; a revision
+#                   not the session's is `revision_conflict`, a generation not its own `stale_generation`, both with the
+#                   current revision and execution_generation in error.data (gateway/session_controls.py mutate()).
+#                   rename {title}; rewind {target_message_id} (a user row: that row and every one after it go, the
+#                   generation moves on, and the rewind is filed in UNDOS); workspace {cwd} (a stored chat's folder).
+#                   rewind and workspace need the generation and are `session_busy` while a turn runs.
+#   session.detach  exactly {session_id, subscription_id, end_reason?}: the socket's current subscription answers
+#                   detached true, a stale one false (gateway/session_controls.py detach()).
+# Each turn's claim moves the revision on and publishes a partial `session.info` {stored_session_id, running,
+# execution_generation, revision} (gateway/session_authority.py _publish_pending); its end publishes it again.
+# session.create and session.resume answer `revision` and a new `subscription_id`. GET /api/_mock/authority reads back
+# every mutate, detach and steer.
 AUTHORITY = "--authority" in sys.argv
 STRICT_PARAMS = "--strict-params" in sys.argv or AUTHORITY
 GENERATIONS: dict = {}   # live session id -> its newest execution generation
 PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
+REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
+RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
+AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": [], "interrupts": []}
+# The keys the authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in v0.22.7 and
+# v0.23.0). It also needs a non-empty submission_id or input_id; either miss is a bare 4001 "invalid_params" (#682).
+SUBMISSION_KEYS = {"session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended",
+                   "surface", "voice_context", "interrupted", "voice_turn", "display_kind", "title_preview", "turn_author",
+                   "api_text", "model_override", "clarify_batch"}
+AUTHORITY_UNSERVED = {"session.usage", "session.title", "session.undo", "session.close", "session.workspace.move"}
 STRICT_PARAMS_DECLARED = {
     "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
                        "follow_profile_config", "hidden", "ignore_rules", "ignore_user_config", "max_turns", "model",
@@ -1456,6 +1566,10 @@ STRICT_PARAMS_DECLARED = {
                       "model_override", "profile", "queued", "session_id", "submission_id", "surface", "text",
                       "title_preview", "turn_author", "unattended", "voice_context", "voice_turn"},  # CanonicalSubmitParams
     "approval.respond": {"choice", "execution_generation", "profile", "prompt_id", "session_id"},  # CanonicalApprovalParams
+    "session.stats": {"profile", "session_id"},  # SessionStatsParams
+    "session.mutate": {"expected_generation", "expected_revision", "operation", "payload", "profile", "request_id",
+                       "session_id"},  # SessionMutateParams
+    "session.detach": {"end_reason", "profile", "session_id", "subscription_id"},  # SessionDetachParams
     "config.get": {"cwd", "key", "profile", "session_id"},  # ConfigGetParams
     "config.set": {"confirm_expensive_model", "key", "profile", "scope", "session_id", "value"},  # CanonicalConfigSetParams
     "profiles.list": {"include_sessions", "profile"},  # CanonicalProfilesParams
@@ -1740,8 +1854,29 @@ def model_options() -> dict:
 #                   (#387: a Watch chat whose live attach failed, tried again once its wait is up)
 #   steer-rejected  session.steer answers "rejected" even while a turn runs, as the gateway does when its turn ended a
 #                   moment before the client knew; no socket is dropped (#546: the words go as the next message)
+#   ready-held      the open sockets are dropped, as a return finds them, and for N seconds (default 30) a socket that
+#                   opens gets no gateway.ready and no answers, as a gateway that took the upgrade but isn't ready. At N
+#                   seconds each one still open gets its gateway.ready and is answered from then on, and the mode goes back
+#                   to none by itself; mode=none releases them at once (#641: a chat that can't re-attach for a while)
+#   drop-on-resume  the next N session.resume calls (default 1) abort their socket instead of answering, as a network
+#                   lost under the re-attach; then all is well; no socket is dropped at the switch (#641)
 #   none            back to normal
+# GET /mock/fault-state answers the switch as it stands and changes nothing (#641: a test reads the refusals left).
 FAULT = {"mode": "none", "status": 523, "count": 0}
+# ready-held's hold: released when its time is up, or by mode=none (#641).
+HELD: dict = {"release": None}
+
+
+def release_held(why: str, only=None) -> None:
+    """Ends the hold: its own timer ends only its own hold (`only`), never a later one."""
+    ev = HELD.get("release")
+    if only is not None and ev is not only:
+        return
+    if ev is not None and not ev.is_set():
+        ev.set()
+        print(f"[mock] fault ready-held: released ({why})", flush=True)
+    if FAULT["mode"] == "ready-held":
+        FAULT["mode"] = "none"
 
 
 def _cloudflare_page(status: int, title: str, text: str) -> Response:
@@ -1800,10 +1935,20 @@ async def process_request(connection, request):
         q = dict(pair.partition("=")[::2] for pair in request.path.split("?", 1)[1].split("&")) if "?" in request.path else {}
         FAULT["mode"] = q.get("mode", "none") or "none"
         FAULT["status"] = int(q["status"]) if q.get("status", "").isdigit() else 523
-        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (1 if FAULT["mode"] in ("ticket-expired", "resume-refused") else 0)
-        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown", "steer-rejected") else 0
+        FAULT["count"] = int(q["count"]) if q.get("count", "").isdigit() else (
+            30 if FAULT["mode"] == "ready-held" else 1 if FAULT["mode"] in ("ticket-expired", "resume-refused", "drop-on-resume") else 0)
+        if FAULT["mode"] == "ready-held":
+            HELD["release"] = asyncio.Event()
+            asyncio.get_running_loop().call_later(FAULT["count"], release_held, "its time is up", HELD["release"])
+        else:
+            release_held("the fault switch")
+        dropped = _drop_sockets() if FAULT["mode"] not in ("none", "slow-resume", "resume-refused", "undo-busy", "undo-unknown",
+                                                           "steer-rejected", "drop-on-resume") else 0
         print(f"[mock] fault {FAULT['mode']} (status {FAULT['status']}, count {FAULT['count']}); dropped {dropped} socket(s)", flush=True)
         body = json.dumps({**FAULT, "dropped": dropped}).encode()
+        return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/mock/fault-state":
+        body = json.dumps(FAULT).encode()
         return Response(200, "OK", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
     if base == "/mock/touch":
         # Test only (#423): a chat changed on the gateway while the app is away (GET /mock/touch?title=…&preview=…),
@@ -2048,6 +2193,8 @@ class Session:
         self.history: list[dict] = []      # rows flushed so far (user/assistant/tool)
         self.inflight: dict | None = None  # {user, assistant, streaming} while a turn runs
         self.running = False
+        self.turn_task: asyncio.Task | None = None   # the running turn, which a Stop cancels (#683)
+        self.stopping = False                         # set by that Stop, so the turn ends "interrupted"
         self.turn_started_at = 0.0
         self.turn_base = 0                 # where the running turn's rows start in `history`
         self.pending: dict[str, asyncio.Future] = {}   # open server→client requests
@@ -2174,6 +2321,7 @@ class Gateway:
         self.ws = ws
         self.sessions: dict[str, Session] = {}
         self.pending: dict[str, asyncio.Future] = {}
+        self.subscriptions: dict[str, str] = {}   # --authority: live session id -> this socket's subscription (#666)
 
     async def send(self, frame: dict) -> None:
         await self.ws.send(neutral(json.dumps(frame)))
@@ -2280,14 +2428,166 @@ class Gateway:
         # asked for (a "steps 8" answered by the default flow) shows what the mock actually read.
         print(f"turn {s.sid} prompt={prompt[:120]!r}", flush=True)
         s.running = True
+        s.turn_task = asyncio.current_task()
         s.turn_started_at = time.time()
         s.inflight = {"user": prompt, "assistant": "", "streaming": True}
         s.turn_base = len(s.history)
         try:
             await self._run_turn(s, prompt)
+        except asyncio.CancelledError:
+            if not s.stopping:
+                raise
+            # A Stop (#683): the turn ends where it is, "interrupted", with what it had said, as the gateway's does.
+            s.stopping = False
+            said = (s.inflight or {}).get("assistant", "")
+            await self.event("message.complete", s.sid, {"text": said, "status": "interrupted", "usage": usage(s.output_tokens, 1)})
         finally:
             s.running = False
+            s.turn_task = None
             s.inflight = None
+            if AUTHORITY:
+                await self.authority_info(s)
+
+    async def authority_info(self, s: Session) -> None:
+        """--authority: the partial session.info a claim and a settle publish, the one place a viewer learns the
+        revision a mutate must present (#666)."""
+        await self.event("session.info", s.sid, {"stored_session_id": s.stored, "pending": [], "running": s.running,
+                                                 "authority_epoch": 1, "desktop_protocol": "hermes-gateway-v1",
+                                                 "execution_generation": GENERATIONS.get(s.sid, 0),
+                                                 "revision": REVISIONS.get(s.sid, 0)})
+
+    async def authority_session_call(self, method: str, p: dict, ok, refused) -> dict:
+        """--authority: session.steer, session.stats, session.mutate and session.detach as v0.23.0's session authority
+        answers them (#666; the rules are in the comment above AUTHORITY)."""
+        sid_asked = p.get("session_id", "")
+        live = LIVE.get(sid_asked) or next((l for l in LIVE.values() if l.stored == sid_asked), None)
+
+        def fenced(reason: str, key: str) -> dict:
+            out = refused(reason)
+            out["error"]["data"].update(revision=REVISIONS.get(key, 0), execution_generation=GENERATIONS.get(key, 0))
+            return out
+
+        if method == "session.steer":
+            text = p.get("text")
+            if (set(p) - {"session_id", "profile", "text", "execution_generation"} or not isinstance(text, str)
+                    or not text.strip() or type(p.get("execution_generation")) is not int):
+                return refused("invalid_params")
+            if live is None:
+                return refused("session_not_found")
+            generation = p["execution_generation"]
+            if not live.running or generation != GENERATIONS.get(live.sid, 0):
+                return refused("stale_generation")
+            AUTHORITY_LOG["steers"].append({"session_id": live.sid, "text": text, "execution_generation": generation, "at": time.time()})
+            if FAULT["mode"] == "steer-rejected":
+                # A plain "rejected": it may follow delivery, so a client never sends it again.
+                return ok({"status": "rejected", "text": text, "execution_generation": generation, "authority_epoch": 1})
+            if live.inflight is not None:
+                live.inflight["corrections"] = [*(live.inflight.get("corrections") or []), text]
+            print(f"session.steer {text!r} session={live.sid} generation={generation}", flush=True)
+            return ok({"status": "queued", "text": text, "execution_generation": generation, "authority_epoch": 1})
+
+        if method == "session.stats":
+            if set(p) - {"session_id", "profile"}:
+                return refused("invalid_params")
+            out_tokens = live.output_tokens if live else 0
+            u = usage(out_tokens, 1)
+            return ok({"input_tokens": u["input"], "output_tokens": out_tokens, "cache_read_tokens": u["cache_read"],
+                       "cache_write_tokens": u["cache_write"], "prompt_tokens": u["input"], "completion_tokens": out_tokens,
+                       "total_tokens": u["input"] + out_tokens, "reasoning_tokens": 0, "api_calls": 1,
+                       "last_prompt_tokens": u["context_used"], "context_tokens": u["context_used"],
+                       "context_length": CONTEXT_MAX, "config_context_length": None, "context_source": u["context_source"],
+                       "compression_count": 0, "avg_latency_s": 1.4, "tokens_per_s": u["avg_tps"], "last_turn_tokens": out_tokens,
+                       "rate_limit": None, "active_subagents": 0, "model": MODEL, "provider": PROVIDER})
+
+        if method == "session.detach":
+            end = p.get("end_reason")
+            if (set(p) - {"end_reason", "profile"} != {"session_id", "subscription_id"}
+                    or not isinstance(p["subscription_id"], str) or not p["subscription_id"] or not sid_asked
+                    or (end is not None and not (isinstance(end, str) and re.fullmatch(r"[a-z][a-z_]{0,31}", end)))):
+                return refused("invalid_params")
+            result = {"session_id": sid_asked, "subscription_id": p["subscription_id"], "detached": False}
+            if self.subscriptions.get(sid_asked) == p["subscription_id"]:
+                del self.subscriptions[sid_asked]
+                if live is not None:
+                    live.members.discard(self)
+                self.sessions.pop(sid_asked, None)
+                result["detached"] = True
+            AUTHORITY_LOG["detaches"].append({**result, "end_reason": end, "at": time.time()})
+            print(f"session.detach {sid_asked} end_reason={end!r} detached={result['detached']}", flush=True)
+            return ok(result)
+
+        # session.mutate
+        if set(p) - {"profile", "expected_generation"} != {"session_id", "request_id", "expected_revision", "operation", "payload"}:
+            return refused("invalid_params")
+        if p["request_id"] in RECEIPTS:
+            return ok(RECEIPTS[p["request_id"]])
+        row = next((r for r in STORED_SESSIONS if r["id"] == (live.stored if live else sid_asked)), None)
+        if live is None and row is None:
+            return refused("session_not_found")
+        key = live.sid if live is not None else row["id"]
+        if live is None:
+            # A stored chat no client has open: a real one has been edited and run before, so its fences aren't 0, and a
+            # client that guesses 0 meets the refusal and the retry it carries.
+            REVISIONS.setdefault(key, 1)
+            GENERATIONS.setdefault(key, 1)
+        operation, payload = p["operation"], p["payload"]
+        needs_generation = operation in ("rewind", "workspace")
+        valid = isinstance(payload, dict) and (
+            (operation == "rename" and set(payload) == {"title"} and isinstance(payload["title"], str))
+            or (operation == "rewind" and "target_message_id" in payload
+                and not set(payload) - {"target_message_id", "preserve_compaction_handoff"}
+                and type(payload["target_message_id"]) is int and payload["target_message_id"] > 0)
+            or (operation == "workspace" and set(payload) == {"cwd"} and isinstance(payload["cwd"], str) and payload["cwd"].strip()))
+        if not valid or (needs_generation and p.get("expected_generation") is None):
+            return refused("invalid_params")
+        if type(p["expected_revision"]) is not int or p["expected_revision"] != REVISIONS.get(key, 0):
+            return fenced("revision_conflict", key)
+        if needs_generation and p.get("expected_generation") != GENERATIONS.get(key, 0):
+            return fenced("stale_generation", key)
+        if needs_generation and live is not None and live.running:
+            return refused("session_busy")
+        result = {"session_id": sid_asked, "operation": operation}
+        if operation == "rename":
+            title = payload["title"]
+            if live is not None:
+                live.title = title
+            if row is not None:
+                row["title"] = title
+            result["title"] = title
+        elif operation == "rewind":
+            target = payload["target_message_id"]
+            at = next((i for i, r in enumerate(live.history) if r.get("row_id") == target), None) if live is not None else None
+            if at is None or live.history[at].get("role") != "user":
+                out = refused("invalid_params")
+                out["error"]["data"].update(field="target_message_id", detail="target user message is no longer in session history")
+                return out
+            taken = live.history[at:]
+            del live.history[at:]
+            live.db_rows = [r for r in live.db_rows if r["id"] < target]
+            GENERATIONS[key] = GENERATIONS.get(key, 0) + 1
+            UNDOS.append({"session_id": live.sid, "intent": "rewind", "removed": len(taken), "at": time.time()})
+            result.update(rewound_count=len(taken), target_message={"role": "user", "content": taken[0].get("text", ""), "row_id": target},
+                          new_head_id=(live.history[-1].get("row_id") if live.history else None), replacement_message_id=None)
+        else:
+            cwd = payload["cwd"]
+            if row is None:
+                return refused("session_not_found")
+            if cwd.startswith("/nowhere"):
+                out = refused("invalid_params")
+                out["error"]["data"].update(field="cwd", detail=f"working directory does not exist: {cwd}")
+                return out
+            row["cwd"] = cwd
+            print(f"moved {row['id']} to {cwd}", flush=True)
+        REVISIONS[key] = REVISIONS.get(key, 0) + 1
+        result["revision"] = REVISIONS[key]
+        RECEIPTS[p["request_id"]] = result
+        AUTHORITY_LOG["mutations"].append({**result, "request_id": p["request_id"], "at": time.time()})
+        print(f"session.mutate {operation} {sid_asked} revision={result['revision']}", flush=True)
+        if live is not None and operation == "rename":
+            # A committed edit publishes the session's whole info (gateway/session_mutations.py _project_committed).
+            await self.event("session.info", live.sid, {**session_info(live.title, live.running, live.profile),
+                                                        "execution_generation": GENERATIONS.get(key, 0), "revision": REVISIONS[key]})
+        return ok(result)
 
     @staticmethod
     def store_turn(s: Session, prompt: str, layout: list) -> None:
@@ -2372,6 +2672,15 @@ class Gateway:
         self.store_turn(s, prompt, [DELEGATE_PART_1, {"role": "user", "text": report}, DELEGATE_PART_2])
         s.inflight = None
         await self.event("message.complete", s.sid, {"text": DELEGATE_PART_1 + "\n\n" + DELEGATE_PART_2, "status": "complete", "usage": usage(s.output_tokens, 2)})
+
+    async def _code_table_turn(self, s: Session, prompt: str) -> None:
+        """`codetable` (#643): CODE_TABLE_REPLY, a table and a code block in one reply."""
+        await self.event("message.start", s.sid)
+        await self.stream_words(s, CODE_TABLE_REPLY, delay=0.004)
+        await self.event("session.usage", s.sid, {"usage": usage(s.output_tokens)})
+        self.store_turn(s, prompt, [CODE_TABLE_REPLY])
+        s.inflight = None
+        await self.event("message.complete", s.sid, {"text": CODE_TABLE_REPLY, "status": "complete", "usage": usage(s.output_tokens, 1)})
 
     async def _table_turn(self, s: Session, prompt: str) -> None:
         """A reply with the markdown PR #133 renders: headings, a table with and without outer
@@ -2728,10 +3037,12 @@ class Gateway:
         if AUTHORITY:
             # Each turn is an execution of its own (#665): a prompt of an earlier one can no longer be answered.
             GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+            REVISIONS[s.sid] = REVISIONS.get(s.sid, 0) + 1
             for pid, (owner, pr, _f) in list(PROMPTS.items()):
                 if owner == s.sid:
                     PROMPTS.pop(pid, None)
                     await self.event(f"{pr['kind']}.settled", s.sid, {"prompt_id": pid, "execution_generation": pr["execution_generation"]})
+            await self.authority_info(s)
         await asyncio.sleep(0.4)
         # A turn of many tool calls, for the thread's layout checks.
         if prompt.strip().lower().startswith("tools"):
@@ -2747,6 +3058,9 @@ class Gateway:
             return
         if prompt.strip().lower().startswith("wide"):
             await self._wide_table_turn(s, prompt)
+            return
+        if prompt.strip().lower().startswith("codetable"):
+            await self._code_table_turn(s, prompt)
             return
         if prompt.strip().lower().startswith("table"):
             await self._table_turn(s, prompt)
@@ -3011,6 +3325,9 @@ class Gateway:
                 live_sid = result["session_id"]
                 result = {**result, "execution_generation": GENERATIONS.get(live_sid, 0),
                           "prompts": [dict(prompt) for (owner, prompt, _f) in PROMPTS.values() if owner == live_sid]}
+                # The revision a mutate presents, and this attach's subscription, new on each one (#666).
+                self.subscriptions[live_sid] = f"sub-{uuid.uuid4().hex[:12]}"
+                result.update(revision=REVISIONS.get(live_sid, 0), subscription_id=self.subscriptions[live_sid])
             return {"jsonrpc": "2.0", "id": rid, "result": result}
 
         def refused(reason: str) -> dict:
@@ -3024,6 +3341,10 @@ class Gateway:
             if unknown:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4001, "message": "invalid_params",
                                                                "data": {"reason": "invalid_params", "fields": unknown}}}
+        if AUTHORITY and method in AUTHORITY_UNSERVED:
+            return err(-32601, f"unknown method: {method}")   # no authority handler and no legacy fallback (#666)
+        if AUTHORITY and method in ("session.steer", "session.stats", "session.mutate", "session.detach"):
+            return await self.authority_session_call(method, p, ok, refused)
 
         if method == "ping":
             return ok({"pong": True})
@@ -3118,6 +3439,17 @@ class Gateway:
                     FAULT["mode"] = "none"
                 print(f"[mock] fault resume-refused: session.resume {p.get('session_id', '')} refused ({FAULT['count']} left)", flush=True)
                 return err(5000, "session could not be resumed")
+            if method == "session.resume" and FAULT["mode"] == "drop-on-resume" and FAULT["count"] > 0:
+                # #641: the network goes under the re-attach: no answer, the socket aborted.
+                FAULT["count"] -= 1
+                if FAULT["count"] == 0:
+                    FAULT["mode"] = "none"
+                print(f"[mock] fault drop-on-resume: session.resume {p.get('session_id', '')} dropped its socket ({FAULT['count']} left)", flush=True)
+                try:
+                    self.ws.transport.abort()
+                except Exception:  # noqa: BLE001
+                    pass
+                return None
             stored = p.get("session_id", "")
             if method == "session.resume":
                 RESUMES.append({"session_id": stored, "profile": p.get("profile") or "", "at": time.time()})
@@ -3338,6 +3670,18 @@ class Gateway:
         if method == "command.dispatch":
             return ok({"type": "exec", "output": f"(mock) ran /{p.get('name', '')}"})
         if method == "prompt.submit":
+            if AUTHORITY:
+                # The authority's admission (#682): the socket's own profile is dropped first (session_controls.py
+                # dispatch, _PROFILE_IMPLICIT); then a key outside SUBMISSION_KEYS, or no non-empty submission_id or
+                # input_id, is refused with no fields. Its attach check (permission_denied) isn't modelled here.
+                q = {k: v for k, v in p.items() if not (k == "profile" and isinstance(v, str) and v)}
+                turn = q.get("submission_id") or q.get("input_id")
+                if set(q) - SUBMISSION_KEYS or not isinstance(turn, str) or not turn:
+                    print(f"[mock] prompt.submit refused invalid_params: keys {sorted(q)}", flush=True)
+                    return refused("invalid_params")
+                AUTHORITY_LOG["submits"].append({"session_id": q.get("session_id"), "input_id": q.get("input_id"),
+                                                 "submission_id": q.get("submission_id"), "at": time.time()})
+                print(f"[mock] prompt.submit admitted input_id={q.get('input_id')!r}", flush=True)
             s = self.sessions.get(p.get("session_id", ""))
             if s is None:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
@@ -3347,8 +3691,36 @@ class Gateway:
                 print(f"prompt.submit surface={p.get('surface')!r} interrupted={bool(p.get('interrupted'))} "
                       f"voice_context={len(str(p.get('voice_context') or ''))} chars", flush=True)
             asyncio.create_task(self.run_turn(s, str(p.get("text", ""))))
+            if AUTHORITY:
+                # The authority's receipt (gateway/session_authority.py _receipt): every admitted message is "queued" in
+                # its own queue, even one whose turn starts at once (#682).
+                return ok({"admission_id": uuid.uuid4().hex, "status": "queued"})
             return ok({"status": "streaming"})
         if method == "session.interrupt":
+            s = self.sessions.get(p.get("session_id", ""))
+            if AUTHORITY:
+                # The authority's interrupt (gateway/session_controls.py interrupt(), session_authority.py :934-938): the
+                # execution named must be the session's current one, else a bare stale_generation; a Stop without the
+                # key names None, never the current one (#683).
+                if s is None:
+                    return refused("not_found")
+                current = GENERATIONS.get(s.sid, 0)
+                if p.get("execution_generation") != current:
+                    print(f"[mock] session.interrupt refused stale_generation: sent {p.get('execution_generation')!r}, "
+                          f"current {current}", flush=True)
+                    return refused("stale_generation")
+            # A running turn stops, on either wire (#683): it ends "interrupted" (run_turn).
+            stopped = bool(s is not None and s.running and s.turn_task is not None)
+            if stopped:
+                s.stopping = True
+                s.turn_task.cancel()
+            print(f"[mock] session.interrupt taken: stopped {stopped}", flush=True)
+            if AUTHORITY:
+                AUTHORITY_LOG["interrupts"].append({"session_id": s.sid, "execution_generation": current, "stopped": stopped,
+                                                    "at": time.time()})
+                return ok({"ref": {"profile_id": s.profile, "session_id": s.sid}, "instance_id": "mock", "authority_epoch": 1,
+                           "revision": REVISIONS.get(s.sid, 0), "execution_generation": current,
+                           "execution_state": "running" if stopped else "idle"})
             return ok({"status": "interrupted", "interrupted": True})
         if method == "session.undo":
             # Hermes' tui_gateway/methods_session.py: the last user turn and everything after it leave the history, never
@@ -3494,6 +3866,15 @@ async def ws_handler(ws):
         return
     gw = Gateway(ws)
     GATEWAYS.add(gw)
+    held = HELD.get("release")
+    if FAULT["mode"] == "ready-held" and held is not None and not held.is_set():
+        # #641: the upgrade is taken, but nothing is said or answered until the hold ends (its frames wait unread).
+        print("[mock] fault ready-held: a socket held, no gateway.ready", flush=True)
+        await held.wait()
+        if getattr(ws, "close_code", None) is not None:
+            GATEWAYS.discard(gw)
+            return
+        print("[mock] fault ready-held: a held socket gets its gateway.ready", flush=True)
     await gw.send({"jsonrpc": "2.0", "method": "event", "params": {
         "type": "gateway.ready", "session_id": "",
         "payload": {"skin": {"name": "default", "description": "", "colors": {}, "light_colors": {},
@@ -3547,6 +3928,7 @@ async def main() -> None:
     ap.add_argument("--authority", action="store_true", help="a Hermes v0.23.0 session authority: approvals and single questions by event, answered with approval.respond / clarify.respond (implies --strict-params; #665)")
     ap.add_argument("--password-auth", metavar="USER:PASSWORD", help="also take a username/password sign-in (auth gate on)")
     ap.add_argument("--extra-sessions", type=int, default=0, metavar="N", help="N more stored chats with the default bot (a long list for the bot-motion clips)")
+    ap.add_argument("--cron-sessions", type=int, default=0, metavar="N", help="a busy gateway's scheduled tasks (#673): N empty runs 5 minutes apart, three with replies, and a chat of the person's two days old; the session list's page cut at its limit")
     ap.add_argument("--extra-bots", type=int, default=0, metavar="N", help="N more bots, each with a handful of stored chats (a heavy list, for the smoothness checks)")
     ap.add_argument("--extra-models", type=int, default=0, metavar="N", help="N more models across two big providers (a long model list, #401)")
     ap.add_argument("--context-percent", type=int, default=None, metavar="N", help="every session's context this full, 0 to 100 (the message bar's ring at a high fill)")
@@ -3565,6 +3947,10 @@ async def main() -> None:
     for i in range(args.extra_sessions):
         row = extra_session(i, "default")
         STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
+    if args.cron_sessions:
+        CRON_FIXTURE[0] = True
+        for row in cron_fixture(args.cron_sessions):
+            STORED_SESSIONS.append(row); SEEDED_IDS.add(row["id"])
     bot_names = ["ops", "research", "writer", "builder", "support", "data", "design", "finance", "legal", "qa", "infra", "growth"]
     global CONTEXT_PERCENT_OVERRIDE
     CONTEXT_PERCENT_OVERRIDE = args.context_percent

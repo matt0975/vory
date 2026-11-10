@@ -95,6 +95,55 @@ import VoryCore
         #expect(laptop.dockLift(dock: .zero) == 0)
     }
 
+    // MARK: A dock taller than the room under the fold (#669)
+
+    /// A dock `height` tall with its bottom edge at `bottom`.
+    func dock(bottom: CGFloat, height: CGFloat) -> CGRect { CGRect(x: 0, y: bottom - height, width: 669, height: height) }
+
+    @Test func aTallDockAtRestIsNotLifted() {
+        // The keyboard down in a chat (our tab bar hidden in one column): the dock rests at the safe bottom, 917. At 450 pt
+        // (a card and a banner at the accessibility sizes) it reaches over the fold, and neither half holds it (about 420 pt
+        // under the fold, 380 above it under the top bar): it stays where it rests, its controls in the bottom half. Lifted,
+        // its top went to 6, over the top bar and into the status band.
+        #expect(laptop.dockLift(dock: dock(bottom: 917, height: 450), restingBottom: 917) == 0)
+    }
+
+    @Test func aDockAtRestOverTheTabBarIsNotLiftedOverTheTopBar() {
+        // A chat with our tab bar under it (opened from another tab): the dock rests at 874. At 390 pt it reaches 12 pt over
+        // the fold's bottom (496); lifted, its top went to 66, over the top bar's row.
+        #expect(laptop.dockLift(dock: dock(bottom: 874, height: 390), restingBottom: 874) == 0)
+    }
+
+    @Test func aTallDockOnTheKeyboardStillLifts() {
+        // The keyboard up: its top is at about y 505, so the dock stands on the fold and lifts over it, whatever its height.
+        #expect(laptop.dockLift(dock: dock(bottom: 505, height: 450), restingBottom: 917) == 505 - 456 + m)
+        #expect(laptop.dockLift(dock: dock(bottom: 505, height: 70), restingBottom: 917) == 505 - 456 + m)
+    }
+
+    @Test func aListsLiftAtRestIsAsBefore() {
+        // A dock that fits under the fold, at rest: it lifts for a list that would cross the fold, held while the list is
+        // open, and stays for one that fits.
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 400, restingBottom: 917) == 917 - 456 + m)
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 600, held: true, restingBottom: 917) == 917 - 456 + m)
+        #expect(laptop.dockLift(dock: dock(bottom: 917), listTop: 600, restingBottom: 917) == 0)
+        #expect(laptop.dockLift(dock: dock(bottom: 917), restingBottom: 917) == 0)
+    }
+
+    @Test func theDocksHeightIsKeptUpToTheWindowsHeight() {
+        // The half-open Duo's window is 951 pt tall: a 450 pt dock is a real measure.
+        #expect(ConversationView.keepsDockHeight(450, window: 951))
+        #expect(!ConversationView.keepsDockHeight(0, window: 951))
+        #expect(!ConversationView.keepsDockHeight(951, window: 951))
+        // No window measured (the Mac's views get none): any height over 0.
+        #expect(ConversationView.keepsDockHeight(450, window: 0))
+    }
+
+    @Test func aTallDockAtRestIsNotLiftedForAListEither() {
+        // The lists keep to the room under the fold (`room(under:)`): a lift would only push the dock into the status band.
+        #expect(laptop.dockLift(dock: dock(bottom: 917, height: 450), listTop: 300, restingBottom: 917) == 0)
+        #expect(laptop.dockLift(dock: dock(bottom: 917, height: 450), listTop: 300, held: true, restingBottom: 917) == 0)
+    }
+
     // MARK: The list column at a fold up the window
 
     @Test func theListColumnEndsAtTheFoldsMiddle() {

@@ -41,7 +41,11 @@ public final class GatewayRuntime {
     /// their text without being redrawn, and are drawn once when it comes back.
     public var isAway = false {
         didSet {
-            if isAway, !oldValue { awaySince = Date() }
+            if isAway, !oldValue {
+                awaySince = Date()
+                // Away, the chats' re-attach tries and clock stop (#641).
+                for chat in registry.all { chat.wentAwayForReattach() }
+            }
             guard oldValue, !isAway else { return }
             // Away long enough for the network under the REST session to have changed (#423): its connections are
             // made afresh before anything is asked of them.
@@ -60,8 +64,11 @@ public final class GatewayRuntime {
             }
             if let scheduleCatchUp { scheduleCatchUp(catchUp) } else { catchUp() }
             // A socket that died quietly while the app was away is found out now, not at the
-            // next heartbeat (see `GatewaySocket.checkAlive`).
-            Task { [socket] in await socket?.checkAlive() }
+            // next heartbeat (see `GatewaySocket.checkAlive`). One between attempts tries now (#641).
+            Task { [socket] in await socket?.checkAlive(); await socket?.retryNow() }
+            // A chat still not attached counts its trouble from now, and is tried at once (#641).
+            for chat in registry.all { chat.cameBackForReattach() }
+            reattachChats(all: false)
             // What was owed while away, once, after the return's animation (the foreground
             // transition is where the watchdog counts the main thread's seconds).
             owedFlush?.cancel()
@@ -181,6 +188,8 @@ public final class GatewayRuntime {
                 let wasOpen = self.socketState.isOpen
                 self.socketState = s
                 if !wasOpen, s.isOpen { self.rememberAddress() }
+                // The chats lost their live attach with it: each waits for the socket (#641).
+                if wasOpen, !s.isOpen { for chat in self.registry.all { chat.socketWent() } }
                 // The status widget shows whether the gateway is reachable: tell it on every flip.
                 // Where HTTP counts too (the watch), a socket that closed asks HTTP afresh rather
                 // than keep the last answer.
@@ -343,11 +352,12 @@ public final class GatewayRuntime {
         }
     }
 
-    /// With two addresses, a change of network while connected is checked at once: the address
-    /// in use may be out of reach from the new network, and the heartbeat could take half a
-    /// minute to notice. A socket that does not answer reconnects, and the reconnect chooses.
+    /// A change of network: the socket's wait between attempts ends and the chats not attached are tried (#641). With two
+    /// addresses it's also checked at once while connected: the address in use may be out of reach from the new network,
+    /// and the heartbeat could take half a minute to notice. A socket that does not answer reconnects, and the reconnect
+    /// chooses.
     private func watchNetwork() {
-        guard connection.alternate != nil, pathWatch == nil else { return }
+        guard pathWatch == nil else { return }
         pathWatch = Task { [weak self] in
             for await _ in NetworkWatch.shared.pathChanges() {
                 guard let self, !Task.isCancelled else { return }
@@ -356,10 +366,12 @@ public final class GatewayRuntime {
         }
     }
 
-    /// The network changed: a socket that does not answer within 3 s is dropped, and its
-    /// reconnect chooses the address again.
+    /// The network changed: with two addresses, a socket that does not answer within 3 s is dropped, and its reconnect
+    /// chooses the address again. A socket between attempts tries now, and the chats not attached are tried (#641).
     func networkChanged() async {
-        if socketState.isOpen { await socket.checkAlive(timeout: 3) }
+        if connection.alternate != nil, socketState.isOpen { await socket.checkAlive(timeout: 3) }
+        await socket.retryNow()
+        reattachChats(all: false)
     }
 
     // MARK: Lifecycle
@@ -416,10 +428,44 @@ public final class GatewayRuntime {
         await advertiseCapabilities()
         // The bots, if the first load went out before the route was up (#305).
         if profiles.isEmpty { lastError = nil; await loadProfiles() }
-        for chat in registry.all {
-            if !attachIfFailed(chat) { await chat.reattachAfterReconnect() }
-        }
+        reattachChats(all: true)
         await probeCodeSkew()
+    }
+
+    /// The chats off screen being re-attached, one at a time; whether a trigger came meanwhile, and whether any of those
+    /// was a reconnect (the strongest pending trigger is the one the rerun keeps).
+    private var offScreenReattach: Task<Void, Never>?
+    private var offScreenAgain = false
+    private var offScreenAgainAll = false
+
+    /// A trigger for the chats' re-attach (#641): a reconnect (`all`: every chat, as a reconnect always re-attached them),
+    /// or coming to the front and a network change (the chats not attached). The chats on screen start their schedule
+    /// now; the others re-attach once each, one at a time, after them, with no timer: at most one off-screen resume is in
+    /// flight, and a trigger while they go runs them once more after.
+    func reattachChats(all: Bool) {
+        for chat in registry.all where chat.isOnScreen {
+            if all { if !attachIfFailed(chat) { chat.reattachNow() } } else if chat.needsReattach { chat.reattachNow() }
+        }
+        if offScreenReattach != nil {
+            offScreenAgain = true
+            offScreenAgainAll = offScreenAgainAll || all
+            return
+        }
+        offScreenReattach = Task { [weak self] in
+            var everyChat = all
+            while let self {
+                self.offScreenAgain = false
+                self.offScreenAgainAll = false
+                for chat in self.registry.all where !chat.isOnScreen {
+                    if everyChat { if !self.attachIfFailed(chat) { await chat.reattachAfterReconnect() } }
+                    else if chat.needsReattach { await chat.reattachAfterReconnect() }
+                }
+                guard self.offScreenAgain else { break }
+                // A reconnect while the pass ran reaches every chat again (a chat whose open failed included).
+                everyChat = self.offScreenAgainAll
+            }
+            self?.offScreenReattach = nil
+        }
     }
 
     /// The socket's first open: there is nothing to re-attach, except a chat opened before it
@@ -649,7 +695,8 @@ public final class GatewayRuntime {
 
     public func closeChat(_ chat: ChatSession) {
         registry.remove(chat)
-        Task { _ = try? await socket.call("session.close", params: Self.params(["session_id": .string(chat.runtimeID)], owner: chat.profile)) }
+        // A detach on Hermes's session authority, session.close on the old wire (#666).
+        Task { await chat.close() }
     }
 
     // MARK: Events

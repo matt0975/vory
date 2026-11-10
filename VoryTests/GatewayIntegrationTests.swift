@@ -368,6 +368,99 @@ extension GatewayIntegrationTests {
     }
 }
 
+/// #666: the session calls on either wire. Against the mock with --authority, the five calls Hermes v0.23.0's session
+/// authority doesn't serve answer -32601 and a steer needs the running turn's generation, so these were red until the
+/// app took the 0.23 ways (session.stats, session.mutate, session.detach). Against the default mock they're green either
+/// way. Move to project is `aChatMovesToAProjectAndOut` (ProjectsAndGoalsTests.swift), on either wire as well.
+extension GatewayIntegrationTests {
+    /// A started runtime on the mock, and what to remove after.
+    struct E2ERuntime { let runtime: GatewayRuntime; let store: ConnectionStore; let conn: GatewayConnection }
+
+    @MainActor private func e2eRuntime(_ name: String) async throws -> E2ERuntime? {
+        guard let env = Self.env, env.token == "mock-token" else { return nil }
+        let store = ConnectionStore()
+        let conn = GatewayConnection(name: name, gateway: try GatewayURL.normalize(env.url), authMode: .sessionToken)
+        try store.upsert(conn, secrets: GatewaySecrets(sessionToken: env.token))
+        let runtime = GatewayRuntime(connection: conn, store: store)
+        await runtime.start()
+        return E2ERuntime(runtime: runtime, store: store, conn: conn)
+    }
+
+    @MainActor private func waitFor(_ seconds: TimeInterval, _ done: () -> Bool) async {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { try? await Task.sleep(for: .milliseconds(200)) }
+    }
+
+    @MainActor @Test func theRingFillsOnOpenOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e ring") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        print("e2e ring: authority \(runtime.sessionAuthority), usage \(String(describing: chat.usage))")
+        #expect(chat.usage?.contextMax != nil, "no context figures on open")
+        #expect((chat.usage?.contextUsed ?? 0) > 0)
+        await runtime.stop()
+    }
+
+    @MainActor @Test func aSteerReachesARunningTurnOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e steer") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        let created = chat.executionGeneration ?? 0
+        _ = await chat.send("long 15")
+        // On the session authority a steer names the running turn, which the chat learns from the turn's claim (its
+        // session.info), a moment after the send: prompt.submit's answer is the admission, before the turn has a
+        // generation. On the old wire, running is enough.
+        func started() -> Bool { chat.isRunning && (!runtime.sessionAuthority || (chat.executionGeneration ?? 0) > created) }
+        await waitFor(15) { started() }
+        try #require(started(), "the turn never started on the gateway")
+        chat.queue = [QueuedMessage(text: "and keep the last week's batches")]
+        await chat.steerQueued(chat.queue[0].id)
+        let steered = chat.items.contains { if case .steer(let t, let s) = $0.kind { return t == "and keep the last week's batches" && s == "queued" }; return false }
+        print("e2e steer: authority \(runtime.sessionAuthority), steered \(steered), queue \(chat.queue.map(\.text)), banner \(chat.banner ?? "none")")
+        #expect(steered, "the steer didn't reach the running turn")
+        #expect(chat.queue.isEmpty)
+        #expect(chat.banner == nil)
+        await chat.stop()
+        await runtime.stop()
+    }
+
+    @MainActor @Test func aRenameSticksOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e rename") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        let name = "E2E rename \(UUID().uuidString.prefix(6))"
+        await chat.rename(name)
+        print("e2e rename: authority \(runtime.sessionAuthority), title \(chat.title)")
+        #expect(chat.title == name)
+        await runtime.stop()
+    }
+
+    @MainActor @Test func anEditAndResendTakesTheTurnBackOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e edit resend") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        _ = await chat.send("short link")
+        await waitFor(5) { chat.isRunning }
+        await waitFor(30) { !chat.isRunning }
+        try #require(!chat.isRunning, "the first turn didn't end")
+        let id = try #require(chat.lastResendableID, "nothing to edit")
+        #expect(chat.beginEdit(id))
+        let outcome = await chat.resend("short link, edited")
+        let undos: JSONValue = try await runtime.api.get("/api/_mock/undos", profile: runtime.selectedProfile)
+        let mine = (undos["undos"]?.arrayValue ?? []).filter { $0["session_id"]?.stringValue == chat.runtimeID }
+        print("e2e edit resend: authority \(runtime.sessionAuthority), outcome \(outcome), taken back \(mine)")
+        #expect(outcome == .sent)
+        #expect(mine.count == 1, "the gateway should have taken back exactly one turn")
+        #expect((mine.first?["removed"]?.intValue ?? 0) >= 2)
+        await waitFor(30) { !chat.isRunning }
+        await runtime.stop()
+    }
+}
+
 extension GatewayIntegrationTests {
     /// Two devices with the same chat open: one sends, and the other shows the prompt as well as
     /// the reply. The gateway fans a chat's events out to everyone attached, but the events
@@ -540,5 +633,52 @@ actor EventCollector {
         UserDefaults.standard.set(false, forKey: VoiceSettings.quickAnswersKey)
         await chat.beginQuickAnswers()
         #expect(!chat.quickAnswersOn && UserDefaults.standard.dictionary(forKey: key) == nil)
+    }
+}
+
+/// #682: a new chat's first message is answered on either wire. Hermes v0.23's session authority (the mock with
+/// --authority) admits a prompt.submit only with a non-empty submission_id or input_id and the keys its submission()
+/// knows, else 4001 "invalid_params" with no fields; so this was red there while a message carried neither. Against the
+/// default mock it's answered either way.
+extension GatewayIntegrationTests {
+    @MainActor @Test func aNewChatsFirstMessageIsAnsweredOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e first message") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let chat = try await e.runtime.newChat()
+        _ = await chat.send("short link")
+        func errors() -> [String] { chat.items.compactMap { if case .error(let t) = $0.kind { return t }; return nil } }
+        func replied() -> Bool { chat.items.contains { if case .assistant(let t, _, let streaming) = $0.kind { return !t.isEmpty && !streaming }; return false } }
+        await waitFor(20) { replied() || !errors().isEmpty }
+        print("e2e first message: authority \(e.runtime.sessionAuthority),", errors().isEmpty ? "answered \(replied())" : "refused: \(errors())")
+        #expect(errors().isEmpty, "the message was refused: \(errors())")
+        #expect(replied(), "no reply in 20 s")
+        await e.runtime.stop()
+    }
+}
+
+/// #683: Stop ends a running turn on either wire. Hermes's session authority (the mock with --authority) takes a
+/// session.interrupt only for the running turn's execution, else a bare 4001 "stale_generation" and the turn runs on;
+/// so this was red there while Stop named none, and the refusal was dropped. Against the default mock it's green either
+/// way. The mock's turn ends "interrupted" when a Stop is taken.
+extension GatewayIntegrationTests {
+    @MainActor @Test func aStopEndsARunningTurnOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e stop") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        let created = chat.executionGeneration ?? 0
+        _ = await chat.send("long 15")
+        // As the steer test: on the authority the chat learns the turn's execution from its claim, a moment after the send.
+        func started() -> Bool { chat.isRunning && (!runtime.sessionAuthority || (chat.executionGeneration ?? 0) > created) }
+        await waitFor(15) { started() }
+        try #require(started(), "the turn never started on the gateway")
+        await chat.stop()
+        await waitFor(10) { !chat.isRunning }
+        let interrupted = chat.items.contains { if case .system(let t, _) = $0.kind { return t == "Interrupted" }; return false }
+        print("e2e stop: authority \(runtime.sessionAuthority), running \(chat.isRunning), interrupted \(interrupted), banner \(chat.banner ?? "none")")
+        #expect(chat.banner == nil, "the Stop was refused: \(chat.banner ?? "")")
+        #expect(!chat.isRunning, "the turn ran on after Stop")
+        #expect(interrupted, "no Interrupted line")
+        await runtime.stop()
     }
 }

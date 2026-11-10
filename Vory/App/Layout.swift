@@ -126,11 +126,14 @@ enum TopBarRoom {
     /// side and as a book they stand in a strip too, in a window wider than tall. There the Chats list has no search drawer
     /// (the system's search button stands in the side column, as Messages' does) and keeps the row's room itself.
     static func closedStrip(barsVertical: Bool, size: CGSize) -> Bool { barsVertical && size.height > size.width }
-    /// The closed Duo's column (#618): how far under Back, middle to middle, More is drawn. The system stands our two
-    /// markers in two groups, 70 apart, about twice the gap another app's controls have there; two items of one group stand
-    /// closer. ASSUMPTION (the iPhone Duo simulator on iOS 27.1, closed, with Back and More in one group, at default text
-    /// and XXXL, 2026-11-02): 52.
-    static let stripPitch: CGFloat = 52
+    /// The closed Duo's column (#618, #671): how far under Back, middle to middle, More is drawn. The system stands our two
+    /// markers in two groups, 70 apart, and two items of one group 52 apart (the iPhone Duo simulator on iOS 27.1,
+    /// closed, at default text and XXXL, 2026-11-02). At 52 with circles of 44 the two stood 8 pt apart, inside the bar's
+    /// glass spacing (10). At 60 with circles of 48 (`columnSide`) they stand 12 pt apart.
+    static let stripPitch: CGFloat = 60
+    /// The closed Duo's column: the side of Back's and More's circles there, and of the square each takes a touch across
+    /// (#671: 48, a little larger than the row's 44).
+    static let columnSide: CGFloat = 48
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
     /// (.avoidHidingContent)`): under a status in a top corner, with the bar up in the status band (#516), and wherever
     /// the floating top bar stands over the system's band (`floatingBar`, `floatingBarOverBand`: a standard iPhone too,
@@ -330,10 +333,16 @@ struct ReservedRegions: Equatable {
     /// "@") would reach across it: `listTop`, the list's top edge at full size with the dock
     /// unlifted, nil with no list open. `held` keeps a lift made for the list until the list
     /// closes (the decision: the dock rides above the fold while the list is open), so
-    /// the list's own resizing after the lift cannot drop the dock back under it.
-    func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false) -> CGFloat {
+    /// the list's own resizing after the lift cannot drop the dock back under it. `restingBottom`
+    /// is where the dock's bottom edge stands with no keyboard (window space), nil where it isn't known.
+    /// A dock standing there and on the fold stays (#669): at rest it's on the fold only because it's
+    /// taller than the room under it, and the half above can't hold it either (on the half-open Duo
+    /// about 420 pt under the fold and 380 above it, under the top bar). Lifted, it went over the top
+    /// bar and into the status band; where it rests, its controls stay in the flat bottom half.
+    func dockLift(dock: CGRect, listTop: CGFloat? = nil, held: Bool = false, restingBottom: CGFloat? = nil) -> CGFloat {
         guard let fold = horizontalFold, dock.height > 0 else { return 0 }
         let onFold = dock.minY < fold.maxY + Self.margin && dock.maxY > fold.minY - Self.margin
+        if onFold, let rest = restingBottom, dock.maxY >= rest - 0.5 { return 0 }
         let underFold = dock.minY >= fold.maxY + Self.margin
         let listCrosses = listTop.map { held || $0 < fold.maxY + Self.margin } ?? false
         guard onFold || (underFold && listCrosses) else { return 0 }

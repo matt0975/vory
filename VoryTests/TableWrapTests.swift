@@ -46,17 +46,17 @@ import Vision
         #expect(scrolling.width > 320, "a held 220 pt column should overflow, but this took \(scrolling.width) pt")
     }
 
-    @Test @MainActor func wrappingIgnoresAThreeLineCap() throws {
-        // A wrapped cell is never cut short: passing a cap with `wraps` must change nothing. This
-        // fails if `lineLimit(wraps ? nil : lineLimit)` ever goes back to a bare `lineLimit`.
+    @Test @MainActor func wrappingKeepsTheThreeLineCapInChatView() throws {
+        // In the chat view, cells keep a 3 line cap; the full-screen sheet uses nil to show everything.
         let t = try #require(Self.table(Self.three))
         let capped = Self.draw(MarkdownTableGrid(table: t, lineLimit: 3, wraps: true, fillWidth: 240))
         let open = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 240))
-        #expect(abs(capped.height - open.height) < 1, "a cap of 3 drew \(capped.height) pt, no cap \(open.height) pt")
+        #expect(capped.height < open.height, "a cap of 3 drew \(capped.height) pt vs no cap \(open.height) pt")
     }
 
     @Test @MainActor func aTableWhoseWordsDoNotFitReportsMoreThanTheBubble() throws {
-        // Six columns of real words: 333 pt of word floors plus 120 pt of padding cannot fit 320.
+        // Six columns of real words: word floors stop at readable minimums (at least minColumnFloor = 64 pt)
+        // and cannot fit in 320 pt, reporting more so ViewThatFits falls back to scrolling.
         let wide = Self.draw(try grid(MarkdownTableTests.wide, wraps: true))
         #expect(wide.width > 320, "the wrapped grid reported \(wide.width) pt, so ViewThatFits falls back")
     }
@@ -88,8 +88,40 @@ import Vision
         #expect(size.width >= 44 && size.height >= 44, "the target is \(size.width)x\(size.height)pt")
     }
 
+    /// A view's picture as PNG bytes, at scale 2 so a glyph's edges are compared too.
+    @MainActor static func png(_ view: some View) -> Data? {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        #if canImport(UIKit)
+        return renderer.uiImage?.pngData()
+        #else
+        return renderer.nsImage?.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?.representation(using: .png, properties: [:])
+        #endif
+    }
+
+    @Test @MainActor func theTableSwitchIsDrawnAsTheCodeBlocks() throws {
+        // The table's switch is built as the code block's (`CodeWrapToggle`): the same glyph, caption-sized and secondary,
+        // in a 44 pt square with nothing drawn behind it, so the two switches in one reply read as one feature. With both
+        // keys set alike they show the same glyph, so their pictures match pixel for pixel.
+        let keys = [MarkdownTableMetrics.wrapKey, CodeBody.wrapKey]
+        defer { for k in keys { UserDefaults.standard.removeObject(forKey: k) } }
+        for wrap in [true, false] {
+            for k in keys { UserDefaults.standard.set(wrap, forKey: k) }
+            let table = try #require(Self.png(TableWrapToggle()), "no picture of the table's switch")
+            let code = try #require(Self.png(CodeWrapToggle()), "no picture of the code block's switch")
+            #expect(table == code, "wrap \(wrap): the table's switch isn't drawn as the code block's (\(table.count) and \(code.count) bytes)")
+        }
+    }
+
     @Test @MainActor func oneKeyDrivesEveryTable() throws {
-        let t = try #require(Self.table(Self.three))
+        // Each cell fits one line while the table scrolls, but the three together are wider than 320 pt in the Mac's
+        // smaller text as well as the phone's, so wrapping has to break them: the wrapped table is the taller one.
+        let tableText = """
+        | Owner | Task | Status |
+        |---|---|---|
+        | @work and the night crew | deploy every gateway to staging | rolled back by dawn |
+        """
+        let t = try #require(Self.table(tableText))
         #expect(MarkdownTableMetrics.wrapKey == "table.wrap")
         // Unset: wrapping is the default.
         UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey)
@@ -111,11 +143,11 @@ import Vision
     @Test @MainActor func theControlsSitInTheirOwnStripSoNoHeaderIsSqueezed() throws {
         // The corner buttons used to overlay the header row, and the room they claimed was taken
         // from the last header cell: with a 65 pt column that left 1 pt for "Status". They now sit
-        // in a header of their own above the grid, so the card is the grid plus that header.
+        // in a strip of their own above the grid, so the card is the grid plus that strip.
         let t = try #require(Self.table(Self.three))
-        let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 320, headerInset: 0))
+        let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: 3, wraps: true, fillWidth: 320, headerInset: 0))
         let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        #expect(card.height >= grid.height + 44, "card \(card.height) pt vs grid \(grid.height) pt: the header is missing")
+        #expect(card.height >= grid.height + 28, "card \(card.height) pt vs grid \(grid.height) pt: the strip is missing")
     }
 
     @Test @MainActor func aCodeSpanColumnHoldsItsWholeToken() throws {
@@ -136,18 +168,27 @@ import Vision
         let wrapped = Self.draw(MarkdownTableView(table: t).frame(width: 320))
         UserDefaults.standard.set(false, forKey: MarkdownTableMetrics.wrapKey)
         let scrolling = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        // Falling back draws the same three-line scroll card. A wrapped candidate that was accepted
-        // instead would draw the token on one line, and be *shorter* than the scroll card.
+        // Falling back draws the same three-line scroll card.
         #expect(wrapped.height >= scrolling.height, "no fallback: wrapped \(wrapped.height) pt vs scroll \(scrolling.height) pt")
     }
 
-    @Test @MainActor func theHeaderIsInsetFromTheCardsEdge() throws {
-        // The header holds the switch and full screen in 44 pt squares, 2 pt under the card's top, as a code block's
-        // header holds its switch and Copy: 46 pt over the grid.
+    @Test @MainActor func aTableWhoseColumnsDoNotFitFallsBackToSidewaysScroll() throws {
+        let t = try #require(Self.table(MarkdownTableTests.wide))
+        defer { UserDefaults.standard.removeObject(forKey: MarkdownTableMetrics.wrapKey) }
+        UserDefaults.standard.set(true, forKey: MarkdownTableMetrics.wrapKey)
+        let wrappedCard = Self.draw(MarkdownTableView(table: t).frame(width: 320))
+        UserDefaults.standard.set(false, forKey: MarkdownTableMetrics.wrapKey)
+        let scrollingCard = Self.draw(MarkdownTableView(table: t).frame(width: 320))
+        // Since columns exceed bubble at readable minimum, wrapped mode falls back to sideways scroll.
+        #expect(abs(wrappedCard.height - scrollingCard.height) < 1, "card fell back to scrolling")
+    }
+
+    @Test @MainActor func theStripIsInsetFromTheCardsEdge() throws {
+        // The strip is the buttons' height, 44 pt, with no padding above or below them.
         let t = try #require(Self.table(Self.three))
-        let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: nil, wraps: true, fillWidth: 320, headerInset: 0))
+        let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: 3, wraps: true, fillWidth: 320, headerInset: 0))
         let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))
-        #expect(card.height - grid.height >= 46, "the header is \(card.height - grid.height) pt: the controls are not inset")
+        #expect(card.height - grid.height >= 34, "the strip is \(card.height - grid.height) pt: the disc is not inset")
     }
 
     @Test @MainActor func probesAreNeverDrawnOverTableCells() throws {
@@ -176,6 +217,14 @@ import Vision
         // be recognized as independent lines on top of the cells.
         #expect(!recognized.contains("Mac↔VPS") && !recognized.contains("Mac→VPS"))
         #expect(recognized.contains(where: { $0.contains("VPS latency") }))
+    }
+
+    @Test func dynamicTypeScalesMinimumColumnFloor() {
+        #expect(MarkdownTableMetrics.minColumnFloor == 64)
+        #expect(MarkdownTableMetrics.minColumnFloor(for: .large) == 64)
+        #expect(MarkdownTableMetrics.minColumnFloor(for: .xLarge) > 64)
+        #expect(MarkdownTableMetrics.minColumnFloor(for: .xxxLarge) > MarkdownTableMetrics.minColumnFloor(for: .xLarge))
+        #expect(MarkdownTableMetrics.minColumnFloor(for: .accessibility3) > MarkdownTableMetrics.minColumnFloor(for: .xxxLarge))
     }
 
     @Test func wrappedAndScrollingGridsDoNotShareSizeCache() throws {

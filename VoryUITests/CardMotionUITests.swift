@@ -91,6 +91,55 @@ final class CardMotionUITests: XCTestCase {
         app.buttons.matching(identifier: "composer.send").firstMatch.tap()
     }
 
+    /// #634: a card tapped with the keyboard still up after a send keeps its place, and the keyboard stays up. The field
+    /// keeps its focus after a send unless "Close keyboard after sending" is on, so this is the first tap after typing.
+    /// The same tap used to close the keyboard as well (#350's tap in the chat): the thread's bottom margin then fell by
+    /// the keyboard's height under the card's hold, and the card dropped about that far in one step, then slid back at
+    /// the hold's end. Each kind on its own launch and turn, typed once, at the start.
+    func testAReasoningCardTappedWithTheKeyboardUpKeepsItsPlace() throws { try tapWithTheKeyboardUp(tool: false) }
+    func testAToolCardTappedWithTheKeyboardUpKeepsItsPlace() throws { try tapWithTheKeyboardUp(tool: true) }
+
+    /// The lowest card of a kind tapped with the keyboard up, read from the probe over the first second after the tap: no
+    /// step over 24 pt in it; 8 pt or less of movement in the first 0.6 s (a working hold reads 3 to 5 pt for one layout
+    /// before its correction lands); back within 1 pt of the card's top before the tap by 0.6 s; and the keyboard still
+    /// up after it. With the keyboard not up before the tap the case can't be judged, and fails as that.
+    private func tapWithTheKeyboardUp(tool: Bool) throws {
+        guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
+        continueAfterFailure = true
+        launch(url: url, token: token)
+        let newChat = app.buttons["chats.new"].firstMatch
+        XCTAssertTrue(newChat.waitForExistence(timeout: 40))
+        wait(for: [expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: newChat)], timeout: 60)
+        newChat.tap()
+        startTurn("steps 8")
+        let done = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'shards read, no errors'")).firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 90), "the steps turn did not finish")
+        pause(2)
+        let name = tool ? "tool card, keyboard up" : "reasoning, keyboard up"
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { XCTFail("\(name): can't judge: the keyboard isn't up before the tap"); return }
+        guard let card = (tool ? cards(toolCard) : cards(showReasoning)).last else { XCTFail("\(name): no card above the bar"); return }
+        // The card's frame before the tap is the probe's top at the tap (the probe's legs: 212.0 and 212.0, 250.0 and 250.0).
+        let before = card.frame.minY
+        if tool { card.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0)).withOffset(CGVector(dx: 0, dy: 16)).tap() } else { card.tap() }
+        pause(1.1)
+        let all = probe().cards.values.flatMap { $0 }.sorted { $0.t < $1.t }
+        let second = all.filter { $0.t <= 1.0 }.map(\.top)
+        let early = [before] + all.filter { $0.t <= 0.6 }.map(\.top)
+        let step = zip([before] + second, second).map { abs($1 - $0) }.max() ?? 0
+        let drift = (early.max() ?? before) - (early.min() ?? before)
+        let off = abs((early.last ?? before) - before)
+        let up = keyboard.exists
+        print("CARD-MOTION \(name): top \(String(format: "%.1f", before)) before, \(all.count) layouts; largest step \(String(format: "%.1f", step))"
+              + " in 1.0 s; drift \(String(format: "%.1f", drift)), \(String(format: "%.1f", off)) off at 0.6 s; keyboard after \(up ? "up" : "down")")
+        print("CARD-MOTION-ALL \(name): \(all.map { String(format: "%.2f:%.1f", $0.t, $0.top) }.joined(separator: " "))")
+        XCTAssertGreaterThanOrEqual(second.count, 1, "\(name): the probe saw no layout")
+        XCTAssertLessThanOrEqual(step, 24, "\(name): the card's top moved \(step) pt in one step: \(second)")
+        XCTAssertLessThanOrEqual(drift, 8, "\(name): the card's top moved \(drift) pt in the first 0.6 s")
+        XCTAssertLessThanOrEqual(off, 1, "\(name): at 0.6 s the card's top was \(off) pt from where it was")
+        XCTAssertTrue(up, "\(name): the keyboard closed: a tap that opens a card leaves it up")
+    }
+
     func testACardOpeningOrClosingKeepsItsPlace() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         continueAfterFailure = true

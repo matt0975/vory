@@ -2119,7 +2119,14 @@ enum CardFollow {
     /// A hold under way: the thread's other scrolls (landing past the end, the overscroll fix) wait for its end.
     var holding: Bool { correct != nil }
 
+    /// When a card was last toggled (system uptime, the clock a touch's timestamp uses). The thread's tap reads it to leave
+    /// the keyboard up when the tap it saw was a card's (#634, `ThreadKeyboardTap`).
+    private(set) var toggledAt: TimeInterval = 0
+    /// Whether a card was toggled at or after `time` (a touch's start, system uptime).
+    func toggled(since time: TimeInterval) -> Bool { toggledAt >= time }
+
     func arm(_ card: Top) {
+        toggledAt = ProcessInfo.processInfo.systemUptime
         held?.heldAt = nil
         card.heldAt = card.y
         held = card
@@ -2707,10 +2714,9 @@ struct MarkdownTableView: View {
         MarkdownTableGrid(table: shownTable, lineLimit: 3, maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
     }
 
-    /// The same table with its columns held at their longest-word floors, every line of every cell
-    /// drawn: what a reader who would rather not drag asks for.
+    /// The table wrapped to fit the bubble, holding columns at their readable floor, capped at 3 lines like the chat view.
     private var wrappedGrid: some View {
-        MarkdownTableGrid(table: shownTable, lineLimit: nil, wraps: true,
+        MarkdownTableGrid(table: shownTable, lineLimit: 3, wraps: true,
                           maxColumn: MarkdownTableMetrics.bubbleMaxColumn)
     }
 
@@ -2738,25 +2744,34 @@ struct MarkdownTableView: View {
         .help("Open Table")
     }
 
-    /// The card's header, built as a code block's: the title where a code block names its language,
-    /// in the same type, and the wrap switch and full screen at the trailing end. Above the grid
-    /// rather than over its cells, so a narrow last column keeps its header's room.
+    /// The card's header strip: the title on the leading edge, and at the trailing edge the wrap switch and full
+    /// screen, plain glyphs in 44 pt squares as a code block's header has them. The table glyph beside the title is
+    /// decoration: the title says what it is.
     private var controls: some View {
-        HStack {
-            Text("Table").font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            HStack(spacing: 5) {
+                Image(systemName: "tablecells")
+                    .font(.caption2)
+                    .accessibilityHidden(true)
+                Text("Table")
+                    .font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.leading, 12)
+
             Spacer(minLength: 0)
-            TableWrapToggle().padding(.trailing, 2)
+
+            TableWrapToggle()
             openTableButton
         }
-        .padding(.horizontal, 10).padding(.top, 2)
     }
 
     private var card: some View {
         // The grid alone when its columns fit (it then stretches to the bubble's width), else
         // the same grid in a sideways scroll view. Deciding here, rather than always scrolling,
         // keeps a narrow table free of a scroll view that would catch the thread's drags. Wrapped,
-        // the first candidate is the word-floor grid: when the words cannot fit, it reports more
-        // than the bubble and this falls through to the scroll that keeps a wide table readable.
+        // the first candidate is the wrapped grid: when the columns cannot fit at their readable
+        // minimum, it reports more than the bubble and falls through to the sideways scroll.
         VStack(spacing: 0) {
             controls
             Group {
