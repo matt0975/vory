@@ -218,6 +218,65 @@ import Testing
         #expect(WatchFeedProblem.from("could not open the chat").kind == .sendFailed)
     }
 
+    // MARK: Stop (#684)
+
+    /// A refused Stop's three wordings (ChatSession's banner, #683) read as a refusal to stop, whichever way they come.
+    @Test func aRefusedStopsWordsReadAsARefusalToStop() {
+        for words in ["The reply couldn't be stopped. Try Stop again.", "The reply couldn't be stopped.",
+                      "The reply couldn't be stopped: unknown session"] {
+            #expect(WatchFeedProblem.from(words) == WatchFeedProblem(kind: .stopRefused, text: words))
+        }
+    }
+
+    /// The iPhone's answer to the Watch's Stop: "ok" false is the refusal in its words; "ok" is nothing to say.
+    @Test func theIPhonesAnswerToAStopIsTheLine() {
+        let refused = WatchFeedRules.stopProblem(answer: ["ok": false, "error": "The reply couldn't be stopped. Try Stop again."])
+        #expect(refused == WatchFeedProblem(kind: .stopRefused, text: "The reply couldn't be stopped. Try Stop again."))
+        #expect(WatchFeedRules.stopProblem(answer: ["ok": false]) == WatchFeedProblem(kind: .stopRefused, text: "The reply couldn't be stopped."))
+        #expect(WatchFeedRules.stopProblem(answer: ["ok": true]) == nil)
+    }
+
+    /// The iPhone's demo ended as the Watch stopped (#502's word, "demoEnded"): not a refusal to stop, so no line.
+    @Test func anAnswerThatTheDemoEndedIsNoRefusal() {
+        #expect(WatchFeedRules.stopProblem(answer: ["ok": false, "error": "The demo ended on your iPhone.", "demoEnded": true]) == nil)
+        #expect(WatchFeedRules.stopProblem(answer: ["ok": false, "error": "The reply couldn't be stopped.", "demoEnded": false]) != nil)
+    }
+
+    /// One line, never two: on the live path the chat's banner says the refusal too, and it is the same line.
+    @Test func aRefusalSaidTwiceIsOneLine() {
+        let words = "The reply couldn't be stopped. Try Stop again."
+        let fromStop = WatchFeedProblem(kind: .stopRefused, text: words)
+        let afterStop = WatchFeedRules.problemAfterStop(nil, refusal: fromStop)
+        let fromBanner = WatchFeedProblem.from(words)
+        #expect(afterStop == fromBanner)
+        #expect(WatchFeedRules.problemAfterStop(fromBanner, refusal: fromStop) == fromStop)
+        // A second refusal replaces the first.
+        let second = WatchFeedProblem(kind: .stopRefused, text: "The reply couldn't be stopped.")
+        #expect(WatchFeedRules.problemAfterStop(fromStop, refusal: second) == second)
+    }
+
+    /// A Stop taken clears a refusal to stop, and leaves any other line.
+    @Test func aStopTakenClearsOnlyARefusalToStop() {
+        let refused = WatchFeedProblem(kind: .stopRefused, text: "The reply couldn't be stopped.")
+        let away = WatchFeedProblem(kind: .phoneAway, text: "Your iPhone is not reachable.")
+        #expect(WatchFeedRules.problemAfterStop(refused, refusal: nil) == nil)
+        #expect(WatchFeedRules.problemAfterStop(away, refusal: nil) == away)
+        #expect(WatchFeedRules.problemAfterStop(nil, refusal: nil) == nil)
+    }
+
+    /// The turn over, a refusal to stop it goes; any other line stays.
+    @Test func theTurnsEndClearsOnlyARefusalToStop() {
+        let refused = WatchFeedProblem(kind: .stopRefused, text: "The reply couldn't be stopped.")
+        let failed = WatchFeedProblem(kind: .sendFailed, text: "could not open the chat")
+        #expect(WatchFeedRules.problemAfterTurn(refused) == nil)
+        #expect(WatchFeedRules.problemAfterTurn(failed) == failed)
+    }
+
+    /// The iPhone out of reach when the Watch stops: said as the iPhone away, as a send's is.
+    @Test func aStopThatCannotReachTheIPhoneSaysSo() {
+        #expect(WatchFeedProblem.from("Your iPhone is not reachable.", phoneAway: true).kind == .phoneAway)
+    }
+
     @Test func anApprovalCrossesToTheWatchWhole() throws {
         let params: JSONValue = ["request_id": "req-1", "session_id": "s1", "command": "rm -rf build", "description": "Delete the build folder",
                                  "choices": ["once", "deny"], "pattern_key": "rm -rf", "tool_name": "terminal"]

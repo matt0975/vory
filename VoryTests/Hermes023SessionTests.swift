@@ -595,6 +595,34 @@ import Testing
         #expect(c.interruptCause == .stopped)
     }
 
+    /// A refused Stop's line goes when the turn ends on its own, with no Stop after it (#684).
+    @Test func aRefusedStopsLineGoesWhenTheTurnEnds() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped. Try Stop again.")
+        c.isRunning = false
+        #expect(c.banner == nil)
+    }
+
+    /// The guard: another banner up when the turn ends stays, a refused Stop before it or not.
+    @Test func anotherBannerStaysWhenTheTurnEnds() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        c.banner = "Reconnecting…"
+        c.isRunning = false
+        #expect(c.banner == "Reconnecting…")
+    }
+
     /// The guard, green before and after: a Stop taken clears only a Stop's own refusal, never another banner.
     @Test func aStopTakenLeavesAnotherBanner() async throws {
         let (c, _) = try await chat(authority: true)

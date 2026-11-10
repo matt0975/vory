@@ -176,7 +176,11 @@ final class WatchChatFeed {
         apply(settled: settled, cards: c.cards, working: c.isRunning, status: c.statusLine, tools: WatchFeedRules.turnTools(all),
               loaded: !c.isResuming)
         if c.interruptCause != nil, let b = c.banner { problem = WatchFeedProblem(kind: .interrupted, text: b) }
-        else if let b = c.banner { problem = WatchFeedProblem.from(b) }
+        else if let b = c.banner {
+            // A refused Stop's banner is the line only while the reply runs on: the turn's end clears it (#684).
+            let said = WatchFeedProblem.from(b)
+            if said.kind != .stopRefused || c.isRunning { problem = said }
+        }
         isLoading = c.showsSyncing
         observe(c)
     }
@@ -249,6 +253,8 @@ final class WatchChatFeed {
         if shown.map(\.id) != items.map(\.id) || shown.last?.kind != items.last?.kind { items = shown }
         if route == .live { hasEarlier = settled.count > limit }
         if newCards.map(\.id) != cards.map(\.id) { cards = newCards }
+        // The turn over: a refusal to stop it is out of date (#684).
+        if isWorking, !working { problem = WatchFeedRules.problemAfterTurn(problem) }
         if working != isWorking { isWorking = working }
         let line = working ? status : nil
         if line != statusLine { statusLine = line }
@@ -356,9 +362,25 @@ final class WatchChatFeed {
         }
     }
 
+    /// Stop, on the live chat or through the iPhone. A Stop the gateway refuses is said on the line under the thread, in
+    /// the iPhone's words (#684): one line, which a Stop taken or the turn's end clears. Stop stays in the bar while the
+    /// reply runs, for another try. Through the iPhone the answer was dropped, so a refusal, or the iPhone out of reach,
+    /// said nothing.
     func stop() async {
-        if route == .live, let c = chat { await c.stop(); return }
-        _ = try? await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""])
+        if route == .live, let c = chat {
+            // The chat's banner says the same refusal (`syncLive`): the same line, not a second one.
+            let refused = await c.stop()
+            problem = WatchFeedRules.problemAfterStop(problem, refusal: refused.map { WatchFeedProblem(kind: .stopRefused, text: $0) })
+            return
+        }
+        do {
+            let r = try await model.askPhone(["op": "stop", "session": storedID, "profile": profile ?? ""])
+            problem = WatchFeedRules.problemAfterStop(problem, refusal: WatchFeedRules.stopProblem(answer: r))
+        } catch is CancellationError {
+            return
+        } catch {
+            problem = WatchFeedProblem.from(error.localizedDescription, phoneAway: true)
+        }
         wake(.sent)
     }
 

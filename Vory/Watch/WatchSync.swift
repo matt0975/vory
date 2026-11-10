@@ -210,11 +210,13 @@ final class WatchSync: NSObject, WCSessionDelegate {
         }
     }
 
-    /// The Watch's Stop, on this phone's chat, and the answer the Watch gets (#684).
+    /// The Watch's Stop, on this phone's chat, and the answer the Watch gets (#684): "ok" when the gateway took it, and
+    /// otherwise the refusal in the words this iPhone's banner shows. It was "ok" whatever happened, so a refused Stop
+    /// said nothing on the Watch.
     @MainActor
     static func stopAnswer(_ chat: ChatSession) async -> [String: Any] {
-        await chat.stop()
-        return ["ok": true]
+        guard let refused = await chat.stop() else { return ["ok": true] }
+        return ["ok": false, "error": refused]
     }
 
     /// An HTTP call the watch makes through this phone: signed with this phone's credentials
