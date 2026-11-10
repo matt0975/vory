@@ -793,6 +793,26 @@ struct ChatListView: View {
 
     /// The Scheduled section: its row, which opens and closes it, and its chats while it's open, in the list's order.
     @ViewBuilder private func scheduledSection(_ runs: [StoredSession], runtime: GatewayRuntime) -> some View {
+        #if os(macOS)
+        // Open, its chats end in a band before the person's: the Mac's inset list draws no gap between sections and
+        // no line of its own at a section's end, as the iPhone's and iPad's groups do, so the person's chats ran
+        // straight on from them. The band is the list's own footer row: its content 16 pt of space with no words, its
+        // line running the list's full width. Closed, its row is the break, and there's no band. The rows are the
+        // iPhone's and iPad's, below.
+        Section {
+            ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
+                                working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                                waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
+                                onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
+                .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
+                .id(ScheduledChats.rowID)
+            if prefs.scheduledOpen {
+                ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
+            }
+        } footer: {
+            if prefs.scheduledOpen { Color.clear.frame(height: 16).accessibilityHidden(true) }
+        }
+        #else
         Section {
             ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
                                 working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
@@ -804,6 +824,7 @@ struct ChatListView: View {
                 ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
             }
         }
+        #endif
     }
 
     // MARK: Grouped by project
@@ -1552,7 +1573,11 @@ struct SessionRow: View {
                 // While the bot works: what it is working on, over one line of the preview, so
                 // the row keeps its height.
                 if live { ChatGoalLine(storedID: session.id, step: step) }
-                Text(summary?.summary ?? session.preview ?? "").font(.subheadline).foregroundStyle(.secondary).lineLimit(live ? max(1, ChatRowStyle.previewLines - 1) : ChatRowStyle.previewLines)
+                // A scheduled task's chat with no preview has no empty line under its title: its row is as tall as its words.
+                let preview = summary?.summary ?? session.preview ?? ""
+                if !(preview.isEmpty && ScheduledChats.isScheduled(session)) {
+                    Text(preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(live ? max(1, ChatRowStyle.previewLines - 1) : ChatRowStyle.previewLines)
+                }
                 HStack(spacing: 8) {
                     if let project { ProjectChip(project: project) }
                     if let m = session.model, !m.isEmpty { Text(m).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
