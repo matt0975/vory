@@ -635,3 +635,23 @@ actor EventCollector {
         #expect(!chat.quickAnswersOn && UserDefaults.standard.dictionary(forKey: key) == nil)
     }
 }
+
+/// #682: a new chat's first message is answered on either wire. Hermes v0.23's session authority (the mock with
+/// --authority) admits a prompt.submit only with a non-empty submission_id or input_id and the keys its submission()
+/// knows, else 4001 "invalid_params" with no fields; so this was red there while a message carried neither. Against the
+/// default mock it's answered either way.
+extension GatewayIntegrationTests {
+    @MainActor @Test func aNewChatsFirstMessageIsAnsweredOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e first message") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let chat = try await e.runtime.newChat()
+        _ = await chat.send("short link")
+        func errors() -> [String] { chat.items.compactMap { if case .error(let t) = $0.kind { return t }; return nil } }
+        func replied() -> Bool { chat.items.contains { if case .assistant(let t, _, let streaming) = $0.kind { return !t.isEmpty && !streaming }; return false } }
+        await waitFor(20) { replied() || !errors().isEmpty }
+        print("e2e first message: authority \(e.runtime.sessionAuthority),", errors().isEmpty ? "answered \(replied())" : "refused: \(errors())")
+        #expect(errors().isEmpty, "the message was refused: \(errors())")
+        #expect(replied(), "no reply in 20 s")
+        await e.runtime.stop()
+    }
+}

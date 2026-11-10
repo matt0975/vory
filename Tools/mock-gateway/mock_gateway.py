@@ -774,7 +774,8 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
         return 200, {"undos": UNDOS}
     if base == "/api/_mock/authority":
-        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered.
+        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered, and every
+        # prompt.submit admitted, with its ids (#682).
         return 200, AUTHORITY_LOG
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
@@ -1468,7 +1469,12 @@ GENERATIONS: dict = {}   # live session id -> its newest execution generation
 PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
 REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
 RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
-AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": []}
+AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": []}
+# The keys the authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in v0.22.7 and
+# v0.23.0). It also needs a non-empty submission_id or input_id; either miss is a bare 4001 "invalid_params" (#682).
+SUBMISSION_KEYS = {"session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended",
+                   "surface", "voice_context", "interrupted", "voice_turn", "display_kind", "title_preview", "turn_author",
+                   "api_text", "model_override", "clarify_batch"}
 AUTHORITY_UNSERVED = {"session.usage", "session.title", "session.undo", "session.close", "session.workspace.move"}
 STRICT_PARAMS_DECLARED = {
     "session.create": {"accept_hooks", "api_key", "base_url", "checkpoints", "client_env", "cwd", "cwd_explicit", "editor",
@@ -3523,6 +3529,18 @@ class Gateway:
         if method == "command.dispatch":
             return ok({"type": "exec", "output": f"(mock) ran /{p.get('name', '')}"})
         if method == "prompt.submit":
+            if AUTHORITY:
+                # The authority's admission (#682): the socket's own profile is dropped first (session_controls.py
+                # dispatch, _PROFILE_IMPLICIT); then a key outside SUBMISSION_KEYS, or no non-empty submission_id or
+                # input_id, is refused with no fields. Its attach check (permission_denied) isn't modelled here.
+                q = {k: v for k, v in p.items() if not (k == "profile" and isinstance(v, str) and v)}
+                turn = q.get("submission_id") or q.get("input_id")
+                if set(q) - SUBMISSION_KEYS or not isinstance(turn, str) or not turn:
+                    print(f"[mock] prompt.submit refused invalid_params: keys {sorted(q)}", flush=True)
+                    return refused("invalid_params")
+                AUTHORITY_LOG["submits"].append({"session_id": q.get("session_id"), "input_id": q.get("input_id"),
+                                                 "submission_id": q.get("submission_id"), "at": time.time()})
+                print(f"[mock] prompt.submit admitted input_id={q.get('input_id')!r}", flush=True)
             s = self.sessions.get(p.get("session_id", ""))
             if s is None:
                 return {"jsonrpc": "2.0", "id": rid, "error": {"code": 4006, "message": "unknown session"}}
@@ -3532,6 +3550,10 @@ class Gateway:
                 print(f"prompt.submit surface={p.get('surface')!r} interrupted={bool(p.get('interrupted'))} "
                       f"voice_context={len(str(p.get('voice_context') or ''))} chars", flush=True)
             asyncio.create_task(self.run_turn(s, str(p.get("text", ""))))
+            if AUTHORITY:
+                # The authority's receipt (gateway/session_authority.py _receipt): every admitted message is "queued" in
+                # its own queue, even one whose turn starts at once (#682).
+                return ok({"admission_id": uuid.uuid4().hex, "status": "queued"})
             return ok({"status": "streaming"})
         if method == "session.interrupt":
             return ok({"status": "interrupted", "interrupted": True})

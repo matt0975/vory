@@ -408,6 +408,113 @@ import Testing
         #expect(calls.all("session.mutate").isEmpty)
     }
 
+    // MARK: The turn's input id (#682)
+
+    /// The keys the session authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in
+    /// v0.22.7 and v0.23.0), which also needs a non-empty submission_id or input_id. Anything else is 4001
+    /// "invalid_params" with no fields.
+    private static let submissionKeys: Set<String> = [
+        "session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended", "surface",
+        "voice_context", "interrupted", "voice_turn", "display_kind", "title_preview", "turn_author", "api_text",
+        "model_override", "clarify_batch"]
+
+    private static func admitted(_ params: [String: JSONValue]) -> Bool {
+        guard Set(params.keys).isSubset(of: submissionKeys) else { return false }
+        return [params["submission_id"], params["input_id"]].contains { !($0?.stringValue ?? "").isEmpty }
+    }
+
+    /// prompt.submit as the authority answers it, and an Edit & resend's rewind and the chat read after it.
+    private static func authoritySubmits(_ method: String, _ params: [String: JSONValue]) throws -> JSONValue {
+        switch method {
+        case "prompt.submit":
+            guard admitted(params) else { throw RPCError(code: 4001, message: "invalid_params", data: ["reason": "invalid_params"]) }
+            return ["status": "streaming"]
+        case "session.mutate":
+            return ["session_id": "rt-a", "operation": "rewind", "revision": 5, "rewound_count": 2, "new_head_id": 6]
+        case "session.resume":
+            return ["session_id": "rt-a", "stored_session_id": "st-a", "running": false, "execution_generation": 4, "revision": 5,
+                    "subscription_id": "sub-2", "messages": [["role": "user", "text": "Clear the old logs", "row_id": 5],
+                                                             ["role": "assistant", "text": "Done.", "row_id": 6]]]
+        default: return .object([:])
+        }
+    }
+
+    private static func isInputID(_ v: JSONValue?) -> Bool {
+        guard let s = v?.stringValue else { return false }
+        return s.count == 32 && s.allSatisfy { ("0"..."9").contains($0) || ("a"..."f").contains($0) }
+    }
+
+    private func errorRows(_ c: ChatSession) -> Int {
+        c.items.filter { if case .error = $0.kind { return true }; return false }.count
+    }
+
+    @Test func aPlainSendIsAdmittedOnTheAuthorityWire() async throws {
+        let (c, calls) = try await chat(authority: true, answer: Self.authoritySubmits)
+        _ = await c.send("Clean up the log host")
+        #expect(calls.all("prompt.submit").count == 1)
+        #expect(errorRows(c) == 0, "the send was refused")
+        #expect(Self.isInputID(calls.last("prompt.submit")?["input_id"]))
+    }
+
+    @Test func eachTurnHasItsOwnInputID() async throws {
+        let (c, calls) = try await chat(authority: true, answer: Self.authoritySubmits)
+        _ = await c.send("First")
+        c.isRunning = false
+        _ = await c.send("Second")
+        c.isRunning = false
+        c.items = Self.twoTurns
+        info(c, generation: 3, revision: 4, running: false)
+        #expect(c.beginEdit("u2"))
+        #expect(await c.resend("Now the cache, but keep today's") == .sent)
+        let ids = calls.all("prompt.submit").map { $0["input_id"] }
+        #expect(ids.count == 3)
+        #expect(ids.allSatisfy { Self.isInputID($0) })
+        #expect(Set(ids.compactMap { $0?.stringValue }).count == 3, "a turn reused another's input id")
+    }
+
+    @Test func aVoiceTurnCarriesAnInputIDBesideItsVoiceKeys() async throws {
+        let (c, calls) = try await chat(authority: true, answer: Self.authoritySubmits)
+        _ = await c.send("Yes", voice: VoiceTurn(context: "Should I clear the cache?", interrupted: true))
+        let p = try #require(calls.last("prompt.submit"))
+        #expect(p["surface"] == .string(VoiceTurn.surface) && p["interrupted"] == true)
+        #expect(Self.isInputID(p["input_id"]))
+        #expect(errorRows(c) == 0, "the spoken turn was refused")
+    }
+
+    /// The guard, green before and after: the legacy wire's prompt.submit names no turn. Hermes's legacy handler refuses
+    /// a key its contract doesn't declare (tui_gateway/contracts/base.py extra="forbid"), and v0.23.0's
+    /// (contracts/prompt_voice.py) declares neither id.
+    @Test func onTheLegacyWireASendNamesNoTurn() async throws {
+        let (c, calls) = try await chat(authority: false, answer: { method, _ in method == "prompt.submit" ? ["status": "streaming"] : .object([:]) })
+        _ = await c.send("Clean up the log host")
+        c.isRunning = false
+        _ = await c.send("Yes", voice: VoiceTurn(context: "Should I clear the cache?", interrupted: true))
+        let sent = calls.all("prompt.submit")
+        #expect(sent.count == 2)
+        #expect(sent.allSatisfy { $0["input_id"] == nil && $0["submission_id"] == nil })
+        #expect(errorRows(c) == 0)
+    }
+
+    /// The authority admits every message to its own queue and answers "queued" (with its admission_id) even when the
+    /// turn starts at once: there the turn's own events say what it's doing, not "Queued on the gateway".
+    @Test func anAdmittedMessageIsNotShownAsQueuedOnTheAuthorityWire() async throws {
+        let (c, calls) = try await chat(authority: true, answer: { method, _ in
+            method == "prompt.submit" ? ["admission_id": "adm-1", "status": "queued"] : .object([:])
+        })
+        _ = await c.send("Clean up the log host")
+        #expect(calls.all("prompt.submit").count == 1)
+        #expect(c.lastSubmitStatus == "queued")
+        #expect(c.statusLine != "Queued on the gateway")
+    }
+
+    /// The guard, green before and after: on the legacy wire "queued" means the message waits behind a running turn.
+    @Test func onTheLegacyWireAQueuedMessageSaysSo() async throws {
+        let (c, _) = try await chat(authority: false, answer: { method, _ in method == "prompt.submit" ? ["status": "queued"] : .object([:]) })
+        _ = await c.send("Clean up the log host")
+        #expect(c.lastSubmitStatus == "queued")
+        #expect(c.statusLine == "Queued on the gateway")
+    }
+
     // MARK: The tool line
 
     private func toolStarts(_ c: ChatSession, _ id: String, _ name: String) {
