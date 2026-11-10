@@ -1187,6 +1187,9 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         return false
     }
 
+    /// A turn's input id: a fresh uuid as lowercase hex, 32 characters (#682).
+    nonisolated static func newInputID() -> String { UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
+
     @discardableResult private func submit(text: String, queued: Bool, voice: VoiceTurn? = nil) async -> Bool {
         await stagingSettled()
         interruptCause = nil
@@ -1209,9 +1212,17 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             var params: [String: JSONValue] = ["session_id": .string(runtimeID), "text": .string(outgoing)]
             if queued { params["queued"] = true }
             voice?.apply(to: &params)
+            // On Hermes's session authority each turn names itself (#682): it admits a prompt.submit only with a non-empty
+            // submission_id or input_id (gateway/session_controls.py submission()). The id is made once per turn, here: a
+            // new message, a queued one sent, a spoken turn and Edit & resend each get their own. The legacy handler
+            // refuses a key its contract doesn't declare, and declares neither, so that wire's submit stays as it was.
+            if runtime.sessionAuthority { params["input_id"] = .string(Self.newInputID()) }
             let r = try await rpc("prompt.submit", params)
             lastSubmitStatus = r["status"]?.stringValue
-            if lastSubmitStatus == "queued" { statusLine = "Queued on the gateway" }
+            // A legacy gateway answers "queued" when the message waits behind a running turn. Hermes's session authority
+            // admits every message to its own queue and answers "queued" even when the turn starts at once (#682), so
+            // there the turn's own events set the line.
+            if lastSubmitStatus == "queued" && !runtime.sessionAuthority { statusLine = "Queued on the gateway" }
             activity.start(for: self)
             runtime.pushRegistrar?.noteSend(session: storedID, runtime: runtime)
             return true
