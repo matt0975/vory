@@ -1372,10 +1372,35 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         staged.removeAll { $0.id == id }
     }
 
+    /// Stop: the running turn interrupted. On Hermes's session authority a Stop names the turn by its execution, as a
+    /// steer does: without it, or with an older one, the gateway refuses it (`stale_generation`) and the turn runs on
+    /// (#683). A Stop the gateway doesn't take is said in the banner, on either wire, not dropped.
     public func stop() async {
         streamFlush?.cancel(); streamFlush = nil
         interruptCause = .stopped
-        _ = try? await rpc("session.interrupt", ["session_id": .string(runtimeID)])
+        var params: [String: JSONValue] = ["session_id": .string(runtimeID)]
+        if runtime.sessionAuthority, let generation = executionGeneration { params["execution_generation"] = .number(Double(generation)) }
+        do {
+            _ = try await rpc("session.interrupt", params)
+        } catch {
+            // A Stop whose call was cancelled may have reached the gateway: nothing is said, and the cause stays.
+            guard !(error is CancellationError) else { return }
+            interruptCause = nil
+            banner = stopRefusal(error)
+        }
+    }
+
+    /// What a refused Stop says, in plain words (#683). The authority's stale_generation means the reply moved on (a newer
+    /// execution) between what the chat knew and the tap: pressing Stop again names the newer one. A reason in words is
+    /// quoted; a bare code (permission_denied, not_found) isn't, and goes to the log.
+    private func stopRefusal(_ error: Error) -> String {
+        let reason = (error as? RPCError)?.message ?? error.localizedDescription
+        if reason == "stale_generation" { return "The reply couldn't be stopped. Try Stop again." }
+        if reason.range(of: "^[a-z0-9_]*$", options: .regularExpression) != nil {
+            log.notice("session.interrupt refused: \(reason, privacy: .public)")
+            return "The reply couldn't be stopped."
+        }
+        return "The reply couldn't be stopped: \(reason)"
     }
 
     /// The composer's Steer now: `text` into the running turn. Gives back the words for the composer to put back, as a
