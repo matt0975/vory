@@ -27,4 +27,23 @@ import Testing
         // In a reply the same, but for the path after "=": a reply's scan doesn't look there, before #686 or after.
         for (text, path) in cases where !text.hasPrefix("out=") { #expect(MediaScan.images(in: text).map(\.id) == [path], "\(text)") }
     }
+
+    @Test func aWebAddressInAReplyKeepsItsWords() {
+        // A reply's words lose a line only to a card a scan draws. A protocol-relative picture is no card (above), so its
+        // bare line stays as text, and its markdown stays for the parser, as a web image's with "https:" does; the fast
+        // pass and the whole one (#638) alike.
+        let bare = "//host/a/b.jpg", mark = "![x](//host/a/b.jpg)", web = "![x](https://host/a/b.jpg)"
+        #expect(MediaScan.textWithoutMedia(bare) == bare)
+        #expect(MediaScan.textWithoutMedia(bare, fast: false) == bare)
+        #expect(MediaScan.textWithoutMedia(mark) == mark)
+        #expect(MediaScan.textWithoutMedia(mark, fast: false) == mark)
+        #expect(MediaScan.textWithoutMedia(web) == web)
+        #expect(MediaScan.textWithoutMedia(web, fast: false) == web)
+        // A file's bare line is a file card, "//" or not (files(in:), which #686 leaves as it is), so its line goes from
+        // the words, as before.
+        let file = "//cdn/x/app.js"
+        #expect(MediaScan.files(in: file).map(\.id) == [file])
+        #expect(MediaScan.textWithoutMedia(file) == "")
+        #expect(MediaScan.textWithoutMedia(file, fast: false) == "")
+    }
 }
