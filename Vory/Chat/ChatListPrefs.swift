@@ -23,6 +23,8 @@ final class ChatListPrefs {
     var byProject: Bool { didSet { if byProject != oldValue { d.set(byProject, forKey: "chats.byProject") } } }
     var collapsedRaw: String { didSet { if collapsedRaw != oldValue { keepOwn(collapsedRaw, "chats.byProject.collapsed") } } }
     var archivedRoomsRaw: String { didSet { if archivedRoomsRaw != oldValue { keepOwn(archivedRoomsRaw, "chats.archivedRooms") } } }
+    /// The Scheduled section open (#673): closed until it's opened, then as it was left, on this device. Not a setting.
+    var scheduledOpen: Bool { didSet { if scheduledOpen != oldValue { d.set(scheduledOpen, forKey: "chats.scheduled.open") } } }
     /// While the demo runs, the filter by project, the folded projects and the archived rooms are the demo's, for its life
     /// (#494): its projects and rooms are not the person's, and kept they left the person's list filtered to a project
     /// they don't have. Leaving it brings the person's own back.
@@ -77,6 +79,7 @@ final class ChatListPrefs {
         byProject = d.object(forKey: "chats.byProject") as? Bool ?? false
         collapsedRaw = d.object(forKey: "chats.byProject.collapsed") as? String ?? ""
         archivedRoomsRaw = d.object(forKey: "chats.archivedRooms") as? String ?? ""
+        scheduledOpen = d.bool(forKey: "chats.scheduled.open")
         botColorsRaw = d.object(forKey: BotColors.storageKey) as? String ?? ""
         botAvatarsRaw = d.object(forKey: BotAvatarStore.storageKey) as? String ?? ""
         glassAll = d.object(forKey: BotAvatarStore.glassAllKey) as? Bool ?? false
@@ -99,6 +102,7 @@ final class ChatListPrefs {
         let new_sortKey = d.object(forKey: "chats.sort") as? String ?? "recent"; if new_sortKey != sortKey { sortKey = new_sortKey }
         let new_groupsOnly = d.object(forKey: "chats.filter.groups") as? Bool ?? false; if new_groupsOnly != groupsOnly { groupsOnly = new_groupsOnly }
         let new_byProject = d.object(forKey: "chats.byProject") as? Bool ?? false; if new_byProject != byProject { byProject = new_byProject }
+        let new_scheduledOpen = d.bool(forKey: "chats.scheduled.open"); if new_scheduledOpen != scheduledOpen { scheduledOpen = new_scheduledOpen }
         if !inDemo {
             let new_projectFilter = d.object(forKey: "chats.filter.project") as? String ?? ""; if new_projectFilter != projectFilter { projectFilter = new_projectFilter }
             let new_collapsedRaw = d.object(forKey: "chats.byProject.collapsed") as? String ?? ""; if new_collapsedRaw != collapsedRaw { collapsedRaw = new_collapsedRaw }

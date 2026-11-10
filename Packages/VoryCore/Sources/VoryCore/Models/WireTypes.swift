@@ -303,7 +303,9 @@ public struct StoredSession: Codable, Hashable, Identifiable, Sendable {
         let t = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !t.isEmpty { return t }
         let p = (preview ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return p.isEmpty ? "New chat" : String(p.prefix(80))
+        if !p.isEmpty { return String(p.prefix(80)) }
+        // A scheduled task's run with neither (#673) is said as what wrote it: "New chat" is the person's own new one.
+        return source == "cron" ? "Scheduled task" : "New chat"
     }
     public var lastDate: Date? { (lastActive ?? startedAt).map { Date(timeIntervalSince1970: $0) } }
 

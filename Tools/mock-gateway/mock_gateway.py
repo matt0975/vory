@@ -742,7 +742,6 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
     if base in ("/api/media", "/api/files/read"):
         # hermes_cli/web_routers/files.py: a gateway-local image as a data URL. Any image path
         # gets a picture here; anything else is refused as the real one would.
-        from urllib.parse import unquote
         p = unquote(query.get("path", ""))
         ext = p.rsplit(".", 1)[-1].lower() if "." in p else ""
         if ext not in ("png", "jpg", "jpeg", "gif", "webp"):

@@ -154,15 +154,17 @@ struct ChatListView: View {
     #if os(macOS)
     /// The list as shown, for stepping through it from the keyboard.
     private func entries(_ runtime: GatewayRuntime) -> [ListEntry] {
-        let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
+        let (rows, scheduled) = parts(filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime))
+        // The scheduled chats first, as drawn, while their section is open (#673).
+        let runs = prefs.scheduledOpen ? scheduled.map(ListEntry.session) : []
         let visibleRooms = prefs.groupsOnly
             ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
             : []
         if grouped(runtime) {
             // Top to bottom as drawn: each open project's visible chats, then the group chats.
-            return groups(rows, runtime: runtime).flatMap { g in collapsed.contains(g.id) ? [] : shown(g).map(ListEntry.session) } + visibleRooms.map(ListEntry.room)
+            return runs + groups(rows, runtime: runtime).flatMap { g in collapsed.contains(g.id) ? [] : shown(g).map(ListEntry.session) } + visibleRooms.map(ListEntry.room)
         }
-        return Self.merge(rows, visibleRooms, sort: prefs.sortKey)
+        return runs + Self.merge(rows, visibleRooms, sort: prefs.sortKey)
     }
 
     /// Opens the chat `direction` rows away from the open one (the first when none is open).
@@ -573,7 +575,8 @@ struct ChatListView: View {
 
     /// The filters and the sort applied to the loaded (or searched) sessions.
     private func filtered(_ list: [StoredSession], runtime: GatewayRuntime) -> [StoredSession] {
-        var out = list
+        // A scheduled task's run with no messages is never listed, nor found (#673).
+        var out = list.filter(ScheduledChats.isListed)
         if prefs.pinnedOnly { out = out.filter { $0.pinned == true } }
         if prefs.needsYouOnly { out = out.filter { runtime.needsAttention.contains($0.id) } }
         if prefs.liveOnly { out = out.filter { runtime.chatForStored($0.id)?.isRunning ?? false } }
@@ -647,7 +650,9 @@ struct ChatListView: View {
     #endif
 
     @ViewBuilder private func list(_ runtime: GatewayRuntime) -> some View {
-        let rows = filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime)
+        let drawn = parts(filtered(searchText.isEmpty ? sessions : searchResults, runtime: runtime))
+        let rows = drawn.chats
+        let scheduled = drawn.scheduled
         #if DEBUG
         let _ = Perf.tick("chatlist-body")
         #endif
@@ -671,11 +676,13 @@ struct ChatListView: View {
             let visibleRooms = prefs.groupsOnly
                 ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                 : []
+            // The scheduled tasks' chats, above the person's own, in a section of their own (#673).
+            if !scheduled.isEmpty { scheduledSection(scheduled, runtime: runtime) }
             if grouped(runtime) {
                 groupedRows(rows, rooms: visibleRooms, runtime: runtime)
             } else {
                 let entries = Self.merge(rows, visibleRooms, sort: prefs.sortKey)
-                if entries.isEmpty && !loading {
+                if entries.isEmpty && scheduled.isEmpty && !loading {
                     if let waiting = model.needsSignIn {
                         ContentUnavailableView("Sign in to see your chats", systemImage: "person.badge.key",
                                                description: Text("\(waiting.name) has no sign-in on \(DeviceWords.this) yet."))
@@ -748,7 +755,9 @@ struct ChatListView: View {
         .animation(.snappy, value: runtime.restartRequired == nil)
         .animation(.snappy, value: model.needsSignIn == nil)
         .onChange(of: scrollToTop) { _, _ in
-            let first = Self.merge(rows, prefs.groupsOnly ? rooms : [], sort: prefs.sortKey).first?.id ?? rows.first?.id
+            // The Scheduled section's row when there is one: it stands above the first chat (#673).
+            let first = scheduled.isEmpty ? Self.merge(rows, prefs.groupsOnly ? rooms : [], sort: prefs.sortKey).first?.id ?? rows.first?.id
+                : ScheduledChats.rowID
             if let first { withAnimation(.snappy) { proxy.scrollTo(first, anchor: .top) } }
         }
         }
@@ -770,6 +779,29 @@ struct ChatListView: View {
                 RestartRequiredBanner(runtime: runtime, message: msg)
                     .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+
+    // MARK: Scheduled (#673)
+
+    /// The rows as drawn: the person's chats, and the scheduled ones for their section. A search's results are one flat
+    /// list, as they are with projects.
+    private func parts(_ rows: [StoredSession]) -> (chats: [StoredSession], scheduled: [StoredSession]) {
+        searchText.isEmpty ? ScheduledChats.split(rows) : (rows, [])
+    }
+
+    /// The Scheduled section: its row, which opens and closes it, and its chats while it's open, in the list's order.
+    @ViewBuilder private func scheduledSection(_ runs: [StoredSession], runtime: GatewayRuntime) -> some View {
+        Section {
+            ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
+                                working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                                waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
+                                onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
+                .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
+                .id(ScheduledChats.rowID)
+            if prefs.scheduledOpen {
+                ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
             }
         }
     }
@@ -933,10 +965,13 @@ struct ChatListView: View {
     /// Archived filter shows them (#474). A Hermes that leaves them out unless asked (`archived=exclude`, its default
     /// since 1eda335a) sent none, so turning Archived on showed nothing; and with them hidden, they aren't asked for, so
     /// the page's rows aren't spent on chats nobody sees. An older Hermes ignores the parameter and lists every chat;
-    /// the filter on the device (`filtered`) still hides the archived ones there.
+    /// the filter on the device (`filtered`) still hides the archived ones there. Without the scheduled tasks' chats,
+    /// which are asked for apart (`ScheduledChats.query`): on a gateway whose tasks run every few minutes, a page of 100
+    /// held only hours of their runs, and the person's own chats fell off it (#673).
     nonisolated static func listQuery(limit: Int, showArchived: Bool) -> [URLQueryItem] {
         [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: String(limit)),
-         URLQueryItem(name: "archived", value: showArchived ? "include" : "exclude")]
+         URLQueryItem(name: "archived", value: showArchived ? "include" : "exclude"),
+         URLQueryItem(name: "exclude_sources", value: ScheduledChats.source)]
     }
 
     private func load(attempt: Int = 0) async {
@@ -971,8 +1006,17 @@ struct ChatListView: View {
                 try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
                     for p in profiles {
                         group.addTask {
-                            let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 50, showArchived: showArchived), profile: p)
-                            return (p, r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
+                            // The bot's chats, and apart from them its scheduled chats with a reply (#673).
+                            let rows = try await ScheduledChats.fetch(
+                                chats: {
+                                    let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 50, showArchived: showArchived), profile: p)
+                                    return r.sessions
+                                },
+                                scheduled: {
+                                    let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: ScheduledChats.query(limit: ScheduledChats.limit, showArchived: showArchived), profile: p)
+                                    return r.sessions
+                                })
+                            return (p, rows.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = p }; return s })
                         }
                     }
                     for try await (p, part) in group { byProfile[p] = part }
@@ -986,8 +1030,18 @@ struct ChatListView: View {
                 // Each row carries the bot it was listed for: opening it later must not depend
                 // on which bot is selected by then.
                 let listed = runtime.selectedProfile
-                let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 100, showArchived: prefs.showArchived), profile: listed)
-                all = r.sessions.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
+                let showArchived = prefs.showArchived
+                // Its chats, and apart from them its scheduled chats with a reply (#673).
+                let rows = try await ScheduledChats.fetch(
+                    chats: {
+                        let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: Self.listQuery(limit: 100, showArchived: showArchived), profile: listed)
+                        return r.sessions
+                    },
+                    scheduled: {
+                        let r: SessionListResponse = try await runtime.api.get("/api/sessions", query: ScheduledChats.query(limit: ScheduledChats.limit, showArchived: showArchived), profile: listed)
+                        return r.sessions
+                    })
+                all = rows.map { var s = $0; if s.profile == nil || s.profile!.isEmpty { s.profile = listed }; return s }
             }
             pinsKept = PinSupport.kept(rows: all, connection: runtime.connection.id)
             // Chats open in the app that the gateway does not list yet: a new chat gets its
@@ -1044,7 +1098,8 @@ struct ChatListView: View {
             // for the next launch. Neither for the demo (#392): its bots and chats stay out of Siri, Spotlight and the cache.
             if !runtime.isEphemeral {
                 SiriCatalog.rememberBots(runtime.profiles)
-                SiriCatalog.rememberChats(sessions)
+                // Not the scheduled tasks' empty runs, which aren't listed (#673).
+                SiriCatalog.rememberChats(sessions.filter(ScheduledChats.isListed))
                 SessionCache.save(sessions, connection: runtime.connection.id, profile: cacheProfile)
             }
             errorText = nil
