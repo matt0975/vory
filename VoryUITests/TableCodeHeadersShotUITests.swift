@@ -42,9 +42,9 @@ final class TableCodeHeadersShotUITests: XCTestCase {
             composer.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x - composer.frame.minX, dy: y - composer.frame.minY))
         }
         let win = app.windows.firstMatch.frame
-        let spot = { at(win.minX + 10, win.minY + win.height * 0.4) }
+        let spot = { at(composer.frame.minX + 10, win.minY + win.height * 0.4) }
         if app.keyboards.firstMatch.exists { spot().tap(); pause(1) }
-        if app.keyboards.firstMatch.exists { spot().press(forDuration: 0.05, thenDragTo: at(win.minX + 10, win.maxY - 4)); pause(1) }
+        if app.keyboards.firstMatch.exists { spot().press(forDuration: 0.05, thenDragTo: at(composer.frame.minX + 10, win.maxY - 4)); pause(1) }
         guard !app.keyboards.firstMatch.exists else { XCTFail("VOID: the keyboard stayed up"); app.terminate(); return }
 
         // Both headers wholly on screen, under the top bar and above the composer: the thread dragged at the leading margin
@@ -55,7 +55,7 @@ final class TableCodeHeadersShotUITests: XCTestCase {
         let barBottom = back.exists ? back.frame.maxY : win.minY + 100
         let inView = { (b: XCUIElement) in b.exists && b.frame.minY >= barBottom + 4 && b.frame.maxY <= composer.frame.minY - 4 }
         for _ in 0..<8 where !(inView(table) && inView(code)) {
-            let step = win.height * 0.2, from = at(win.minX + 10, win.minY + win.height * 0.5)
+            let step = win.height * 0.2, from = at(composer.frame.minX + 10, win.minY + win.height * 0.5)
             let down = !table.exists || table.frame.minY < barBottom + 4
             from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: down ? step : -step))); pause(1)
         }

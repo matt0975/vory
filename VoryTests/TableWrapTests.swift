@@ -184,7 +184,7 @@ import Vision
     }
 
     @Test @MainActor func theStripIsInsetFromTheCardsEdge() throws {
-        // The action discs are compact 28 pt circles in the strip; 4 pt of vertical padding keeps them inset (strip = 36 pt tall).
+        // The strip is the buttons' height, 44 pt, with no padding above or below them.
         let t = try #require(Self.table(Self.three))
         let grid = Self.draw(MarkdownTableGrid(table: t, lineLimit: 3, wraps: true, fillWidth: 320, headerInset: 0))
         let card = Self.draw(MarkdownTableView(table: t).frame(width: 320))

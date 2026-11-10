@@ -21,7 +21,7 @@ enum MarkdownTableMetrics {
     /// never squeeze down to unreadable 2-3 letter slivers before falling back to sideways scroll.
     static let minColumnFloor: CGFloat = 64
 
-    /// Dynamic minimum floor scaling under larger Dynamic Type sizes, keeping the 6–8 character guarantee.
+    /// Dynamic minimum floor scaling under larger Dynamic Type sizes, keeping the 6 to 8 character guarantee.
     static func minColumnFloor(for size: DynamicTypeSize?) -> CGFloat {
         guard let size else { return minColumnFloor }
         switch size {
@@ -63,7 +63,7 @@ enum MarkdownTableMetrics {
     }
 
     /// A wrapped table's widths: every column starts at its longest-word floor (at least `minColumnFloor`,
-    /// around 6 to 8 characters), then the spare in `fill` goes back to the columns that can use it —
+    /// around 6 to 8 characters), then the spare in `fill` goes back to the columns that can use it:
     /// their one-line widths first, the rest in proportion. Floors that already exceed `fill` stand as
     /// they are, so the card falls back to its sideways scroll rather than breaking words to fit.
     static func wrapWidths(natural: [CGFloat], floors: [CGFloat], hi: CGFloat, fill: CGFloat?) -> [CGFloat] {
@@ -168,19 +168,19 @@ extension MarkdownTable {
     }
 }
 
-/// The wrap/scroll switch in a table card's corner. The glyph is the change it will make: a
-/// scrolling table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the
-/// two switches on a screen never disagree.
+/// The wrap/scroll switch in a table card's header, built as a code block's (`CodeWrapToggle`): the
+/// same glyphs, caption-sized and secondary, in a 44 pt square with nothing drawn behind them, so the
+/// two switches in one reply read as one feature. The glyph is the change it will make: a scrolling
+/// table offers "wrap", a wrapped one offers "unroll". One key drives every table, so the two
+/// switches on a screen never disagree.
 struct TableWrapToggle: View {
     @AppStorage(MarkdownTableMetrics.wrapKey) private var wrap = true
 
     var body: some View {
         Button { withAnimation(.snappy) { wrap.toggle() } } label: {
             Image(systemName: wrap ? "arrow.left.and.right" : "text.alignleft")
-                .font(.caption2.weight(.semibold))
+                .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
-                .background(.thinMaterial, in: .circle)
                 .frame(width: 44, height: 44)
                 .contentShape(.rect)
         }
@@ -359,7 +359,7 @@ struct MarkdownTableLayout: Layout {
         var xs: [CGFloat] = [0], ys: [CGFloat] = [0]
         for x in w { xs.append(xs[xs.count - 1] + x) }
         for y in h { ys.append(ys[ys.count - 1] + y) }
-        // Cells only: the probes after them are placed off-screen and hidden, so they draw nothing.
+        // Cells only: the probes after them are placed at the grid's origin and hidden, so they draw nothing.
         for (i, s) in subviews.prefix(cellCount).enumerated() {
             let r = i / columns, c = i % columns
             s.place(at: CGPoint(x: bounds.minX + xs[c], y: bounds.minY + ys[r]), anchor: .topLeading,

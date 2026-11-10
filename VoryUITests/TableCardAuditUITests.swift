@@ -57,12 +57,12 @@ final class TableCardAuditUITests: XCTestCase {
         // Noted for a run where it stays up: the spot, the composer, Back's bottom, and the keyboards before and after each
         // step (none to close at all, against a tap that missed).
         let win = app.windows.firstMatch.frame
-        let spot = { at(win.minX + 10, win.minY + win.height * 0.4) }
+        let spot = { at(composer.frame.minX + 10, win.minY + win.height * 0.4) }
         let backBottom = app.buttons["chat.back"].firstMatch.exists ? "\(app.buttons["chat.back"].firstMatch.frame.maxY)" : "-"
         Self.note("TABLES keyboard before: \(app.keyboards.count) keyboard(s); spot \(spot().screenPoint), composer \(composer.frame), Back's bottom \(backBottom), window \(win)")
         if app.keyboards.firstMatch.exists { spot().tap(); pause(1); Self.note("TABLES keyboard after the tap: \(app.keyboards.count)") }
         if app.keyboards.firstMatch.exists {
-            spot().press(forDuration: 0.05, thenDragTo: at(win.minX + 10, win.maxY - 4)); pause(1)
+            spot().press(forDuration: 0.05, thenDragTo: at(composer.frame.minX + 10, win.maxY - 4)); pause(1)
             Self.note("TABLES keyboard after the drag: \(app.keyboards.count)")
         }
         let keyboardUp = app.keyboards.firstMatch.exists
@@ -79,7 +79,7 @@ final class TableCardAuditUITests: XCTestCase {
         let headerTop = { firstTitle.frame.minY - 16 }, headerBottom = { firstTitle.frame.minY + 28 }
         let onScreen = { firstTitle.exists && headerTop() >= barBottom + 8 && headerBottom() <= composer.frame.minY - 8 }
         for _ in 0..<8 where !onScreen() {
-            let step = window.height * 0.3, from = at(window.minX + 10, window.minY + window.height * 0.5)
+            let step = window.height * 0.3, from = at(composer.frame.minX + 10, window.minY + window.height * 0.5)
             let down = !firstTitle.exists || headerTop() < barBottom + 8
             from.press(forDuration: 0.05, thenDragTo: from.withOffset(CGVector(dx: 0, dy: down ? step : -step))); pause(1)
         }
