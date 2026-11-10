@@ -515,6 +515,65 @@ import Testing
         #expect(c.statusLine == "Queued on the gateway")
     }
 
+    // MARK: Stop (#683)
+
+    /// The authority's interrupt names the running turn by its execution (gateway/session_authority.py interrupt()):
+    /// without it, or with an older one, it's a bare stale_generation and the turn runs on.
+    @Test func aStopNamesTheRunningTurnsExecution() async throws {
+        let (c, calls) = try await chat(authority: true)
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(calls.last("session.interrupt") == ["session_id": "rt-a", "execution_generation": 7])
+        #expect(c.banner == nil)
+    }
+
+    @Test func aStopTheAuthorityRefusesIsSaid() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped. Try Stop again.")
+        #expect(c.interruptCause == nil)
+    }
+
+    /// A refusal that is a bare code is said without it, in plain words; the code goes to the log.
+    @Test func aStopRefusedWithABareCodeSaysSoInPlainWords() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "permission_denied", data: ["reason": "permission_denied"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped.")
+        #expect(c.interruptCause == nil)
+    }
+
+    @Test func onTheLegacyWireAStopTheGatewayRefusesIsSaid() async throws {
+        let (c, _) = try await chat(authority: false, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4006, message: "unknown session") }
+            return .object([:])
+        })
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped: unknown session")
+        #expect(c.interruptCause == nil)
+    }
+
+    /// The guard, green before and after: the legacy wire's Stop names no execution, and one taken says nothing.
+    @Test func onTheLegacyWireAStopNamesNoExecution() async throws {
+        let (c, calls) = try await chat(authority: false)
+        c.isRunning = true
+        await c.stop()
+        #expect(calls.last("session.interrupt") == ["session_id": "rt-a"])
+        #expect(c.banner == nil)
+        #expect(c.interruptCause == .stopped)
+    }
+
     // MARK: The tool line
 
     private func toolStarts(_ c: ChatSession, _ id: String, _ name: String) {

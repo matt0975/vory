@@ -655,3 +655,30 @@ extension GatewayIntegrationTests {
         await e.runtime.stop()
     }
 }
+
+/// #683: Stop ends a running turn on either wire. Hermes's session authority (the mock with --authority) takes a
+/// session.interrupt only for the running turn's execution, else a bare 4001 "stale_generation" and the turn runs on;
+/// so this was red there while Stop named none, and the refusal was dropped. Against the default mock it's green either
+/// way. The mock's turn ends "interrupted" when a Stop is taken.
+extension GatewayIntegrationTests {
+    @MainActor @Test func aStopEndsARunningTurnOnEitherWire() async throws {
+        guard let e = try await e2eRuntime("e2e stop") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        let chat = try await runtime.newChat()
+        let created = chat.executionGeneration ?? 0
+        _ = await chat.send("long 15")
+        // As the steer test: on the authority the chat learns the turn's execution from its claim, a moment after the send.
+        func started() -> Bool { chat.isRunning && (!runtime.sessionAuthority || (chat.executionGeneration ?? 0) > created) }
+        await waitFor(15) { started() }
+        try #require(started(), "the turn never started on the gateway")
+        await chat.stop()
+        await waitFor(10) { !chat.isRunning }
+        let interrupted = chat.items.contains { if case .system(let t, _) = $0.kind { return t == "Interrupted" }; return false }
+        print("e2e stop: authority \(runtime.sessionAuthority), running \(chat.isRunning), interrupted \(interrupted), banner \(chat.banner ?? "none")")
+        #expect(chat.banner == nil, "the Stop was refused: \(chat.banner ?? "")")
+        #expect(!chat.isRunning, "the turn ran on after Stop")
+        #expect(interrupted, "no Interrupted line")
+        await runtime.stop()
+    }
+}

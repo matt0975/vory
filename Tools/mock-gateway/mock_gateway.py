@@ -774,8 +774,8 @@ def rest(path: str, query: dict) -> tuple[int, object] | None:
         # Every session.undo as it was answered, for checking that an edit took back exactly one turn (#556).
         return 200, {"undos": UNDOS}
     if base == "/api/_mock/authority":
-        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered, and every
-        # prompt.submit admitted, with its ids (#682).
+        # --authority (#666): every session.mutate, session.detach and session.steer as it was answered, every
+        # prompt.submit admitted, with its ids (#682), and every session.interrupt taken (#683).
         return 200, AUTHORITY_LOG
     if base == "/api/_mock/cron-triggers":
         # Every Run now as it arrived, for checking that a quick double press sent one.
@@ -1469,7 +1469,7 @@ GENERATIONS: dict = {}   # live session id -> its newest execution generation
 PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as published, the future its answer settles)
 REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
 RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
-AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": []}
+AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": [], "interrupts": []}
 # The keys the authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in v0.22.7 and
 # v0.23.0). It also needs a non-empty submission_id or input_id; either miss is a bare 4001 "invalid_params" (#682).
 SUBMISSION_KEYS = {"session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended",
@@ -2086,6 +2086,8 @@ class Session:
         self.history: list[dict] = []      # rows flushed so far (user/assistant/tool)
         self.inflight: dict | None = None  # {user, assistant, streaming} while a turn runs
         self.running = False
+        self.turn_task: asyncio.Task | None = None   # the running turn, which a Stop cancels (#683)
+        self.stopping = False                         # set by that Stop, so the turn ends "interrupted"
         self.turn_started_at = 0.0
         self.turn_base = 0                 # where the running turn's rows start in `history`
         self.pending: dict[str, asyncio.Future] = {}   # open server→client requests
@@ -2319,13 +2321,22 @@ class Gateway:
         # asked for (a "steps 8" answered by the default flow) shows what the mock actually read.
         print(f"turn {s.sid} prompt={prompt[:120]!r}", flush=True)
         s.running = True
+        s.turn_task = asyncio.current_task()
         s.turn_started_at = time.time()
         s.inflight = {"user": prompt, "assistant": "", "streaming": True}
         s.turn_base = len(s.history)
         try:
             await self._run_turn(s, prompt)
+        except asyncio.CancelledError:
+            if not s.stopping:
+                raise
+            # A Stop (#683): the turn ends where it is, "interrupted", with what it had said, as the gateway's does.
+            s.stopping = False
+            said = (s.inflight or {}).get("assistant", "")
+            await self.event("message.complete", s.sid, {"text": said, "status": "interrupted", "usage": usage(s.output_tokens, 1)})
         finally:
             s.running = False
+            s.turn_task = None
             s.inflight = None
             if AUTHORITY:
                 await self.authority_info(s)
@@ -3556,6 +3567,30 @@ class Gateway:
                 return ok({"admission_id": uuid.uuid4().hex, "status": "queued"})
             return ok({"status": "streaming"})
         if method == "session.interrupt":
+            s = self.sessions.get(p.get("session_id", ""))
+            if AUTHORITY:
+                # The authority's interrupt (gateway/session_controls.py interrupt(), session_authority.py :934-938): the
+                # execution named must be the session's current one, else a bare stale_generation; a Stop without the
+                # key names None, never the current one (#683).
+                if s is None:
+                    return refused("not_found")
+                current = GENERATIONS.get(s.sid, 0)
+                if p.get("execution_generation") != current:
+                    print(f"[mock] session.interrupt refused stale_generation: sent {p.get('execution_generation')!r}, "
+                          f"current {current}", flush=True)
+                    return refused("stale_generation")
+            # A running turn stops, on either wire (#683): it ends "interrupted" (run_turn).
+            stopped = bool(s is not None and s.running and s.turn_task is not None)
+            if stopped:
+                s.stopping = True
+                s.turn_task.cancel()
+            print(f"[mock] session.interrupt taken: stopped {stopped}", flush=True)
+            if AUTHORITY:
+                AUTHORITY_LOG["interrupts"].append({"session_id": s.sid, "execution_generation": current, "stopped": stopped,
+                                                    "at": time.time()})
+                return ok({"ref": {"profile_id": s.profile, "session_id": s.sid}, "instance_id": "mock", "authority_epoch": 1,
+                           "revision": REVISIONS.get(s.sid, 0), "execution_generation": current,
+                           "execution_state": "running" if stopped else "idle"})
             return ok({"status": "interrupted", "interrupted": True})
         if method == "session.undo":
             # Hermes' tui_gateway/methods_session.py: the last user turn and everything after it leave the history, never
