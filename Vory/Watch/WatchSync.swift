@@ -31,12 +31,16 @@ final class WatchSync: NSObject, WCSessionDelegate {
         let secrets = Self.contextSecrets(store)
         guard let cdata = try? JSONEncoder().encode(store.connections), let sdata = try? JSONEncoder().encode(secrets) else { return }
         var ctx: [String: Any] = ["connections": cdata, "secrets": sdata, "sent": Date().timeIntervalSince1970]
-        // Never the demo (#392): the watch keeps what it is told, and the demo is the phone's only, for its run.
-        if let a = store.activeConnectionID, a != GatewayConnection.demoID { ctx["active"] = a.uuidString }
+        // The demo too (#502), named with its flag: the Watch shows it through this phone and keeps nothing of it
+        // (`WatchDemoRules`).
+        let word = WatchDemoRules.context(activeID: store.activeConnectionID)
+        if let a = word.active { ctx["active"] = a }
+        if word.demo { ctx[WatchDemoRules.demoKey] = true }
         // The bots as this phone draws them (shape, eyes, colour, photo thumbnail): the watch
         // draws the same faces from this, static.
         // The gateway in use's only (#573): the watch draws those, and every gateway's photos would not fit the context.
-        var looks = BotLooks.load(); looks.gateways = nil; looks.shared = nil
+        // In the demo, by this context's own flag, the demo's own (#502, `DemoLooks.watchLooks`), held in memory on the Watch.
+        let looks = DemoLooks.watchLooks(demo: word.demo)
         if let data = try? JSONEncoder().encode(looks) { ctx["looks"] = data }
         // Vory Summaries, made here by Apple Intelligence, so the watch shows them without
         // running a model of its own.
@@ -79,6 +83,23 @@ final class WatchSync: NSObject, WCSessionDelegate {
 
     private func flushPending() {
         if let s = pending { pending = nil; push(store: s) }
+    }
+
+    /// The store, from the app's launch (#502): the context this phone last sent may still name the demo, held in
+    /// memory only, so an app that ended in it told the Watch nothing. Once the session is active, that context is sent
+    /// afresh (`WatchDemoRules.contextIsStale`), with a gateway in use or none.
+    func launched(store: ConnectionStore) {
+        lastStore = store
+        sendIfStale()
+    }
+
+    private func sendIfStale() {
+        guard WCSession.isSupported(), let store = lastStore else { return }
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        let inDemo = store.activeConnectionID == GatewayConnection.demoID
+        guard WatchDemoRules.contextIsStale(lastSent: session.applicationContext, phoneInDemo: inDemo) else { return }
+        push(store: store)
     }
 
     // MARK: A chat open on the Watch (#387)
@@ -130,6 +151,12 @@ final class WatchSync: NSObject, WCSessionDelegate {
         // The phone acts on its own active gateway only: a chat on another one is refused, not
         // looked up (or created) on the wrong gateway.
         if let g = (m["gateway"] as? String).flatMap(UUID.init(uuidString:)), g != rt.connection.id {
+            // Asked for the demo after it ended here (#502): the Watch leaves it at once, before the context lands.
+            if WatchDemoRules.demoEnded(requested: g, phoneInDemo: rt.connection.isDemo) {
+                return ["ok": false, "error": "The demo ended on your iPhone.", WatchDemoRules.demoEndedKey: true]
+            }
+            // The phone shows the demo and the Watch hasn't had that context yet (#502): say so, not "another gateway".
+            if rt.connection.isDemo { return ["ok": false, "error": "Your iPhone is showing the demo."] }
             return ["ok": false, "error": "Your iPhone is using another gateway. Switch the iPhone to this one, or pick the iPhone's gateway on the watch."]
         }
         // The watch's bot goes with each call; the phone's own selection stays where the person
@@ -194,7 +221,13 @@ final class WatchSync: NSObject, WCSessionDelegate {
             assembled = d
         }
         guard let request = RelayWire.request(from: m, assembled: assembled) else { return RelayWire.unavailable("The iPhone could not read the request.") }
-        guard let api = api(for: m["gateway"] as? String, model: model) else { return RelayWire.unavailable("This gateway is not on the iPhone any more.") }
+        guard let api = api(for: m["gateway"] as? String, model: model) else {
+            var answer = RelayWire.unavailable("This gateway is not on the iPhone any more.")
+            // The demo, ended here before the Watch had the context (#502): it leaves it at once.
+            let asked = (m["gateway"] as? String).flatMap(UUID.init(uuidString:))
+            if WatchDemoRules.demoEnded(requested: asked, phoneInDemo: model.store.demo != nil) { answer[WatchDemoRules.demoEndedKey] = true }
+            return answer
+        }
         do {
             let answer = try await api.forward(request)
             return RelayParts.reply(answer)
@@ -226,7 +259,7 @@ final class WatchSync: NSObject, WCSessionDelegate {
     @MainActor private static var spareAPIs: [UUID: (secrets: GatewaySecrets, gateway: GatewayURL, api: HermesAPI)] = [:]
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
-        Task { @MainActor in self.flushPending() }
+        Task { @MainActor in self.flushPending(); self.sendIfStale() }
     }
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
     nonisolated func sessionDidDeactivate(_ session: WCSession) { session.activate() }

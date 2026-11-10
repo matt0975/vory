@@ -337,6 +337,11 @@ final class AppModel {
         // What a demo ended with the app showed outside it, its cards and notifications (#632); with a demo in use too,
         // since none of them can be this process's.
         DemoLeftovers.sweepAtLaunch()
+        #if os(iOS)
+        // A context this phone last sent may still name the demo, which went with the app (#502): sent afresh once the
+        // Watch link is up.
+        WatchSync.shared.launched(store: store)
+        #endif
         // The bots' own names (#315) before anything reads a label.
         BotNames.install()
         CloudSync.shared.start(store: store)
@@ -418,6 +423,11 @@ final class AppModel {
         DemoTraces.sweep()
         DemoTraces.sweepKeychain(store: store)
         store.leaveDemo()
+        #if os(iOS)
+        // The Watch is told at once that the demo is over (#502), with a gateway in use or none: with none, nothing
+        // else would send it a context, and the one it has would still name the demo.
+        WatchSync.shared.push(store: store)
+        #endif
         if let c = next ?? store.active { await activate(c) }
         // The extensions' and the Watch's copy of the looks, if a change of the person's own was held back meanwhile (#494).
         BotLooksMirror.mirrorIfOwed()

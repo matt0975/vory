@@ -83,6 +83,49 @@ import Testing
         #expect(!WatchDemoRules.endsDemo(["ok": false, "error": "Your iPhone is using another gateway."]))
     }
 
+    /// The phone's app ended in the demo, which it holds in memory only: launched again outside it, the context it
+    /// last sent still names the demo, and is sent afresh. A context with no demo flag, or a phone in the demo, sends
+    /// nothing.
+    @Test func aContextLeftNamingTheDemoIsSentAgainOutsideIt() {
+        #expect(WatchDemoRules.contextIsStale(lastSent: [WatchDemoRules.demoKey: true], phoneInDemo: false))
+        #expect(!WatchDemoRules.contextIsStale(lastSent: [WatchDemoRules.demoKey: true], phoneInDemo: true))
+        #expect(!WatchDemoRules.contextIsStale(lastSent: ["active": saved.uuidString], phoneInDemo: false))
+        #expect(!WatchDemoRules.contextIsStale(lastSent: [:], phoneInDemo: false))
+    }
+
+    // MARK: The saved lists
+
+    /// The Watch saves a gateway's chat list under that gateway's id and the bot ("-" for none, "*" for every bot): the
+    /// gateway that fetched the rows, so a list landing after a switch is never saved under the next gateway's key.
+    @Test func aSavedListsKeyIsTheGatewayThatFetchedItAndItsBot() {
+        let id = saved.uuidString
+        #expect(WatchDemoRules.listKey(gateway: saved, profile: "default") == "watch.sessions.\(id).default")
+        #expect(WatchDemoRules.listKey(gateway: saved, profile: nil) == "watch.sessions.\(id).-")
+        #expect(WatchDemoRules.listKey(gateway: saved, profile: "*") == "watch.sessions.\(id).*")
+    }
+
+    /// At launch the Watch removes the demo's saved lists, which the race before this rule could fill with the person's
+    /// rows: every key under the demo's id, whatever the bot, and nothing else. Keys that merely start like the demo's
+    /// (another id differing in its last character, the demo's id with a character more) are left.
+    @Test func theLaunchCleanupTakesTheDemosSavedListsOnly() throws {
+        let demo = GatewayConnection.demoID.uuidString
+        let near = try #require(UUID(uuidString: String(demo.dropLast()) + (demo.hasSuffix("1") ? "2" : "1")))
+        let keys = ["watch.sessions.\(demo).-", "watch.sessions.\(demo).default", "watch.sessions.\(saved.uuidString).default",
+                    "watch.sessions.\(near.uuidString).default", "watch.sessions.\(demo)0.default", "watch.summaries",
+                    "watch.syncedGateways", "kanban.available.\(demo)", "activeConnectionID"]
+        let taken = WatchDemoRules.demoListKeys(in: keys)
+        #expect(taken == ["watch.sessions.\(demo).-", "watch.sessions.\(demo).default"], "the cleanup took \(taken)")
+    }
+
+    /// A real gateway's saved list, under a bot or none, survives the launch cleanup: it only ever touches the demo's key.
+    @Test func aRealGatewaysSavedListSurvivesTheLaunchCleanup() {
+        let own = [WatchDemoRules.listKey(gateway: saved, profile: "default"), WatchDemoRules.listKey(gateway: saved, profile: nil)]
+        #expect(WatchDemoRules.demoListKeys(in: own).isEmpty, "the cleanup would take a real gateway's saved list")
+        let demoList = WatchDemoRules.listKey(gateway: GatewayConnection.demoID, profile: nil)
+        let taken = WatchDemoRules.demoListKeys(in: own + [demoList])
+        #expect(taken == [demoList], "beside the demo's, the cleanup took \(taken)")
+    }
+
     // MARK: One move at a time (`DemoMove`)
 
     /// Every request the Watch makes while it still runs the demo's runtime is answered "the demo ended": a second such

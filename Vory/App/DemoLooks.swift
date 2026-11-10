@@ -57,10 +57,17 @@ enum DemoLooks {
     }
 
     /// The looks the phone sends the Apple Watch (#502), `demo` being the context's own word that the gateway in use is the
-    /// demo. Today's: the stored looks of the gateway in use, in the demo too.
+    /// demo: then the demo's own faces and colours as this phone draws them, never the stored ones (the person's, on bots
+    /// of the same folders), held in memory on the Watch. Otherwise the stored looks of the gateway in use, as before, even
+    /// while the demo's looks are worn without the demo in use (onboarding's tour, `TourChat`): sent with no demo flag,
+    /// the Watch would save them as the person's.
     static func watchLooks(demo: Bool) -> BotLooks {
-        var looks = BotLooks.load(); looks.gateways = nil; looks.shared = nil
-        return looks
+        let worn = lock.withLock { (avatarMap, colorMap) }
+        guard demo, let avatars = worn.0, let colors = worn.1 else {
+            var looks = BotLooks.load(); looks.gateways = nil; looks.shared = nil
+            return looks
+        }
+        return BotLooks(colors: colors, avatars: avatars)
     }
 }
 
