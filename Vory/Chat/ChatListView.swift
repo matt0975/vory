@@ -49,6 +49,15 @@ struct ChatListView: View {
         TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner, barOn: MorphTopBar.active(model),
                          rowBottom: MorphState.shared.rootRowBottom)
     }
+    /// The closed Duo's list has no sections (#697): the Scheduled row, its chats, each project's header and the chats
+    /// are rows of one section. There the page is one surface (#693), and the gap the list keeps between two sections
+    /// stood as an empty band between its groups. As rows the list draws no gap, and its own line between every two.
+    private var flatGroups: Bool { closedStrip }
+    /// The break after the open Scheduled section there, before the person's chats (#673 keeps one of 16 pt or more):
+    /// half a point over, so on a 3x screen it is drawn 16 1/3 or 16 2/3 pt, never a hair under 16.
+    private static let scheduledBreak: CGFloat = 16.5
+    #else
+    private var flatGroups: Bool { false }
     #endif
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
@@ -658,26 +667,29 @@ struct ChatListView: View {
         #endif
         ScrollViewReader { proxy in
         List {
-            // Not signed in on this device: the banner above says so and has the button; the
-            // gateway's own "session expired" line under it would only repeat it in red.
-            if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
-            // Which project the list is narrowed to, since the rows' own chips are hidden then.
-            if !prefs.projectFilter.isEmpty {
-                HStack(spacing: 8) {
-                    if let p = runtime.projects.project(id: prefs.projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
-                    else { Image(systemName: "folder.badge.questionmark").foregroundStyle(.secondary); Text("Chats in no project").font(.subheadline.weight(.medium)) }
-                    Spacer()
-                    Button("Show all") { withAnimation { prefs.projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 6, trailing: 16))
-            }
             // With the "Group chats" filter on, rooms sit among the chats by recency, as chats.
             let visibleRooms = prefs.groupsOnly
                 ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                 : []
+            #if os(macOS)
+            topRows(runtime)
             // The scheduled tasks' chats, above the person's own, in a section of their own (#673).
             if !scheduled.isEmpty { scheduledSection(scheduled, runtime: runtime) }
+            #else
+            if flatGroups && prefs.scheduledOpen && !scheduled.isEmpty {
+                // The closed Duo with the Scheduled section open (#697): the rows down to its last chat are the list's one
+                // section, so the list's own gap after it is the break before the person's chats (#673), at the size
+                // set below (`scheduledBreak`). Nothing else on the page ends a section there.
+                Section {
+                    topRows(runtime)
+                    scheduledRows(scheduled, runtime: runtime)
+                }
+            } else {
+                topRows(runtime)
+                // The scheduled tasks' chats, above the person's own, in a section of their own (#673).
+                if !scheduled.isEmpty { scheduledSection(scheduled, runtime: runtime) }
+            }
+            #endif
             if grouped(runtime) {
                 groupedRows(rows, rooms: visibleRooms, runtime: runtime)
             } else {
@@ -713,6 +725,8 @@ struct ChatListView: View {
         // color from top to bottom. The rows' own backgrounds are cleared where the rows are made (the same tag).
         .scrollContentBackground(closedStrip ? .hidden : .automatic)
         .background(closedStrip ? Color(.systemBackground) : Color.clear)
+        // #697: there the list's one gap between sections is the break after the open Scheduled section.
+        .listSectionSpacing(flatGroups ? .custom(Self.scheduledBreak) : .default)
         #endif
         #if os(macOS)
         // The search field sits over the list it searches (in the top inset below), as in
@@ -832,22 +846,51 @@ struct ChatListView: View {
             if prefs.scheduledOpen { Color.clear.frame(height: 16).accessibilityHidden(true) }
         }
         #else
-        Section {
-            ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
-                                working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
-                                waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
-                                onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
-                .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
-                #if os(iOS)
-                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
-                #endif
-                .id(ScheduledChats.rowID)
-            if prefs.scheduledOpen {
-                ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
-            }
+        if flatGroups {
+            // The closed Duo, the section closed (#697): its row is a row among the others. Open, the list makes the one
+            // section itself (`list`).
+            scheduledRows(runs, runtime: runtime)
+        } else {
+            Section { scheduledRows(runs, runtime: runtime) }
         }
         #endif
     }
+
+    /// The rows above every chat: the gateway's error line, and the project the list is narrowed to.
+    @ViewBuilder private func topRows(_ runtime: GatewayRuntime) -> some View {
+        // Not signed in on this device: the banner above says so and has the button; the
+        // gateway's own "session expired" line under it would only repeat it in red.
+        if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
+        // Which project the list is narrowed to, since the rows' own chips are hidden then.
+        if !prefs.projectFilter.isEmpty {
+            HStack(spacing: 8) {
+                if let p = runtime.projects.project(id: prefs.projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
+                else { Image(systemName: "folder.badge.questionmark").foregroundStyle(.secondary); Text("Chats in no project").font(.subheadline.weight(.medium)) }
+                Spacer()
+                Button("Show all") { withAnimation { prefs.projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 6, trailing: 16))
+        }
+    }
+
+    #if !os(macOS)
+    /// The Scheduled section's rows on the iPhone and iPad: its own row, and its chats while it's open.
+    @ViewBuilder private func scheduledRows(_ runs: [StoredSession], runtime: GatewayRuntime) -> some View {
+        ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
+                            working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                            waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
+                            onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
+            .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
+            #if os(iOS)
+            .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+            #endif
+            .id(ScheduledChats.rowID)
+        if prefs.scheduledOpen {
+            ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
+        }
+    }
+    #endif
 
     // MARK: Grouped by project
 
@@ -873,32 +916,53 @@ struct ChatListView: View {
     @ViewBuilder private func groupedRows(_ rows: [StoredSession], rooms: [Room], runtime: GatewayRuntime) -> some View {
         ForEach(groups(rows, runtime: runtime)) { g in
             let folded = collapsed.contains(g.id)
-            Section {
-                if !folded {
-                    let visible = shown(g)
-                    ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
-                    if visible.count < g.sessions.count {
-                        Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
-                            Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    if g.sessions.isEmpty {
-                        Text("No chats here yet.").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                ProjectSectionHeader(group: g, collapsed: folded,
-                                     working: g.sessions.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
-                                     waiting: g.sessions.filter { runtime.needsAttention.contains($0.id) }.count,
-                                     showBot: prefs.allBots,
-                                     onToggle: { withAnimation(.snappy) { prefs.collapsedRaw = ChatProjectGroups.toggled(prefs.collapsedRaw, g.id) } },
-                                     onNewChat: selecting ? nil : { startChat(in: g, runtime: runtime) })
+            if flatGroups {
+                // A row where a section's header was (#697): the header's own room around it, said as a header.
+                projectHeader(g, folded: folded, runtime: runtime, asRow: true)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+                    .listRowBackground(Color.clear)
+                projectRows(g, folded: folded, runtime: runtime)
+            } else {
+                Section { projectRows(g, folded: folded, runtime: runtime) } header: { projectHeader(g, folded: folded, runtime: runtime, asRow: false) }
             }
         }
         if !rooms.isEmpty {
-            Section("Group chats") { ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) } }
+            if flatGroups {
+                Text("Group chats").font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                    .listRowBackground(Color.clear)
+                ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) }
+            } else {
+                Section("Group chats") { ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) } }
+            }
         }
+    }
+
+    /// A project's chats under its header: the first few, "Show all", or the line that says there are none.
+    @ViewBuilder private func projectRows(_ g: ChatProjectGroup, folded: Bool, runtime: GatewayRuntime) -> some View {
+        if !folded {
+            let visible = shown(g)
+            ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
+            if visible.count < g.sessions.count {
+                Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
+                    Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+                }
+                .buttonStyle(.borderless)
+            }
+            if g.sessions.isEmpty {
+                Text("No chats here yet.").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func projectHeader(_ g: ChatProjectGroup, folded: Bool, runtime: GatewayRuntime, asRow: Bool) -> ProjectSectionHeader {
+        ProjectSectionHeader(group: g, collapsed: folded,
+                             working: g.sessions.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                             waiting: g.sessions.filter { runtime.needsAttention.contains($0.id) }.count,
+                             showBot: prefs.allBots,
+                             asRow: asRow,
+                             onToggle: { withAnimation(.snappy) { prefs.collapsedRaw = ChatProjectGroups.toggled(prefs.collapsedRaw, g.id) } },
+                             onNewChat: selecting ? nil : { startChat(in: g, runtime: runtime) })
     }
 
     /// The + on a project: a fresh chat with that project's bot, working in its folder.
