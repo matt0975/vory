@@ -1798,6 +1798,11 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
 # Test only: /api/profiles answers this much later, as a real gateway over the network can (the
 # app's socket then opens before the bots are known: the cold-launch Chats check, 1.5 (21)).
 PROFILES_DELAY = [0.0]
+# Test only: while a hold is set (POST /api/_mock/sessions-hold {"seconds": S, "empty": bool}), each
+# GET /api/sessions (the chat list alone) answers S seconds late, and with "empty" it answers no
+# rows: a bot's page while its chats load (#690). "held" counts the answers held since that POST
+# and "sent" is when each went out; GET on the route reads them back, {"seconds": 0} clears it.
+SESSIONS_HOLD = {"seconds": 0.0, "empty": False, "held": 0, "sent": [], "set": 0}
 # Test only: the next N /api/profiles answer 500 (GET /mock/profiles-fail?count=N), with the
 # socket staying up: the Chats refresh has to ask for the bots again (#338).
 PROFILES_FAIL = [0]
@@ -1997,6 +2002,18 @@ async def process_request(connection, request):
             print(f"[mock] /api/profiles failed on purpose ({PROFILES_FAIL[0]} more)", flush=True)
             body = json.dumps({"error": "mock: profiles failed on purpose"}).encode()
             return Response(500, "Internal Server Error", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/api/sessions" and (getattr(request, "method", "GET") or "GET") == "GET" and SESSIONS_HOLD["seconds"] > 0:
+        # Held as the hold stood when the request came; counted only if that hold still stands when it goes out.
+        seconds, empty, was = SESSIONS_HOLD["seconds"], SESSIONS_HOLD["empty"], SESSIONS_HOLD["set"]
+        await asyncio.sleep(seconds)
+        response = _process_request(connection, request)
+        if empty and getattr(response, "status_code", 0) == 200:
+            response = _json_response(200, {"sessions": [], "total": 0, "limit": 100, "offset": 0})
+        if SESSIONS_HOLD["set"] == was:
+            SESSIONS_HOLD["held"] += 1
+            SESSIONS_HOLD["sent"] = (SESSIONS_HOLD["sent"] + [round(time.time(), 3)])[-50:]
+        print(f"[mock] /api/sessions held {seconds:g} s{' and answered empty' if empty else ''}", flush=True)
+        return response
     return _process_request(connection, request)
 
 
@@ -2151,6 +2168,19 @@ def _process_request(connection, request):
     elif method == "GET" and re.fullmatch(r"/api/cron/jobs/[^/]+", base):
         job = _cron_job(unquote(base.split("/")[4]))
         result = (200, job) if job else (404, {"detail": "Job not found"})
+    elif base == "/api/_mock/sessions-hold" and method in ("GET", "POST"):
+        # The hold on the chat list (SESSIONS_HOLD): POST sets it and starts its count again, GET reads it.
+        if method == "POST":
+            spec = body_json if isinstance(body_json, dict) else {}
+            # Capped under 10 s: the server's handshake limit (websockets' open_timeout) covers this wait too, and a
+            # longer hold would be cut there and never counted.
+            try:
+                seconds = min(9.0, max(0.0, float(spec.get("seconds") or 0)))
+            except (TypeError, ValueError):
+                seconds = 0.0
+            SESSIONS_HOLD.update(seconds=seconds, empty=bool(spec.get("empty")), held=0, sent=[], set=SESSIONS_HOLD["set"] + 1)
+            print(f"[mock] the chat list is held {seconds:g} s{' and answers empty' if SESSIONS_HOLD['empty'] else ''}", flush=True)
+        result = (200, {k: SESSIONS_HOLD[k] for k in ("seconds", "empty", "held", "sent")})
     elif method == "POST" and base == "/api/_mock/rooms":
         # A group chat made here, for a test that needs one the app's New Message cannot make: a
         # long name, or bots this mock does not list. Body: {"name", "handles": [...]}.

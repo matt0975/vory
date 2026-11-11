@@ -482,6 +482,8 @@ struct BotDetailView: View {
     @Environment(AppModel.self) private var model
     var profile: ProfileInfo
     @State private var sessions: [StoredSession] = []
+    /// The gateway has answered for the list (or there is none to ask): until then it is not known to be empty.
+    @State private var loaded = false
     @State private var error: String?
     @State private var pendingDelete: StoredSession?
     @State private var composing = false
@@ -498,7 +500,7 @@ struct BotDetailView: View {
             }
             Section {
                 if let error { Text(error).foregroundStyle(.red).font(.footnote) }
-                if sessions.isEmpty, error == nil {
+                if sessions.isEmpty, loaded, error == nil {
                     Text("No chats with this bot yet.").foregroundStyle(.secondary).font(.footnote)
                 }
                 ForEach(sessions) { s in
@@ -530,11 +532,12 @@ struct BotDetailView: View {
     }
 
     private func load() async {
-        guard let rt = model.runtime else { return }
+        guard let rt = model.runtime else { loaded = true; return }
         do {
             let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: "100")], profile: profile.name)
             sessions = r.sessions
             error = nil
+            loaded = true
         } catch { self.error = error.localizedDescription }
     }
 
