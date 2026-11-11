@@ -102,7 +102,7 @@ enum DemoContent {
         Chat(id: "20261012_190000_pixel1", title: "Compare three e-readers", bot: "default",
              preview: "The Inkwell 7 wins on battery, the Leaf Pro on the screen.", source: "ios", cwd: home,
              pinned: false, started: 140_000, active: 139_000, rows: { readerRows }),
-        Chat(id: "20261013_110000_pixel2", title: "Colours for the garden sign", bot: "pixel",
+        Chat(id: "20261013_110000_pixel2", title: "Colors for the garden sign", bot: "pixel",
              preview: "Leaf green, warm white and a marigold accent, easy to read from the street.", source: "ios", cwd: home,
              pinned: false, started: 100_000, active: 99_300, rows: { signRows }),
         Chat(id: botChatID, title: "Bot Chat", bot: "gizmo",
@@ -112,7 +112,7 @@ enum DemoContent {
              preview: "Groceries came in under plan, but the bike repair went over.", source: "cron", cwd: home,
              pinned: false, started: 260_000, active: 259_000, rows: { budgetRows }),
         Chat(id: "20261014_093500_sprout", title: "Soil for the raised beds", bot: "default",
-             preview: "About 1.2 m³ for both beds, or 24 bags of 50 litres.", source: "ios", cwd: home,
+             preview: "About 1.2 m³ for both beds, or 24 bags of 50 liters.", source: "ios", cwd: home,
              pinned: false, started: 1_500, active: 1_200, rows: { soilRows }),
         Chat(id: "20261014_091500_gizmo", title: "Rename the lake trip photos by date", bot: "gizmo",
              preview: "One command renames all 212 by when each was taken.", source: "ios", cwd: "/home/demo/trip",
@@ -287,11 +287,11 @@ enum DemoContent {
     ] }
 
     static var signRows: [Row] { [
-        Row(role: "user", text: "The community garden needs a sign for the gate. Can you suggest colours and a font that feel friendly?"),
+        Row(role: "user", text: "The community garden needs a sign for the gate. Can you suggest colors and a font that feel friendly?"),
         Row(role: "assistant", text: """
             Here's a palette that holds up outdoors and reads from a distance:
 
-            | Use | Colour | Hex |
+            | Use | Color | Hex |
             |---|---|---|
             | Background | Leaf green | #3F7D4E |
             | Lettering | Warm white | #F7F3E8 |
@@ -300,7 +300,7 @@ enum DemoContent {
             For the lettering, a rounded sans serif in bold. On a 60 cm board, set the name about 12 cm tall and it stays readable from the street.
 
             Want a second option in blues, in case green blends into the hedge?
-            """, reasoning: "An outdoor sign needs strong contrast, colours that suit a garden, and letters big enough to read from a few metres away.", at: 40),
+            """, reasoning: "An outdoor sign needs strong contrast, colors that suit a garden, and letters big enough to read from a few meters away.", at: 40),
         Row(role: "user", text: "Green's perfect. Leaf green and marigold it is.", at: 640),
         Row(role: "assistant", text: "Great choice. I'll keep the hex codes handy for when you order it.", at: 700),
     ] }
@@ -339,7 +339,7 @@ enum DemoContent {
             V = 2 \\times 0.54 \\times 1.1 \\approx 1.19\\ \\text{m}^3
             $$
 
-            That's 24 bags of 50 litres. Want me to add them to the shopping list?
+            That's 24 bags of 50 liters. Want me to add them to the shopping list?
             """, at: 25),
     ] }
 
@@ -539,6 +539,6 @@ enum DemoContent {
         ("newsletter", "Draft and tidy a newsletter", "writing", 11),
         ("home-lab-check", "Check the home servers and write a digest", "beacon", 25),
         ("budget", "Compare spending with the plan", "life", 4),
-        ("palette", "Suggest colours and type for a design", "design", 3),
+        ("palette", "Suggest colors and type for a design", "design", 3),
     ]
 }
