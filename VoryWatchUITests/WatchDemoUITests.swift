@@ -11,7 +11,7 @@ final class WatchDemoUITests: WatchUITestCase {
     private let demoTitles = ["Packing list for the lake weekend", "Compare three e-readers",
                               "Weekly budget check-in", "Soil for the raised beds",
                               "Morning checks on the home servers", "Why is the NAS slow tonight?",
-                              "Newsletter intro, take two", "Colours for the garden sign",
+                              "Newsletter intro, take two", "Colors for the garden sign",
                               "Rename the lake trip photos by date"]
     private let demoName = "Vory demo"
     private var demoMarks: [String] { demoTitles + [demoName] }
