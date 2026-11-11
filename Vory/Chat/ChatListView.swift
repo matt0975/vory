@@ -240,7 +240,14 @@ struct ChatListView: View {
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
             // On the closed Duo, behind the system's search button instead (`closedStrip`).
-            .searchable(text: $searchText, placement: closedStrip ? .toolbar : .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            // In two columns, where the list is the split view's column (`detailPath`), the field is always shown (#537).
+            // Left to the system there (`.automatic`), it was shown or tucked away afresh each time the column was laid
+            // out again (a launch with a short list, a way back from another app, the column hidden and shown, the Duo
+            // closed and opened), and tucked, the rows moved up into its place. Always shown, it no longer scrolls away
+            // under the title.
+            .searchable(text: $searchText,
+                        placement: closedStrip ? .toolbar : .navigationBarDrawer(displayMode: detailPath != nil ? .always : .automatic),
+                        prompt: "Search chats")
             .searchToolbarBehavior(closedStrip ? .minimize : .automatic)
             // Its toolbar integration kept right at the navigation item as the window enters or leaves the closed strip
             // (`ChatsSearchPlacement`).
@@ -399,7 +406,12 @@ struct ChatListView: View {
             #else
             // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
             // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
-            .pullRefresh(ownWheel: true) { await refresh() }
+            // No wheel item of its own (#537): the list's wheel has a place in every layout, beside the title in two
+            // columns (`pageHeading`) and in the top bar's title capsule otherwise (`pullStates`, below). Its own item
+            // stood in the bar whenever neither had claimed the list's state yet, which a change of layout could leave so
+            // (the Duo closed and opened, a way back from another app): an empty slot at the bar's leading edge, with the
+            // bot circle and the title a slot further in.
+            .pullRefresh { await refresh() }
             // The list's pull state, for the morph bar's title capsule to host the wheel (the
             // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
             .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
