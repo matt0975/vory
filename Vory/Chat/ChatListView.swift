@@ -687,10 +687,16 @@ struct ChatListView: View {
                         ContentUnavailableView("Sign in to see your chats", systemImage: "person.badge.key",
                                                description: Text("\(waiting.name) has no sign-in on \(DeviceWords.this) yet."))
                             .listRowSeparator(.hidden)
+                            #if os(iOS)
+                            .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                            #endif
                     } else {
                         ContentUnavailableView(searchText.isEmpty ? "No chats yet" : "No results", systemImage: "bubble.left.and.bubble.right",
                                                description: Text(searchText.isEmpty ? "Start a new chat with the compose button." : "Try another search."))
                             .listRowSeparator(.hidden)
+                            #if os(iOS)
+                            .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                            #endif
                     }
                 }
                 ForEach(entries) { entry in
@@ -702,6 +708,12 @@ struct ChatListView: View {
             }
         }
         .listStyle(.insetGrouped)
+        #if os(iOS)
+        // #693 (B2): on the closed Duo the page is one surface, as the Bots page is, so the side column stands on one
+        // color from top to bottom. The rows' own backgrounds are cleared where the rows are made (the same tag).
+        .scrollContentBackground(closedStrip ? .hidden : .automatic)
+        .background(closedStrip ? Color(.systemBackground) : Color.clear)
+        #endif
         #if os(macOS)
         // The search field sits over the list it searches (in the top inset below), as in
         // Messages: in the window's toolbar it landed at the far end, over the open chat.
@@ -710,7 +722,14 @@ struct ChatListView: View {
         .onChange(of: model.chatStepRequest?.id) { _, _ in if let r = model.chatStepRequest { step(r.direction, runtime: runtime) } }
         #endif
         // Wider rows: the card hugs the screen edges and the rows their card.
+        #if os(iOS)
+        // On the closed Duo the trailing side keeps the list's own margin, so the rows end left of the side column as
+        // every other tab's rows do (#693). The leading side is as it was.
+        .contentMargins(.leading, ChatRowStyle.cardInset, for: .scrollContent)
+        .contentMargins(.trailing, closedStrip ? nil : ChatRowStyle.cardInset, for: .scrollContent)
+        #else
         .contentMargins(.horizontal, ChatRowStyle.cardInset, for: .scrollContent)
+        #endif
         #if os(iOS)
         // The tab bar's room at the list's end, its own and constant (it replaces the root's): the
         // root's drops to 0 while a chat is up, and a list scrolled to its end had its offset
@@ -819,6 +838,9 @@ struct ChatListView: View {
                                 waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
                                 onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
                 .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
+                #if os(iOS)
+                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                #endif
                 .id(ScheduledChats.rowID)
             if prefs.scheduledOpen {
                 ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
@@ -1262,6 +1284,9 @@ struct ChatListView: View {
                         .task(id: "\(s.id)-\(s.lastActive ?? 0)-\(aiSummaries)") { if aiSummaries { summarizer.refresh(s, runtime: runtime, profile: prefs.allBots ? s.profile : nil) } }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                #if os(iOS)
+                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                #endif
                 .accessibilityFocused($spokenRow, equals: s.id)
                 #if os(macOS)
                 // A firm press on the trackpad peeks the conversation, as the long press does on the phone.
@@ -1333,6 +1358,9 @@ struct ChatListView: View {
                     }
                 }
                 .listRowInsets(EdgeInsets(top: 10, leading: ChatRowStyle.rowInset, bottom: 10, trailing: 8))
+                #if os(iOS)
+                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+                #endif
                 .task(id: "\(room.roomId)-\(room.latestSeq ?? 0)-\(aiSummaries)") {
                     if roomLogs[room.roomId] == nil || (room.latestSeq ?? 0) > (roomLogs[room.roomId]?.last?.seq ?? 0),
                        let r: GroupsLogResult = try? await runtime.rpc("groups.log", ["room_id": .string(room.roomId), "since_seq": 0, "limit": 40], timeout: 10).decode() {

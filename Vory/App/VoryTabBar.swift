@@ -82,14 +82,18 @@ struct VoryTabBar: View {
     /// too narrow to hold it): the capsule plus a margin each side.
     static let reservedWidth: CGFloat = 56 + 2 * 10
     /// The system's strip items, measured on the closed iPhone Duo: 50 pt wide, their centre
-    /// line 48 pt in from the window's edge, 10 pt between groups. Ours line up with them (Matt).
+    /// line 48 pt in from the window's edge, 10 pt between groups. Ours stand on that line and keep that gap. On the
+    /// closed Duo the capsule and the circles are 48 pt wide, as the search button's glass under them is (#694); on any
+    /// other vertical bar the capsule is 50 and the circles 42.
     static let stripItemWidth: CGFloat = 50
     static let stripCentreFromEdge: CGFloat = 48
     static let stripGroupGap: CGFloat = 10
-    /// The foot slot the closed Duo's column leaves free on every tab (#591, 2026-11-02): one circle and its gap. Chats fills
+    /// The foot slot the closed Duo's column leaves free on every tab (#591, 2026-11-02). Chats fills
     /// it with the system's own search button, as Messages does there; on the other tabs it stays empty, so the voice and
-    /// Compose circles stand at the same place on every tab.
-    static let stripSearchSlot: CGFloat = 42 + stripGroupGap
+    /// Compose circles stand at the same place on every tab. 38 pt is the room from the column's foot to the top of the
+    /// search button's glass, measured on the closed Duo (#694). The column keeps one group gap over its foot besides, so
+    /// the Compose circle ends one gap above that glass, as the circles and the capsule stand one gap apart.
+    static let stripSearchSlot: CGFloat = 38
     /// The side of a status strip like the Duo's (closed, or open on its side: the safe area 84 on one side, 0 on the
     /// other): one side deep enough for the strip's items, the other none. Nil anywhere else, an iPhone held sideways among
     /// them (its Dynamic Island's inset on both sides) (#542).
@@ -110,7 +114,13 @@ struct VoryTabBar: View {
     /// Down a strip the bar is compact, like the system's vertical bars: icons only, in 46 pt
     /// slots and circles, so it fits under the navigation items the strip already holds.
     private let verticalSlot: CGFloat = 42
-    private var circleSize: CGFloat { axis == .vertical ? 42 : barHeight }
+    /// The closed Duo's column (#694): the circles and the capsule are as wide as the search button's glass under them
+    /// (`TopBarRoom.columnSide`, 48), so the column reads as one. The capsule's slots keep their 42 pt down the strip and
+    /// are 40 across. Any other vertical bar is as it was.
+    private var closedColumn: Bool { axis == .vertical && TopBarRoom.closedStrip(barsVertical: true, size: windowGeometry.bounds.size) }
+    private var circleSize: CGFloat { axis == .vertical ? (closedColumn ? TopBarRoom.columnSide : 42) : barHeight }
+    /// The capsule's width down a strip: one slot and the inset each side, or the column's side on the closed Duo.
+    private var verticalCapsuleWidth: CGFloat { closedColumn ? TopBarRoom.columnSide : verticalSlot + inset * 2 }
 
     var body: some View {
         let gap = axis == .horizontal ? circleGap : Self.stripGroupGap
@@ -241,7 +251,7 @@ struct VoryTabBar: View {
             .gesture(barGesture(slotAlong: slotAlong), including: gestureMask)
             .onChange(of: touching) { _, on in if !on { DispatchQueue.main.async { dragGone() } } }
         }
-        .frame(width: axis == .vertical ? verticalSlot + inset * 2 : nil,
+        .frame(width: axis == .vertical ? verticalCapsuleWidth : nil,
                height: axis == .horizontal ? barHeight : CGFloat(max(1, tabs.count)) * verticalSlot + inset * 2)
         .glassEffect(.regular, in: .capsule)
     }

@@ -35,14 +35,20 @@ public enum WatchFeedEventKind: Sendable, Equatable {
 
 /// What went wrong, as a short line under the thread instead of a reply.
 public struct WatchFeedProblem: Sendable, Equatable {
-    public enum Kind: Sendable, Equatable { case notProcessed, interrupted, phoneAway, sendFailed }
+    /// `stopRefused`: the gateway didn't take a Stop, and the reply runs on (#684).
+    public enum Kind: Sendable, Equatable { case notProcessed, interrupted, phoneAway, sendFailed, stopRefused }
     public var kind: Kind
     public var text: String
     public init(kind: Kind, text: String) { self.kind = kind; self.text = text }
 
-    /// A failure's words to a kind: the iPhone out of reach, the gateway's "not processed", or a send that failed.
+    /// How a refused Stop's words begin, as ChatSession's banner says them (#683).
+    static let stopRefusedLead = "The reply couldn't be stopped"
+
+    /// A failure's words to a kind: the iPhone out of reach, a Stop the gateway refused, the gateway's "not processed", or
+    /// a send that failed.
     public static func from(_ text: String, phoneAway: Bool = false) -> WatchFeedProblem {
         if phoneAway { return WatchFeedProblem(kind: .phoneAway, text: text) }
+        if text.hasPrefix(stopRefusedLead) { return WatchFeedProblem(kind: .stopRefused, text: text) }
         if text.localizedCaseInsensitiveContains("not processed") { return WatchFeedProblem(kind: .notProcessed, text: text) }
         return WatchFeedProblem(kind: .sendFailed, text: text)
     }
@@ -72,6 +78,29 @@ public enum WatchFeedRules {
     public static func turnTools(_ items: [TranscriptItem]) -> [ToolActivity] {
         let start = items.lastIndex { if case .user = $0.kind { return true }; return false }.map { $0 + 1 } ?? items.startIndex
         return items[start...].compactMap { if case .tool(let a) = $0.kind { return a }; return nil }
+    }
+
+    /// The iPhone's answer to the Watch's Stop as the line under the thread (#684): nil when the gateway took it, else the
+    /// refusal in the iPhone's words ("ok" false). An iPhone from before #684 answers "ok" to every Stop. Nil too for an
+    /// answer that says the iPhone's demo has ended ("demoEnded", #502): no Stop was refused, and the Watch leaves the demo
+    /// and its chat.
+    public static func stopProblem(answer: [String: Any]) -> WatchFeedProblem? {
+        guard answer["ok"] as? Bool != true, answer["demoEnded"] as? Bool != true else { return nil }
+        let words = (answer["error"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? WatchFeedProblem.stopRefusedLead + "."
+        return WatchFeedProblem(kind: .stopRefused, text: words)
+    }
+
+    /// The line after a Stop, one at most (#684): a refusal's, in place of what was there (a refusal said again, on the
+    /// live path also by the chat's banner, is the same line, not a second one); after a Stop taken, what was there
+    /// without an earlier refusal.
+    public static func problemAfterStop(_ current: WatchFeedProblem?, refusal: WatchFeedProblem?) -> WatchFeedProblem? {
+        if let refusal { return refusal }
+        return current?.kind == .stopRefused ? nil : current
+    }
+
+    /// The line once the turn has ended: a refusal to stop it is out of date (#684).
+    public static func problemAfterTurn(_ current: WatchFeedProblem?) -> WatchFeedProblem? {
+        current?.kind == .stopRefused ? nil : current
     }
 
     /// Seconds to the next read, or nil for none: only the phone path polls, and only while a turn runs. The live path

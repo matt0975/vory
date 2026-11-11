@@ -11,7 +11,7 @@ final class DemoChatOpenUITests: XCTestCase {
 
     /// The demo's chats by title (DemoContent.chats).
     private let titles = ["Packing list for the lake weekend", "Morning checks on the home servers", "Bot Chat",
-                          "Why is the NAS slow tonight?", "Newsletter intro, take two", "Colours for the garden sign",
+                          "Why is the NAS slow tonight?", "Newsletter intro, take two", "Colors for the garden sign",
                           "Compare three e-readers", "Weekly budget check-in", "Soil for the raised beds",
                           "Rename the lake trip photos by date"]
 

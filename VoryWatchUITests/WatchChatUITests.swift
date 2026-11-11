@@ -140,6 +140,73 @@ final class WatchChatUITests: WatchUITestCase {
         shot("chat-card-answered")
     }
 
+    /// #684: a Stop the gateway refuses is said on the Watch, once, and Stop again ends the reply. With the mock's
+    /// --authority and MOCK_INTERRUPT_MOVED_ON=1 (the host says so with HERMES_E2E_INTERRUPT_MOVED_ON=1), the first
+    /// Stop finds the turn moved on and is refused: one line asks for Stop again and Stop stays in the bar. A Stop that
+    /// is taken ends the reply, and the line goes with it. The thread builds only the rows on screen and can sit away from
+    /// them all, so the line is looked for along the whole thread (`searchThread`), not only where the screen sits.
+    func testARefusedStopIsSaidAndStopAgainEndsTheReply() async throws {
+        guard ProcessInfo.processInfo.environment["HERMES_E2E_INTERRUPT_MOVED_ON"] == "1" else {
+            throw XCTSkip("the mock isn't run with MOCK_INTERRUPT_MOVED_ON")
+        }
+        try openExportChat()
+        try await startTurn("long 30")
+        let stop = app.buttons["Stop"].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 20), "no Stop while the reply runs")
+        sleep(1)
+        stop.tap()
+        mark("stop 1 tapped")
+        let refusals = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "The reply couldn't be stopped"))
+        var said = refusals.firstMatch.waitForExistence(timeout: 10)
+        sleep(1)
+        var most = said ? refusals.count : 0
+        var labels = refusals.allElementsBoundByIndex.map(\.label)
+        if !said {
+            // Not where the screen sits: along the thread, and a thread with no rows anywhere is #539's blank.
+            let found = searchThread("stop 1", refusals)
+            XCTAssertTrue(found.rowSeen, "no rows in the chat after Stop")
+            said = found.most > 0; most = found.most; labels = found.labels
+        }
+        shot("chat-stop-refused")
+        mark("stop 1: \(most) line(s): \(labels)")
+        XCTAssertTrue(said, "a refused Stop said nothing")
+        XCTAssertEqual(most, 1, "the refusal is said more than once")
+        XCTAssertEqual(labels.first, "The reply couldn't be stopped. Try Stop again.")
+        XCTAssertTrue(stop.exists, "Stop left the bar while the reply runs on")
+        sleep(2)
+        stop.tap()
+        mark("stop 2 tapped")
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 15), "the reply ran on after Stop again")
+        let after = searchThread("stop 2", refusals)
+        shot("chat-stop-taken")
+        mark("stop 2: \(after.most) line(s) left on the thread: \(after.labels)")
+        XCTAssertTrue(after.rowSeen, "no rows in the chat after Stop")
+        XCTAssertEqual(after.most, 0, "the refusal's line stayed after the reply stopped")
+    }
+
+    /// R3's look along the whole thread (#684): the Crown to the thread's end, step 0 looked at there, then 12 steps of
+    /// 0.4 back up, each looked at and marked. It gives the most refusal lines seen at once, whether any of the export
+    /// chat's rows was seen in the area below the title bar (the title names the chat too, above it; a tall row counts
+    /// while any of it shows there, as openChat's `below`), and the labels at the most. The Crown only, no taps; about
+    /// 1 s a step.
+    private func searchThread(_ when: String, _ refusals: XCUIElementQuery) -> (most: Int, rowSeen: Bool, labels: [String]) {
+        let rows = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "export"))
+        for _ in 0..<6 { XCUIDevice.shared.rotateDigitalCrown(delta: 1.0); usleep(300_000) }
+        usleep(500_000)
+        var most = 0, rowSeen = false, labels: [String] = []
+        for step in 0...12 {
+            if step > 0 { XCUIDevice.shared.rotateDigitalCrown(delta: -0.4); usleep(700_000) }
+            let window = app.windows.firstMatch.frame
+            let below = CGRect(x: window.minX, y: window.minY + 60, width: window.width, height: window.height - 60)
+            let here = refusals.allElementsBoundByIndex.map(\.label)
+            let row = rows.allElementsBoundByIndex.contains { $0.frame.intersects(below) }
+            mark("\(when) search step \(step): \(here.count) line(s), a row \(row): \(here)")
+            if here.count > most { most = here.count; labels = here }
+            rowSeen = rowSeen || row
+        }
+        return (most, rowSeen, labels)
+    }
+
     /// Onboarding's Watch picture (#388 beat 5, `TourWatch`): the mock's tour ask in "Disk cleanup on the log host", as
     /// the Watch shows it. Made by Tools/dev/tour-frames.sh; skipped unless TOUR_FRAMES_OUT names the folder.
     func testTheToursAskOnTheWatch() async throws {

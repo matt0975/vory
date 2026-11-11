@@ -574,6 +574,116 @@ import Testing
         #expect(c.interruptCause == .stopped)
     }
 
+    /// A refused Stop's line goes once a later Stop is taken: "couldn't be stopped" stayed on screen after the reply had
+    /// stopped (#684).
+    @Test func aStopTakenAfterARefusedOneClearsTheRefusal() async throws {
+        let refusals = Box(1)
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt", refusals.n > 0 {
+                refusals.n -= 1
+                throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"])
+            }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped. Try Stop again.")
+        info(c, generation: 8, revision: 6, running: true)
+        await c.stop()
+        #expect(c.banner == nil)
+        #expect(c.interruptCause == .stopped)
+    }
+
+    /// A refused Stop's line goes when the turn ends on its own, with no Stop after it (#684).
+    @Test func aRefusedStopsLineGoesWhenTheTurnEnds() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        #expect(c.banner == "The reply couldn't be stopped. Try Stop again.")
+        c.isRunning = false
+        #expect(c.banner == nil)
+    }
+
+    /// The guard: another banner up when the turn ends stays, a refused Stop before it or not.
+    @Test func anotherBannerStaysWhenTheTurnEnds() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        await c.stop()
+        c.banner = "Reconnecting…"
+        c.isRunning = false
+        #expect(c.banner == "Reconnecting…")
+    }
+
+    /// The guard, green before and after: a Stop taken clears only a Stop's own refusal, never another banner.
+    @Test func aStopTakenLeavesAnotherBanner() async throws {
+        let (c, _) = try await chat(authority: true)
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        c.banner = "Reconnecting…"
+        await c.stop()
+        #expect(c.banner == "Reconnecting…")
+    }
+
+    // MARK: The Watch's Stop through this iPhone (#684)
+
+    #if os(iOS)
+    /// The Watch hears what the gateway said to its Stop. One refused because the reply moved on is answered with the
+    /// words that ask for Stop again, where the answer was "ok" whatever happened.
+    @Test func aStopFromTheWatchRefusedAsStaleIsAnsweredWithTryAgain() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "stale_generation", data: ["reason": "stale_generation"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        let answer = await WatchSync.stopAnswer(c)
+        #expect(answer["ok"] as? Bool == false)
+        #expect(answer["error"] as? String == "The reply couldn't be stopped. Try Stop again.")
+    }
+
+    @Test func aStopFromTheWatchRefusedWithABareCodeIsAnsweredInPlainWords() async throws {
+        let (c, _) = try await chat(authority: true, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4001, message: "permission_denied", data: ["reason": "permission_denied"]) }
+            return .object([:])
+        })
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        let answer = await WatchSync.stopAnswer(c)
+        #expect(answer["ok"] as? Bool == false)
+        #expect(answer["error"] as? String == "The reply couldn't be stopped.")
+    }
+
+    @Test func aStopFromTheWatchRefusedInWordsIsAnsweredWithThem() async throws {
+        let (c, _) = try await chat(authority: false, answer: { method, _ in
+            if method == "session.interrupt" { throw RPCError(code: 4006, message: "unknown session") }
+            return .object([:])
+        })
+        c.isRunning = true
+        let answer = await WatchSync.stopAnswer(c)
+        #expect(answer["ok"] as? Bool == false)
+        #expect(answer["error"] as? String == "The reply couldn't be stopped: unknown session")
+    }
+
+    /// The guard, green before and after: a Stop the gateway takes is answered "ok", with no error.
+    @Test func aStopFromTheWatchTakenIsAnsweredOK() async throws {
+        let (c, _) = try await chat(authority: true)
+        info(c, generation: 7, revision: 5, running: true)
+        c.isRunning = true
+        let answer = await WatchSync.stopAnswer(c)
+        #expect(answer["ok"] as? Bool == true)
+        #expect(answer["error"] == nil)
+    }
+    #endif
+
     // MARK: The tool line
 
     private func toolStarts(_ c: ChatSession, _ id: String, _ name: String) {

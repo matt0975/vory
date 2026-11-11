@@ -1546,6 +1546,11 @@ PROMPTS: dict = {}       # prompt id -> (live session id, the prompt as publishe
 REVISIONS: dict = {}     # live session id (or a stored id never opened) -> its revision (#666)
 RECEIPTS: dict = {}      # session.mutate request_id -> its first answer
 AUTHORITY_LOG: dict = {"mutations": [], "detaches": [], "steers": [], "submits": [], "interrupts": []}
+# MOCK_INTERRUPT_MOVED_ON=<count> (with --authority, #684): the next <count> session.interrupt calls find that the
+# session's execution has moved on since the client last heard (a newer one claimed between what it knew and its Stop):
+# the generation and revision move on and the partial session.info is published, as a claim does, and the Stop is then
+# refused by the generation check as stale_generation. A Stop sent after that names the newer execution and is taken.
+INTERRUPT_MOVED_ON = {"left": int(os.environ.get("MOCK_INTERRUPT_MOVED_ON", "0") or 0)}
 # The keys the authority admits on a prompt.submit (gateway/session_controls.py submission(), the same in v0.22.7 and
 # v0.23.0). It also needs a non-empty submission_id or input_id; either miss is a bare 4001 "invalid_params" (#682).
 SUBMISSION_KEYS = {"session_id", "text", "submission_id", "input_id", "queued", "attachments", "finite", "unattended",
@@ -1798,6 +1803,11 @@ def auth_rest(method: str, base: str, query: dict, payload: dict, headers) -> tu
 # Test only: /api/profiles answers this much later, as a real gateway over the network can (the
 # app's socket then opens before the bots are known: the cold-launch Chats check, 1.5 (21)).
 PROFILES_DELAY = [0.0]
+# Test only: while a hold is set (POST /api/_mock/sessions-hold {"seconds": S, "empty": bool}), each
+# GET /api/sessions (the chat list alone) answers S seconds late, and with "empty" it answers no
+# rows: a bot's page while its chats load (#690). "held" counts the answers held since that POST
+# and "sent" is when each went out; GET on the route reads them back, {"seconds": 0} clears it.
+SESSIONS_HOLD = {"seconds": 0.0, "empty": False, "held": 0, "sent": [], "set": 0}
 # Test only: the next N /api/profiles answer 500 (GET /mock/profiles-fail?count=N), with the
 # socket staying up: the Chats refresh has to ask for the bots again (#338).
 PROFILES_FAIL = [0]
@@ -1997,6 +2007,18 @@ async def process_request(connection, request):
             print(f"[mock] /api/profiles failed on purpose ({PROFILES_FAIL[0]} more)", flush=True)
             body = json.dumps({"error": "mock: profiles failed on purpose"}).encode()
             return Response(500, "Internal Server Error", Headers([("Content-Type", "application/json"), ("Content-Length", str(len(body)))]), body)
+    if base == "/api/sessions" and (getattr(request, "method", "GET") or "GET") == "GET" and SESSIONS_HOLD["seconds"] > 0:
+        # Held as the hold stood when the request came; counted only if that hold still stands when it goes out.
+        seconds, empty, was = SESSIONS_HOLD["seconds"], SESSIONS_HOLD["empty"], SESSIONS_HOLD["set"]
+        await asyncio.sleep(seconds)
+        response = _process_request(connection, request)
+        if empty and getattr(response, "status_code", 0) == 200:
+            response = _json_response(200, {"sessions": [], "total": 0, "limit": 100, "offset": 0})
+        if SESSIONS_HOLD["set"] == was:
+            SESSIONS_HOLD["held"] += 1
+            SESSIONS_HOLD["sent"] = (SESSIONS_HOLD["sent"] + [round(time.time(), 3)])[-50:]
+        print(f"[mock] /api/sessions held {seconds:g} s{' and answered empty' if empty else ''}", flush=True)
+        return response
     return _process_request(connection, request)
 
 
@@ -2151,6 +2173,19 @@ def _process_request(connection, request):
     elif method == "GET" and re.fullmatch(r"/api/cron/jobs/[^/]+", base):
         job = _cron_job(unquote(base.split("/")[4]))
         result = (200, job) if job else (404, {"detail": "Job not found"})
+    elif base == "/api/_mock/sessions-hold" and method in ("GET", "POST"):
+        # The hold on the chat list (SESSIONS_HOLD): POST sets it and starts its count again, GET reads it.
+        if method == "POST":
+            spec = body_json if isinstance(body_json, dict) else {}
+            # Capped under 10 s: the server's handshake limit (websockets' open_timeout) covers this wait too, and a
+            # longer hold would be cut there and never counted.
+            try:
+                seconds = min(9.0, max(0.0, float(spec.get("seconds") or 0)))
+            except (TypeError, ValueError):
+                seconds = 0.0
+            SESSIONS_HOLD.update(seconds=seconds, empty=bool(spec.get("empty")), held=0, sent=[], set=SESSIONS_HOLD["set"] + 1)
+            print(f"[mock] the chat list is held {seconds:g} s{' and answers empty' if SESSIONS_HOLD['empty'] else ''}", flush=True)
+        result = (200, {k: SESSIONS_HOLD[k] for k in ("seconds", "empty", "held", "sent")})
     elif method == "POST" and base == "/api/_mock/rooms":
         # A group chat made here, for a test that needs one the app's New Message cannot make: a
         # long name, or bots this mock does not list. Body: {"name", "handles": [...]}.
@@ -3704,6 +3739,15 @@ class Gateway:
                 # key names None, never the current one (#683).
                 if s is None:
                     return refused("not_found")
+                if INTERRUPT_MOVED_ON["left"] > 0:
+                    # MOCK_INTERRUPT_MOVED_ON (#684): a newer execution claimed just before this Stop, published as a
+                    # claim publishes it; the check below then finds the Stop's generation out of date.
+                    INTERRUPT_MOVED_ON["left"] -= 1
+                    GENERATIONS[s.sid] = GENERATIONS.get(s.sid, 0) + 1
+                    REVISIONS[s.sid] = REVISIONS.get(s.sid, 0) + 1
+                    await self.authority_info(s)
+                    print(f"[mock] session.interrupt: the execution moved on to {GENERATIONS[s.sid]} first "
+                          f"({INTERRUPT_MOVED_ON['left']} more)", flush=True)
                 current = GENERATIONS.get(s.sid, 0)
                 if p.get("execution_generation") != current:
                     print(f"[mock] session.interrupt refused stale_generation: sent {p.get('execution_generation')!r}, "

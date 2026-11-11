@@ -682,3 +682,45 @@ extension GatewayIntegrationTests {
         await runtime.stop()
     }
 }
+
+/// #684: the Watch's Stop through this iPhone is answered with what the gateway said to it. With the mock's
+/// MOCK_INTERRUPT_MOVED_ON=1 (and --authority) the first Stop finds the turn moved on and is refused stale_generation:
+/// the Watch is answered with the words that ask for Stop again, where it was answered "ok", and the turn runs on. A Stop
+/// sent once the chat has heard of the newer execution names it and ends the turn, and the refusal's line goes. It runs
+/// only when the host says the mock has that fault (HERMES_E2E_INTERRUPT_MOVED_ON=1).
+#if os(iOS)
+extension GatewayIntegrationTests {
+    static var interruptMovedOn: Bool { ProcessInfo.processInfo.environment["HERMES_E2E_INTERRUPT_MOVED_ON"] == "1" }
+
+    @MainActor @Test(.enabled(if: GatewayIntegrationTests.interruptMovedOn, "the mock isn't run with MOCK_INTERRUPT_MOVED_ON"))
+    func aStopFromTheWatchTheGatewayRefusesIsAnsweredSoAndStopAgainEndsTheTurn() async throws {
+        guard let e = try await e2eRuntime("e2e watch stop") else { return }
+        defer { e.store.delete(id: e.conn.id) }
+        let runtime = e.runtime
+        try #require(runtime.sessionAuthority, "the fault needs the mock's --authority")
+        let chat = try await runtime.newChat()
+        let created = chat.executionGeneration ?? 0
+        _ = await chat.send("long 15")
+        func started() -> Bool { chat.isRunning && (chat.executionGeneration ?? 0) > created }
+        await waitFor(15) { started() }
+        try #require(started(), "the turn never started on the gateway")
+        let known = chat.executionGeneration ?? 0
+        let first = await WatchSync.stopAnswer(chat)
+        print("e2e watch stop 1: ok \(first["ok"] ?? "none"), error \(first["error"] ?? "none"), running \(chat.isRunning)")
+        #expect(first["ok"] as? Bool == false, "the Watch was answered ok to a Stop the gateway refused")
+        #expect(first["error"] as? String == "The reply couldn't be stopped. Try Stop again.")
+        #expect(chat.isRunning, "the turn ended after a refused Stop")
+        // The newer execution, as the gateway published it: the person's second press comes a moment later.
+        await waitFor(5) { (chat.executionGeneration ?? 0) > known }
+        let second = await WatchSync.stopAnswer(chat)
+        await waitFor(10) { !chat.isRunning }
+        let interrupted = chat.items.contains { if case .system(let t, _) = $0.kind { return t == "Interrupted" }; return false }
+        print("e2e watch stop 2: ok \(second["ok"] ?? "none"), running \(chat.isRunning), interrupted \(interrupted), banner \(chat.banner ?? "none")")
+        #expect(second["ok"] as? Bool == true, "the second Stop wasn't taken: \(second["error"] ?? "")")
+        #expect(!chat.isRunning, "the turn ran on after the second Stop")
+        #expect(interrupted, "no Interrupted line")
+        #expect(chat.banner == nil, "the refusal's line stayed after the Stop was taken")
+        await runtime.stop()
+    }
+}
+#endif

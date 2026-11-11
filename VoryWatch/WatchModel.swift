@@ -55,7 +55,14 @@ final class WatchModel {
     /// The phone link from the first moment, background launches included: a notification's
     /// Reply or a complication push that launched the app found it not yet activated.
     init() {
+        // The demo's saved lists go at launch (#502): before this fix, the person's rows could be saved under the demo's
+        // key and shown under the demo's name when its list was read. A real gateway's lists stay.
+        for key in WatchDemoRules.demoListKeys(in: Array(UserDefaults.standard.dictionaryRepresentation().keys)) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         connectivity.onContext = { [weak self] ctx in Task { @MainActor in self?.receive(context: ctx) } }
+        // A relayed call for the demo after it ended on the phone (#502): back to the person's gateway now.
+        connectivity.onDemoEnded = { [weak self] in Task { @MainActor in await self?.leaveDemo() } }
         // The iPhone's word that a chat open here changed, and the phone coming within reach: the open chat's feed
         // reads it again (#387) instead of asking every few seconds.
         connectivity.onMessage = { [weak self] m in
@@ -94,6 +101,8 @@ final class WatchModel {
 
     /// The latest activation: an older one that finishes after it gives way.
     private var activation = UUID()
+    /// One move at a time into or out of the phone's demo (#502, `WatchDemoRules.DemoMove`).
+    private var demoMove = WatchDemoRules.DemoMove()
 
     func start() async {
         #if DEBUG
@@ -117,13 +126,14 @@ final class WatchModel {
         activation = token
         if let rt = runtime {
             if rt.connection.id == connection.id, !force { return }
-            await rt.stop()
             if rt.connection.id != connection.id {
-                // Another gateway: its own list, from its own cache.
+                // Another gateway: its own list, from its own cache. The old one's goes before its runtime stops
+                // (#502), so the new gateway's name is never drawn over the old one's rows while the stop runs.
                 sessions = []
                 listLimit = 8
                 hasMore = true
             }
+            await rt.stop()
         }
         store.activeConnectionID = connection.id
         let rt = GatewayRuntime(connection: connection, store: store)
@@ -133,6 +143,9 @@ final class WatchModel {
         notifier.feedOpen = { [weak self] id in self?.feeds[id]?.value != nil }
         rt.cardNotifier = notifier
         rt.onSnapshotPublished = { _ in WidgetCenter.shared.reloadAllTimelines() }
+        // The phone's demo (#502) is answered in process there: everything through the phone, no socket, whatever the
+        // route setting (which is left as it was).
+        let route = connection.isDemo ? GatewayRoute.relayOnly : self.route
         // iPhone only opens no socket; the watch's HTTP goes by the route, the iPhone carrying
         // what its own connection cannot.
         rt.socketEnabled = route != .relayOnly
@@ -146,13 +159,26 @@ final class WatchModel {
         }
         // Another activation started while this one waited: it wins.
         guard activation == token else { await rt.stop(); return }
+        // The gateway changes here (#502): whatever the outgoing runtime put in the list while it stopped (its cache read,
+        // a page that landed) goes in this same step, so the new gateway's name is never drawn over the old one's rows.
+        if runtime?.connection.id != connection.id {
+            sessions = []
+            listLimit = 8
+            hasMore = true
+        }
         runtime = rt
+        // Whatever move into or out of the demo was under way is done (#502): this activation won.
+        demoMove.landed()
         await rt.start()
         await loadSessions()
     }
 
+    /// Whether `rt` is still the running gateway's runtime. A result it brings back after an await is dropped when another
+    /// runtime took its place meanwhile (#502): it belongs to the gateway before, and the new runtime loads its own.
+    private func isCurrent(_ rt: GatewayRuntime) -> Bool { runtime === rt }
+
     private func noteRoute(relayed: Bool, runtime rt: GatewayRuntime) {
-        guard runtime === rt else { return }
+        guard isCurrent(rt) else { return }
         throughPhone = relayed || route == .relayOnly
         // The complications read the flag from the snapshot: write it as soon as it changes.
         if rt.throughRelay != throughPhone { rt.throughRelay = throughPhone; rt.publishSnapshot() }
@@ -162,7 +188,10 @@ final class WatchModel {
     var listLimit = 8
     var loadingMore = false
     var hasMore = true
-    private var cacheKey: String { "watch.sessions." + (runtime?.connection.id.uuidString ?? "-") + "." + (listProfile ?? runtime?.selectedProfile ?? "-") }
+    /// The key `rt`'s list is saved under: the gateway that fetched it (#502), never the one running when the rows land.
+    private func cacheKey(for rt: GatewayRuntime) -> String {
+        WatchDemoRules.listKey(gateway: rt.connection.id, profile: listProfile ?? rt.selectedProfile)
+    }
 
     /// The list, in three steps so the wrist never waits on the slowest one: the last list this
     /// watch saw (at once), a short page from the gateway, then the rest in the background.
@@ -170,7 +199,11 @@ final class WatchModel {
         guard let rt = runtime else { return }
         // The bots, if the first try found neither route (the phone not yet within reach).
         if rt.profiles.isEmpty { await rt.loadProfiles() }
-        if sessions.isEmpty, let d = UserDefaults.standard.data(forKey: cacheKey), let cached = try? JSONDecoder().decode([StoredSession].self, from: d) {
+        // Another runtime started meanwhile (#502): its own activation loads its list.
+        guard isCurrent(rt) else { return }
+        // Never the demo's saved list (#502), as none is saved; a real gateway's, under its own key.
+        if sessions.isEmpty, WatchDemoRules.keepsState(for: rt.connection), let d = UserDefaults.standard.data(forKey: cacheKey(for: rt)),
+           let cached = try? JSONDecoder().decode([StoredSession].self, from: d) {
             sessions = cached
         }
         await fetchSessions(limit: listLimit)
@@ -204,12 +237,20 @@ final class WatchModel {
                 let r: SessionListResponse = try await rt.api.get("/api/sessions", query: [URLQueryItem(name: "order", value: "recent"), URLQueryItem(name: "limit", value: String(limit))], profile: listProfile ?? rt.selectedProfile)
                 out = r.sessions
             }
+            // The runtime changed while the rows came (#502): they're the gateway's before, never drawn under the new
+            // one's name, nor cached under its key.
+            guard isCurrent(rt) else { return }
             hasMore = out.count >= limit
             // Pinned chats first, as on the phone; the gateway's order within each group.
             sessions = out.filter { $0.pinned == true } + out.filter { $0.pinned != true }
-            if let d = try? JSONEncoder().encode(Array(out.prefix(30))) { UserDefaults.standard.set(d, forKey: cacheKey) }
+            // Never the demo's list (#502).
+            if WatchDemoRules.keepsState(for: rt.connection), let d = try? JSONEncoder().encode(Array(out.prefix(30))) { UserDefaults.standard.set(d, forKey: cacheKey(for: rt)) }
             loadError = nil
-        } catch { loadError = error.localizedDescription }
+        } catch {
+            // Likewise an old runtime's failure (#502): not shown over the new one's list.
+            guard isCurrent(rt) else { return }
+            loadError = error.localizedDescription
+        }
     }
 
     /// A chat op the phone carries out for the watch, for this watch's gateway: the phone
@@ -217,7 +258,30 @@ final class WatchModel {
     func askPhone(_ m: [String: Any]) async throws -> [String: Any] {
         var m = m
         if let id = runtime?.connection.id { m["gateway"] = id.uuidString }
-        return try await connectivity.request(m)
+        let answer = try await connectivity.request(m)
+        // The demo ended on the phone before its context came (#502): the Watch leaves it now.
+        if WatchDemoRules.endsDemo(answer) { await leaveDemo() }
+        return answer
+    }
+
+    /// Back from the phone's demo (#502) to the person's gateway, or to none, without waiting for the context.
+    func leaveDemo() async {
+        // One move back at a time: every request made while the demo's runtime is still in place answers that the demo
+        // ended, and each would start the move again.
+        guard store.demo != nil || runtime?.connection.isDemo == true, demoMove.begin(.leaving) else { return }
+        store.leaveDemo()
+        looks = BotLooks.load()
+        // Forced: an activation into the demo still under way may have stopped the person's runtime and left it in place;
+        // unforced, the move back would return early on it, nothing would land, and the move would stay under way.
+        if let c = store.active { await activate(c, force: true) } else { await stopDemo(); demoMove.landed() }
+    }
+
+    /// The demo ended on the phone with no gateway of the person's to go back to (#502): its runtime stops, its rows go.
+    private func stopDemo() async {
+        guard let rt = runtime, rt.connection.isDemo else { return }
+        runtime = nil
+        sessions = []
+        await rt.stop()
     }
 
     /// Whether the watch's own live socket is open. watchOS lets a watch app open one only in
@@ -239,17 +303,22 @@ final class WatchModel {
     /// only when that is older than half an hour, and the answer goes back into the snapshot so
     /// the complications draw the same thing.
     func loadUsage() async {
-        if let u = WidgetSnapshot.load()?.usage {
+        // The demo's numbers (#502) are for the page only: not read from the snapshot, never written to it.
+        let keeps = runtime.map { WatchDemoRules.keepsState(for: $0.connection) } ?? true
+        if keeps, let u = WidgetSnapshot.load()?.usage {
             usage = u
             if Date().timeIntervalSince(u.updatedAt) < 1800 { return }
         }
         guard let rt = runtime else { return }
         let profile = listProfile == "*" ? rt.selectedProfile : (listProfile ?? rt.selectedProfile)
         guard let a: UsageAnalytics = try? await rt.api.get("/api/analytics/usage", query: [URLQueryItem(name: "days", value: "91")], profile: profile) else { return }
+        // The runtime changed while the numbers came (#502): the demo's never show on the person's page, nor theirs on the
+        // demo's.
+        guard isCurrent(rt) else { return }
         // The watch holds a short list of chats: the message count and peak hour stay as the phone last worked them out.
         let u = WidgetSnapshot.Usage.make(analytics: a, sessions: nil, previous: usage)
         usage = u
-        if var snap = WidgetSnapshot.load() {
+        if keeps, var snap = WidgetSnapshot.load() {
             snap.usage = u
             snap.save()
             WidgetCenter.shared.reloadAllTimelines()
@@ -260,8 +329,12 @@ final class WatchModel {
 
     /// The phone sends every saved gateway plus its secrets as one application context.
     private func receive(context: [String: Any]) {
+        // The phone runs the demo (#502): shown here through the phone, kept nowhere.
+        let inDemo = context[WatchDemoRules.demoKey] as? Bool == true
         if let ldata = context["looks"] as? Data, let l = try? JSONDecoder().decode(BotLooks.self, from: ldata) {
-            l.save(); looks = l
+            // The demo's (#502) are held, never saved: the next context after it puts the person's back.
+            if !inDemo { l.save() }
+            looks = l
         }
         if let sdata = context["summaries"] as? Data, let m = try? JSONDecoder().decode([String: WatchSummary].self, from: sdata) {
             summaries = m; UserDefaults.standard.set(sdata, forKey: WatchSummary.cacheKey)
@@ -312,15 +385,34 @@ final class WatchModel {
             Task { await push.removeRegistration(runtime: nil, deviceFile: false, relay: true) }
         }
         UserDefaults.standard.set(Array(incoming).sorted(), forKey: Self.syncedGatewaysKey)
-        guard !store.connections.isEmpty else { syncStatus = "No gateway on the iPhone yet"; return }
+        // The phone's demo (#502): shown through the phone; nothing of it kept, the phone's last choice included, so the
+        // demo's end reads as a move back to the person's gateway.
+        let phoneActive = (context["active"] as? String).flatMap(UUID.init(uuidString:))
+        guard case .gateway(let activeID) = WatchDemoRules.target(demo: inDemo, active: phoneActive) else {
+            syncStatus = "Showing the iPhone's demo"
+            // One move in at a time: a second context before this one lands starts nothing.
+            if runtime?.connection.isDemo != true, demoMove.begin(.entering) { Task { await activate(.demo) } }
+            return
+        }
+        let wasInDemo = store.demo != nil || runtime?.connection.isDemo == true
+        // One move back at a time: one already under way (an answer said the demo ended) isn't started again.
+        let leavingDemo = wasInDemo && demoMove.begin(.leaving)
+        let moveUnderWay = wasInDemo && !leavingDemo
+        if leavingDemo { store.leaveDemo(); if context["looks"] == nil { looks = BotLooks.load() } }
+        guard !store.connections.isEmpty else {
+            syncStatus = "No gateway on the iPhone yet"
+            if leavingDemo { Task { await stopDemo(); demoMove.landed() } }
+            return
+        }
         syncStatus = "Synced \(connections.count) gateway\(connections.count == 1 ? "" : "s") from iPhone"
-        let activeID = (context["active"] as? String).flatMap(UUID.init(uuidString:))
         // Only when the phone's choice changed since the last sync: every context (a looks or
         // summary resend) moved the watch back to it over a gateway picked on the watch.
         let phoneMoved = activeID?.uuidString != UserDefaults.standard.string(forKey: Self.lastPhoneActiveKey)
         UserDefaults.standard.set(activeID?.uuidString, forKey: Self.lastPhoneActiveKey)
         if let target = activeID.flatMap({ store.connection(id: $0) }) ?? store.active ?? connections.first {
-            if runtime == nil || (phoneMoved && runtime?.connection.id != target.id) { Task { await activate(target) } }
+            // A move back is forced (#502): `runtime` may be the person's, already stopped by an activation into the demo
+            // that this one overtakes; unforced, it would return early on it and nothing would land.
+            if !moveUnderWay, runtime == nil || leavingDemo || (phoneMoved && runtime?.connection.id != target.id) { Task { await activate(target, force: leavingDemo) } }
         }
     }
 
@@ -391,6 +483,8 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sen
     nonisolated(unsafe) var onMessage: (([String: Any]) -> Void)?
     /// The iPhone came within reach, or went.
     nonisolated(unsafe) var onReachability: ((Bool) -> Void)?
+    /// The phone's word, on a relayed call, that the demo ended there (#502).
+    nonisolated(unsafe) var onDemoEnded: (() -> Void)?
 
     func activate() {
         guard WCSession.isSupported() else { return }
@@ -450,6 +544,7 @@ final class WatchConnectivityBridge: NSObject, WCSessionDelegate, @unchecked Sen
             message = RelayWire.message(r, gateway: gateway, inlineBody: packed)
         }
         let first = try await relaySend(message)
+        if RelayWire.isUnavailable(first), WatchDemoRules.endsDemo(first) { onDemoEnded?() }
         if RelayWire.isUnavailable(first) { throw RelayUnavailable(first["error"] as? String ?? WatchProxyError.phoneUnreachable.localizedDescription) }
         guard first["ok"] as? Bool == true else { throw RelayWire.error(from: first) }
         guard let status = first["status"] as? Int, var body = first["body"] as? Data else { throw HermesAPIError.transport("The iPhone's answer could not be read.") }
@@ -516,7 +611,8 @@ final class WatchPushRegistrar: PushRegistrationSyncing {
     }
 
     func syncRegistration(runtime: GatewayRuntime) async {
-        guard let token = deviceToken, let home = runtime.profileHome else { return }
+        // The demo registers nowhere (#501 on the Watch, #502).
+        guard WatchDemoRules.keepsState(for: runtime.connection), let token = deviceToken, let home = runtime.profileHome else { return }
         let path = "\(home)/push/devices/\(installID)-watch.json"
         #if DEBUG
         let env = "development"

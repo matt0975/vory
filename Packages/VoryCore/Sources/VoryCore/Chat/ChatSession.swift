@@ -189,6 +189,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
                 }
             } else {
                 approvalPollTask?.cancel(); approvalPollTask = nil
+                // A Stop refused while the turn ran is out of date once it has ended, on its own too (#684).
+                clearStopRefusal()
                 // Every way a turn can stop (reclaim, a resume snapshot that says idle, a stray
                 // session.info) funnels through here, so the Live Activity cannot outlive the turn —
                 // but a moment later, so the brief idle blip between submit and the first token does
@@ -330,6 +332,8 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
     }
     private var resumeTask: Task<Void, Never>?
     private var bannerIsReconnect = false
+    /// The words a refused Stop put in the banner, until a Stop is taken (#684).
+    private var stopRefusalShown: String?
     private var lastActivityUpdate = Date.distantPast
 
     // The re-attach after a lost live attach (#641).
@@ -1561,8 +1565,12 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// Stop: the running turn interrupted. On Hermes's session authority a Stop names the turn by its execution, as a
     /// steer does: without it, or with an older one, the gateway refuses it (`stale_generation`) and the turn runs on
-    /// (#683). A Stop the gateway doesn't take is said in the banner, on either wire, not dropped.
-    public func stop() async {
+    /// (#683). A Stop the gateway doesn't take is said in the banner, on either wire, not dropped, and its words are given
+    /// back, for a Stop made elsewhere (the Watch's, through this iPhone) to be answered with them (#684); nil for a Stop
+    /// taken or one whose call was cancelled. A Stop taken, or the turn's end, clears an earlier Stop's refusal from the
+    /// banner, and only that.
+    @discardableResult
+    public func stop() async -> String? {
         streamFlush?.cancel(); streamFlush = nil
         interruptCause = .stopped
         var params: [String: JSONValue] = ["session_id": .string(runtimeID)]
@@ -1571,10 +1579,23 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
             _ = try await rpc("session.interrupt", params)
         } catch {
             // A Stop whose call was cancelled may have reached the gateway: nothing is said, and the cause stays.
-            guard !(error is CancellationError) else { return }
+            guard !(error is CancellationError) else { return nil }
             interruptCause = nil
-            banner = stopRefusal(error)
+            let words = stopRefusal(error)
+            banner = words
+            stopRefusalShown = words
+            return words
         }
+        // "Couldn't be stopped" stayed on screen after a later Stop had stopped the reply (#684).
+        clearStopRefusal()
+        return nil
+    }
+
+    /// A refused Stop's words gone from the banner, once a Stop is taken or the turn has ended (#684). Only those: another
+    /// banner put up since has other words, and stays.
+    private func clearStopRefusal() {
+        if let shown = stopRefusalShown, banner == shown { banner = nil }
+        stopRefusalShown = nil
     }
 
     /// What a refused Stop says, in plain words (#683). The authority's stale_generation means the reply moved on (a newer

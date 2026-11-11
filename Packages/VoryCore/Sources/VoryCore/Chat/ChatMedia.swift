@@ -46,7 +46,9 @@ public enum MediaScan {
         var seen = Set<String>()
         func add(_ raw: String) {
             let path = clean(raw)
-            guard !path.isEmpty, MediaRef.isImage(path), path.hasPrefix("/") || path.hasPrefix("~"), !seen.contains(path) else { return }
+            // Not a protocol-relative web address ("//host/a/b.jpg"): a picture on the web, not on the gateway (#686).
+            guard !path.isEmpty, MediaRef.isImage(path), path.hasPrefix("/") || path.hasPrefix("~"), !path.hasPrefix("//"),
+                  !seen.contains(path) else { return }
             seen.insert(path)
             out.append(MediaRef(path: path))
         }
@@ -115,7 +117,9 @@ public enum MediaScan {
         var seen = Set<String>()
         for m in text.matches(of: /(?:^|[\s"'`(=:])((?:~|\/)[^\s"'`)<>]+\.(?:png|jpe?g|gif|webp|heic|heif|bmp))/.ignoresCase()) {
             let path = clean(String(m.1))
-            guard !seen.contains(path) else { continue }
+            // A web address's "//host/a/b.jpg", after "https:" or on its own, is a picture on the web, not a path on the
+            // gateway (#686): the gateway answered its card with a 404.
+            guard !path.hasPrefix("//"), !seen.contains(path) else { continue }
             seen.insert(path)
             out.append(MediaRef(path: path))
         }
@@ -137,10 +141,10 @@ public enum MediaScan {
             if !fast || line.contains("MEDIA:") { line = line.replacing(/\s*MEDIA:\S+/) { _ in "" } }
             if !fast || line.contains("](") {
                 // A markdown image with a path on the gateway leaves its words behind; one with a
-                // web address stays for the markdown to render.
+                // web address, a protocol-relative one too (#686), stays for the markdown to render.
                 line = line.replacing(/!\[([^\]]*)\]\(([^)\s]+)\)/) { m in
                     let target = String(m.2)
-                    return target.hasPrefix("/") || target.hasPrefix("~") ? String(m.1) : String(m.0)
+                    return !target.hasPrefix("//") && (target.hasPrefix("/") || target.hasPrefix("~")) ? String(m.1) : String(m.0)
                 }
                 // A link to a file on the gateway leaves its words behind (the card is under the bubble).
                 line = line.replacing(/(^|[^!])\[([^\]]*)\]\(<([^>]+)>\)/) { m in
@@ -156,7 +160,10 @@ public enum MediaScan {
             // A path with a full stop or a bracket after it is still that path, and one in inline code on its own
             // line too (the backticks come off first). A path inside a sentence stays in the words.
             let p = clean(t)
-            if (p.hasPrefix("/") || p.hasPrefix("~/")), !p.contains(" "), MediaRef.isImage(p) || isFilePath(p) { continue }
+            // A picture's line goes with its card, so not a protocol-relative web address's, which is no card (#686); a
+            // file's goes with its file card, "//" or not.
+            if (p.hasPrefix("/") || p.hasPrefix("~/")), !p.contains(" "),
+               MediaRef.isImage(p) ? !p.hasPrefix("//") : isFilePath(p) { continue }
             if t.isEmpty, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { continue }
             lines.append(line)
         }
