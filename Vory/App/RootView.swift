@@ -570,14 +570,19 @@ private struct ColumnStandInOverlay: View {
         let markers = StripMarkers.shared, standIn = markers.standIn
         let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: true)
         let back = markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false).y
-        let top: CGFloat? = g.keyboardOverlap > 0 ? g.bounds.height - g.safeArea.bottom - g.keyboardOverlap : nil
-        var stands: (back: CGFloat?, more: CGFloat) = (back, back + TopBarRoom.stripPitch)
+        let top: CGFloat? = g.keyboardHighOverlap > 0 ? g.bounds.height - g.safeArea.bottom - g.keyboardHighOverlap : nil
+        // The rule in force (#637, `TopBarRoom.columnFit`): the pair, or one More where it doesn't fit over the keyboard.
+        var stands: (back: CGFloat?, more: CGFloat), fit: String
+        switch TopBarRoom.columnFit(back: back, keyboardTop: top) {
+        case .pair(let b, let m): stands = (b, m); fit = "pair"
+        case .merged(let m): stands = (nil, m); fit = "merged"
+        }
         if let pick = standIn.pick, let top {
             stands = ColumnStandIn.stand(pick: pick, back: back, keyboardTop: top, side: TopBarRoom.columnSide, pitch: TopBarRoom.stripPitch)
         }
         return "standin marker \(n(standIn.markerDown)) kb \(n(standIn.markerUp)) status \(n(standIn.status)) pick \(standIn.pick?.rawValue ?? "none")"
             + "\nsettled back \(r(markers.frame(.back, for: key))) more \(r(markers.frame(.more, for: key)))"
-            + "\nstands back \(n(stands.back)) more \(n(stands.more)) side \(n(TopBarRoom.columnSide)) kbtop \(n(top))"
+            + "\nstands back \(n(stands.back)) more \(n(stands.more)) side \(n(TopBarRoom.columnSide)) kbtop \(n(top)) fit \(fit)"
     }
 
     var body: some View {

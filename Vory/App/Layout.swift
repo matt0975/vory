@@ -134,6 +134,30 @@ enum TopBarRoom {
     /// The closed Duo's column: the side of Back's and More's circles there, and of the square each takes a touch across
     /// (#671: 48, a little larger than the row's 44).
     static let columnSide: CGFloat = 48
+    /// The closed Duo's column with the keyboard up (#637): Back and More as two where the pair fits as it stands, nothing
+    /// of it lower than `keyboardClear` above the keyboard's top; one More where it does not, on Back's marker where that
+    /// fits and else with its bottom on that line. Nothing rises: the pair is never moved.
+    enum ColumnFit: Equatable {
+        /// Back's and More's middles (window space, y).
+        case pair(back: CGFloat, more: CGFloat)
+        /// More's middle; Back is the first item of its menu.
+        case merged(more: CGFloat)
+        /// Whether Back stands in the column: with the pair. Merged, it is out of the view and first in More's menu.
+        var hasBack: Bool { if case .pair = self { true } else { false } }
+        /// Whether Back is the first item of More's menu: exactly where it does not stand in the column.
+        var backInMenu: Bool { !hasBack }
+    }
+    /// Clear space between the column's lowest circle and the keyboard's top (the dock keeps the same).
+    static let keyboardClear: CGFloat = 8
+    /// `back` is Back's keyboard-down marker's middle and `keyboardTop` the keyboard's top, both window space; nil with
+    /// the keyboard down.
+    static func columnFit(back: CGFloat, keyboardTop: CGFloat?) -> ColumnFit {
+        let pair = ColumnFit.pair(back: back, more: back + stripPitch)
+        guard let keyboardTop else { return pair }
+        let limit = keyboardTop - keyboardClear, half = columnSide / 2
+        if back + stripPitch + half <= limit { return pair }
+        return .merged(more: min(back, limit - half))
+    }
     /// Whether a page's search keeps the navigation bar while it's presented (`.searchPresentationToolbarBehavior
     /// (.avoidHidingContent)`): under a status in a top corner, with the bar up in the status band (#516), and wherever
     /// the floating top bar stands over the system's band (`floatingBar`, `floatingBarOverBand`: a standard iPhone too,

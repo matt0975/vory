@@ -42,6 +42,28 @@ import Testing
         #expect(abs(WindowGeometry.keyboardOverlap(window: half, keyboard: kb, safeBottom: 20) - 280) < 0.001)
     }
 
+    /// #637: the most the keyboard has covered since it came up is held while it stays, and forgotten when it goes. On
+    /// the closed Duo the keyboard reads 270 at rest and 231 with a menu open over it; the column must not follow that.
+    @Test func theKeyboardsHighestIsHeldWhileItStays() {
+        #expect(WindowGeometry.highOverlap(now: 270, held: 0) == 270)
+        #expect(WindowGeometry.highOverlap(now: 231, held: 270) == 270)
+        #expect(WindowGeometry.highOverlap(now: 300, held: 270) == 300)
+        #expect(WindowGeometry.highOverlap(now: 0, held: 270) == 0)
+        #expect(WindowGeometry.highOverlap(now: 231, held: 0) == 231)
+    }
+
+    /// The same, as the reader meets it, one publish after another. A taller keyboard raises what is held and it stays
+    /// raised when the keyboard is its first height again: what was fitted against the taller one is not fitted again
+    /// until the keyboard goes. Nothing is held past its leaving.
+    @Test func aTallerKeyboardIsHeldUntilTheKeyboardGoes() {
+        var held: CGFloat = 0
+        let seen = [270, 300, 270, 0, 270].map { (now: CGFloat) -> CGFloat in
+            held = WindowGeometry.highOverlap(now: now, held: held)
+            return held
+        }
+        #expect(seen == [270, 300, 300, 0, 270])
+    }
+
     #if os(iOS)
     @Test func theTabBarReservesLessOnAHomeButtonPhone() {
         // With a home indicator the capsule hangs 13 pt into its area; without one it cannot hang,

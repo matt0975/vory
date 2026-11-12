@@ -513,6 +513,21 @@ private final class CountingDefaults: UserDefaults {
         d.removePersistentDomain(forName: name)
     }
 
+    @Test func aPlaceReadWithTheKeyboardUpIsNotKept() {
+        // #637: the key is the window's shape, which the keyboard doesn't change, so a place the system moved Back's
+        // marker to for the keyboard would be kept over the keyboard-down one. It isn't; the next read with the keyboard
+        // down is kept as before.
+        withMarkers { m in
+            let key = "closed|back"
+            let down = CGRect(x: 394, y: 269, width: 48, height: 48), up = CGRect(x: 394, y: 318, width: 48, height: 48)
+            m.settled(.back, down, for: key)
+            m.settled(.back, up, for: key, keyboardOverlap: 270)
+            #expect(m.frame(.back, for: key) == down)
+            m.settled(.back, up, for: key, keyboardOverlap: 0)
+            #expect(m.frame(.back, for: key) == up)
+        }
+    }
+
     @Test func thePageGoingLeavesThePageComing() {
         let chat = Chat(), id = ObjectIdentifier(chat)
         withMarkers { m in
@@ -582,14 +597,15 @@ private final class CountingDefaults: UserDefaults {
         // Keyboard down: Back at 293 and More's own marker the system's 70 under it, in the strip's middle.
         #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 293))
         #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 363))
-        // Keyboard up (its top at 374: 270 over the 34 pt inset).
+        // Keyboard up (its top at 374: 270 over the 34 pt inset): still the keyboard-down number (#637). A place read with the
+        // keyboard up is not kept, so the column never follows a marker the system moved for the keyboard; the stand-in does the same.
         g.keyboard = CGRect(x: 0, y: 374, width: 466, height: 304)
         #expect(g.keyboardOverlap == 270)
-        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 342))
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 293))
         // It wins over a settled place, on the line that place was read on, and nothing is stored.
         let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: 0, safeTrailing: 84), withBack: true)
         markers.settled(.back, CGRect(x: 401, y: 175, width: 38, height: 48), for: key)
-        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 420, y: 342))
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 420, y: 293))
         #expect(markers.frame(.back, for: key) == CGRect(x: 401, y: 175, width: 38, height: 48))
         // On its side the stand-in says nothing.
         g.keyboard = .null

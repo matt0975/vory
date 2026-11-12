@@ -557,6 +557,19 @@ struct MorphTopBar: View {
         case .columnBack, .columnMore: return stripClosed && !inBand
         }
     }
+    /// The closed column's fit over the keyboard (#637, `TopBarRoom.columnFit`): from Back's keyboard-down marker (the kept
+    /// place: none is kept while the keyboard is up) and the keyboard's top at its highest since it came up (`WindowGeometry.
+    /// keyboardHighOverlap`: a keyboard that only gets shorter while it stays, as it does under More's open menu, does not
+    /// bring the pair back). The pair with the
+    /// keyboard down, and wherever the bar isn't the closed column's.
+    private var columnFit: TopBarRoom.ColumnFit {
+        let g = windowGeometry
+        let back = StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: typeSize == .xxxLarge).y
+        let top: CGFloat? = stripClosed && !inBand && g.keyboardHighOverlap > 0 ? g.bounds.height - g.safeArea.bottom - g.keyboardHighOverlap : nil
+        return TopBarRoom.columnFit(back: back, keyboardTop: top)
+    }
+    /// Back merged into More: the closed column with the keyboard up and no room for the pair.
+    private var columnMerged: Bool { !columnFit.hasBack }
     /// A chat's Back or More in the closed Duo's status strip, in the bar's space: a `TopBarRoom.columnSide` square,
     /// centred on the marker the system laid out there for it (`StripMarkers`: under the status, and moved down with it as
     /// Live Activities arrive, which nothing else the app can read follows, #555); before a marker is read for this
@@ -568,11 +581,14 @@ struct MorphTopBar: View {
         let g = windowGeometry, xxxl = typeSize == .xxxLarge
         let byMarkers = Self.columnCentre(slot, back: StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: xxxl),
                                           more: StripMarkers.shared.centre(.more, in: g, withBack: true, closed: true, xxxl: xxxl))
+        // With the keyboard up and no room for the pair, both slots answer the one More's place (#637): More stands
+        // there, and Back's capsule travels to it as it goes.
+        let byFit: CGPoint = { if case .merged(let y) = columnFit { CGPoint(x: byMarkers.x, y: y) } else { byMarkers } }()
         #if DEBUG
         // DEBUG only (#637, `-vory-standin-pick`): the column as a pick would stand it with the keyboard up.
-        let centre = standInStand.map { CGPoint(x: byMarkers.x, y: slot == .columnBack ? ($0.back ?? byMarkers.y) : $0.more) } ?? byMarkers
+        let centre = standInStand.map { CGPoint(x: byFit.x, y: slot == .columnBack ? ($0.back ?? byFit.y) : $0.more) } ?? byFit
         #else
-        let centre = byMarkers
+        let centre = byFit
         #endif
         let side = TopBarRoom.columnSide
         return CGRect(x: centre.x - side / 2 - g.safeArea.leading - Self.sideInset, y: centre.y - side / 2 - g.safeArea.top - topPadding,
@@ -808,12 +824,17 @@ struct MorphTopBar: View {
         // and trailing capsules go where they are; nothing moves from one place to another (#542).
         let awayHas = state.chat != nil ? chatHas(slot) : (holdSides ? true : (state.pushedTab != nil || state.opening ? slot == .mid || (slot == .trail && pushedActions != nil) : pageHas))
         let has = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
+        // Closed, with the keyboard up and no room for the pair (#637): Back is merged into More and its slot goes.
+        // Its control goes out of the view with it (`fits` below, where the chat's set is put up): a column slot that is
+        // only not present keeps its frame and shrinks in place, and a Back left in it was still an element on the page,
+        // half a point wide at More's middle, for VoiceOver to land on.
         #if DEBUG
         // DEBUG only (#637, `-vory-standin-pick a`): Back merged away with the keyboard up, for the pick's picture.
-        let present = has && !standInMerges(slot)
+        let fits = !(slot == .columnBack && columnMerged) && !standInMerges(slot)
         #else
-        let present = has
+        let fits = !(slot == .columnBack && columnMerged)
         #endif
+        let present = has && fits
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
         // it with the morph left the Bots + standing beside the Back as it formed (feedback on 1.5
@@ -843,7 +864,7 @@ struct MorphTopBar: View {
                 // opacity is 0 and with no transition of their own (a fade in on top of the one
                 // here would lag it).
                 if shown < 1 {
-                    if let chat = state.chat, chatHas(slot) { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
+                    if let chat = state.chat, chatHas(slot), fits { chatContent(slot, chat).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                     else if let tab = state.pushedTab ?? (state.opening ? .chats : nil), slot == .mid { pageBack(tab).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                     else if slot == .trail, let acts = pushedActions { pageActionButtons(acts).opacity(Double(max(0, 1 - shown * 2.4))).allowsHitTesting(shownTarget < 0.5).transition(.identity) }
                 }
@@ -1008,6 +1029,14 @@ struct MorphTopBar: View {
         case .trail, .columnMore:
             let side = slot.inColumn ? TopBarRoom.columnSide : 44
             Menu {
+                // Merged over the keyboard in the closed column (#637): Back is here, first, with its own action. The
+                // column's More comes here as the row's trailing control (`chatContent(_:_:)` hands it on as `.trail`), so
+                // the fit alone decides: it is merged only in the closed column with the keyboard up, where the row has
+                // no trailing control of its own.
+                if columnFit.backInMenu {
+                    Button { model.chatRequest = .init(.back) } label: { MenuLabel("Back", systemImage: "chevron.left") }
+                    Divider()
+                }
                 ChatMenuItems(chat: chat, onProfile: { model.chatRequest = .init(.profile) }, onRename: { model.chatRequest = .init(.rename) },
                               onContext: { model.chatRequest = .init(.context) }, onNewChat: { model.chatRequest = .init(.newChat) }, onClose: { model.chatRequest = .init(.close) })
             } label: {

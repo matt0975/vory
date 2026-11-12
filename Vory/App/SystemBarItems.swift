@@ -113,7 +113,8 @@ import UIKit
 /// DEBUG only, never in a release build (#637): a stand-in for what the closed Duo's side strip does on a device and not
 /// in the simulator, where Back's marker stands at 199 in every state. Launch arguments, fixed for a launch:
 ///   -vory-standin-marker <y>      Back's marker's middle, window space, with the keyboard down (More's own 70 under it)
-///   -vory-standin-marker-kb <y>   the same with the keyboard up; without it the first holds in both states
+///   -vory-standin-marker-kb <y>   where the system would stand it with the keyboard up: shown in the readout only, since a
+///                                 keyboard-up place is not kept and the column stands by the keyboard-down one (#637)
 ///   -vory-standin-status <y>      the status's bottom: the app reads none, so this only draws a block (`standin.status`)
 ///   -vory-standin-pick a|b        the column drawn as a pick would stand it where the pair doesn't fit over the keyboard:
 ///                                 a, one More in Back's place; b, the pair moved up. A picture for the pick, not the fix.
@@ -238,9 +239,9 @@ struct ColumnStandIn: Equatable {
     func centre(_ kind: Kind, in g: WindowGeometry, withBack: Bool, closed: Bool, xxxl: Bool) -> CGPoint {
         let key = Self.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: withBack)
         #if DEBUG
-        // DEBUG only (#637): closed, Back's marker stands where the stand-in says for the keyboard's state, and More's
-        // own the system's pitch under it; on the line the markers were read on, or the strip's middle.
-        if closed, let y = standIn.marker(keyboardUp: g.keyboardOverlap > 0) {
+        // DEBUG only (#637): closed, Back's marker stands where the stand-in says with the keyboard down, in both states of the
+        // keyboard (a keyboard-up place is not kept, `settled`), and More's own the system's pitch under it; on the line the markers were read on.
+        if closed, let y = standIn.marker(keyboardUp: false) {
             let line = frame(kind, for: key)?.midX
                 ?? (g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge)
             return CGPoint(x: line, y: kind == .more && withBack ? y + ColumnStandIn.systemPitch : y)
@@ -303,8 +304,12 @@ struct ColumnStandIn: Equatable {
     }
 
     /// A marker's settled place, kept for its key and the next launch. A move while the app runs (an activity arriving or
-    /// leaving, a turn) is animated, as the system moves its own items.
-    func settled(_ kind: Kind, _ frame: CGRect, for key: String) {
+    /// leaving, a turn) is animated, as the system moves its own items. Nothing is kept while the keyboard is up (#637):
+    /// the key is the window's shape, which the keyboard doesn't change, so a place the system moved a marker to for the
+    /// keyboard would be kept over the keyboard-down one, and the closed column judges its fit from the keyboard-down
+    /// place (`TopBarRoom.columnFit`). The next settled read with the keyboard down is kept as before.
+    func settled(_ kind: Kind, _ frame: CGRect, for key: String, keyboardOverlap: CGFloat = 0) {
+        guard keyboardOverlap <= 0 else { return }
         guard byShape[key]?[kind.rawValue] != frame else { return }
         if byShape[key]?[kind.rawValue] == nil { byShape[key, default: [:]][kind.rawValue] = frame }
         else { withAnimation(.snappy(duration: 0.3)) { byShape[key, default: [:]][kind.rawValue] = frame } }
@@ -669,7 +674,7 @@ struct StripMarkerReader: UIViewControllerRepresentable {
                 #if DEBUG
                 MorphFramesProbe.note(kind == .back ? "markerBack" : "markerMore", f)
                 #endif
-                StripMarkers.shared.settled(kind, f, for: key)
+                StripMarkers.shared.settled(kind, f, for: key, keyboardOverlap: self.geometry?.keyboardOverlap ?? 0)
                 self.hideViews(in: window)
             }
         }
