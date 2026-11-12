@@ -333,7 +333,7 @@ struct ChatListView: View {
                         // The system lays these items down the same strip Vory's tab bar stands in
                         // (the closed Duo), or beside a narrow column on the open one: sort and
                         // filters share one View menu there, so the strip and the title keep room.
-                        Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                        Menu { viewSortRow; viewFilterRow } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
                             .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
                             .accessibilityLabel("View")
                             .accessibilityIdentifier("chats.view")
@@ -589,6 +589,29 @@ struct ChatListView: View {
                 .accessibilityLabel(filtering ? "Filters (on)" : "Filters")
         }
         .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
+        .accessibilityIdentifier("chats.filters")
+    }
+
+    /// The View menu's two rows (#698). Inside another menu a submenu's row is drawn from its label, and a label
+    /// that is an image alone made a row with a symbol and no word. Each row here is a stock labeled row, the word
+    /// with its symbol, and holds what the button of the same name holds where it stands alone in a bar
+    /// (`sortMenu`, `filterMenu`, which stay symbol only). The symbols still tell the state: filled when the order
+    /// is not Recent, filled when a filter is on.
+    private var viewSortRow: some View {
+        Menu {
+            sortItems
+        } label: {
+            MenuLabel("Sort", systemImage: prefs.sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
+        }
+        .accessibilityIdentifier("chats.sort")
+    }
+
+    private var viewFilterRow: some View {
+        Menu {
+            filterItems
+        } label: {
+            MenuLabel("Filter", systemImage: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
         .accessibilityIdentifier("chats.filters")
     }
 
