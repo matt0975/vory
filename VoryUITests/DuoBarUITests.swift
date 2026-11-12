@@ -67,7 +67,7 @@ final class DuoBarUITests: XCTestCase {
             }
             // Three groups down the strip, never touching: the page's own items (the list's "+"
             // and View menu), then our tabs, then the circles. The first tab starts at least a
-            // group gap (10 pt, the system's own) below the last of the page's items (Matt: the
+            // group gap (10 pt, the system's own) below the last of the page's items (feedback: the
             // filter and Home touched).
             let view = app.buttons["chats.view"].firstMatch
             let firstTab = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'tab.'")).allElementsBoundByIndex

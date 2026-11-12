@@ -4,7 +4,7 @@ import Testing
 import UIKit
 @testable import Vory
 
-/// A body shape is one outline, so no fill rule, rim or glass plate can split it (Matt on
+/// A body shape is one outline, so no fill rule, rim or glass plate can split it (feedback on
 /// 1.5 (17): the Bubble's tail drew as a second, lighter triangle with a white wedge where it
 /// met the body). With VORY_SHAPE_SHOTS=<folder> the Bubble's stills are also written there, at
 /// the sizes the app draws it (a row, the Bots card, the large face), painted and glass, light

@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import VoryCore
 
-/// The first-run tour (#388, the copy Matt approved on 2026-10-19): six beats, swiped or stepped through, with Vory, the
+/// The first-run tour (#388, the copy approved on 2026-10-19): six beats, swiped or stepped through, with Vory, the
 /// app icon's glass cloud, as one character on a layer above the pages. He floats while the page is still, flies to
 /// his place on the next page as the finger moves it (a lag and a lean), and talks in his typed bubble. Each beat also
 /// plays on its own. With Reduce Motion he doesn't float or fly: he is beside each page, and the change cross-fades.
@@ -310,7 +310,7 @@ struct TourView: View {
             HStack {
                 Spacer()
                 if current != .connect {
-                    // To the last beat, in a replay too (#492, Matt: a replay's Skip closed it rather than going to the
+                    // To the last beat, in a replay too (#492: a replay's Skip closed it rather than going to the
                     // last page); a replay's Done is there.
                     Button("Skip") { go(to: .connect) }
                         .font(.subheadline.weight(.medium))
@@ -383,7 +383,7 @@ struct TourCardMove {
 /// What Vory says on each beat, in the approved words: a first line on arrival, the next once it has been read (or a
 /// bot has been tapped). Each line has a key of its own, so the bubble types it out once.
 struct TourLines: Equatable {
-    /// How long a line stays up at the least (#489, Matt: on a beat with more than one line they changed too fast): the
+    /// How long a line stays up at the least (#489: on a beat with more than one line they changed too fast): the
     /// time it takes to type in (none under Reduce Motion, where it shows at once), then a second, then 0.3 s a word.
     static func hold(for line: String, typed: Bool) -> TimeInterval {
         let typing = typed ? line.reduce(0.0) { $0 + ($1 == " " ? 0.012 : 0.022) } : 0
@@ -396,7 +396,7 @@ struct TourLines: Equatable {
     /// The tour's chat had its card answered: beat 4's lines have moved past it for good.
     private var answered = false
 
-    /// Vory's line after a Deny (Matt, 2026-10-20).
+    /// Vory's line after a Deny (2026-10-20).
     static let afterDeny = "That\u{2019}s fine too. Nothing happens without your OK."
 
     static func lines(_ beat: TourBeat, demo: Bool) -> [String] {
@@ -533,7 +533,7 @@ struct VoryTourLayer: View, Animatable {
     static func faceY(_ p: Place, in size: CGSize) -> CGFloat { p.y * size.height + p.size * 0.46 - 22 }
     /// The most his float takes him from his place, up or down, in points (#489: smaller than it was, 5).
     static let bob: CGFloat = 2.5
-    /// The room between him and his bubble at the nearest his float brings them (#489, Matt: he sometimes overlapped
+    /// The room between him and his bubble at the nearest his float brings them (#489: he sometimes overlapped
     /// it; it had tucked under his chin).
     static let bubbleGap: CGFloat = 8
     /// His bubble's top on a page, in points: under his face, clear of it at the bottom of his float, or where the beat
@@ -604,7 +604,7 @@ struct VoryTourLayer: View, Animatable {
         let underLine = who.under.map(say) ?? (says, lineKey), hungLine = who.hung.map(say) ?? (says, lineKey)
         TimelineView(.animation(minimumInterval: 1 / 30, paused: !animating)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            // Smaller than they were (#489, Matt: his motion was too big): a float of `bob` points and a one-degree sway.
+            // Smaller than they were (#489: his motion was too big): a float of `bob` points and a one-degree sway.
             let bob = reduceMotion ? 0 : sin(t * 1.3) * Double(Self.bob)
             let sway = reduceMotion ? 0 : sin(t * 0.8) * 1
             ZStack {
@@ -869,7 +869,7 @@ private struct TourChatCard: View {
                     }
             }
             BottomDock(chat: chat, text: $text, quote: $quote, namespace: dockSpace)
-                // Beat 4 plays itself (#490, Matt: "let's do just plays itself"): once the mention is due, the bar takes
+                // Beat 4 plays itself (#490: "let's do just plays itself"): once the mention is due, the bar takes
                 // no taps (the field and its list, Send, the rest), and VoiceOver reads it as its words.
                 .allowsHitTesting(!mention)
                 .modifier(TourDockReading(playing: mention, text: text))
@@ -1094,7 +1094,7 @@ private struct TourGlow: View {
 #endif
 
 #if DEBUG && os(iOS)
-/// DEBUG, for the tour's gate (#489, Matt: Vory sometimes overlapped his bubble): with `-vory-tour-gap-probe`, the
+/// DEBUG, for the tour's gate (#489: Vory sometimes overlapped his bubble): with `-vory-tour-gap-probe`, the
 /// least room seen between Vory's face, where his float, lean and hop put it, and his bubble, while the bubble hangs
 /// under him: a 1 pt element ("debug.tourgap") whose value is "least=<points> samples=<count>" (negative: they met).
 @MainActor

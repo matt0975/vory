@@ -90,7 +90,7 @@ public enum BotFace {
             // A speech bubble: a wide ellipse with a short tail toward the bottom-left, as one
             // outline. Two overlapping shapes drew the tail as a lighter triangle with a white
             // wedge where it met the body (their windings cancelled there, and the rim and the
-            // glass drew the ellipse's edge across the tail; Matt on 1.5 (17): "Message bubble
+            // glass drew the ellipse's edge across the tail; feedback on 1.5 (17): "Message bubble
             // bot shape is also broken").
             return bubblePath(in: r)
         case "cloud":
@@ -788,7 +788,7 @@ public enum BotFace {
     nonisolated(unsafe) public static var motionEngine = false
     /// A still drawn mid-blink: set around an offscreen render of the eyes-shut picture that a
     /// list row swaps in for a blink, so a small idle face never mounts its live view (the
-    /// live face drew a shade brighter than the still around every blink, Matt 2026-10-12).
+    /// live face drew a shade brighter than the still around every blink, 2026-10-12).
     nonisolated(unsafe) public static var stillBlink: Double = 0
 
     /// The eyes' ink; on a glass bot they are dark glass, drawn a little lighter.
@@ -996,7 +996,7 @@ public enum BotFace {
 public final class BotAmbient {
     public static let shared = BotAmbient()
     /// −1…1 on each axis. Nothing drives it any more: the bots used to look where a list was
-    /// scrolling, which redrew every visible face on every scroll frame (Matt, 2026-10-10:
+    /// scrolling, which redrew every visible face on every scroll frame (2026-10-10:
     /// "get rid of look where you scroll"); the tilt lean has its own value.
     public var gaze: CGPoint = .zero
     /// −1…1: roll (x) and pitch (y) away from the resting hold. Exactly zero at the hold.
@@ -1091,7 +1091,7 @@ public final class BotAmbient {
     public static let arrivalOff = false
     #endif
     public func markArrival(profile: String) {
-        // The Mac has no tap reaction (Matt, 2026-10-13), so no arrival either: its pages never
+        // The Mac has no tap reaction (2026-10-13), so no arrival either: its pages never
         // reported their landing, and a waiting arrival only held faces back.
         #if os(macOS)
         return
@@ -1702,7 +1702,7 @@ public struct BotFaceView: View {
         .accessibilityHidden(true)
     }
 
-    /// The engine follows the display while it moves (60, or 120 on ProMotion; Matt,
+    /// The engine follows the display while it moves (60, or 120 on ProMotion; decided
     /// 2026-10-10: "absolutely smooth", "60-120fps"); idle stays paused, so the rate costs
     /// nothing then. The old routines (extensions and the Watch, where the engine is off) keep
     /// 30 while animating and 24 for eyes alone.

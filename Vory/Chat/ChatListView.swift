@@ -87,7 +87,7 @@ struct ChatListView: View {
     @State private var movingUntil = Date.distantPast
     /// How long a row's swipe action, or its menu's preview, takes to close: the row moves after.
     /// Moved while its swipe was still closing, it went with its actions out and its place blank
-    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24). 400 ms was set
+    /// but for faint Pin and Archive circles, then popped in (#372, feedback on 24). 400 ms was set
     /// while the move itself also left a blank slot; with a pinned row leaving and arriving
     /// (`listRowID`) the circles are gone about 0.1 s after the tap and the row is back by about
     /// 0.3 s, so the move starts as the swipe settles (1.5 (26); two clean runs at 250).
@@ -235,7 +235,7 @@ struct ChatListView: View {
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             // The search field is tucked under the title and revealed by a pull, as on the Bots
-            // and Settings pages (Matt, 2026-10-12). On iOS 26 this drawer coexists with
+            // and Settings pages (2026-10-12). On iOS 26 this drawer coexists with
             // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
@@ -405,7 +405,7 @@ struct ChatListView: View {
             .onReceive(NotificationCenter.default.publisher(for: .refreshChats)) { _ in Task { await refresh() } }
             #else
             // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
-            // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
+            // system's pull spinner drew inside the search drawer (2026-10-10).
             // No wheel item of its own (#537): the list's wheel has a place in every layout, beside the title in two
             // columns (`pageHeading`) and in the top bar's title capsule otherwise (`pullStates`, below). Its own item
             // stood in the bar whenever neither had claimed the list's state yet, which a change of layout could leave so
@@ -783,7 +783,7 @@ struct ChatListView: View {
         // The tab bar's room at the list's end, its own and constant (it replaces the root's): the
         // root's drops to 0 while a chat is up, and a list scrolled to its end had its offset
         // clamped to the shorter content then, so after Back it sat that much lower, 59 pt, its
-        // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
+        // last row under the bar (feedback on 1.5 (11): the list "drops" after a swipe back).
         .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
         // The closed Duo's room under the top bar's row, the list's own (#591): laid out with the list, so it's in place as a
         // pop brings the list in, on a stack SwiftUI built anew at a fold too. The row's room alone, so the first row stands
@@ -815,7 +815,7 @@ struct ChatListView: View {
         .overlay(alignment: .bottom) { SummaryStripAboveBar() }
         #endif
         // A bar, not a plain inset: the rows fade out under it the way they do under the
-        // toolbar, instead of showing through behind the search field. On the phone too (Matt):
+        // toolbar, instead of showing through behind the search field. On the phone too (by request):
         // the system's search drawer sat exactly where the pull-to-refresh spinner draws, so
         // the spinner turned inside the field; our field is pinned above the list and the
         // spinner turns below it.
@@ -1126,7 +1126,7 @@ struct ChatListView: View {
         }
         // All bots before the bots are known (a cold launch: every trigger, the socket's opening
         // included, can come before /api/profiles answers): nothing to ask for yet, and the empty
-        // answer wiped the list until another page loaded it again (Matt on 1.5 (20)). The list
+        // answer wiped the list until another page loaded it again (feedback on 1.5 (20)). The list
         // loads once the bots arrive (the `profiles` trigger above).
         guard Self.canList(allBots: prefs.allBots, botsLoaded: runtime.profilesLoaded) else { return }
         loading = sessions.isEmpty; defer { loading = false }
@@ -1142,7 +1142,7 @@ struct ChatListView: View {
                 let showArchived = prefs.showArchived
                 // Each bot's rows in the bots' own order, whichever answered first: a chat the
                 // gateway lists under several bots kept whichever listing arrived first, so its
-                // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
+                // bot and avatar flipped between loads (2026-10-12: "the bots and chats
                 // glitch out").
                 var byProfile: [String: [StoredSession]] = [:]
                 try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
@@ -1214,7 +1214,7 @@ struct ChatListView: View {
             }
             // A chat keeps its place until it has new messages: the gateway counts an attach as
             // activity, so the chat just read floated to the top on the way back and every row
-            // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
+            // shifted (2026-10-12: "the chats list jumps ... we want it to remain the same
             // when going into a chat and out of"). Its old time stays until something was said.
             all = all.map { s in
                 guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
@@ -1663,7 +1663,7 @@ extension StoredSession {
     /// A chat's row identity in the list, which changes with its pin: List animates a move by
     /// sliding the row underneath the opaque rows it passes, so a pinned row vanished from its
     /// place, a blank slot opened at the top and the row popped into it, and an unpinned one flew
-    /// up over the search field before landing (Matt on 1.5 (25): "a really weird animation").
+    /// up over the search field before landing (feedback on 1.5 (25): "a really weird animation").
     /// As one row leaving and another arriving, each place animates on its own: the row fades
     /// out where it was while the rows close up, and fades in where it goes as they open.
     var listRowID: String { (pinned == true ? "pinned:" : "") + id }

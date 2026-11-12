@@ -85,7 +85,7 @@ struct DashboardView: View {
     /// The fold the desk lays out against: the window's, taken a main-actor turn after the system reports it (see the
     /// onChange that sets it).
     @State private var deskFold: CGRect?
-    /// The idle bots' faces on the desk: 44 pt (Matt, on build 39's stills), 36 at the two largest text sizes short of
+    /// The idle bots' faces on the desk: 44 pt (from build 39's stills), 36 at the two largest text sizes short of
     /// the accessibility ones, so the row keeps clear of Who's working's rows and the fold. Hit areas stay at least 44.
     private var idleFace: CGFloat { typeSize >= .xxLarge ? 36 : 44 }
     /// The gateway the last finished load ran against (see `shouldLoad`).
@@ -151,7 +151,7 @@ struct DashboardView: View {
             .reloadable { await Task { await load(); await summarizeSince(force: true) }.value }
         }
         // The desk comes and goes in one frame. The system changes the posture inside an animation, and with it the
-        // scroll's frame glided from the fold up to the page's top going flat, the greeting passing mid-screen (Matt, on
+        // scroll's frame glided from the fold up to the page's top going flat, the greeting passing mid-screen (seen on
         // build 39; the recording put the slide at 0.2 s).
         .transaction(value: desk != nil) { $0.animation = nil }
         // The system reports a posture change inside its own UIKit animation, and a layout change made in that pass

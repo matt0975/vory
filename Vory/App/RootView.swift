@@ -144,7 +144,7 @@ struct RootView: View {
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
         // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
-        // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
+        // Duo upright (669 pt: one column was chosen there, 2026-10-10) and a narrow Stage
         // Manager or Split View window. The window's shape decides, never the device or a pose.
         .environment(\.wideLayout, wide)
         .onChange(of: liveWide, initial: true) { _, w in if scenePhase != .background { shownWide = w } }
@@ -366,7 +366,7 @@ struct MainTabView: View {
                             // The overlay already ends above the home-indicator area; the stack
                             // keeps one group gap over it, no more. Padding it by the inset again
                             // pushed the stack up until its first tab touched the page's own
-                            // strip items (the list's filter met Home, Matt).
+                            // strip items (the list's filter met Home, as reported).
                             .padding(.bottom, VoryTabBar.stripGroupGap)
                             // On the closed Duo the foot slot is left to Chats' search, on every tab (`stripSearchSlot`).
                             .padding(.bottom, TopBarRoom.closedStrip(barsVertical: vertical, size: windowGeometry.bounds.size) ? VoryTabBar.stripSearchSlot : 0)
@@ -399,7 +399,7 @@ struct MainTabView: View {
                 } else {
                     var t = Transaction(); t.disablesAnimations = true
                     withTransaction(t) { model.popProgress = fraction }
-                    // The morph prototype's controls follow the finger (Matt, 2026-10-12).
+                    // The morph prototype's controls follow the finger (2026-10-12).
                     if MorphTopBar.on { MorphState.shared.scrub(fraction) }
                 }
             }

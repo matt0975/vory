@@ -6,7 +6,7 @@ import VoryCore
 
 /// What a composer is for: a chat's own, or the New Message sheet's first message (#27), on a
 /// draft (`ChatSession.isDraft`): its send starts the chat, its mic starts voice mode while the
-/// message is empty (Matt, 2026-10-13: the sheet's mic as it was), and to several bots (a group
+/// message is empty (2026-10-13: the sheet's mic as it was), and to several bots (a group
 /// chat) it takes words and "@" only, since a group starts with words and each bot keeps its model.
 enum ComposerRole {
     case chat
@@ -332,9 +332,9 @@ struct ComposerView: View {
             .coordinateSpace(.named("composerStack"))
             // Each panel in a glass container of its own, outside the card's: a glass shape
             // changing inside the card's container re-hosted the card's views, and the text
-            // view lost the keyboard every time a panel opened (Matt, 2026-10-11). Behind the
+            // view lost the keyboard every time a panel opened (2026-10-11). Behind the
             // card, not over it: a panel folding away ends behind the + (or the field) instead
-            // of as a last shape drawn over it (Matt: "have it go behind the existing +").
+            // of as a last shape drawn over it (feedback: "have it go behind the existing +").
             .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { attachOverlay } }
             #if os(iOS)
             .background(alignment: .topLeading) { GlassEffectContainer(spacing: 0) { slashOverlay } }
@@ -360,7 +360,7 @@ struct ComposerView: View {
     /// while the rows scale up inside it and fade in. No insert transition: a glass container
     /// draws its members without their shadows while a transition runs, and the shadows came
     /// back in one frame a third of a second after the panel had settled (the spring's late
-    /// end), under the card, the circles and the panel (Matt, 2026-10-11: "the dimmed part
+    /// end), under the card, the circles and the panel (2026-10-11: "the dimmed part
     /// late after the animation").
     private var attachOverlay: some View {
         let open = showAttach, button = attachButtonFrame
@@ -400,7 +400,7 @@ struct ComposerView: View {
     /// the field's leading edge the way the + panel grows out of its button. It used to sit
     /// inside the card: the card stretched to hold it, the thread's bottom margin followed
     /// the card's height frame by frame and the whole thread re-laid out while it opened
-    /// (Matt, 2026-10-11: "/ commands ... still choppy"). The card keeps its height now.
+    /// (2026-10-11: "/ commands ... still choppy"). The card keeps its height now.
     private var slashOverlay: some View {
         // Re-evaluated when the keyboard moves the dock: the rows' accessibility frames went
         // stale otherwise (a UI test tapped a row where it had been before the keyboard rose).
@@ -410,7 +410,7 @@ struct ComposerView: View {
         let height = min(commandListCap, CGFloat(max(items.count, menuLoading ? 1 : 0)) * SlashMenuList.rowHeight + 8)
         // Closed, the panel is nothing at all (no size) at the field's leading edge: a closed
         // circle of glass showed through its own opacity as an orb over the + while the panel
-        // folded away (Matt, 2026-10-11: "i dont want to see that at all").
+        // folded away (2026-10-11: "i dont want to see that at all").
         return SlashMenuList(items: items, selection: markedIndex, loading: menuLoading, cap: commandListCap, glass: false) { pick($0) }
             .frame(width: stackWidth)
             .opacity(open ? 1 : 0)
@@ -553,7 +553,7 @@ struct ComposerView: View {
             }
     }
 
-    /// One rounded glass card (#320, Matt: "expands up as you type or do / commands", the
+    /// One rounded glass card (#320: "expands up as you type or do / commands", the
     /// attachments added at the top): the staged files' thumbnails along the top, the reply
     /// strip, then whatever opens for "/" or "@" above the words, the words themselves (growing
     /// upward to about 40% of the visible height, then scrolling inside), and under them a row
@@ -746,7 +746,7 @@ struct ComposerView: View {
             Section("Model") { ModelMenuContent(chat: chat) }
             ReasoningEffortMenu(chat: chat)
         } label: {
-            // Matt's wording (2026-10-10): the model's name in the text's own
+            // The wording chosen (2026-10-10): the model's name in the text's own
             // tone, the level after it in a lighter one, no "Reasoning:"; at the accessibility
             // sizes the level stands alone.
             HStack(spacing: 6) {
@@ -877,7 +877,7 @@ struct ComposerView: View {
     /// in Messages, grown out of the button and folded back into it.
     private var attachMenu: some View {
         Button {
-            // The keyboard stays up (Matt, 2026-10-11: "it shouldn't close the keyboard"); the
+            // The keyboard stays up (2026-10-11: "it shouldn't close the keyboard"); the
             // panel is capped to the room between the header and the card and scrolls inside it,
             // where it used to take the keyboard's place and, uncapped, covered the header.
             // The slash list closes with it: on the Duo the two stood open together, the panel pushed up onto the fold.

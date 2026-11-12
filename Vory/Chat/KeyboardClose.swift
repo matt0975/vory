@@ -6,7 +6,7 @@ import UIKit
 
 /// Whether the message field keeps the keyboard after a send (#350). The app's own chats keep it for the next message
 /// unless Settings › Appearance › Close keyboard after sending is on; the demo and the tour put it away either way
-/// (`composerFocusesAfterSend` is false there: #490, Matt: swiping it away was hard). The Mac has no on-screen keyboard
+/// (`composerFocusesAfterSend` is false there, #490: swiping it away was hard). The Mac has no on-screen keyboard
 /// and never reads the setting.
 enum ComposerFocusRule {
     static func afterSend(placeKeepsFocus: Bool, closeAfterSending: Bool) -> Bool {

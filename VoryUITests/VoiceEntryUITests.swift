@@ -95,7 +95,7 @@ final class VoiceEntryUITests: XCTestCase {
         shot("voice-entry-sheet-panel")
     }
 
-    /// The New Message composer's one slot (#27, Matt, 2026-10-13): the mic while nothing is
+    /// The New Message composer's one slot (#27, 2026-10-13): the mic while nothing is
     /// written, the send arrow once there are words, the mic again when they are cleared; the mic
     /// starts voice mode with the bot chosen.
     func testNewMessageMicBecomesSendAndBack() throws {

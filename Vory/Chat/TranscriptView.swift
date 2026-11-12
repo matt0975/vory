@@ -69,7 +69,7 @@ struct TranscriptView: View {
     var keyboardFloors = true
     /// The header band's fade (`ChatStyle.bandFade` on iOS, 0 where there is no band): added to
     /// the top margin so the first row reads whole. The bottom has no fade above the bar (the
-    /// thread shows through the field's glass, Matt 2026-10-10): the last row ends 8 pt above
+    /// thread shows through the field's glass, 2026-10-10): the last row ends 8 pt above
     /// the dock, as before.
     var bandFade: CGFloat = 0
     /// `scrollTop` is 0 when the thread starts at the window's top edge (it runs under the status
@@ -203,7 +203,7 @@ struct TranscriptView: View {
                 TimeRevealColumn {
                 ThreadStack(alignment: .leading, spacing: 10) {
                     // Not while the history is still on its way: a reopened chat showed "Say
-                    // something" for a few frames before its rows landed (Matt, 2026-10-11).
+                    // something" for a few frames before its rows landed (2026-10-11).
                     if chat.items.isEmpty, chat.resumeError == nil, !chat.isResuming {
                         VStack(spacing: 8) {
                             BotAvatar(profile: chat.profileName, size: 56)
@@ -347,7 +347,7 @@ struct TranscriptView: View {
                 // nothing until a drag bounces it back ("chats open blank until you scroll"), and
                 // content that shrinks under a thread at rest (a chat's stored rows landing shorter
                 // than its first layout) leaves an empty band over the composer that the first
-                // touch snapped away (Matt on 1.5 (21): "a weird jump"). Land it. The scroll that
+                // touch snapped away (feedback on 1.5 (21): "a weird jump"). Land it. The scroll that
                 // followed every change of the last row hid the small ones until it went with the
                 // per-token scroll.
                 if distance < -1, !metrics.userScrolling { landPastTheEnd(distance) }
@@ -633,7 +633,7 @@ extension TranscriptView {
             try? await Task.sleep(for: .milliseconds(delay))
             guard !Task.isCancelled, metrics.stickToBottom, !metrics.userScrolling else { return }
             // Eased, not snapped: a tap that moved a little on its way in nudged the thread,
-            // and the two snaps back read as a jump (Matt, 2026-10-12, "opening a chat and
+            // and the two snaps back read as a jump (2026-10-12, "opening a chat and
             // moving my finger a bit").
             if metrics.distanceFromBottom < -8 || metrics.distanceFromBottom > 8 { withAnimation(.easeOut(duration: 0.25)) { scrollPosition.scrollTo(edge: .bottom) } }
         }
@@ -868,7 +868,7 @@ extension TranscriptView {
     /// The lazy stack measures its rows only as a scroll brings them near, and until then a long history's height is its
     /// estimate (40,494 pt for a chat that settles at 19,282). Shown at its end over that, nothing moves while it rests (the
     /// anchor holds the end), but the first scroll measures it: in a pull past the end the scroll view kept its offset while
-    /// the content shrank under the finger, 4,404 pt past the end in sight, then snapped back in a frame (#468; Matt's
+    /// the content shrank under the finger, 4,404 pt past the end in sight, then snapped back in a frame (#468; the reported
     /// "stutters instead of rubber-banding" right after opening). So out of sight, at its end and quiet, the thread is
     /// scrolled up and, a frame later, landed back at its end, in rounds. The lazy stack measures a step with each scroll
     /// that moves the view, and the scroll's layout runs in its own turn, so the next frame has it. One round took a long
@@ -1979,7 +1979,7 @@ struct InjectedNoteRow: View {
         // One piece of glass that grows out from its centre both ways and folds back the same
         // way. The title never moves: it stays centred, and the details are laid out at the
         // row's full width underneath from the start, so the widening glass reveals them
-        // (Matt, 2026-10-11: "stay centered and it expands on both sides to reveal the text").
+        // (2026-10-11: "stay centered and it expands on both sides to reveal the text").
         let open = open
         let title = HStack(spacing: 6) {
             Image(systemName: note.title.contains("failed") ? "exclamationmark.circle" : note.title.hasPrefix("Scheduled") ? "clock" : note.title.hasPrefix("Subagent") ? "person.2" : "gearshape.2")
@@ -2981,7 +2981,7 @@ struct ToolCardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // A painted card, not glass: a thread can hold dozens of these, and each live glass
         // layer is composited every frame while the thread scrolls (the stutter on device).
-        // The opened part is revealed by the card growing, inside the card (Matt, 2026-10-11:
+        // The opened part is revealed by the card growing, inside the card (2026-10-11:
         // tool expands need a proper animation; it faded in before).
         .clipShape(.rect(cornerRadius: compact ? 10 : 14))
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: compact ? 10 : 14))

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Matt on 1.5 (21): "when holding a message the tail comes back weird after the animation". The
+/// Feedback on 1.5 (21): "when holding a message the tail comes back weird after the animation". The
 /// tail reached past the bubble's bounds, so the lift cut it off and it grew back a few frames
 /// after the menu closed. Frames of the lift and the return are kept for the person's tailed
 /// bubble, the bot's untailed and tailed ones, in light and dark; at rest the chat is kept whole

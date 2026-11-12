@@ -561,7 +561,7 @@ struct BotsSettingsView: View {
             }
             #else
             // The same styles on the Mac (decision E); the gyroscope lean is the phone's. No
-            // on/off switch (Matt, 2026-10-11): the bots always move, Still is the quiet choice.
+            // on/off switch (2026-10-11): the bots always move, Still is the quiet choice.
             Section {
                 Picker("Style", selection: $style) {
                     Text("Lively").tag("lively")
@@ -1244,7 +1244,7 @@ struct BotColorRow: View {
     var body: some View {
         ColorPicker(selection: $color, supportsOpacity: false) {
             // A picture, never a live face: a row per bot, each blinking live now and then,
-            // made this page scroll in jerks (Matt, 2026-10-11: "not animate at all in this pane").
+            // made this page scroll in jerks (2026-10-11: "not animate at all in this pane").
             HStack(spacing: 10) {
                 Image(uiImage: BotAvatarImage.cached(profile: profile, size: 26, scheme: colorScheme)).resizable().frame(width: 26, height: 26)
                 Text(label)
@@ -1254,7 +1254,7 @@ struct BotColorRow: View {
         .onChange(of: color) { _, c in
             // Only a real change: the colour set on appear tripped this too, and each of those
             // writes re-rendered the whole page and every row (the first scroll down to the bots
-            // stalled, Matt, 2026-10-11).
+            // stalled, 2026-10-11).
             guard c.hexString.uppercased() != BotColors.hex(for: profile).uppercased() else { return }
             BotColors.set(c, for: profile)
             raw = String(data: (try? JSONEncoder().encode(BotColors.stored())) ?? Data(), encoding: .utf8) ?? raw

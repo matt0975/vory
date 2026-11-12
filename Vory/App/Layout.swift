@@ -163,7 +163,7 @@ enum TopBarRoom {
     /// The open Duo held upright (#516, replacing the corner room above): the row stands up in the status band at the
     /// window's top, clear of the status, and the pages need no room under it. Keyed on the window alone: a fold reported
     /// across it (active or not), taller than wide, with a top safe area deep enough to hold the row. Never on a status
-    /// region: the device reports none in any pose (Matt's 38 readouts), and neither does a plain iPhone.
+    /// region: the device reports none in any pose (the build 38 device readouts), and neither does a plain iPhone.
     static func barUp(regions: ReservedRegions, size: CGSize, safeTop: CGFloat) -> Bool {
         size.height > size.width && safeTop >= bandRowTop + bandRowHeight
             && regions.reported.contains { $0.kind == .fold && $0.frame.width > $0.frame.height }
@@ -189,12 +189,12 @@ enum TopBarRoom {
     static func statusCorner(barUp: Bool, regions: ReservedRegions, size: CGSize) -> Bool {
         !barUp && size.height > size.width && regions.statusInCorner(width: size.width)
     }
-    /// The row's top in the band: a 44 pt row centred on y 48, the middle of the status as measured on Matt's two 38
+    /// The row's top in the band: a 44 pt row centred on y 48, the middle of the status as measured on the two build 38 device
     /// readouts of the open Duo upright (y 27 to 69 in both).
     static let bandRowTop: CGFloat = 26
     static let bandRowHeight: CGFloat = 44
     /// What the row leaves clear at the band's trailing end, from the window's trailing edge: the status's left edge at
-    /// its widest in Matt's two 38 readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
+    /// its widest in the two build 38 device readouts (476; the other 553), less 25 for one more indicator (Location, an alarm,
     /// Focus) and an 8 pt gap. The row ends at 443 on the 669 pt window.
     static let statusReserve: CGFloat = 226
     /// How far a row of the bar ends short of its trailing end, for its last control to end where UIKit ends its own

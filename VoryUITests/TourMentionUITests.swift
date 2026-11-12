@@ -1,6 +1,6 @@
 import XCTest
 
-/// Onboarding's beat 4 plays itself (#490, Matt: "let's do just plays itself"): after the answer the mention types
+/// Onboarding's beat 4 plays itself (#490: "let's do just plays itself"): after the answer the mention types
 /// itself, the message bar's list of bots comes up and Gizmo is picked, with no keyboard. Taps on the bar, the list and
 /// the card then change nothing: no keyboard, the mention isn't typed over or started again, and the card stays in
 /// view. VoiceOver reads the bar as its words, not as a field. A still of the list, in each bot's own look, light and

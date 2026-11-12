@@ -395,7 +395,7 @@ final class ReconnectFaultUITests: XCTestCase {
         XCTAssertEqual(waitForLine(seconds: 20) { $0 == "Connected" }, "Connected", "not connected at the start")
     }
 
-    /// U1, Matt's case: two chats open since launch (both re-attach after a reconnect), the second on screen. The
+    /// U1, the reported case: two chats open since launch (both re-attach after a reconnect), the second on screen. The
     /// network goes under the first one's re-attach (the mock aborts the socket on its session.resume). No banner at any
     /// read, back by 30 s, and the chat works. Before #641: about 42 s after the drop the second chat showed
     /// "Reconnected, but the chat could not be re-attached: Timed out waiting for gateway.ready."

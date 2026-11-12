@@ -316,7 +316,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
         }
     }
     /// "Syncing…" is for a chat with nothing to show yet; with the cached transcript on screen
-    /// the attach runs silently behind the title (Matt, 2026-10-12: "a Syncing… status, speed
+    /// the attach runs silently behind the title (2026-10-12: "a Syncing… status, speed
     /// that up").
     public var showsSyncing: Bool { isResuming && items.isEmpty }
     @ObservationIgnored private var _resumeError: String?
@@ -496,7 +496,7 @@ public final class ChatSession: @MainActor Identifiable, ChatIdentity {
 
     /// The model the chat last ran with (this device's cache), or its bot's default, until the
     /// attach brings `info`: the chip said "Model" for the first frames of every reopened chat
-    /// (Matt, 2026-10-11). The bot's default is read live: the profiles may land after the open.
+    /// (2026-10-11). The bot's default is read live: the profiles may land after the open.
     private var cachedModel: String?
     public var modelName: String { pendingModel?.model ?? info?.model ?? cachedModel ?? runtime.profiles.first { $0.name == profileName }?.model ?? "" }
     public var subtitle: String {

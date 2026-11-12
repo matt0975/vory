@@ -45,7 +45,7 @@ struct VoryTabBar: View {
     @State private var dragX: CGFloat?
     @State private var pressStart: Date?
     /// The tab the lens is over while it is dragged: tinted, not yet shown. The page switches
-    /// when the lens is dropped (Matt, 2026-10-11: switching as it passed made the drag lag,
+    /// when the lens is dropped (2026-10-11: switching as it passed made the drag lag,
     /// each pass cross-faded two whole pages under a live glass lens).
     @State private var hoverTab: AppModel.AppTab?
     /// True while a finger is on the capsule; back to false on a lift and on a cancel alike,
@@ -105,7 +105,7 @@ struct VoryTabBar: View {
     /// The longest the bar group (the capsule and the circles) runs along the bottom: its length on the
     /// widest iPhone, the 17 Pro Max (440 pt wide, less the two 21 pt side margins), so no iPhone
     /// reaches it (the iPhone app is portrait-only). An iPad and the open Duo upright keep the
-    /// iPhone's bar, centred, instead of one stretched across the window (Matt for 1.5 (26)); a
+    /// iPhone's bar, centred, instead of one stretched across the window (asked for in 1.5 (26)); a
     /// window narrower than that (a small Stage Manager window, a window tiled to half the screen)
     /// is filled, as on an iPhone. A compact height (the closed Duo, the open Duo on its side) has
     /// the vertical strip instead. If the iPhone's portrait lock is ever lifted, a phone on its side
@@ -182,7 +182,7 @@ struct VoryTabBar: View {
         .frame(maxWidth: axis == .horizontal ? Self.maxHorizontalLength : nil)
         // The bar's own shape takes the touches that miss its buttons: in the gaps between the
         // capsule and the circles, or at the glass's edge, they reached the page behind and
-        // opened the row there (Matt on (18): "I can tap it when touching the nav bar"). One
+        // opened the row there (feedback on (18): "I can tap it when touching the nav bar"). One
         // capsule around the capsule and the circles, a little wider than what is drawn, under
         // them: the lens drag and the buttons sit on top and keep their touches. Only the
         // shapes, not a strip: beside the bar the list still answers. The same shape keeps the
@@ -346,7 +346,7 @@ struct VoryTabBar: View {
     /// The finger is off the capsule. After a lift `onEnded` has already put everything away; a
     /// drag the system cancelled (its edge gesture, or the window's glass recognizer that won the
     /// touch) never gets `onEnded`, and left the lens and the tint on the tab it was over with the
-    /// page unchanged until the next touch (Matt on 24, #375). Run a turn later, so a lift's
+    /// page unchanged until the next touch (feedback on 24, #375). Run a turn later, so a lift's
     /// `onEnded` always comes first: here only a cancel is left. A lifted lens then goes on to the
     /// tab it was over, the page with it, as if dropped there; a press that had not lifted it
     /// (a cancelled tap) does nothing. The tint and the page never disagree.
@@ -434,7 +434,7 @@ struct TabRoot: ViewModifier {
     /// The page's pull-to-refresh state when its `.reloadable` is applied outside this marker
     /// (Bots, Files): by environment then, by preference when it sits inside (Home, Projects,
     /// the Board, Status, Sessions, Tasks). The bar's title capsule hosts the wheel either way;
-    /// Bots and Files had no wheel (Matt, 2026-10-12).
+    /// Bots and Files had no wheel (2026-10-12).
     @Environment(PullRefreshState.self) private var pullAround: PullRefreshState?
     @State private var pullBelow: PullRefreshState?
     var tab: AppModel.AppTab
@@ -443,7 +443,7 @@ struct TabRoot: ViewModifier {
         content
             // The bar draws this page's actions (`barTab`); the page leaves its own out.
             .environment(\.barTab, tab)
-            // Every root page shares the Chats page's heading (Matt, 2026-10-12); the pull-to-
+            // Every root page shares the Chats page's heading (2026-10-12); the pull-to-
             // refresh wheel sits beside it on the pages that can refresh.
             .pageHeading(tab.title, on: !model.wideLayout && !MorphTopBar.on)
             // Out of the accessibility tree while another tab is up. RootView hides the whole
@@ -467,7 +467,7 @@ struct TabRoot: ViewModifier {
                                                                barOn: MorphTopBar.active(model), rowBottom: MorphState.shared.rootRowBottom)).frame(width: 0, height: 0))
             // "At root" is set by the probe below: on a swipe back SwiftUI's onAppear fires as
             // the pop begins, and the bar's capsules came back over the pushed page before it
-            // had moved (Matt, 2026-10-12: "swiping back on other pages is broken"). The probe
+            // had moved (2026-10-12: "swiping back on other pages is broken"). The probe
             // waits for an interactive pop to finish (and stays put if it is cancelled).
             .onDisappear { model.tabAtRoot[tab] = false }
             .background(PopToRootProbe(tab: tab))
@@ -478,7 +478,7 @@ struct TabRoot: ViewModifier {
 /// Under a tab's root page, a view that watches the stack's UIKit navigation controller:
 /// - tells the root it has arrived (at once on a plain appearance or a Back button's pop, at
 ///   the end of an interactive pop, not at all if the swipe is cancelled), for `tabAtRoot`;
-/// - drives the morph bar for a pushed page (Matt, 2026-10-12: the title capsule morphs into
+/// - drives the morph bar for a pushed page (2026-10-12: the title capsule morphs into
 ///   the Back arrow and back, following the swipe like a chat);
 /// - hides the pushed page's own back button under the bar's Back (its title stays);
 /// - pops one page when the bar's Back bumps `popOne`.
@@ -488,7 +488,7 @@ struct TabRoot: ViewModifier {
 /// from it, so a page at any depth hides its own Back; and a display link runs only while a
 /// finger has a pop back to the root, for the scrub. Nothing runs at rest (the battery rule, #248;
 /// the 60 Hz poll this replaced cost 1.3% CPU on a root at rest). Not the stack's delegate:
-/// wrapped in a forwarder, SwiftUI pushed every page without its slide (1.5 (18), Matt: "there's
+/// wrapped in a forwarder, SwiftUI pushed every page without its slide (1.5 (18): "there's
 /// no longer an animation when clicking into panes").
 struct RootArrivalProbe: UIViewControllerRepresentable {
     /// The last decision, for the geometry probe's banner (a UI test reads it; observable, so the
@@ -777,7 +777,7 @@ struct RootArrivalProbe: UIViewControllerRepresentable {
             MorphState.shared.scrub(min(1, max(0, max(CGFloat(c.percentComplete), slid))))
         }
 
-        /// A pushed page's own title stays, in the middle where the system puts it (Matt,
+        /// A pushed page's own title stays, in the middle where the system puts it (noted
         /// 2026-10-12, on a bot's page: "it shows up in the middle where it should be but then
         /// disappears ... just have it actually stay appeared"). This is the one switch if that
         /// turns out to be for a bot's page only (`tab == .bots`).

@@ -8,7 +8,7 @@ import UIKit
 /// Liquid Glass's `.interactive()` reacts through a pan recognizer on the window
 /// (`_UIFlexInteractionPanGestureRecognizer`), which finds glass by the touch's position whatever
 /// SwiftUI hit-tests: a tab tapped over a group chat card on Bots lit the card up and grew it under
-/// the bar (Matt on 1.5 (24)). The same recognizer is a pan that can win over the bar's own drag,
+/// the bar (feedback on 1.5 (24)). The same recognizer is a pan that can win over the bar's own drag,
 /// which then never ends (#375). The shield is one recognizer on the window that sees each touch
 /// as it comes down: where a bar is what the finger is on, it turns those glass recognizers off and
 /// on again, which takes this touch from them (a recognizer turned back on does not pick up a touch

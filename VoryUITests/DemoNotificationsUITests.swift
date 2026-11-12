@@ -1,7 +1,7 @@
 import XCTest
 import UserNotifications
 
-/// The demo's notifications (#501, Matt's call): its first message asks for notification permission, once, as nothing
+/// The demo's notifications (#501, a product call): its first message asks for notification permission, once, as nothing
 /// else in the demo would; with permission, its replies and approvals are local notifications, and Leave demo takes them
 /// away. The question is Springboard's alert. Run on the demo copy as installed fresh (the question not yet answered);
 /// skipped unless HERMES_E2E_BUNDLE is set.

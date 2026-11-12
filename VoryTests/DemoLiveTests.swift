@@ -65,7 +65,7 @@ import Testing
         #expect(chat.cards.isEmpty)
     }
 
-    /// The onboarding tour's demo (#388) asks with two answers only, Allow once and Deny (Matt's pick); "Try a demo"
+    /// The onboarding tour's demo (#388) asks with two answers only, Allow once and Deny (the pick made); "Try a demo"
     /// keeps all four (above).
     @Test func theToursApprovalOffersOnceAndDenyOnly() async throws {
         let rt = await runtime(approvalChoices: ["once", "deny"])

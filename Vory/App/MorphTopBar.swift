@@ -7,7 +7,7 @@ import VoryCore
 // NavigationStack, as three persistent glass capsules in ONE GlassEffectContainer. Each capsule
 // is drawn at the frame interpolated by `t` between its two measured end states (0 the chat's
 // controls, 1 the list's), its contents cross-fading, so a swipe back scrubs the morph with
-// the finger (Matt, 2026-10-12: "follow the finger") and a push, a Back button or a release
+// the finger (2026-10-12: "follow the finger") and a push, a Back button or a release
 // animate the same `t`. Reduce Motion: a cross-fade between the two sets, no interpolation.
 // Visual apart from Back; nothing here runs without the flag.
 
@@ -39,7 +39,7 @@ enum TabTrail { case chatActions, plus(String), filesActions, boardActions, sess
 
 /// A pushed page's own control, drawn by the bar in its trailing capsule as the page comes in (#435): it
 /// arrives in the one morph with the Back circle, where the page's own bar item came in by UIKit's
-/// cross-fade a beat after the slide (Matt on 27: "a second animation"). A button, or a menu of buttons.
+/// cross-fade a beat after the slide (feedback on 27: "a second animation"). A button, or a menu of buttons.
 struct MorphPageAction: Identifiable {
     struct Item { var label: String; var symbol: String; var action: () -> Void }
     /// Its accessibility identifier.
@@ -96,7 +96,7 @@ private struct MorphPageActions: ViewModifier {
 @MainActor @Observable final class MorphState {
     static let shared = MorphState()
     var chat: ChatSession?
-    /// A page pushed on a tab other than Chats: the title capsule becomes its Back (Matt,
+    /// A page pushed on a tab other than Chats: the title capsule becomes its Back (noted
     /// 2026-10-12: "it should morph into the back arrow on all pages and then morph back").
     var pushedTab: AppModel.AppTab?
     /// The tabs other than Chats with a page pushed, kept by their roots' probes whether or not
@@ -123,7 +123,7 @@ private struct MorphPageActions: ViewModifier {
     var t: CGFloat = 1
     /// Bumped by every transition that starts: a transition settles (`settleOnRoot`, a pop's or
     /// a release's end) only while it is still the latest. Settled on a timer, an earlier pop's
-    /// settle landed inside the next push and took its chat away (Matt on 1.5 (21): in and out
+    /// settle landed inside the next push and took its chat away (feedback on 1.5 (21): in and out
     /// of a chat quickly left the Back circle alone, or no controls at all).
     @ObservationIgnored private var generation = 0
     /// The finger has the pop: `t` follows it and nothing is tappable.
@@ -152,7 +152,7 @@ private struct MorphPageActions: ViewModifier {
     /// The tabs whose page in front keeps its own bar: a form with its own Cancel, Done or Save
     /// (`.pushedPage(keepsOwnBar: true)`), or a page pushed from one. The bar steps aside there,
     /// as it does over a group chat on Chats: the morph Back stood over Edit Gateway's Cancel
-    /// (Matt on 1.5 (18): "the formatting is off in the add a gateway"). Kept by the tabs' root
+    /// (feedback on 1.5 (18): "the formatting is off in the add a gateway"). Kept by the tabs' root
     /// probes; the bar's own state under it is left as it was, so it comes back as it went.
     var ownBarTabs: Set<AppModel.AppTab> = []
     /// The controls of the page in front on each tab, declared by a page pushed under the bar
@@ -170,7 +170,7 @@ private struct MorphPageActions: ViewModifier {
     /// The Chats stack, handed over by its root (`ChatsStackProbe`): a chat's push and pop there
     /// are followed frame by frame, the page's own slide being the bar's progress. Timed on a
     /// spring of its own, the bar ran apart from the page whenever UIKit turned a transition
-    /// around (a quick in and out): both sets half drawn over each other (Matt on 1.5 (21)).
+    /// around (a quick in and out): both sets half drawn over each other (feedback on 1.5 (21)).
     @ObservationIgnored weak var chatsNav: UINavigationController?
     /// The bar's progress as the page's slide puts it, while a push or a pop is followed. The bar
     /// draws this; `t` keeps where it is heading, which decides the taps.
@@ -209,7 +209,7 @@ private struct MorphPageActions: ViewModifier {
         // With the page, in the same update. The bar draws every frame from its progress, so the
         // chat's end frames, measured a layout later, are taken up on the way (the first frames
         // are still at the list's). Started a turn later, the list's own search row went with the
-        // page while the bar stood still (Matt on 1.5 (21): a partial bar at each push).
+        // page while the bar stood still (feedback on 1.5 (21): a partial bar at each push).
         // Heading for the chat already (a push followed since the page opened): nothing to start.
         guard !scrubbing, t > 0 else { return }
         if !follow(to: 0) { toAway() }
@@ -241,13 +241,13 @@ private struct MorphPageActions: ViewModifier {
         generation += 1
         // The page and its morph in one transaction: set apart, the bar went over to the pushed
         // page unanimated and jumped to the Back circle in one frame while the page slid (in (17)
-        // too), where the pop morphs back over its slide (Matt on 18: "the reverse of going out").
+        // too), where the pop morphs back over its slide (feedback on 18: "the reverse of going out").
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { pushedTab = tab; t = 0 } }
         else { withAnimation(.spring(duration: 0.32, bounce: 0)) { pushedTab = tab; t = 0 } }
     }
     private func toAway() {
         if UIAccessibility.isReduceMotionEnabled { withAnimation(.easeInOut(duration: 0.2)) { t = 0 } }
-        // Quick, as the system's own glass morphs are (Matt, 2026-10-12: "too slow").
+        // Quick, as the system's own glass morphs are (2026-10-12: "too slow").
         else { withAnimation(.spring(duration: 0.32, bounce: 0)) { t = 0 } }
     }
     private func settleOnRoot() { chat = nil; pushedTab = nil; opening = false }
@@ -319,7 +319,7 @@ private struct MorphPageActions: ViewModifier {
         }
         scrubbing = false
         // With the page: the bar finishing ahead of the slide made the list's controls land
-        // before the list (Matt, 2026-10-12: "the nav bar reappears weirdly").
+        // before the list (2026-10-12: "the nav bar reappears weirdly").
         let d = min(0.4, max(0.18, duration))
         let end: CGFloat = fraction >= 1 ? 1 : 0
         generation += 1
@@ -527,7 +527,7 @@ struct MorphTopBar: View {
                                               remembered: SystemBarItems.shared.closed(for: key))
     }
     @Environment(\.reservedRegions) private var regions
-    /// A chat's bar like Messages' on the Duo (Matt, 2026-10-28, #542): no pill. Up in the band, Back, the face with no
+    /// A chat's bar like Messages' on the Duo (2026-10-28, #542): no pill. Up in the band, Back, the face with no
     /// glass behind it (as a contact's photo is), then the bot's name and the chat's title as plain text, and More. Closed, the face and the
     /// name at the top left, and Back and More in the status strip under the status (`columnFrame`). Elsewhere (a phone, an iPad) the pill
     /// with the face seated on it, as before.
@@ -578,7 +578,7 @@ struct MorphTopBar: View {
     static func columnCentre(_ slot: MorphSlot, back: CGPoint, more: CGPoint) -> CGPoint {
         slot == .columnBack ? back : CGPoint(x: more.x, y: back.y + TopBarRoom.stripPitch)
     }
-    /// On by default (Matt, 2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
+    /// On by default (2026-10-12: "the morphing is perfect"); `-vory-morph-off` brings the
     /// shipped chrome back for a comparison, in DEBUG only: Release never reads it.
     static var on: Bool {
         #if DEBUG
@@ -591,7 +591,7 @@ struct MorphTopBar: View {
     /// the only place a morph exists. On a wide window (iPad, the open Duo) the list and the
     /// chat stand in their own columns with the shipped chrome, each over its column.
     static func active(_ model: AppModel) -> Bool { on && !model.wideLayout }
-    /// The pages swap at once on a tab switch while the bar morphs (Matt's pick, "Instant
+    /// The pages swap at once on a tab switch while the bar morphs (the pick made, "Instant
     /// swap", 2026-10-12); `-vory-morph-fade` keeps the old cross-fade for a comparison, in DEBUG only: Release never
     /// reads it.
     static var cutsPages: Bool {
@@ -618,7 +618,7 @@ struct MorphTopBar: View {
     /// set is mounted follow it, so a push or a pop that starts mid-flight carries on from the
     /// frame on screen. Read from the state's target, every frame started from an end state:
     /// the outgoing set was taken down and the incoming one put up at the start, and a quick
-    /// in and out showed both sets half drawn, empty capsules or no controls (Matt on 1.5 (21)).
+    /// in and out showed both sets half drawn, empty capsules or no controls (feedback on 1.5 (21)).
     @Environment(\.morphProgress) private var drawn
     private var t: CGFloat { state.away ? drawn : 1 }
     /// Where the bar is heading: which set takes taps and which slots are there follow it, so a
@@ -662,7 +662,7 @@ struct MorphTopBar: View {
         #endif
         // The seated face rides above the middle capsule in the chat state: outside the glass
         // container, which composites its glass over anything drawn inside it (the face sat
-        // behind its pill, Matt 2026-10-12). Same inset as the measured space.
+        // behind its pill, 2026-10-12). Same inset as the measured space.
         .overlay(alignment: .topLeading) {
             if let chat = state.chat, messagesBar, let a = chatFrames[faceSlot] {
                 // Like Messages (#542): the face on its slot's glass, then the name as plain text, one Chat info button
@@ -725,7 +725,7 @@ struct MorphTopBar: View {
         .onChange(of: model.roomsOnScreen) { _, n in if n > 0, model.chatsPathOpen { state.roomShown() } }
         .onChange(of: chatFrames, initial: true) { _, f in
             guard !state.scrubbing else { return }
-            // Like Messages on the Duo, the thread starts under the chat's band, not under its row (Matt, 2026-10-28).
+            // Like Messages on the Duo, the thread starts under the chat's band, not under its row (2026-10-28).
             let bottom = (f.values.map(\.maxY).max() ?? 0) + (messagesBar ? ChatBand.reach : 0)
             if bottom > 0, abs(bottom - state.chatRowBottom) > 0.5 { state.chatRowBottom = bottom }
         }
@@ -740,7 +740,7 @@ struct MorphTopBar: View {
             // can change with the path still open: a Bot Chat opened from a "Messaged X" notice
             // sits over the chat it came from, and back from it that chat is in front again. The
             // bar is the one in front's: kept on the chat underneath, its Back reached that chat
-            // and took both pages away (#346, Matt on 1.5 (23): Back went to the list). The Chats
+            // and took both pages away (#346, feedback on 1.5 (23): Back went to the list). The Chats
             // tab's own only: with a chat left open on Chats (the Overview widget's link goes to
             // Home and leaves it there), a chat pushed on another tab's stack (from a bot's page or
             // its compose) took the bar, and after its Back the chat's bar stayed over the page
@@ -787,7 +787,7 @@ struct MorphTopBar: View {
         let present = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
-        // it with the morph left the Bots + standing beside the Back as it formed (Matt on 1.5
+        // it with the morph left the Bots + standing beside the Back as it formed (feedback on 1.5
         // (17): "the back button leave behind a trail button once in the new window"). It comes
         // back with the usual move; a tab switch still shrinks it where it was.
         let goesAtOnce = !present && state.away
@@ -801,15 +801,15 @@ struct MorphTopBar: View {
                 // opacity 0 and would otherwise cover it (the Back tap went nowhere).
                 // Each set is seen alone: the outgoing one is gone by a third of the way and the
                 // incoming one arrives past the half, so the capsule carries one control at a
-                // time instead of two half-faded over each other (Matt, 2026-10-12, against the
+                // time instead of two half-faded over each other (2026-10-12, against the
                 // Claude app's morph: crisp, each element fading in place).
                 // Settled, only the shown set is mounted: a menu's label in the glass kept a
                 // ghost of the other set at opacity 0 (the list's bot chip behind Back, the
-                // list's icons behind …; Matt, 2026-10-12).
+                // list's icons behind …; 2026-10-12).
                 // These are functions of the frame drawn (`shown`), not of where the bar is
                 // heading: from the end values a push or a pop faded both sets across the whole
                 // morph, two half-drawn sets over each other, and a quick in and out restarted
-                // them from nothing (Matt on 1.5 (21)).
+                // them from nothing (feedback on 1.5 (21)).
                 // Both sets are up for the whole flight, put up and taken down only where their
                 // opacity is 0 and with no transition of their own (a fade in on top of the one
                 // here would lag it).
@@ -909,7 +909,7 @@ struct MorphTopBar: View {
             .opacity(Double(max(0, 1 - shown * 2.4)))
             // Seated on the pill by its base, 10 pt over the top edge plus the shape's own seat:
             // a 44-pt face seated this low lets the row sit 18 pt under the bar's top with the
-            // head's top at 50 pt, under the Dynamic Island's edge (Matt, 2026-10-12: the
+            // head's top at 50 pt, under the Dynamic Island's edge (2026-10-12: the
             // buttons were too far down, the head must stay off the island). Like Messages on
             // the Duo, in its own slot's place instead (`faceCentre`).
             .position(faceCentre(chat, mid))
@@ -1173,7 +1173,7 @@ struct MorphTopBar: View {
     private var listLayout: some View {
         let chrome = tabChrome(model.selectedTab)
         // At least a control's height on every page, so the title capsule sits on the same line
-        // whether or not the page has round controls beside it (Matt on 1.5 (17): "the title
+        // whether or not the page has round controls beside it (feedback on 1.5 (17): "the title
         // headings like bot and settings they should all be on the exact same spot"; centred in a
         // row of 44 pt circles, Bots' sat 4 pt below Settings' bare one).
         return HStack(spacing: 10) {
@@ -1187,7 +1187,7 @@ struct MorphTopBar: View {
             // pushed page's Back.
             Text(selecting?.title ?? model.selectedTab.title).font(.headline).fixedSize().hidden()
             // A set height, not the text's measured one: measured afresh on each tab switch it
-            // came out a few points taller for a moment and the capsule breathed (Matt,
+            // came out a few points taller for a moment and the capsule breathed (noted
             // 2026-10-12: "the height of the bubble from bot to settings seems to change").
             .padding(.horizontal, 12).frame(height: titleHeight)
             .measured(.mid, into: $listFrames, last: $lastListFrames, rootRow: true)
@@ -1350,7 +1350,7 @@ private struct CapsuleFrame: ViewModifier {
     /// and right of where it rests at first (the gate's frame log).
     var inPlace = false
     /// The face's slot while a chat shows on the Duo: its frame as ever, so nothing in the morph moves, but no glass, so
-    /// the face stands on nothing, as a contact's photo does in Messages (Matt, 2026-10-28, #542).
+    /// the face stands on nothing, as a contact's photo does in Messages (2026-10-28, #542).
     var bare = false
     /// The slot's control is a button across the slot (a chat's Back, a page's Back, Files' Home): it takes touches across
     /// the slot's whole frame, as the system's bar buttons do, and the shield covers that frame (#584).
@@ -1399,7 +1399,7 @@ extension View {
     func barIconSlot() -> some View { frame(minWidth: BarIcon.width) }
 }
 
-/// The bar's controls pressed (Matt on 1.5 (18): "at touching indication on the top right icons
+/// The bar's controls pressed (feedback on 1.5 (18): "at touching indication on the top right icons
 /// for the chat page"): a soft fill behind the control touched, not its whole shared capsule, and
 /// a slight grow, like the system's glass controls, at touch-down; gone on lift or when the finger
 /// slides off. A fill, never glass taken to 0 (the glass reference). Reduce Motion: the fill

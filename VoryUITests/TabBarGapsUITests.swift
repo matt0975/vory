@@ -1,6 +1,6 @@
 import XCTest
 
-/// Matt on 1.5 (18): "don't allow taps behind the nav bar on iPhone as when the group chats appear
+/// Feedback on 1.5 (18): "don't allow taps behind the nav bar on iPhone as when the group chats appear
 /// behind nav bar I can tap it when touching the nav bar". Points on the tab bar that miss its
 /// buttons are tapped one at a time, with the page behind at rest: on Chats (the list runs under
 /// the bar), on Bots (a group chat brought under the bar) and on Home. Before the fix, a touch

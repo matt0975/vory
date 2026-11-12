@@ -25,7 +25,7 @@ final class BarUpUITests: XCTestCase {
     static let rowTop: CGFloat = 26, rowBottom: CGFloat = 70, trailingLimit: CGFloat = 443, slack: CGFloat = 1
     /// At the bar's largest type: the band's bottom (the safe area's top, 82) less 4.
     static let bandBottom: CGFloat = 78
-    /// The open Duo's top safe area (Matt's readouts and the simulator agree).
+    /// The open Duo's top safe area (the device's readouts and the simulator agree).
     static let safeTop: CGFloat = 82
 
     private func pause(_ s: Double) { RunLoop.current.run(until: Date().addingTimeInterval(s)) }
@@ -134,7 +134,7 @@ final class BarUpUITests: XCTestCase {
             guard t.exists else { continue }
             t.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); pause(1.5)
             checkRow("xxxl \(tab)", largest: true)
-            // Chats held for the script's still of the open display (Matt's package).
+            // Chats held for the script's still of the open display (the stills package).
             if tab == "chats" { print("BARUP HOLD xxxl-chats"); pause(3) }
             let c = caps()
             if let lead = c["lead"], let mid = c["mid"] { XCTAssertLessThanOrEqual(lead.maxX, mid.minX + 0.5, "xxxl \(tab): the circle meets the title") }
@@ -344,7 +344,7 @@ final class BarUpUITests: XCTestCase {
     static let closedRowTop: CGFloat = 11
     /// On its side, the name and the face centred on the status's middle.
     static let sideRowMiddle: CGFloat = 48
-    /// Like Messages (Matt, 2026-10-28): the gap between the face and the name, and how far the band's opaque part reaches
+    /// Like Messages (2026-10-28): the gap between the face and the name, and how far the band's opaque part reaches
     /// under the face, each a quarter of the face's 44 pt (`ChatNameLines.faceGap`, `ChatBand.below`); the band's soft
     /// foot past that (`ChatBand.foot`).
     static let faceNameGap: CGFloat = 11, bandBelow: CGFloat = 11, bandFoot: CGFloat = 4
@@ -394,7 +394,7 @@ final class BarUpUITests: XCTestCase {
         }
     }
 
-    /// The chat's bar on the Duo like Messages (Matt, 2026-10-28), in the pose the script names (HERMES_E2E_POSE); with
+    /// The chat's bar on the Duo like Messages (2026-10-28), in the pose the script names (HERMES_E2E_POSE); with
     /// HERMES_E2E_LISTHIDDEN=1 (side or book), after the split's list column is hidden. In every pose:
     /// - Chat info (the face and the name, one button) 44 pt tall (the name alone at XXXL keeps it so), and Back and More
     ///   44 pt or more;
@@ -432,7 +432,7 @@ final class BarUpUITests: XCTestCase {
             XCTAssertEqual(info.frame.height, 44, accuracy: 1, "Chat info \(info.frame) isn't one 44 pt row")
             XCTAssertGreaterThanOrEqual(info.frame.width, 44, "Chat info \(info.frame) under 44 pt")
             XCTAssertTrue(more.exists, "no More")
-            // Like Messages (Matt, 2026-10-28): a quarter of the face between it and the name, the name centred on it, and
+            // Like Messages (2026-10-28): a quarter of the face between it and the name, the name centred on it, and
             // the band reaching a quarter of the face under it.
             if let face = c["face"], let name = c["name"], let band = c["band"] {
                 print("CHATFRAMES spacing face \(face) name \(name) band \(band): gap \(name.minX - face.maxX), name middle off \(name.midY - face.midY), band under the face \(band.maxY - face.maxY)")

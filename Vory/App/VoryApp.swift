@@ -88,7 +88,7 @@ struct VoryApp: App {
                         }
                         // The rest waits for the system's return animation (about half a second):
                         // Keychain reads, the activities' settle and the network checks on the
-                        // first frames made the app land with a hitch (Matt, 2026-10-12).
+                        // first frames made the app land with a hitch (2026-10-12).
                         Task { @MainActor in
                             try? await Task.sleep(for: .milliseconds(600))
                             Task { await model.push.refreshAuthorization() }

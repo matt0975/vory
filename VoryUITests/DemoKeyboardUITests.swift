@@ -1,6 +1,6 @@
 import XCTest
 
-/// Demo mode's chats put the keyboard away after a send (#490, Matt: swiping it away was hard). The app's own chats keep
+/// Demo mode's chats put the keyboard away after a send (#490: swiping it away was hard). The app's own chats keep
 /// it up after a send, as before. The app with `-vory-demo`; the app's own chat needs the mock (HERMES_E2E_URL,
 /// HERMES_E2E_TOKEN, HERMES_E2E_BUNDLE).
 final class DemoKeyboardUITests: XCTestCase {

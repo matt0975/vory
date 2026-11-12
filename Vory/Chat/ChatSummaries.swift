@@ -37,7 +37,7 @@ final class ChatSummarizer {
 
     /// `count` is the chat's message count when the summary was made: the gateway moves
     /// `lastActive` on an attach as well, and a summary stamped by time alone fell back to the
-    /// raw preview every time a chat was opened, then swapped back (Matt, 2026-10-12: "chats are
+    /// raw preview every time a chat was opened, then swapped back (2026-10-12: "chats are
     /// populating weird when I slide out").
     struct Summary: Codable, Equatable { var title: String; var summary: String; var stamp: Double; var count: Int? = nil }
     /// Current for the chat as listed now: same activity stamp, or the same number of messages.

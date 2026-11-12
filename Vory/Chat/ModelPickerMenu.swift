@@ -20,7 +20,7 @@ extension ChatSession {
     var cachedModelOptions: ModelOptionsResult? { ModelOptionsCache.results[modelOptionsCacheKey] }
 
     /// Fetches the list ahead of the first open of the model menu, quietly: the menu used to
-    /// load it on its first open and rebuild itself while it opened (Matt, 2026-10-11: "load
+    /// load it on its first open and rebuild itself while it opened (2026-10-11: "load
     /// the stuff behind the model chip so it doesn't look weird on first open").
     func warmModelOptions() async {
         guard cachedModelOptions == nil else { return }

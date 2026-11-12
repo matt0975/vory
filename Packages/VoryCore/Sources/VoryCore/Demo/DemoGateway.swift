@@ -13,7 +13,7 @@ public actor DemoGateway {
     public enum Pace: Sendable { case real, quick }
     public let pace: Pace
     /// The answers the demo's one approval offers, in the order the card shows them: all four for "Try a demo", only
-    /// Allow once and Deny for the onboarding tour's card (#388, Matt's pick), which passes `["once", "deny"]`.
+    /// Allow once and Deny for the onboarding tour's card (#388, the pick made), which passes `["once", "deny"]`.
     public static let allApprovalChoices = ["once", "session", "always", "deny"]
     public let approvalChoices: [String]
     /// The person's line in a demo's voice mode (#621), which the scripted session shows as heard.

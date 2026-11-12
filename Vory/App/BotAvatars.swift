@@ -228,7 +228,7 @@ struct CreatorStudio: View {
 
     /// A tile's face: the picked one lives and moves, the others are cached stills. Eighteen
     /// live faces (a canvas, a shadow pass and a timeline each) made the Look tab scroll in
-    /// jerks (Matt, 2026-10-11: "load only when clicked on").
+    /// jerks (2026-10-11: "load only when clicked on").
     @ViewBuilder private func tile(_ spec: BotLookSpec, live: Bool) -> some View {
         if live {
             BotFaceView(spec: spec, size: 58, active: true)

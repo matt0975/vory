@@ -10,7 +10,7 @@ struct ProfileInfoSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     /// Opens at the medium height; the tall one is a pull away.
-    /// Full height from the start (Matt, 2026-10-10): at the medium height the sheet's glass let
+    /// Full height from the start (2026-10-10): at the medium height the sheet's glass let
     /// the thread show through beside the face. Medium stays a drag away.
     @State private var detent: PresentationDetent = .large
     /// "All Models…" from the card's Model menu (#401): opened over the card, as the chat under it cannot while it is up.

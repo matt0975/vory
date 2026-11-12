@@ -2,7 +2,7 @@ import XCTest
 
 /// The tab bar comes back after the window changes shape: landscape to portrait and back, with
 /// the list in front and with a chat open. On the open iPhone Duo the turn is also the switch
-/// between two columns and one (Matt, 2026-10-10), after which the bar was missing once.
+/// between two columns and one (2026-10-10), after which the bar was missing once.
 /// Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 @MainActor
 final class BarAfterRotationUITests: XCTestCase {

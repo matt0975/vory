@@ -6,7 +6,7 @@ import os
 /// The pull's steps in the perf log (DEBUG), so a UI test run can say where a pull stopped.
 private let pullLog = Logger(subsystem: "Vory", category: "perf")
 
-// The phone's page chrome: the leading title every tab root shares (the Chats look, Matt
+// The phone's page chrome: the leading title every tab root shares (the Chats look, decided
 // 2026-10-12: "add the heading style of the chats page to all the other pages") and Vory's own
 // pull-to-refresh, whose wheel sits beside that title. The Mac keeps its window toolbar, its
 // Refresh button and its own search field; nothing here is in its target.
@@ -39,7 +39,7 @@ struct PullRefreshKey: PreferenceKey {
 }
 
 /// Pull to refresh, Vory's own rather than `.refreshable`: the system's pull spinner drew inside
-/// the search drawer (Matt, 2026-10-10). An over-pull past the drawer fills the wheel beside
+/// the search drawer (2026-10-10). An over-pull past the drawer fills the wheel beside
 /// the title as it comes; at the trigger it arms with a haptic tick, and the refresh runs the
 /// moment the finger lifts (never mid-pull, never twice on the bounce), the wheel spinning there
 /// for at least a breath before it fades. VoiceOver gets a "Refresh" action.
@@ -47,7 +47,7 @@ struct PullRefresh: ViewModifier {
     /// Where the pull arms, in points pulled past the top (the haptic and the refresh's trigger).
     static let armAt: CGFloat = 104
     /// Where the title capsule opens for the wheel and the arc starts: a quarter of a full pull as the
-    /// finger feels it (Matt on 1.5 (17): "it shouldn't start until it's a quarter of the way into
+    /// finger feels it (feedback on 1.5 (17): "it shouldn't start until it's a quarter of the way into
     /// a full pull down"). The full pull is the finger's travel from rest to the trigger: under
     /// the scroll view's rubber band 104 pt of over-pull takes about 215 pt of finger on a 17 Pro,
     /// and a quarter of that (about 54 pt) pulls the page about 28 pt.
@@ -116,7 +116,7 @@ struct PullRefresh: ViewModifier {
 /// The pull-to-refresh wheel beside a page's title: an arc that fills as the pull comes, then
 /// the spinner while the refresh runs. Its slot opens once a quarter of a full pull has come (one
 /// snappy step: growing it with the finger resized the bar's glass on every frame, and fast pulls
-/// hitched on the phone) and closes after the refresh (Matt, 2026-10-12: no empty space in the
+/// hitched on the phone) and closes after the refresh (2026-10-12: no empty space in the
 /// Chats capsule at rest); the title keeps its leading edge, so it never moves, and the capsule
 /// grows to the right and back.
 struct PullRefreshWheel: View {

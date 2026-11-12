@@ -147,7 +147,7 @@ struct BotAvatar: View {
     @Environment(\.colorScheme) private var colorScheme
     /// A small idle face blinks by picture: the eyes-shut still for a moment, then the open one.
     /// The live view is mounted only for a finish spin or a tap, see `restsAsImage` (mounted
-    /// around each blink, it drew a shade brighter than the still: Matt, 2026-10-12, "randomly
+    /// around each blink, it drew a shade brighter than the still: 2026-10-12, "randomly
     /// loading the bot colors ... it should just load it once and keep it").
     @State private var eyesShut = false
     /// The live view under a row's face has drawn: its cached still can go.
@@ -198,7 +198,7 @@ struct BotAvatar: View {
             } else if size <= 40, !drawn, override == nil {
                 // A row's face: the cached still stays underneath while the live view mounts
                 // (a finish spin, a tap, or when the app comes forward), so the row never draws
-                // empty for a frame (Matt, 2026-10-12, after an app switch), and only then: left
+                // empty for a frame (2026-10-12, after an app switch), and only then: left
                 // under a working face, its idle outline and eyes showed around and through the
                 // moving pose (the toolbox read as a blob with two pairs of eyes, on the phone).
                 ZStack {
@@ -289,7 +289,7 @@ struct BotStill: View {
 /// (one wakeup per blink), skipped while a list is moving. Only on the page in front: the loop
 /// starts again as its page comes forward or goes (a face mounted behind another tab never
 /// blinked, and one that started in front kept waking behind a hidden tab, #248). The Mac stays
-/// still at rest (Matt, 2026-10-12: "Stay still on the Mac"): its faces blink only while a bot
+/// still at rest (2026-10-12: "Stay still on the Mac"): its faces blink only while a bot
 /// is working, as its live faces do.
 private struct StillBlink: ViewModifier {
     @Binding var shut: Bool
