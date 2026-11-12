@@ -536,6 +536,89 @@ private final class CountingDefaults: UserDefaults {
         }
     }
 
+    #if DEBUG
+    /// #637's stand-in for the closed Duo's column (`ColumnStandIn`, DEBUG only): off, nothing changes; on, Back's marker
+    /// stands where it says, closed only.
+    private func closedWindow() -> WindowGeometry {
+        let g = WindowGeometry()
+        g.bounds = CGRect(x: 0, y: 0, width: 466, height: 678)
+        g.safeArea = EdgeInsets(top: 0, leading: 0, bottom: 34, trailing: 84)
+        return g
+    }
+
+    @Test func withoutItsArgumentsTheStandInIsOff() {
+        #expect(ColumnStandIn(arguments: ["Vory", "-vory-geometry-probe", "-launchTab", "chats"]) == ColumnStandIn())
+        #expect(!ColumnStandIn.isOn(["Vory", "-vory-geometry-probe", "-launchTab", "chats"]))
+        #expect(ColumnStandIn.isOn(["Vory", "-vory-standin-readout"]) && ColumnStandIn(arguments: ["Vory", "-vory-standin-readout"]).readout)
+        #expect(ColumnStandIn.isOn(["-vory-standin-marker", "293"]) && !ColumnStandIn(arguments: ["-vory-standin-marker", "293"]).readout)
+        #expect(ColumnStandIn().marker(keyboardUp: false) == nil)
+        #expect(ColumnStandIn().marker(keyboardUp: true) == nil)
+        // A name with no number after it, or one that is no number, or none over zero, says nothing.
+        #expect(ColumnStandIn(arguments: ["-vory-standin-marker"]) == ColumnStandIn())
+        #expect(ColumnStandIn(arguments: ["-vory-standin-marker", "low", "-vory-standin-status", "0", "-vory-standin-pick", "c"]) == ColumnStandIn())
+        let name = "ColumnStandInTests-\(UUID().uuidString)", d = UserDefaults(suiteName: name)!
+        let markers = StripMarkers(defaults: d), g = closedWindow()
+        markers.standIn = ColumnStandIn()
+        // Off: the places are today's, the measured ones before any is read and a settled one after.
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 199))
+        #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 269))
+        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: 0, safeTrailing: 84), withBack: true)
+        markers.settled(.back, CGRect(x: 399, y: 255, width: 38, height: 48), for: key)
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 279))
+        d.removePersistentDomain(forName: name)
+    }
+
+    @Test func theStandInStandsBacksMarkerClosedOnly() {
+        let standIn = ColumnStandIn(arguments: ["-vory-standin-marker", "293", "-vory-standin-marker-kb", "342", "-vory-standin-status", "225", "-vory-standin-pick", "a"])
+        #expect(standIn.markerDown == 293 && standIn.markerUp == 342 && standIn.status == 225 && standIn.pick == .a)
+        #expect(standIn.marker(keyboardUp: false) == 293)
+        #expect(standIn.marker(keyboardUp: true) == 342)
+        // With one number it holds in both states; with the keyboard's alone, the system's own stands until it's up.
+        #expect(ColumnStandIn(arguments: ["-vory-standin-marker", "293"]).marker(keyboardUp: true) == 293)
+        #expect(ColumnStandIn(arguments: ["-vory-standin-marker-kb", "342"]).marker(keyboardUp: false) == nil)
+        let name = "ColumnStandInTests-\(UUID().uuidString)", d = UserDefaults(suiteName: name)!
+        let markers = StripMarkers(defaults: d), g = closedWindow()
+        markers.standIn = standIn
+        // Keyboard down: Back at 293 and More's own marker the system's 70 under it, in the strip's middle.
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 293))
+        #expect(markers.centre(.more, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 363))
+        // Keyboard up (its top at 374: 270 over the 34 pt inset).
+        g.keyboard = CGRect(x: 0, y: 374, width: 466, height: 304)
+        #expect(g.keyboardOverlap == 270)
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 418, y: 342))
+        // It wins over a settled place, on the line that place was read on, and nothing is stored.
+        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: 0, safeTrailing: 84), withBack: true)
+        markers.settled(.back, CGRect(x: 401, y: 175, width: 38, height: 48), for: key)
+        #expect(markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false) == CGPoint(x: 420, y: 342))
+        #expect(markers.frame(.back, for: key) == CGRect(x: 401, y: 175, width: 38, height: 48))
+        // On its side the stand-in says nothing.
+        g.keyboard = .null
+        g.bounds = CGRect(x: 0, y: 0, width: 951, height: 669)
+        #expect(markers.centre(.back, in: g, withBack: true, closed: false, xxxl: false) == CGPoint(x: 903, y: 149))
+        d.removePersistentDomain(forName: name)
+    }
+
+    @Test func aPickStandsTheColumnOverTheKeyboard() {
+        // Circles of 48, 60 apart, the keyboard's top at 374: the lowest middle is 374 less 8 less 24, 342.
+        func stand(_ pick: ColumnStandIn.Pick, _ back: CGFloat) -> [CGFloat?] {
+            let s = ColumnStandIn.stand(pick: pick, back: back, keyboardTop: 374, side: 48, pitch: 60)
+            return [s.back, s.more]
+        }
+        // The pair fits while Back's middle is at most 282: as today, whatever the pick.
+        #expect(stand(.a, 199) == [199, 259])
+        #expect(stand(.b, 282) == [282, 342])
+        // One point lower it doesn't. a: one More in Back's place. b: the pair up, More's bottom 8 over the keyboard.
+        #expect(stand(.a, 283) == [nil, 283])
+        #expect(stand(.b, 283) == [282, 342])
+        #expect(stand(.a, 293) == [nil, 293])
+        #expect(stand(.b, 293) == [282, 342])
+        // Where one circle doesn't fit under the marker either, a's More stands on the limit.
+        #expect(stand(.a, 342) == [nil, 342])
+        #expect(stand(.a, 359) == [nil, 342])
+        #expect(stand(.b, 359) == [282, 342])
+    }
+    #endif
+
     @Test func aPressEndsWhenItsSideGoes() {
         let chat = Chat(), id = ObjectIdentifier(chat)
         withMarkers { m in

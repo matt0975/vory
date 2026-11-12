@@ -566,12 +566,35 @@ struct MorphTopBar: View {
     private func columnFrame(_ slot: MorphSlot) -> CGRect? {
         guard slot.inColumn, stripClosed, !inBand else { return nil }
         let g = windowGeometry, xxxl = typeSize == .xxxLarge
-        let centre = Self.columnCentre(slot, back: StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: xxxl),
-                                       more: StripMarkers.shared.centre(.more, in: g, withBack: true, closed: true, xxxl: xxxl))
+        let byMarkers = Self.columnCentre(slot, back: StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: xxxl),
+                                          more: StripMarkers.shared.centre(.more, in: g, withBack: true, closed: true, xxxl: xxxl))
+        #if DEBUG
+        // DEBUG only (#637, `-vory-standin-pick`): the column as a pick would stand it with the keyboard up.
+        let centre = standInStand.map { CGPoint(x: byMarkers.x, y: slot == .columnBack ? ($0.back ?? byMarkers.y) : $0.more) } ?? byMarkers
+        #else
+        let centre = byMarkers
+        #endif
         let side = TopBarRoom.columnSide
         return CGRect(x: centre.x - side / 2 - g.safeArea.leading - Self.sideInset, y: centre.y - side / 2 - g.safeArea.top - topPadding,
                       width: side, height: side)
     }
+    #if DEBUG
+    /// DEBUG only, never in a release build (#637, `ColumnStandIn`): with `-vory-standin-pick`, closed and with the keyboard
+    /// up, where the pick stands the column's two controls, as middles in window space; nil with no pick or no keyboard.
+    private var standInStand: (back: CGFloat?, more: CGFloat)? {
+        let g = windowGeometry
+        guard stripClosed, !inBand, let pick = StripMarkers.shared.standIn.pick, g.keyboardOverlap > 0 else { return nil }
+        let back = StripMarkers.shared.centre(.back, in: g, withBack: true, closed: true, xxxl: typeSize == .xxxLarge).y
+        return ColumnStandIn.stand(pick: pick, back: back, keyboardTop: g.bounds.height - g.safeArea.bottom - g.keyboardOverlap,
+                                   side: TopBarRoom.columnSide, pitch: TopBarRoom.stripPitch)
+    }
+    /// DEBUG only, never in a release build (#637): whether the stand-in's pick has merged the slot away (pick a: Back,
+    /// with the keyboard up where the pair doesn't fit).
+    private func standInMerges(_ slot: MorphSlot) -> Bool {
+        if slot == .columnBack, let stand = standInStand { return stand.back == nil }
+        return false
+    }
+    #endif
     /// A closed column control's middle, window space, from the two markers' (#618): Back on its own; More on its own
     /// marker's line, `TopBarRoom.stripPitch` under Back (closer than the system's two groups, 70 apart, with room between
     /// the two circles, #671). Back's marker moves down with the status as Live Activities arrive, and More with it.
@@ -784,7 +807,13 @@ struct MorphTopBar: View {
         // A chat has its own slots (`chatHas`): closed, its Back and More stand in the status column and the list's title
         // and trailing capsules go where they are; nothing moves from one place to another (#542).
         let awayHas = state.chat != nil ? chatHas(slot) : (holdSides ? true : (state.pushedTab != nil || state.opening ? slot == .mid || (slot == .trail && pushedActions != nil) : pageHas))
-        let present = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
+        let has = !pushedAway && (shownTarget < 0.5 ? awayHas : pageHas)
+        #if DEBUG
+        // DEBUG only (#637, `-vory-standin-pick a`): Back merged away with the keyboard up, for the pick's picture.
+        let present = has && !standInMerges(slot)
+        #else
+        let present = has
+        #endif
         // Going away (a page pushed on another tab), a slot the away state does not have goes at
         // once, at the push's start: its glass cannot fade inside the container, and shrinking
         // it with the morph left the Bots + standing beside the Back as it formed (feedback on 1.5
