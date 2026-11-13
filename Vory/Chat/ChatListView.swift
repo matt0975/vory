@@ -49,6 +49,15 @@ struct ChatListView: View {
         TopBarRoom.inset(barsVertical: model.tabBarVertical, statusInCorner: statusInCorner, barOn: MorphTopBar.active(model),
                          rowBottom: MorphState.shared.rootRowBottom)
     }
+    /// The closed Duo's list has no sections (#697): the Scheduled row, its chats, each project's header and the chats
+    /// are rows of one section. There the page is one surface (#693), and the gap the list keeps between two sections
+    /// stood as an empty band between its groups. As rows the list draws no gap, and its own line between every two.
+    private var flatGroups: Bool { closedStrip }
+    /// The break after the open Scheduled section there, before the person's chats (#673 keeps one of 16 pt or more):
+    /// half a point over, so on a 3x screen it is drawn 16 1/3 or 16 2/3 pt, never a hair under 16.
+    private static let scheduledBreak: CGFloat = 16.5
+    #else
+    private var flatGroups: Bool { false }
     #endif
     /// The Mac keeps this page mounted behind the others (`macPageShown`, MainSplitView).
     @Environment(\.macPageShown) private var pageShown
@@ -78,7 +87,7 @@ struct ChatListView: View {
     @State private var movingUntil = Date.distantPast
     /// How long a row's swipe action, or its menu's preview, takes to close: the row moves after.
     /// Moved while its swipe was still closing, it went with its actions out and its place blank
-    /// but for faint Pin and Archive circles, then popped in (#372, Matt on 24). 400 ms was set
+    /// but for faint Pin and Archive circles, then popped in (#372, feedback on 24). 400 ms was set
     /// while the move itself also left a blank slot; with a pinned row leaving and arriving
     /// (`listRowID`) the circles are gone about 0.1 s after the tap and the row is back by about
     /// 0.3 s, so the move starts as the swipe settles (1.5 (26); two clean runs at 250).
@@ -226,12 +235,19 @@ struct ChatListView: View {
             .navigationBarTitleDisplayMode(.inline)
             #if os(iOS)
             // The search field is tucked under the title and revealed by a pull, as on the Bots
-            // and Settings pages (Matt, 2026-10-12). On iOS 26 this drawer coexists with
+            // and Settings pages (2026-10-12). On iOS 26 this drawer coexists with
             // pull-to-refresh (Bots does both), so the pinned custom field it replaced, from
             // before this iOS, is gone; the field no longer rides in and out with the bar on the
             // way back from a chat.
             // On the closed Duo, behind the system's search button instead (`closedStrip`).
-            .searchable(text: $searchText, placement: closedStrip ? .toolbar : .navigationBarDrawer(displayMode: .automatic), prompt: "Search chats")
+            // In two columns, where the list is the split view's column (`detailPath`), the field is always shown (#537).
+            // Left to the system there (`.automatic`), it was shown or tucked away afresh each time the column was laid
+            // out again (a launch with a short list, a way back from another app, the column hidden and shown, the Duo
+            // closed and opened), and tucked, the rows moved up into its place. Always shown, it no longer scrolls away
+            // under the title.
+            .searchable(text: $searchText,
+                        placement: closedStrip ? .toolbar : .navigationBarDrawer(displayMode: detailPath != nil ? .always : .automatic),
+                        prompt: "Search chats")
             .searchToolbarBehavior(closedStrip ? .minimize : .automatic)
             // Its toolbar integration kept right at the navigation item as the window enters or leaves the closed strip
             // (`ChatsSearchPlacement`).
@@ -317,7 +333,7 @@ struct ChatListView: View {
                         // The system lays these items down the same strip Vory's tab bar stands in
                         // (the closed Duo), or beside a narrow column on the open one: sort and
                         // filters share one View menu there, so the strip and the title keep room.
-                        Menu { sortMenu; filterMenu } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
+                        Menu { viewSortRow; viewFilterRow } label: { Image(systemName: "line.3.horizontal.decrease.circle") }
                             .simultaneousGesture(TapGesture().onEnded { Smooth.animate("viewMenu") })
                             .accessibilityLabel("View")
                             .accessibilityIdentifier("chats.view")
@@ -389,8 +405,13 @@ struct ChatListView: View {
             .onReceive(NotificationCenter.default.publisher(for: .refreshChats)) { _ in Task { await refresh() } }
             #else
             // Vory's own pull-to-refresh, the wheel beside the title (PageChrome.swift): the
-            // system's pull spinner drew inside the search drawer (Matt, 2026-10-10).
-            .pullRefresh(ownWheel: true) { await refresh() }
+            // system's pull spinner drew inside the search drawer (2026-10-10).
+            // No wheel item of its own (#537): the list's wheel has a place in every layout, beside the title in two
+            // columns (`pageHeading`) and in the top bar's title capsule otherwise (`pullStates`, below). Its own item
+            // stood in the bar whenever neither had claimed the list's state yet, which a change of layout could leave so
+            // (the Duo closed and opened, a way back from another app): an empty slot at the bar's leading edge, with the
+            // bot circle and the title a slot further in.
+            .pullRefresh { await refresh() }
             // The list's pull state, for the morph bar's title capsule to host the wheel (the
             // other roots publish theirs from TabRoot; the Chats page has no TabRoot).
             .onPreferenceChange(PullRefreshKey.self) { r in Task { @MainActor in model.pullStates[.chats] = r.state } }
@@ -571,6 +592,29 @@ struct ChatListView: View {
         .accessibilityIdentifier("chats.filters")
     }
 
+    /// The View menu's two rows (#698). Inside another menu a submenu's row is drawn from its label, and a label
+    /// that is an image alone made a row with a symbol and no word. Each row here is a stock labeled row, the word
+    /// with its symbol, and holds what the button of the same name holds where it stands alone in a bar
+    /// (`sortMenu`, `filterMenu`, which stay symbol only). The symbols still tell the state: filled when the order
+    /// is not Recent, filled when a filter is on.
+    private var viewSortRow: some View {
+        Menu {
+            sortItems
+        } label: {
+            MenuLabel("Sort", systemImage: prefs.sortKey == "recent" ? "arrow.up.arrow.down" : "arrow.up.arrow.down.circle.fill")
+        }
+        .accessibilityIdentifier("chats.sort")
+    }
+
+    private var viewFilterRow: some View {
+        Menu {
+            filterItems
+        } label: {
+            MenuLabel("Filter", systemImage: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+        .accessibilityIdentifier("chats.filters")
+    }
+
     private var filterItems: some View { ChatListFilterItems() }
 
     /// The filters and the sort applied to the loaded (or searched) sessions.
@@ -658,26 +702,29 @@ struct ChatListView: View {
         #endif
         ScrollViewReader { proxy in
         List {
-            // Not signed in on this device: the banner above says so and has the button; the
-            // gateway's own "session expired" line under it would only repeat it in red.
-            if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
-            // Which project the list is narrowed to, since the rows' own chips are hidden then.
-            if !prefs.projectFilter.isEmpty {
-                HStack(spacing: 8) {
-                    if let p = runtime.projects.project(id: prefs.projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
-                    else { Image(systemName: "folder.badge.questionmark").foregroundStyle(.secondary); Text("Chats in no project").font(.subheadline.weight(.medium)) }
-                    Spacer()
-                    Button("Show all") { withAnimation { prefs.projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 6, trailing: 16))
-            }
             // With the "Group chats" filter on, rooms sit among the chats by recency, as chats.
             let visibleRooms = prefs.groupsOnly
                 ? rooms.filter { (prefs.showArchived || !archivedRooms.contains($0.roomId)) && (searchText.isEmpty || $0.name.localizedCaseInsensitiveContains(searchText)) }
                 : []
+            #if os(macOS)
+            topRows(runtime)
             // The scheduled tasks' chats, above the person's own, in a section of their own (#673).
             if !scheduled.isEmpty { scheduledSection(scheduled, runtime: runtime) }
+            #else
+            if flatGroups && prefs.scheduledOpen && !scheduled.isEmpty {
+                // The closed Duo with the Scheduled section open (#697): the rows down to its last chat are the list's one
+                // section, so the list's own gap after it is the break before the person's chats (#673), at the size
+                // set below (`scheduledBreak`). Nothing else on the page ends a section there.
+                Section {
+                    topRows(runtime)
+                    scheduledRows(scheduled, runtime: runtime)
+                }
+            } else {
+                topRows(runtime)
+                // The scheduled tasks' chats, above the person's own, in a section of their own (#673).
+                if !scheduled.isEmpty { scheduledSection(scheduled, runtime: runtime) }
+            }
+            #endif
             if grouped(runtime) {
                 groupedRows(rows, rooms: visibleRooms, runtime: runtime)
             } else {
@@ -713,6 +760,8 @@ struct ChatListView: View {
         // color from top to bottom. The rows' own backgrounds are cleared where the rows are made (the same tag).
         .scrollContentBackground(closedStrip ? .hidden : .automatic)
         .background(closedStrip ? Color(.systemBackground) : Color.clear)
+        // #697: there the list's one gap between sections is the break after the open Scheduled section.
+        .listSectionSpacing(flatGroups ? .custom(Self.scheduledBreak) : .default)
         #endif
         #if os(macOS)
         // The search field sits over the list it searches (in the top inset below), as in
@@ -734,7 +783,7 @@ struct ChatListView: View {
         // The tab bar's room at the list's end, its own and constant (it replaces the root's): the
         // root's drops to 0 while a chat is up, and a list scrolled to its end had its offset
         // clamped to the shorter content then, so after Back it sat that much lower, 59 pt, its
-        // last row under the bar (Matt on 1.5 (11): the list "drops" after a swipe back).
+        // last row under the bar (feedback on 1.5 (11): the list "drops" after a swipe back).
         .contentMargins(.bottom, model.tabBarVertical ? 0 : VoryTabBar.reservedHeight(in: windowGeometry) + 16, for: .scrollContent)
         // The closed Duo's room under the top bar's row, the list's own (#591): laid out with the list, so it's in place as a
         // pop brings the list in, on a stack SwiftUI built anew at a fold too. The row's room alone, so the first row stands
@@ -766,7 +815,7 @@ struct ChatListView: View {
         .overlay(alignment: .bottom) { SummaryStripAboveBar() }
         #endif
         // A bar, not a plain inset: the rows fade out under it the way they do under the
-        // toolbar, instead of showing through behind the search field. On the phone too (Matt):
+        // toolbar, instead of showing through behind the search field. On the phone too (by request):
         // the system's search drawer sat exactly where the pull-to-refresh spinner draws, so
         // the spinner turned inside the field; our field is pinned above the list and the
         // spinner turns below it.
@@ -832,22 +881,51 @@ struct ChatListView: View {
             if prefs.scheduledOpen { Color.clear.frame(height: 16).accessibilityHidden(true) }
         }
         #else
-        Section {
-            ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
-                                working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
-                                waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
-                                onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
-                .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
-                #if os(iOS)
-                .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
-                #endif
-                .id(ScheduledChats.rowID)
-            if prefs.scheduledOpen {
-                ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
-            }
+        if flatGroups {
+            // The closed Duo, the section closed (#697): its row is a row among the others. Open, the list makes the one
+            // section itself (`list`).
+            scheduledRows(runs, runtime: runtime)
+        } else {
+            Section { scheduledRows(runs, runtime: runtime) }
         }
         #endif
     }
+
+    /// The rows above every chat: the gateway's error line, and the project the list is narrowed to.
+    @ViewBuilder private func topRows(_ runtime: GatewayRuntime) -> some View {
+        // Not signed in on this device: the banner above says so and has the button; the
+        // gateway's own "session expired" line under it would only repeat it in red.
+        if let errorText, model.needsSignIn == nil { Text(errorText).foregroundStyle(.red).font(.footnote) }
+        // Which project the list is narrowed to, since the rows' own chips are hidden then.
+        if !prefs.projectFilter.isEmpty {
+            HStack(spacing: 8) {
+                if let p = runtime.projects.project(id: prefs.projectFilter) { ProjectIcon(project: p, size: 22); Text(p.name).font(.subheadline.weight(.medium)) }
+                else { Image(systemName: "folder.badge.questionmark").foregroundStyle(.secondary); Text("Chats in no project").font(.subheadline.weight(.medium)) }
+                Spacer()
+                Button("Show all") { withAnimation { prefs.projectFilter = "" } }.font(.subheadline).buttonStyle(.borderless)
+            }
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 2, leading: 20, bottom: 6, trailing: 16))
+        }
+    }
+
+    #if !os(macOS)
+    /// The Scheduled section's rows on the iPhone and iPad: its own row, and its chats while it's open.
+    @ViewBuilder private func scheduledRows(_ runs: [StoredSession], runtime: GatewayRuntime) -> some View {
+        ScheduledSectionRow(count: runs.count, open: prefs.scheduledOpen,
+                            working: runs.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                            waiting: runs.filter { runtime.needsAttention.contains($0.id) }.count,
+                            onToggle: { withAnimation(.snappy) { prefs.scheduledOpen.toggle() } })
+            .listRowInsets(EdgeInsets(top: 6, leading: ChatRowStyle.rowInset, bottom: 6, trailing: 8))
+            #if os(iOS)
+            .listRowBackground(closedStrip ? Color.clear : nil)   // #693 (B2)
+            #endif
+            .id(ScheduledChats.rowID)
+        if prefs.scheduledOpen {
+            ForEach(runs, id: \.listRowID) { s in sessionRow(s, runtime: runtime) }
+        }
+    }
+    #endif
 
     // MARK: Grouped by project
 
@@ -873,32 +951,53 @@ struct ChatListView: View {
     @ViewBuilder private func groupedRows(_ rows: [StoredSession], rooms: [Room], runtime: GatewayRuntime) -> some View {
         ForEach(groups(rows, runtime: runtime)) { g in
             let folded = collapsed.contains(g.id)
-            Section {
-                if !folded {
-                    let visible = shown(g)
-                    ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
-                    if visible.count < g.sessions.count {
-                        Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
-                            Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    if g.sessions.isEmpty {
-                        Text("No chats here yet.").font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                ProjectSectionHeader(group: g, collapsed: folded,
-                                     working: g.sessions.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
-                                     waiting: g.sessions.filter { runtime.needsAttention.contains($0.id) }.count,
-                                     showBot: prefs.allBots,
-                                     onToggle: { withAnimation(.snappy) { prefs.collapsedRaw = ChatProjectGroups.toggled(prefs.collapsedRaw, g.id) } },
-                                     onNewChat: selecting ? nil : { startChat(in: g, runtime: runtime) })
+            if flatGroups {
+                // A row where a section's header was (#697): the header's own room around it, said as a header.
+                projectHeader(g, folded: folded, runtime: runtime, asRow: true)
+                    .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+                    .listRowBackground(Color.clear)
+                projectRows(g, folded: folded, runtime: runtime)
+            } else {
+                Section { projectRows(g, folded: folded, runtime: runtime) } header: { projectHeader(g, folded: folded, runtime: runtime, asRow: false) }
             }
         }
         if !rooms.isEmpty {
-            Section("Group chats") { ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) } }
+            if flatGroups {
+                Text("Group chats").font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
+                    .listRowBackground(Color.clear)
+                ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) }
+            } else {
+                Section("Group chats") { ForEach(rooms.sorted { $0.updatedAt > $1.updatedAt }, id: \.roomId) { roomRow($0, runtime: runtime) } }
+            }
         }
+    }
+
+    /// A project's chats under its header: the first few, "Show all", or the line that says there are none.
+    @ViewBuilder private func projectRows(_ g: ChatProjectGroup, folded: Bool, runtime: GatewayRuntime) -> some View {
+        if !folded {
+            let visible = shown(g)
+            ForEach(visible, id: \.listRowID) { s in sessionRow(s, runtime: runtime, showProject: false) }
+            if visible.count < g.sessions.count {
+                Button { withAnimation(.snappy) { _ = shownInFull.insert(g.id) } } label: {
+                    Text("Show all \(g.sessions.count)").font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
+                }
+                .buttonStyle(.borderless)
+            }
+            if g.sessions.isEmpty {
+                Text("No chats here yet.").font(.subheadline).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func projectHeader(_ g: ChatProjectGroup, folded: Bool, runtime: GatewayRuntime, asRow: Bool) -> ProjectSectionHeader {
+        ProjectSectionHeader(group: g, collapsed: folded,
+                             working: g.sessions.filter { runtime.chatForStored($0.id)?.isRunning ?? false }.count,
+                             waiting: g.sessions.filter { runtime.needsAttention.contains($0.id) }.count,
+                             showBot: prefs.allBots,
+                             asRow: asRow,
+                             onToggle: { withAnimation(.snappy) { prefs.collapsedRaw = ChatProjectGroups.toggled(prefs.collapsedRaw, g.id) } },
+                             onNewChat: selecting ? nil : { startChat(in: g, runtime: runtime) })
     }
 
     /// The + on a project: a fresh chat with that project's bot, working in its folder.
@@ -1027,7 +1126,7 @@ struct ChatListView: View {
         }
         // All bots before the bots are known (a cold launch: every trigger, the socket's opening
         // included, can come before /api/profiles answers): nothing to ask for yet, and the empty
-        // answer wiped the list until another page loaded it again (Matt on 1.5 (20)). The list
+        // answer wiped the list until another page loaded it again (feedback on 1.5 (20)). The list
         // loads once the bots arrive (the `profiles` trigger above).
         guard Self.canList(allBots: prefs.allBots, botsLoaded: runtime.profilesLoaded) else { return }
         loading = sessions.isEmpty; defer { loading = false }
@@ -1043,7 +1142,7 @@ struct ChatListView: View {
                 let showArchived = prefs.showArchived
                 // Each bot's rows in the bots' own order, whichever answered first: a chat the
                 // gateway lists under several bots kept whichever listing arrived first, so its
-                // bot and avatar flipped between loads (Matt, 2026-10-12: "the bots and chats
+                // bot and avatar flipped between loads (2026-10-12: "the bots and chats
                 // glitch out").
                 var byProfile: [String: [StoredSession]] = [:]
                 try await withThrowingTaskGroup(of: (String, [StoredSession]).self) { group in
@@ -1115,7 +1214,7 @@ struct ChatListView: View {
             }
             // A chat keeps its place until it has new messages: the gateway counts an attach as
             // activity, so the chat just read floated to the top on the way back and every row
-            // shifted (Matt, 2026-10-12: "the chats list jumps ... we want it to remain the same
+            // shifted (2026-10-12: "the chats list jumps ... we want it to remain the same
             // when going into a chat and out of"). Its old time stays until something was said.
             all = all.map { s in
                 guard let p = before[s.id], p.messageCount == s.messageCount, let was = p.lastActive, (s.lastActive ?? 0) > was else { return s }
@@ -1564,7 +1663,7 @@ extension StoredSession {
     /// A chat's row identity in the list, which changes with its pin: List animates a move by
     /// sliding the row underneath the opaque rows it passes, so a pinned row vanished from its
     /// place, a blank slot opened at the top and the row popped into it, and an unpinned one flew
-    /// up over the search field before landing (Matt on 1.5 (25): "a really weird animation").
+    /// up over the search field before landing (feedback on 1.5 (25): "a really weird animation").
     /// As one row leaving and another arriving, each place animates on its own: the row fades
     /// out where it was while the rows close up, and fades in where it goes as they open.
     var listRowID: String { (pinned == true ? "pinned:" : "") + id }

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Matt on 1.5 (21): "going into a chat and pressing/sliding on the white space above the message
+/// Feedback on 1.5 (21): "going into a chat and pressing/sliding on the white space above the message
 /// bar gives this message a weird jump". A chat opened rests with its last row the designed margin
 /// over the composer, and a small touch-drag in the band between them moves the thread no more
 /// than the finger: on a short chat, on one about a screen long and on a long one. (The simulator

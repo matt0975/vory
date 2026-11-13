@@ -20,6 +20,11 @@ final class WindowGeometry {
     /// `.null` when there is none, it is hidden, or it does not sit on the window's bottom edge
     /// (a floating iPad keyboard, another scene's).
     var keyboard: CGRect = .null
+    /// The most the keyboard has covered (`keyboardOverlap`) since it came up; 0 with no keyboard. A keyboard that only
+    /// changes its height while it stays up (it reads 39 pt shorter while a menu is open, #637) does not lower it: it is
+    /// forgotten when the keyboard goes. For what must not move while the keyboard stays (the closed Duo's column,
+    /// `TopBarRoom.columnFit`); the dock and the thread follow the keyboard itself.
+    var keyboardHighOverlap: CGFloat = 0
     /// Whether the reader is holding back a turn's passing window (`passing`): what else is read from the window holds
     /// with it, so nothing moves before the window settles (#548: the bars' edge).
     var holding = false
@@ -60,6 +65,9 @@ final class WindowGeometry {
         let covered = max(0, window.maxY - keyboard.minY)
         return min(max(0, covered - safeBottom), window.height * 0.6)
     }
+
+    /// `keyboardHighOverlap`'s rule: the larger of what is covered now and what was held, and nothing with no keyboard.
+    nonisolated static func highOverlap(now: CGFloat, held: CGFloat) -> CGFloat { now > 0 ? max(now, held) : 0 }
 }
 
 extension EnvironmentValues {
@@ -179,6 +187,8 @@ struct WindowGeometryReader: UIViewRepresentable {
             if geometry.bounds != bounds { geometry.bounds = bounds }
             if geometry.safeArea != measured { geometry.safeArea = measured }
             if geometry.keyboard != keyboard { geometry.keyboard = keyboard }
+            let high = WindowGeometry.highOverlap(now: geometry.keyboardOverlap, held: geometry.keyboardHighOverlap)
+            if geometry.keyboardHighOverlap != high { geometry.keyboardHighOverlap = high }
             if geometry.holding { geometry.holding = false }
             if geometry.seeded { geometry.seeded = false }
         }

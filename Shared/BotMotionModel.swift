@@ -196,7 +196,7 @@ public final class BotMotionModel {
         #endif
         /// Whether a tap plays at all: not off, and the bots not still (Settings › Bots › Style ›
         /// Still, or their motion turned off). Reduce Motion is the view's: it snaps the face.
-        /// Never on the Mac (Matt, 2026-10-13: "You can keep Mac as is"): there a click on a face
+        /// Never on the Mac (2026-10-13: "You can keep Mac as is"): there a click on a face
         /// opens what it opens and the face stays as it was. (Its arrival never landed, held the
         /// bot's other faces back, and the click swapped a still face for a paused live one, a
         /// darker flash with no reaction.)

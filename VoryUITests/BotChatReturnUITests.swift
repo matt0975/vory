@@ -1,6 +1,6 @@
 import XCTest
 
-/// Leaving a Bot Chat opened from a "Messaged <bot>" notice (#448, Matt on 1.5 (28)) and coming back to the chat it
+/// Leaving a Bot Chat opened from a "Messaged <bot>" notice (#448, feedback on 1.5 (28)) and coming back to the chat it
 /// came from (#450). BotChatBackUITests has Back itself. Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN /
 /// HERMES_E2E_BUNDLE are set: the mock gateway's scripted turn messages the "work" bot, and that bot's Bot Chat is on
 /// the gateway.
@@ -151,7 +151,7 @@ final class BotChatReturnUITests: XCTestCase {
         XCTAssertTrue(again, "the same notice did nothing after Back")
     }
 
-    /// The same in a chat opened from the list, as in Matt's report.
+    /// The same in a chat opened from the list, as in the report.
     func testTheNoticeInAStoredChatOpensItsBotChatAgainAfterBack() throws {
         _ = try chatWithANotice()
         sleep(2)

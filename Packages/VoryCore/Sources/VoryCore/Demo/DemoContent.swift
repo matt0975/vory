@@ -1,6 +1,6 @@
 import Foundation
 
-/// What the demo shows (#392): its bots, chats, projects, files and board, in words Matt can
+/// What the demo shows (#392): its bots, chats, projects, files and board, in words anyone can
 /// read and change here without touching the gateway's logic (`DemoGateway`). Generic people, places and
 /// machines only, nothing that reads as a real person, no em dashes, and no links but the demo's own
 /// (a picture is a `MEDIA:` path the demo itself serves). Times are offsets back from the moment the demo starts.
@@ -409,7 +409,7 @@ enum DemoContent {
             """)
 
     /// A message that asks what's taking the space, or to clean up (or a new chat's second message): it measures, then
-    /// asks once before it deletes anything. Onboarding's beats 3 and 4, Option A as Matt approved it: the ready-made
+    /// asks once before it deletes anything. Onboarding's beats 3 and 4, Option A as approved: the ready-made
     /// message is "What's taking up the most space on my server?".
     static let cleanup = Turn(
         reasoning: "Measure first, then ask before deleting anything.",

@@ -247,7 +247,7 @@ struct ConversationView: View {
         #if os(macOS)
         thread(chat)
             // With no toolbar strip the thread runs up under the bot's pill and the window's edge
-            // at full strength, as on the phone (Matt, 2026-10-10: "remove the fades on the Mac
+            // at full strength, as on the phone (2026-10-10: "remove the fades on the Mac
             // too"); the 68 pt top fade mask that used to soften it is gone.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 dock(chat).frame(maxWidth: ChatStyle.readingColumn).frame(maxWidth: .infinity)
@@ -305,11 +305,11 @@ struct ConversationView: View {
         // header sits inside it, so the thread's top margin is the header plus that inset;
         // without it the first message starts under the pill.
         // Like Messages: header and dock float over the thread and the text scrolls under their glass.
-        // No band under the dock, nor under the header on a phone or an iPad (Matt, on the phone,
+        // No band under the dock, nor under the header on a phone or an iPad (on the phone,
         // 2026-10-10: "I dont like the fade at the top or the bottom, you should see the messages
         // from all the way behind the message bar and behind the name"): the thread runs under both
         // and shows through their glass; only its rest margins keep the ends clear. On the Duo the
-        // header has Messages' band (Matt, 2026-10-28, #542: the thread's text ran through the
+        // header has Messages' band (2026-10-28, #542: the thread's text ran through the
         // name, which has no glass there): `ChatBand`, here and in the morph bar.
         ZStack(alignment: .bottom) {
             // The thread keeps the window's full height whatever the keyboard does; its bottom
@@ -318,7 +318,7 @@ struct ConversationView: View {
             thread(chat)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
             // The dock is a sibling, not an overlay of the thread: it sits in the keyboard's own
-            // safe area and rides the keyboard's animation (Matt, 2026-10-11: the bar "lags
+            // safe area and rides the keyboard's animation (2026-10-11: the bar "lags
             // behind the keyboard opening and closing", "the keyboard collapses completely
             // before the chat moves"): a hand-made spring took half a second against the
             // keyboard's quarter. On a wide layout it keeps to the reading column, as on the Mac.
@@ -475,7 +475,7 @@ struct ConversationView: View {
 
     private func dock(_ chat: ChatSession) -> some View {
         BottomDock(chat: chat, text: $composerText, quote: $composerQuote, namespace: glassNamespace, readOnly: route.readOnly)
-            // Demo mode's chats put the keyboard away after a send (#490, Matt: swiping it away was hard); the app's own
+            // Demo mode's chats put the keyboard away after a send (#490: swiping it away was hard); the app's own
             // chats keep it up for the next message.
             .environment(\.composerFocusesAfterSend, !chat.runtime.connection.isDemo)
             .disabled(chat.resumeError != nil && chat.items.isEmpty)
@@ -486,13 +486,13 @@ struct ConversationView: View {
             // own bottom edge the same way and keeps its last line above this. It follows
             // every frame of an interactive keyboard dismiss too: the thread's rows no longer
             // rebuild for it (TranscriptRow takes its open states as values), so the thread
-            // rides with the keyboard instead of holding and jumping (Matt, 2026-10-11).
+            // rides with the keyboard instead of holding and jumping (2026-10-11).
             .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { dockTop = $0 }
     }
     private func header(_ chat: ChatSession) -> some View {
         // The fold of a partly open Duo, where it crosses the thread: the pill keeps off it.
         FoldReader { fold in
-            // Back stays on a wide window too (Matt, 2026-10-10): it clears the column.
+            // Back stays on a wide window too (2026-10-10): it clears the column.
             ChatHeader(chat: chat, fold: fold, showBack: true,
                        onBack: { backFromHeader(chat) }, onProfile: { showProfile = true }, onRename: { renaming = true }, onContext: { showContext = true },
                        onNewChat: { Task { await newChat() } }, onClose: { model.runtime?.closeChat(chat); dismiss() })
@@ -847,7 +847,7 @@ struct ChatHeader: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     /// The header's frame in the window, on the Duo's side: the band and More are placed in window points from it.
     @State private var sideFrame: CGRect = .zero
-    /// The chat list stands beside the chat (Matt, 2026-10-28, #542: no Back then): the pane starts past the window's
+    /// The chat list stands beside the chat (2026-10-28, #542: no Back then): the pane starts past the window's
     /// leading safe edge, the split's list column at its side. With that column hidden the pane runs from the edge. Read
     /// from the pane's own place: the split's visibility binding didn't say so on the Duo (Back stood beside the list).
     private var listBeside: Bool { sideFrame.minX > windowGeometry.safeArea.leading + 1 }
@@ -867,7 +867,7 @@ struct ChatHeader: View {
     }
 
     #if os(iOS)
-    /// The Duo on its side, like Messages there (Matt, 2026-10-28, #542): the face (no glass behind it) and the name at the
+    /// The Duo on its side, like Messages there (2026-10-28, #542): the face (no glass behind it) and the name at the
     /// chat pane's top left, centred on the status's middle (y 48), as one Chat info button; Back and More in the status
     /// strip under the status, each centred on the marker the system lays out there for it (`StripMarkers`, #555: they move
     /// down with the status as Live Activities arrive); Messages' band behind the row (`ChatBand`). Back only while the list
@@ -956,7 +956,7 @@ struct ChatHeader: View {
             onProfile()
         }
         return Button(action: open) {
-            // No glass behind the face: the bot alone, as a contact's photo in Messages (Matt, 2026-10-28).
+            // No glass behind the face: the bot alone, as a contact's photo in Messages (2026-10-28).
             HStack(spacing: ChatNameLines.faceGap) {
                 BotAvatar(profile: chat.profileName, size: 44, active: chat.isRunning,
                           mood: BotFaceView.Mood(session: chat.storedID, state: chat.botState))
@@ -1138,7 +1138,7 @@ private struct PillMenu: ViewModifier {
 /// up the name alone, so the row keeps inside its band. The line takes the longest cut that fits whole: a line cut by its
 /// frame is clipped text to VoiceOver's audit. In the morph bar and in the header on the Duo's side.
 struct ChatNameLines: View {
-    /// Between the face and the name: a quarter of the face's 44 pt, as in Messages' bar (Matt, 2026-10-28).
+    /// Between the face and the name: a quarter of the face's 44 pt, as in Messages' bar (2026-10-28).
     static let faceGap: CGFloat = 11
     var name: String
     var line: String
@@ -1164,13 +1164,13 @@ struct ChatNameLines: View {
 }
 
 #if os(iOS)
-/// A chat's band on the Duo, like Messages' (Matt, 2026-10-28, #542): the system bars' own material behind the chat's
+/// A chat's band on the Duo, like Messages' (2026-10-28, #542): the system bars' own material behind the chat's
 /// controls, from the window's top down to `bottom` and from where it's drawn out to `width`, so the thread never runs
 /// through the name or the controls: opaque to its bottom, then a short soft foot. Never down the status column: Back
 /// and More stand there on their own glass, as UIKit's own items do (#549: a part down the column hung below More as a
 /// block). In points from its own top-left, laid at the window's top; no taps, and VoiceOver doesn't read it.
 struct ChatBand: View {
-    /// How far the band reaches under the face's row: a quarter of the face's 44 pt, as Messages' does (Matt, 2026-10-28).
+    /// How far the band reaches under the face's row: a quarter of the face's 44 pt, as Messages' does (2026-10-28).
     static let below: CGFloat = 11
     /// Its soft edge past that: short, so the band reads as reaching there, not as fading out from the row.
     static let foot: CGFloat = 4

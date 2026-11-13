@@ -96,7 +96,7 @@ final class SplitLayoutUITests: XCTestCase {
     }
 
     /// A regular-width window that is upright and under 700 pt wide (the open Duo in portrait,
-    /// 669 pt): one column, the chat pushed over the list, as on a phone (Matt, 2026-10-10),
+    /// 669 pt): one column, the chat pushed over the list, as on a phone (2026-10-10),
     /// never the system's dimmed list overlay. Runs where the window is that shape; skipped
     /// elsewhere.
     func testOneColumnOnANarrowUprightWindow() throws {

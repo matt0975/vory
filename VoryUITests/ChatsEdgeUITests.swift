@@ -25,9 +25,25 @@ import XCTest
 /// A chat row is proven before anything is read from it or done to it. It is the one hittable cell that holds the
 /// middle of the row button whose label has one of the mock's own chat titles, that button never one whose identifier
 /// starts "chats."; the cell does not hold the middle of the Scheduled section's row ("chats.scheduled") nor of a
-/// scheduled chat's row. The Scheduled section is read at each leg's start and end and is never tapped; a leg that
-/// does not find it closed at its start is VOID. Every press, drag and tap is made at a point of the window worked out
-/// from frames read just before it, by title, so a row that has moved is found where it is now.
+/// scheduled chat's row. The Scheduled section is read at each leg's start and end and is never tapped, but by the
+/// plain gap leg, which opens and closes it once by a tap on its own cell; a leg that does not find it closed at its
+/// start is VOID. Every press, drag and tap is made at a point of the window worked out from frames read just before
+/// it, by title, so a row that has moved is found where it is now.
+///
+/// #697, the gaps between the list's groups. G: every cell of the Chats list that takes a tap is read from the top
+/// down, and for every two neighbors the gap is the lower cell's minY less the upper cell's maxY. On the closed Duo G
+/// is GREEN when every gap is within 0 to 1 pt, RED otherwise; in any other pose it is a READ. One place is held to
+/// another number: with the Scheduled section open, from its last chat's cell to the first proven chat row's cell the
+/// gap is the break, 15 to 17 pt. T (the plain leg): after the section was opened and closed again, the Scheduled
+/// cell's frame and the first cell under it are where they were first read, within 1 pt. Each cell is named by what
+/// it holds (the Scheduled row, a scheduled chat, a proven chat's title, a project's header, or "other"), and each
+/// project header's frame is printed beside the gaps, since a section's header is no cell. The legs: Plain (the
+/// list as it stands), Filtered (narrowed to the mock's project "Acme" for the launch alone, from the argument
+/// domain), Grouped (by project, which the script sets on the device before the leg and removes after it, and says so
+/// with HERMES_E2E_BYPROJECT=1; without it the leg is VOID). P (the grouped leg): a header's + takes its own tap, a
+/// new chat's page opens and Back returns to the list with every header there. S (grouped, selecting): after Select
+/// from a chat row's menu the same header cells are there, each at the x and width it had (not moved in), the title reads
+/// "1 Selected", and Done ends it. P and S are verdicts on the closed Duo and READs in any other pose.
 @MainActor
 final class ChatsEdgeUITests: XCTestCase {
     private var app: XCUIApplication!
@@ -258,7 +274,13 @@ final class ChatsEdgeUITests: XCTestCase {
         }
     }
 
-    private func launch(_ leg: String, look: String, layout: [String]) throws -> Bool {
+    /// `extra`: more of the argument domain for this launch alone. `wait`: the chat title the launch waits for.
+    /// `pinScheduled`: the Scheduled section held closed for the launch from the argument domain. While it is held, no
+    /// tap can open it: the app writes the tap, reads its settings again, and the argument answers first. The plain gap
+    /// legs leave it unheld, so the saved state decides, and close what they opened. Every launch also says no chat is
+    /// to be opened again from the one before (the app keeps the chat on screen for the next launch), so a leg starts
+    /// on the list whatever the leg before it left open.
+    private func launch(_ leg: String, look: String, layout: [String], extra: [String] = [], wait: String = ChatsEdgeUITests.chatTitles[0], pinScheduled: Bool = true) throws -> Bool {
         let e = ProcessInfo.processInfo.environment
         guard let url = e["HERMES_E2E_URL"], let token = e["HERMES_E2E_TOKEN"], !url.isEmpty, !token.isEmpty else {
             throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set")
@@ -269,9 +291,9 @@ final class ChatsEdgeUITests: XCTestCase {
         shots = e["HERMES_E2E_SHOTS"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
         app = XCUIApplication(bundleIdentifier: e["HERMES_E2E_BUNDLE"].flatMap { $0.isEmpty ? nil : $0 } ?? "com.vorantx.vory.demo")
         app.launchArguments = ["-vory-demo-gateway", url, token, "Workshop", "-companionPromptShown", "YES", "-launchTab", "chats",
-                               "-colorSchemePreference", look, "-chats.scheduled.open", "NO"] + layout
+                               "-colorSchemePreference", look, "-restore.openChat", "none"] + (pinScheduled ? ["-chats.scheduled.open", "NO"] : []) + layout + extra
         app.launch()
-        let first = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", Self.chatTitles[0])).firstMatch
+        let first = app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", wait)).firstMatch
         guard first.waitForExistence(timeout: 40) else {
             say("LAUNCH", "chats", "VOID", "no chat row 40 s after launch")
             return false
@@ -495,4 +517,291 @@ final class ChatsEdgeUITests: XCTestCase {
         say("W2", "chats", ok ? "GREEN" : "RED",
             "done \(doneFrame) title '\(t1)' then '\(t2)'; a chat open while selecting \(opened); ended \(ended); the first row opens its chat after \(opens)")
     }
+
+    // MARK: The gaps between the list's groups (#697)
+
+    /// The mock's project the filtered leg narrows the list to: its id, and the proven chat that is in it.
+    private static let filterProject = "p_1a2b3c4d"
+    private static let filterChat = "Disk cleanup on the log host"
+
+    /// A cell of the list that takes a tap, as the gap rule reads it: its frame and what it holds.
+    private struct Slot {
+        let frame: CGRect
+        let what: String
+    }
+
+    private func titleFrame() -> CGRect? {
+        let t = app.staticTexts["morph.title"].firstMatch
+        return t.exists ? t.frame : nil
+    }
+
+    /// The projects' headers on the page ("chats.project.<id>"), from the top down.
+    private func projectHeaders() -> [(id: String, frame: CGRect)] {
+        app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'chats.project.'")).allElementsBoundByIndex
+            .filter { $0.exists }.map { (id: $0.identifier, frame: $0.frame) }.sorted { $0.frame.minY < $1.frame.minY }
+    }
+
+    /// The list's cells that take a tap, from the top down, each named by what holds its middle in it: the Scheduled
+    /// row, a scheduled chat's row, a proven title's button, a project's header; "other" if none of them.
+    private func slots(_ what: String) -> [Slot] {
+        let all = cellFrames(count: what)
+        let sched = byID("chats.scheduled")
+        let schedFrame: CGRect? = sched.exists ? sched.frame : nil
+        let runs = scheduledRowFrames()
+        var titles: [(title: String, frame: CGRect)] = []
+        for t in Self.chatTitles {
+            for b in titled(t).allElementsBoundByIndex where b.exists && b.isHittable { titles.append((title: t, frame: b.frame)) }
+        }
+        let heads = projectHeaders()
+        return all.map { c in
+            var names: [String] = []
+            if let s = schedFrame, c.contains(mid(s)) { names.append("scheduled") }
+            if runs.contains(where: { c.contains(mid($0)) }) { names.append("scheduled-chat") }
+            for t in titles where c.contains(mid(t.frame)) { names.append("chat '\(t.title)'") }
+            for h in heads where c.contains(mid(h.frame)) { names.append("header \(h.id)") }
+            return Slot(frame: c, what: names.isEmpty ? "other" : names.joined(separator: "+"))
+        }
+    }
+
+    /// G on the cells as they stand, one verdict line. With `open`, the one break is looked for: from the last
+    /// scheduled chat's cell to the first proven chat's cell under it, 15 to 17 pt, whatever cells stand between them.
+    @discardableResult
+    private func gaps(_ subject: String, open: Bool) -> [Slot] {
+        let s = slots(subject)
+        let heads = projectHeaders()
+        note("\(subject) headers \(heads.count): \(heads.map { "\($0.id)\(f($0.frame))" }.joined(separator: " ")); title \(f(titleFrame()))")
+        guard s.count > 1 else {
+            say("G", subject, "VOID", "\(s.count) cell(s) that take a tap; two are wanted")
+            return s
+        }
+        // The break's two ends, by what the cells hold.
+        var from: Int?
+        var to: Int?
+        if open {
+            from = s.lastIndex { $0.what.contains("scheduled-chat") }
+            if let a = from { to = s.indices.first { $0 > a && s[$0].what.contains("chat '") && !s[$0].what.contains("scheduled") } }
+        }
+        var parts: [String] = []
+        var out = 0
+        for i in 1..<s.count {
+            if let a = from, let b = to, i > a, i <= b {
+                guard i == b else { continue }
+                let g = s[b].frame.minY - s[a].frame.maxY
+                let ok = g >= 15 && g <= 17
+                if !ok { out += 1 }
+                parts.append("[\(s[a].what) \(f(s[a].frame))] \(n(g)) the break, 15 to 17 wanted, cells between \(b - a - 1)\(ok ? "" : " OUT") [\(s[b].what) \(f(s[b].frame))]")
+                continue
+            }
+            let g = s[i].frame.minY - s[i - 1].frame.maxY
+            let ok = g >= -0.5 && g <= 1
+            if !ok { out += 1 }
+            parts.append("[\(s[i - 1].what) \(f(s[i - 1].frame))] \(n(g))\(ok ? "" : " OUT") [\(s[i].what) \(f(s[i].frame))]")
+        }
+        let detail = "cells \(s.count), gaps out of range \(out): \(parts.joined(separator: "; "))"
+        if open && (from == nil || to == nil) {
+            say("G", subject, "VOID", "the section is open and no scheduled chat's cell with a proven chat's cell under it was found; \(detail)")
+        } else if pose == "closed" {
+            say("G", subject, out == 0 ? "GREEN" : "RED", detail)
+        } else {
+            say("G", subject, "READ", detail)
+        }
+        return s
+    }
+
+    /// The Scheduled section's row, tapped at the middle of its own button. False, with a note, if no one cell holds it
+    /// or the button takes no tap.
+    private func tapScheduled(_ why: String) -> Bool {
+        let now = slots("for the tap on the Scheduled cell (\(why))").filter { $0.what.contains("scheduled") && !$0.what.contains("scheduled-chat") }
+        guard now.count == 1, let c = now.first else {
+            note("\(why): \(now.count) cells hold the Scheduled row, one is wanted; no tap made")
+            return false
+        }
+        // The tap goes to the row's own button, by its frame read now, as a person's would; the cell is printed beside it.
+        let row = byID("chats.scheduled")
+        guard row.exists, row.isHittable else {
+            note("\(why): the Scheduled row's button takes no tap; no tap made")
+            return false
+        }
+        let b = row.frame
+        note("\(why): tap at \(p(mid(b))) on the Scheduled row's button \(f(b)), in the cell \(f(c.frame))")
+        at(mid(b)).tap()
+        pause(1.5)
+        return true
+    }
+
+    private func isClosedPose() -> Bool { ProcessInfo.processInfo.environment["HERMES_E2E_POSE"] == "closed" }
+
+    /// Plain: the list as it stands, with the Scheduled section closed, opened, and closed again.
+    private func gapPlain(_ name: String, look: String) throws {
+        guard try launch(name, look: look, layout: isClosedPose() ? Self.layoutA : [], pinScheduled: false) else { return }
+        let section = scheduledState("start")
+        defer { scheduledAtEnd() }
+        let subject = "plain-\(look)"
+        guard section == "closed" else {
+            for r in ["G", "T"] { say(r, subject, "VOID", "the Scheduled section is \(section) at the leg's start, closed is wanted") }
+            return
+        }
+        let first = gaps("\(subject)-closed", open: false)
+        shot("gap-plain-closed-\(look)")
+        guard tapScheduled("to open the section") else {
+            say("G", "\(subject)-open", "VOID", "the Scheduled cell could not be tapped")
+            say("T", subject, "VOID", "the Scheduled cell could not be tapped")
+            return
+        }
+        let opened = scheduledState("opened")
+        if opened == "open" {
+            gaps("\(subject)-open", open: true)
+            shot("gap-plain-open-\(look)")
+        } else {
+            say("G", "\(subject)-open", "VOID", "the section reads \(opened) after the tap on its cell, open is wanted")
+        }
+        guard opened == "open", tapScheduled("to close the section") else {
+            say("T", subject, "VOID", "the section was not opened and closed again (after the first tap it read \(opened))")
+            return
+        }
+        let closed = scheduledState("closed again")
+        let again = gaps("\(subject)-closed-again", open: false)
+        // T: the Scheduled cell and the first cell under it, where they were first read.
+        func pair(_ s: [Slot]) -> (sched: CGRect, under: CGRect)? {
+            guard let i = s.firstIndex(where: { $0.what.contains("scheduled") && !$0.what.contains("scheduled-chat") }), i + 1 < s.count else { return nil }
+            return (s[i].frame, s[i + 1].frame)
+        }
+        guard closed == "closed", let a = pair(first), let b = pair(again) else {
+            say("T", subject, closed == "closed" ? "VOID" : "RED", "the section reads \(closed) after the second tap; the Scheduled cell and the cell under it first \(pair(first) != nil), again \(pair(again) != nil)")
+            return
+        }
+        let same = abs(a.sched.minX - b.sched.minX) <= 1 && abs(a.sched.minY - b.sched.minY) <= 1 && abs(a.sched.width - b.sched.width) <= 1
+            && abs(a.sched.height - b.sched.height) <= 1 && abs(a.under.minY - b.under.minY) <= 1
+        say("T", subject, same ? "GREEN" : "RED", "Scheduled cell first \(f(a.sched)) again \(f(b.sched)); the cell under it first \(f(a.under)) again \(f(b.under)); title \(f(titleFrame())); a chat open \(chatOpen())")
+        shot("gap-plain-closed-again-\(look)")
+        audit("gap-plain-\(look)")
+    }
+
+    /// Filtered: the list narrowed to one project, its row above the Scheduled section.
+    private func gapFiltered(_ name: String, look: String) throws {
+        guard try launch(name, look: look, layout: isClosedPose() ? Self.layoutA : [],
+                         extra: ["-chats.filter.project", Self.filterProject], wait: Self.filterChat) else { return }
+        let section = scheduledState("start")
+        defer { scheduledAtEnd() }
+        let subject = "filtered-\(look)"
+        // The filter's own row, by its button, which is never tapped.
+        let showAll = hittable(named("Show all"), timeout: 4)
+        note("\(subject): Show all \(f(showAll)); headers \(projectHeaders().count)")
+        guard showAll != nil else { say("G", subject, "VOID", "no \"Show all\" on the page: the list is not narrowed to the project"); return }
+        guard section == "closed" else { say("G", subject, "VOID", "the Scheduled section is \(section) at the leg's start, closed is wanted"); return }
+        gaps(subject, open: false)
+        shot("gap-filtered-\(look)")
+        audit("gap-filtered-\(look)")
+    }
+
+    /// Grouped: the chats under their projects, one project folded and unfolded by a tap on its header.
+    private func gapGrouped(_ name: String, look: String) throws {
+        guard try launch(name, look: look, layout: isClosedPose() ? Self.layoutA : []) else { return }
+        let section = scheduledState("start")
+        defer { scheduledAtEnd() }
+        let subject = "grouped-\(look)"
+        guard ProcessInfo.processInfo.environment["HERMES_E2E_BYPROJECT"] == "1" else {
+            say("G", subject, "VOID", "HERMES_E2E_BYPROJECT is not 1: the list was not set by project before this leg")
+            return
+        }
+        let heads = projectHeaders()
+        guard let head = heads.first else { say("G", subject, "VOID", "no project header on the page: the list is not by project"); return }
+        guard section == "closed" else { say("G", subject, "VOID", "the Scheduled section is \(section) at the leg's start, closed is wanted"); return }
+        gaps(subject, open: false)
+        shot("gap-grouped-\(look)")
+        audit("gap-grouped-\(look)")
+        // One project folded, then unfolded: a tap on its header's own button, found again by its identifier.
+        let h = byID(head.id)
+        guard h.exists, h.isHittable else { say("G", "\(subject)-folded", "VOID", "the header \(head.id) takes no tap"); return }
+        note("\(subject): tap on the header \(head.id) \(f(h.frame)) to fold it")
+        h.tap(); pause(1.2)
+        gaps("\(subject)-folded", open: false)
+        shot("gap-grouped-folded-\(look)")
+        let again = byID(head.id)
+        guard again.exists, again.isHittable else { say("G", "\(subject)-unfolded", "VOID", "the header \(head.id) takes no tap after the fold"); return }
+        note("\(subject): tap on the header \(head.id) \(f(again.frame)) to unfold it")
+        again.tap(); pause(1.2)
+        gaps("\(subject)-unfolded", open: false)
+        note("\(subject): a chat open after the two taps \(chatOpen())")
+        // P: the header's other button, its +, takes its own tap: a new chat's page opens, and Back returns to the list.
+        let plusQ = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "New chat in "))
+        guard let plus = hittable(plusQ, timeout: 3) else { say("P", subject, "VOID", "no \"New chat in\" button that takes a tap on the page"); return }
+        let plusFrame = plus.frame
+        let headNow = byID(head.id)
+        let headFrame: CGRect? = headNow.exists ? headNow.frame : nil
+        note("\(subject): tap at \(p(mid(plusFrame))) on '\(plus.label)' \(f(plusFrame)); the header's button \(f(headFrame))")
+        at(mid(plusFrame)).tap(); pause(2)
+        let opened = chatOpen()
+        var back = false
+        if opened {
+            let b = byID("chat.back")
+            if b.exists && b.isHittable { b.tap(); pause(1.5); back = !chatOpen() }
+        }
+        let folded = slots("\(subject) after the +").filter { $0.what.contains("header") }.count
+        // A verdict on the closed Duo, where the chat pushes over the list and Back returns. In any other pose a READ:
+        // in two columns the chat opens beside the list and there is no Back to take.
+        say("P", subject, pose != "closed" ? "READ" : (opened && back && folded == heads.count ? "GREEN" : "RED"),
+            "the + \(f(plusFrame)) beside the header's button \(f(headFrame)); a new chat's page opened \(opened); back on the list \(back); header cells after \(folded) of \(heads.count)")
+    }
+
+    /// Grouped, selecting: hold a chat row and pick Select, then read where the headers stand. S: the same header cells,
+    /// each at the x and width it had before selecting, within 1 pt, so a header does not move in for a selection mark
+    /// (the mark itself is read from the still); the title reads "1 Selected"; Done ends it. A header's height and place
+    /// down the page are printed only: it has no + while selecting and is shorter (on build 54, 44 pt where it is 48,
+    /// and each row under it 4 pt higher for every header above it).
+    private func gapGroupedSelect(_ name: String, look: String) throws {
+        guard try launch(name, look: look, layout: isClosedPose() ? Self.layoutA : []) else { return }
+        let section = scheduledState("start")
+        defer { scheduledAtEnd() }
+        let subject = "grouped-select-\(look)"
+        guard ProcessInfo.processInfo.environment["HERMES_E2E_BYPROJECT"] == "1" else {
+            say("S", subject, "VOID", "HERMES_E2E_BYPROJECT is not 1: the list was not set by project before this leg")
+            return
+        }
+        guard section == "closed" else { say("S", subject, "VOID", "the Scheduled section is \(section) at the leg's start, closed is wanted"); return }
+        let before = slots("\(subject) before").filter { $0.what.contains("header") }
+        let buttonsBefore = projectHeaders()
+        guard !before.isEmpty, before.count == buttonsBefore.count else {
+            say("S", subject, "VOID", "\(before.count) header cells and \(buttonsBefore.count) header buttons before selecting; the same number, and one at least, are wanted")
+            return
+        }
+        guard let row = chatRows("\(subject) before the hold").first else { say("S", subject, "VOID", "no proven chat row to hold"); return }
+        note("\(subject): hold at \(p(mid(row.cell))) on '\(row.title)' cell \(f(row.cell))")
+        at(mid(row.cell)).press(forDuration: 1.0)
+        let select = app.buttons["Select"].firstMatch
+        guard select.waitForExistence(timeout: 5) else {
+            // The menu is put away by a tap on the page's top left corner, clear of the menu and its preview.
+            app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.02)).tap()
+            say("S", subject, "VOID", "no Select in the row's menu")
+            return
+        }
+        select.tap(); pause(1.5)
+        let doneQ = ids("chats.select.done")
+        let done = hittable(doneQ, timeout: 5)
+        // Read while Done is there: after the tap that ends selecting it is gone, and its frame can no longer be read.
+        let doneFrame = f(done)
+        let t = title()
+        let after = slots("\(subject) while selecting").filter { $0.what.contains("header") }
+        let buttonsAfter = projectHeaders()
+        gaps("\(subject)", open: false)
+        shot("gap-grouped-select-\(look)")
+        // Not moved in: the same header cells, each at the x and width it had. Their heights and places down the page are
+        // printed and not judged: while selecting a header has no + and is shorter, and the rows under it stand higher.
+        var same = after.count == before.count
+        if same {
+            for i in before.indices where abs(before[i].frame.minX - after[i].frame.minX) > 1 || abs(before[i].frame.width - after[i].frame.width) > 1 { same = false }
+        }
+        var ended = false
+        if let d = hittable(doneQ, timeout: 2) { d.tap(); pause(1.5); ended = gone(doneQ, timeout: 3) }
+        say("S", subject, pose != "closed" ? "READ" : (done != nil && t == "1 Selected" && same && ended ? "GREEN" : "RED"),
+            "done \(doneFrame) title '\(t)'; header cells before [\(before.map { f($0.frame) }.joined(separator: " "))] while selecting [\(after.map { f($0.frame) }.joined(separator: " "))]; header buttons before [\(buttonsBefore.map { f($0.frame) }.joined(separator: " "))] while selecting [\(buttonsAfter.map { f($0.frame) }.joined(separator: " "))]; ended \(ended)")
+    }
+
+    func testGapPlainLight() throws { try gapPlain("GapPlainLight", look: "light") }
+    func testGapPlainDark() throws { try gapPlain("GapPlainDark", look: "dark") }
+    func testGapFilteredLight() throws { try gapFiltered("GapFilteredLight", look: "light") }
+    func testGapFilteredDark() throws { try gapFiltered("GapFilteredDark", look: "dark") }
+    func testGapGroupedLight() throws { try gapGrouped("GapGroupedLight", look: "light") }
+    func testGapGroupedDark() throws { try gapGrouped("GapGroupedDark", look: "dark") }
+    func testGapGroupedSelect() throws { try gapGroupedSelect("GapGroupedSelect", look: "light") }
 }

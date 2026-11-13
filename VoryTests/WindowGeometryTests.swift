@@ -42,6 +42,28 @@ import Testing
         #expect(abs(WindowGeometry.keyboardOverlap(window: half, keyboard: kb, safeBottom: 20) - 280) < 0.001)
     }
 
+    /// #637: the most the keyboard has covered since it came up is held while it stays, and forgotten when it goes. On
+    /// the closed Duo the keyboard reads 270 at rest and 231 with a menu open over it; the column must not follow that.
+    @Test func theKeyboardsHighestIsHeldWhileItStays() {
+        #expect(WindowGeometry.highOverlap(now: 270, held: 0) == 270)
+        #expect(WindowGeometry.highOverlap(now: 231, held: 270) == 270)
+        #expect(WindowGeometry.highOverlap(now: 300, held: 270) == 300)
+        #expect(WindowGeometry.highOverlap(now: 0, held: 270) == 0)
+        #expect(WindowGeometry.highOverlap(now: 231, held: 0) == 231)
+    }
+
+    /// The same, as the reader meets it, one publish after another. A taller keyboard raises what is held and it stays
+    /// raised when the keyboard is its first height again: what was fitted against the taller one is not fitted again
+    /// until the keyboard goes. Nothing is held past its leaving.
+    @Test func aTallerKeyboardIsHeldUntilTheKeyboardGoes() {
+        var held: CGFloat = 0
+        let seen = [270, 300, 270, 0, 270].map { (now: CGFloat) -> CGFloat in
+            held = WindowGeometry.highOverlap(now: now, held: held)
+            return held
+        }
+        #expect(seen == [270, 300, 300, 0, 270])
+    }
+
     #if os(iOS)
     @Test func theTabBarReservesLessOnAHomeButtonPhone() {
         // With a home indicator the capsule hangs 13 pt into its area; without one it cannot hang,
@@ -102,7 +124,7 @@ import Testing
     /// Duo upright), with the bar up; nowhere else.
     @Test func theTopBarsRowGetsRoomBesideAStripOrUnderACornerStatus() {
         // Beside the strip (the closed Duo) the row stands 7 pt lower than it did, its face 11 pt from the top as it is
-        // 11 pt above the band's bottom (#558, Matt's even margins closed): the room under it with it, 56 then, 63 now.
+        // 11 pt above the band's bottom (#558, the even margins closed): the room under it with it, 56 then, 63 now.
         #expect(TopBarRoom.inset(barsVertical: true, statusInCorner: true, barOn: true, rowBottom: 44) == 63)
         #expect(TopBarRoom.inset(barsVertical: false, statusInCorner: true, barOn: true, rowBottom: 44) == TopBarRoom.cornerRoom)
         #expect(TopBarRoom.cornerRoom == 1)
@@ -124,7 +146,7 @@ import Testing
         let closed = [CGRect(x: 400, y: 29, width: 37, height: 37), CGRect(x: 382, y: 0, width: 84, height: 170)]
         let upright = [CGRect(x: 611, y: 677, width: 37, height: 58), CGRect(x: 535, y: 0, width: 134, height: 82)]
         let side = [CGRect(x: 216, y: 611, width: 58, height: 37), CGRect(x: 867, y: 0, width: 84, height: 120)]
-        // Closed, the row sits 7 pt lower by Matt's even margins (#558): the design's 63 now, not the 56 the probe read.
+        // Closed, the row sits 7 pt lower by the even margins (#558): the design's 63 now, not the 56 the probe read.
         #expect(room(closed, width: 466, vertical: true, barOn: true) == 63)
         #expect(room(upright, width: 669, vertical: false, barOn: true) == 1)   // flat upright, and the laptop pose
         #expect(room(side, width: 951, vertical: true, barOn: false) == 0)      // flat on its side, and the book pose

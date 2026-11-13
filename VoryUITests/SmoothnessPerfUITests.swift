@@ -1,6 +1,6 @@
 import XCTest
 
-/// Hitches in the moments that have to be smooth (1.5, Matt: "absolutely smooth"): the push
+/// Hitches in the moments that have to be smooth (1.5: "absolutely smooth"): the push
 /// into a chat and the pop back, the + panel, the bot card, the model chip, the list's View
 /// menu, a settings sheet, a long thread's scroll and a whole turn. Each flow is measured with
 /// XCTest's os_signpost hitch metrics (hitch time per second, the hitch count and the frame
@@ -125,7 +125,7 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// A fast back swipe out of a chat, for a frame check of the bar and the list's top coming
-    /// back (Matt, 2026-10-12: "swiping back fast the nav bar pops up kinda choppy").
+    /// back (2026-10-12: "swiping back fast the nav bar pops up kinda choppy").
     func testFastSwipeBack() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token)
@@ -146,7 +146,7 @@ final class SmoothnessPerfUITests: XCTestCase {
 
     /// Pull to refresh with the search drawer hidden, then reveal the drawer and pull again,
     /// for a frame check that the refresh spinner does not draw inside the search field (the
-    /// 2026-10-10 bug the old pinned field caused; Matt, 2026-10-12 moved to the native drawer).
+    /// 2026-10-10 bug the old pinned field caused; 2026-10-12 moved to the native drawer).
     func testSearchDrawerAndRefresh() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         launch(url: url, token: token)
@@ -187,7 +187,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
-    /// The list keeps its place through a chat and back (Matt, 2026-10-12: "the chats list
+    /// The list keeps its place through a chat and back (2026-10-12: "the chats list
     /// jumps, so it'll almost reload everything when going back"): scrolled a screen down, a
     /// row's frame before the chat opens equals its frame after the swipe back.
     func testListKeepsPlaceAfterBack() throws {
@@ -287,7 +287,7 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// Away to the Home screen and back, three times: how long until the list answers, and a
-    /// recording for the frames of the return (Matt, 2026-10-12: "opening task switcher and
+    /// recording for the frames of the return (2026-10-12: "opening task switcher and
     /// then back to Vory app still has that weird lag time").
     func testAppSwitchReturn() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -307,7 +307,7 @@ final class SmoothnessPerfUITests: XCTestCase {
 
     /// A page pushed on a tab other than Chats (a Settings row), then the edge swipe back: the
     /// bar's capsules must not stand over the pushed page, nor come back before the page has
-    /// gone (Matt, 2026-10-12: "swiping back on other pages is broken"), and the title capsule
+    /// gone (2026-10-12: "swiping back on other pages is broken"), and the title capsule
     /// must be back and live once the page is at its root.
     func testPushedPageSwipeBack() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -363,10 +363,10 @@ final class SmoothnessPerfUITests: XCTestCase {
     }
 
     /// A bot's shape changed in its card (Look, then a shape), then the list and the Bots page,
-    /// and the Bots page again after a relaunch (Matt on 1.5 (17): changing a bot from Cloud to
+    /// and the Bots page again after a relaunch (feedback on 1.5 (17): changing a bot from Cloud to
     /// Circle broke its look): stills to hold the changed bot against the others.
     /// The bot starts as HERMES_E2E_SHAPE_FROM (Cloud; set, then a relaunch, so the Bots page is
-    /// first drawn with it, as Matt's was) and becomes HERMES_E2E_SHAPE (Circle).
+    /// first drawn with it, as the reported one was) and becomes HERMES_E2E_SHAPE (Circle).
     func testShapeChange() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
         let e = ProcessInfo.processInfo.environment
@@ -401,7 +401,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         pause(4); shot("bots-relaunch")
     }
 
-    /// Every root's title capsule on the same line (Matt on 1.5 (17): "the title headings like bot
+    /// Every root's title capsule on the same line (feedback on 1.5 (17): "the title headings like bot
     /// and settings they should all be on the exact same spot"): the same centre line on every
     /// tab, and the same leading edge on the tabs without a round control before it (Chats' bot,
     /// Files' Home).
@@ -668,7 +668,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertEqual(blocks, 0, "Home's activity blocks are in the Chats tree")
     }
 
-    /// The pull-to-refresh wheel on every root that can refresh (Matt, 2026-10-12: "the pull to
+    /// The pull-to-refresh wheel on every root that can refresh (2026-10-12: "the pull to
     /// refresh wheel doesn't appear on some of the pages"): the bar is relaunched with each group
     /// of four tabs, every page pulled, and the wheel's "Refreshing" looked for after the release.
     func testPullWheelEveryRoot() throws {
@@ -882,7 +882,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         print("STREAM-AT end")
     }
 
-    /// I: the bar's controls answer a touch (Matt on (18): "at touching indication on the top right
+    /// I: the bar's controls answer a touch (feedback on (18): "at touching indication on the top right
     /// icons"). On the Chats +, sort and filter: a press held for a second then lifted, and a press
     /// that slides off before it lifts, for the phone's frames (the log's Press lines are the
     /// moments). Whatever opened is closed again; the slide-off must not open the New Bot sheet.
@@ -997,7 +997,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         row.tap(); pause(1.5); shot("settings-pushed")
         let back = any("page.back")
         XCTAssertTrue(back.waitForExistence(timeout: 5), "the pushed page has no Back capsule")
-        // 1.5 (18) pushed every page without its slide (Matt: "there's no longer an animation when
+        // 1.5 (18) pushed every page without its slide (feedback: "there's no longer an animation when
         // clicking into panes"); the pop still slid.
         let record = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'probe push '")).firstMatch
         print("PUSH-RECORD \(record.exists ? record.label : "none")")
@@ -1007,7 +1007,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         XCTAssertTrue(any("morph.title").waitForExistence(timeout: 5), "the Settings title capsule is not back")
     }
 
-    /// A bot's page pushed from the Bots grid (Matt on 1.5 (17): "the back button leave behind a
+    /// A bot's page pushed from the Bots grid (feedback on 1.5 (17): "the back button leave behind a
     /// trail button once in the new window", and "Bot name also disappears when it should show"):
     /// the + is gone as the Back forms, and the page keeps its title. Pushed through the card's
     /// menu ("Chats"): an XCTest tap on a card lands on its face, which keeps the tap.
@@ -1107,7 +1107,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         if plus.waitForExistence(timeout: 5) { plus.tap(); pause(1.5); plus.tap(); pause(1.5) }
     }
 
-    /// Settings › Appearance flung down to the bot rows and back (Matt, 2026-10-11: "lags so
+    /// Settings › Appearance flung down to the bot rows and back (2026-10-11: "lags so
     /// hard" as the bots come in).
     func testAppearanceScroll() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -1277,7 +1277,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
-    /// The keyboard up and down in a chat (Matt: "bringing up the keyboard and bringing it down
+    /// The keyboard up and down in a chat (feedback: "bringing up the keyboard and bringing it down
     /// is very laggy and choppy"): the dock and the thread ride with it.
     func testKeyboard() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -1311,7 +1311,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
-    /// The tab bar's lens held on Chats and dragged slowly across to Settings and back (Matt:
+    /// The tab bar's lens held on Chats and dragged slowly across to Settings and back (feedback:
     /// "holding the nav bar selector and then dragging it across to change views is a bit laggy").
     func testTabLensDrag() throws {
         guard let (url, token) = env else { throw XCTSkip("HERMES_E2E_URL / HERMES_E2E_TOKEN not set") }
@@ -1331,7 +1331,7 @@ final class SmoothnessPerfUITests: XCTestCase {
         }
     }
 
-    // MARK: The heavy list (Matt: with lots of chats and bots "that is where it gets sluggish").
+    // MARK: The heavy list (feedback: with lots of chats and bots "that is where it gets sluggish").
     // These want the mock with --extra-sessions 60 --extra-bots 12 (14 bots, 112 chats).
 
     private func waitForList() {

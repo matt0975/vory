@@ -5,7 +5,7 @@ import Testing
 
 /// Edit & resend (#556): only the chat's last message of the person's own can be edited; Send then asks the gateway to
 /// take that turn back (`session.undo`, as a retry), reads the chat again and sends the new words. Each of the gateway's
-/// answers ends it as Matt asked: nothing sent unless the turn was taken back, the words kept otherwise, and a gateway
+/// answers ends it as asked: nothing sent unless the turn was taken back, the words kept otherwise, and a gateway
 /// without the method offers Copy to message from then on.
 @MainActor @Suite struct EditResendTests {
     private func chat() throws -> ChatSession {

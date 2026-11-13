@@ -1,6 +1,6 @@
 import XCTest
 
-/// #439 (Matt on 1.5 (27)): in an old chat loaded from history, no turn running, expanding reasoning and tool cards,
+/// #439 (feedback on 1.5 (27)): in an old chat loaded from history, no turn running, expanding reasoning and tool cards,
 /// and the sideways swipe that shows the times, froze the screen for about 30 s and then the app ended. Against the
 /// mock's long coding chat (MOCK_CODING=n: steps that only think before each tool call, tool rows with output, code
 /// replies, about ten rows a round), opened from the list: cards expanded a few screens up, then the times swipe, a

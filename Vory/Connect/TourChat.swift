@@ -26,7 +26,7 @@ final class TourChat {
         #endif
         return 1.4
     }
-    /// What the tour's one ask offers: Allow once and Deny, so the real card shows those two (Matt, 2026-10-20). Try a
+    /// What the tour's one ask offers: Allow once and Deny, so the real card shows those two (2026-10-20). Try a
     /// demo keeps all four.
     static let approvalChoices = ["once", "deny"]
 

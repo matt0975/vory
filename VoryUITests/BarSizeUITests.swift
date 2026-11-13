@@ -1,6 +1,6 @@
 import XCTest
 
-/// The tab bar's size (1.5 (26), Matt: the iPad's bar the same small size as the iPhone's): along the bottom the bar
+/// The tab bar's size (1.5 (26): the iPad's bar the same small size as the iPhone's): along the bottom the bar
 /// group (the capsule and its circles) runs at most 398 pt, its length on the widest iPhone held upright, centred, on
 /// an iPad and the open Duo upright; on an iPhone held upright it is the window less the two 21 pt margins, as in 1.5.
 /// Also pictured for the review (HERMES_E2E_SHOTS): the Chats list, a chat open beside it, and on an iPad a pushed page with its

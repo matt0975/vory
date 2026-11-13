@@ -2,7 +2,7 @@ import Testing
 @testable import Vory
 
 /// A cold launch with All bots on: the list is not asked for before the gateway has answered for
-/// its bots, so an answer made of no bots cannot wipe it (Matt on 1.5 (20): no chats until
+/// its bots, so an answer made of no bots cannot wipe it (feedback on 1.5 (20): no chats until
 /// another page was picked).
 struct ChatListLoadTests {
     @Test func allBotsWaitsForTheGatewaysAnswerAboutItsBots() {

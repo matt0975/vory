@@ -109,6 +109,66 @@ import UIKit
     }
 }
 
+#if DEBUG
+/// DEBUG only, never in a release build (#637): a stand-in for what the closed Duo's side strip does on a device and not
+/// in the simulator, where Back's marker stands at 199 in every state. Launch arguments, fixed for a launch:
+///   -vory-standin-marker <y>      Back's marker's middle, window space, with the keyboard down (More's own 70 under it)
+///   -vory-standin-marker-kb <y>   where the system would stand it with the keyboard up: shown in the readout only, since a
+///                                 keyboard-up place is not kept and the column stands by the keyboard-down one (#637)
+///   -vory-standin-status <y>      the status's bottom: the app reads none, so this only draws a block (`standin.status`)
+///   -vory-standin-pick a|b        the column drawn as a pick would stand it where the pair doesn't fit over the keyboard:
+///                                 a, one More in Back's place; b, the pair moved up. A picture for the pick, not the fix.
+///   -vory-standin-readout         the column's readout (`standin.column`), for a test to read
+/// Without an argument that begins `-vory-standin-` nothing here changes anything and no view is added (`isOn`;
+/// `StripMarkers.centre`, `MorphTopBar.columnFrame`, RootView's overlay).
+struct ColumnStandIn: Equatable {
+    enum Pick: String { case a, b }
+    static let prefix = "-vory-standin-"
+    var markerDown: CGFloat?
+    var markerUp: CGFloat?
+    var status: CGFloat?
+    var pick: Pick?
+    var readout = false
+    /// Whether the launch carries any stand-in argument at all: only then is the stand-in's overlay in the page.
+    static func isOn(_ arguments: [String]) -> Bool { arguments.contains { $0.hasPrefix(prefix) } }
+
+    /// The system's own pitch between its two items in the strip, as measured (`StripMarkers.fallbackTops`).
+    static let systemPitch: CGFloat = 70
+    /// The room kept between the column's lowest control and the keyboard's top, as the dock keeps.
+    static let gap: CGFloat = 8
+    /// This launch's, from the process's arguments.
+    static let launch = ColumnStandIn(arguments: ProcessInfo.processInfo.arguments)
+
+    init() {}
+    init(arguments: [String]) {
+        func value(_ name: String) -> String? {
+            guard let i = arguments.firstIndex(of: name), i + 1 < arguments.count else { return nil }
+            return arguments[i + 1]
+        }
+        func number(_ name: String) -> CGFloat? { value(name).flatMap { Double($0) }.flatMap { $0 > 0 ? CGFloat($0) : nil } }
+        markerDown = number("-vory-standin-marker")
+        markerUp = number("-vory-standin-marker-kb")
+        status = number("-vory-standin-status")
+        pick = value("-vory-standin-pick").flatMap { Pick(rawValue: $0) }
+        readout = arguments.contains("-vory-standin-readout")
+    }
+
+    /// Back's marker's middle for the keyboard's state, or nil where the system's own stands.
+    func marker(keyboardUp: Bool) -> CGFloat? { keyboardUp ? (markerUp ?? markerDown) : markerDown }
+
+    /// Where a pick stands the column's controls with the keyboard up, as middles: `back` nil where Back is merged away.
+    /// Where the pair fits under Back's marker (More's bottom no lower than `gap` over the keyboard's top), as today.
+    static func stand(pick: Pick, back: CGFloat, keyboardTop: CGFloat, side: CGFloat, pitch: CGFloat) -> (back: CGFloat?, more: CGFloat) {
+        let lowest = keyboardTop - gap - side / 2
+        if back + pitch <= lowest { return (back, back + pitch) }
+        switch pick {
+        case .a: return (nil, min(back, lowest))
+        case .b: return (lowest - pitch, lowest)
+        }
+    }
+}
+#endif
+
 /// Where the system lays out a chat page's two markers in the Duo's side strip, closed and on its side (#555): bar items of
 /// ours (`StripMarkerReader`), never seen, that the system stands under the status and moves down with it as Live Activities
 /// arrive, which nothing else the app can read follows (the probes, 2026-10-31: one activity moved the status 84 pt and the
@@ -143,6 +203,10 @@ import UIKit
     /// The catcher being pressed, so the page's Back or More under it shows the press, as closed's controls press
     /// (`StripPressMirror`).
     var pressed: Kind?
+    #if DEBUG
+    /// DEBUG only, never in a release build (#637): the column's stand-in, this launch's unless a test gives its own.
+    @ObservationIgnored var standIn = ColumnStandIn.launch
+    #endif
     @ObservationIgnored private let defaults: UserDefaults
     /// Readings kept from 1.5.1 (48): the ones before were read with a room on the closed Duo's Chats stack, which moved
     /// the system's items 63 pt down the strip (#591).
@@ -174,6 +238,15 @@ import UIKit
     /// where the system stood it when measured (`fallbackTops`), in the strip's middle line.
     func centre(_ kind: Kind, in g: WindowGeometry, withBack: Bool, closed: Bool, xxxl: Bool) -> CGPoint {
         let key = Self.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: withBack)
+        #if DEBUG
+        // DEBUG only (#637): closed, Back's marker stands where the stand-in says with the keyboard down, in both states of the
+        // keyboard (a keyboard-up place is not kept, `settled`), and More's own the system's pitch under it; on the line the markers were read on.
+        if closed, let y = standIn.marker(keyboardUp: false) {
+            let line = frame(kind, for: key)?.midX
+                ?? (g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge)
+            return CGPoint(x: line, y: kind == .more && withBack ? y + ColumnStandIn.systemPitch : y)
+        }
+        #endif
         if let f = frame(kind, for: key) { return CGPoint(x: f.midX, y: f.midY) }
         let tops = Self.fallbackTops(closed: closed, withBack: withBack, xxxl: xxxl)
         let x = g.safeArea.trailing >= g.safeArea.leading ? g.bounds.width - VoryTabBar.stripCentreFromEdge : VoryTabBar.stripCentreFromEdge
@@ -231,8 +304,12 @@ import UIKit
     }
 
     /// A marker's settled place, kept for its key and the next launch. A move while the app runs (an activity arriving or
-    /// leaving, a turn) is animated, as the system moves its own items.
-    func settled(_ kind: Kind, _ frame: CGRect, for key: String) {
+    /// leaving, a turn) is animated, as the system moves its own items. Nothing is kept while the keyboard is up (#637):
+    /// the key is the window's shape, which the keyboard doesn't change, so a place the system moved a marker to for the
+    /// keyboard would be kept over the keyboard-down one, and the closed column judges its fit from the keyboard-down
+    /// place (`TopBarRoom.columnFit`). The next settled read with the keyboard down is kept as before.
+    func settled(_ kind: Kind, _ frame: CGRect, for key: String, keyboardOverlap: CGFloat = 0) {
+        guard keyboardOverlap <= 0 else { return }
         guard byShape[key]?[kind.rawValue] != frame else { return }
         if byShape[key]?[kind.rawValue] == nil { byShape[key, default: [:]][kind.rawValue] = frame }
         else { withAnimation(.snappy(duration: 0.3)) { byShape[key, default: [:]][kind.rawValue] = frame } }
@@ -597,7 +674,7 @@ struct StripMarkerReader: UIViewControllerRepresentable {
                 #if DEBUG
                 MorphFramesProbe.note(kind == .back ? "markerBack" : "markerMore", f)
                 #endif
-                StripMarkers.shared.settled(kind, f, for: key)
+                StripMarkers.shared.settled(kind, f, for: key, keyboardOverlap: self.geometry?.keyboardOverlap ?? 0)
                 self.hideViews(in: window)
             }
         }

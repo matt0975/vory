@@ -3,7 +3,7 @@ import XCTest
 /// What the person had under their hands survives a rotation: the open chat, the half-typed
 /// draft, the keyboard focus and the thread's place. On the open iPhone Duo the rotation is
 /// also a switch between one column (upright) and two (wide), which rebuilds the chat's views
-/// (Matt, 2026-10-10: one column in portrait). Run on a regular-width simulator (the Duo, an
+/// (2026-10-10: one column in portrait). Run on a regular-width simulator (the Duo, an
 /// iPad). Skipped unless HERMES_E2E_URL / HERMES_E2E_TOKEN are set.
 @MainActor
 final class RotationSurvivalUITests: XCTestCase {

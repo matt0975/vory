@@ -243,7 +243,7 @@ final class DeskHomeUITests: XCTestCase {
                 try audit()
             }
         case "foldcycle":
-            // Half open, flat, half open, HERMES_E2E_CYCLES times (3), Home unscrolled (Matt, on build 39: the desk came
+            // Half open, flat, half open, HERMES_E2E_CYCLES times (3), Home unscrolled (seen on build 39: the desk came
             // late, and going flat the list jumped). Each pose is asked of the script by signal (want-flat-n, want-half-n;
             // it answers done-...-n with the click's epoch); the readout is polled from the signal on, and the first poll
             // that shows the desk gone or come is printed with its epoch, then the heading and the loads once settled.
@@ -275,7 +275,7 @@ final class DeskHomeUITests: XCTestCase {
                 }
             }
         case "answers":
-            // Answering on the desk (Matt couldn't: nothing waited): two chats left waiting, the desk folded, then Allow once
+            // Answering on the desk (it could not be done: nothing waited): two chats left waiting, the desk folded, then Allow once
             // on the first card and Deny on the second, each from the desk; each chat then opened from Chats to see it
             // answered (no card, the mock's scripted end). The mock logs each ask and answer by its request id.
             guard let r = checkDesk("answers"), r.split, let fold = r.fold else { XCTFail("VOID: no desk in the laptop pose"); break }

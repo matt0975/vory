@@ -52,7 +52,7 @@ extension View {
     /// A message bubble: its fill in the bubble's shape, and its press-and-hold menu. On the phone
     /// the view takes in the tail (it reaches past the bubble's edge), so the menu's lift keeps the
     /// tail and lifts the bubble's own outline, and the bubble comes back whole after it: the lift
-    /// cut the tail off, and it grew back a few frames after the menu closed (Matt on 1.5 (21)).
+    /// cut the tail off, and it grew back a few frames after the menu closed (feedback on 1.5 (21)).
     /// The layout is as before. `wholeOnMac`: the Mac's right-click takes the whole bubble, its
     /// padding too (#255). The Mac's right-click has no lift.
     @ViewBuilder func bubble<S: ShapeStyle, M: View>(_ fill: S, side: MessageBubbleShape.Side, tailed: Bool = true, wholeOnMac: Bool = false, @ViewBuilder menu: () -> M) -> some View {

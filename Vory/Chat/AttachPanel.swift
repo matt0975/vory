@@ -101,7 +101,7 @@ struct PanelSurface: ViewModifier {
         // One modifier whatever `on` says (`.identity` glass when off): switching between a
         // glass branch and a plain one changed the subtree's identity inside the glass
         // container, and the replaced subtree stayed on screen at full size (the "/" rows
-        // left over on the card after a close, Matt, 2026-10-11).
+        // left over on the card after a close, 2026-10-11).
         if Self.solid {
             content.background(on ? Color(.secondarySystemBackground) : .clear, in: shape)
         } else if Self.plain {

@@ -1,6 +1,6 @@
 import XCTest
 
-/// Matt on 1.5 (21): "This animation is choppy as well, can we smooth this up so it's fast, but
+/// Feedback on 1.5 (21): "This animation is choppy as well, can we smooth this up so it's fast, but
 /// smooth and can handle going in and out of that fast". A chat opened from Chats and closed
 /// again quickly, ten times over at 0.1 to 0.3 s, then the bar rests with one set of controls,
 /// and its taps land: the list's +, a chat's Back. The run is recorded from outside

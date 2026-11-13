@@ -1,6 +1,6 @@
 import XCTest
 
-/// #375 (Matt on 24): dragging the lens along the tab bar and letting go on a tab moved the tint
+/// #375 (feedback on 24): dragging the lens along the tab bar and letting go on a tab moved the tint
 /// there while the page stayed. Every drag let go on another tab shows that tab's page; and a drag
 /// the system cancels (forced here with `-vory-test-cancel-bar-drag`, since a synthesized drag is
 /// never cancelled) ends with the tint and the page on the same tab.

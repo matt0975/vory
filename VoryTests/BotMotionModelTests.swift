@@ -256,7 +256,7 @@ import Testing
         defer { a.tapped[bot] = nil }
         a.markArrival(profile: bot)
         #if os(macOS)
-        // The Mac has no tap reaction and no arrival (Matt, 2026-10-13): nothing is held back.
+        // The Mac has no tap reaction and no arrival (2026-10-13): nothing is held back.
         #expect(!a.arrivalWaits(profile: bot) && !a.arrive(profile: bot), "the Mac kept an arrival")
         #expect(!BotMotionModel.Reaction.plays, "a tap plays on the Mac")
         #else

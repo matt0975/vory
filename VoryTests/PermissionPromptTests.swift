@@ -4,7 +4,7 @@ import Testing
 import UIKit
 #endif
 
-/// The permission prompts read as Matt approved them (#500), each on its own device: the microphone's one sentence, and
+/// The permission prompts read as approved (#500), each on its own device: the microphone's one sentence, and
 /// the speech recognition's naming the device it's on (the iPad reads its own, `~ipad`, from the same Info.plist).
 @Suite @MainActor struct PermissionPromptTests {
     private func info(_ key: String) -> String? { Bundle.main.object(forInfoDictionaryKey: key) as? String }

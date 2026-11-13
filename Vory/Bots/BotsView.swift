@@ -91,7 +91,7 @@ struct BotsView: View {
                     Button {
                         #if os(macOS)
                         // The Mac: a click opens the bot's settings (its look, instructions and
-                        // model); its chats and the rest are a right-click away (Matt, 2026-10-13).
+                        // model); its chats and the rest are a right-click away (2026-10-13).
                         path.append(BotSettingsRoute(profile: p.name))
                         #else
                         BotAmbient.shared.tap(profile: p.name)
@@ -109,7 +109,7 @@ struct BotsView: View {
                     .accessibilityActions { botActions(p, rt) }
                     .accessibilityIdentifier("bots.card.\(p.name)")
                     // Press and hold (a right-click on the Mac): the bot's menu. The … that also
-                    // opened it is gone (Matt on 1.5 (21): "just press and hold").
+                    // opened it is gone (feedback on 1.5 (21): "just press and hold").
                     .modifier(BotCardLift(profile: p.name))
                     .contextMenu { botActions(p, rt) }
                 }
@@ -202,7 +202,7 @@ struct BotCard: View {
     /// bottom); the overlap is measured from the shape's real base so each bot sits the same.
     /// From the stored looks this view reads, so a changed shape re-seats it: read from the store
     /// directly, the card kept the old shape's seat (a cloud changed to a circle sat 10 pt low,
-    /// over its own name; Matt on 1.5 (17): "it now broke the look").
+    /// over its own name; feedback on 1.5 (17): "it now broke the look").
     private var overlap: CGFloat {
         Self.overlap(shape: BotAvatarStore.choice(for: profile.name, overrides: BotLookMaps.map(avatarsRaw)).spec(hex: "").shape)
     }
@@ -236,7 +236,7 @@ struct BotCard: View {
 
 /// A bot card's outline: the bot's own silhouette over its name pill. Its press and hold lifts
 /// just the bot and its name; the card's rectangle lifted on a light platter read as a window
-/// behind it (Matt on 1.5 (21)).
+/// behind it (feedback on 1.5 (21)).
 struct BotCardOutline: Shape {
     /// The body at rest; nil for a photo, a circle.
     var head: BotBodyShape?

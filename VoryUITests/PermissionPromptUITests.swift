@@ -1,6 +1,6 @@
 import XCTest
 
-/// The speech recognition prompt the system shows reads as Matt approved it on the device it's on (#500): "this iPad" on
+/// The speech recognition prompt the system shows reads as approved for the device it's on (#500): "this iPad" on
 /// an iPad (`NSSpeechRecognitionUsageDescription~ipad`), "this iPhone" on an iPhone. The prompt is raised by a DEBUG
 /// launch argument (`-vory-ask-speech-permission`), on the demo copy freshly installed so it hasn't been answered
 /// (HERMES_E2E_BUNDLE); a still of it, then Don't Allow.

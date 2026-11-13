@@ -89,7 +89,7 @@ import Testing
 
     /// #641: a socket lost while the chats re-attach is opened again before they finish. The re-attach hook ran inside
     /// the connect loop, so the loss started no other loop, and each chat after it waited 20 s on a gateway.ready that
-    /// only the held loop could bring: "Timed out waiting for gateway.ready." (Matt's banner). Here the hook drops its
+    /// only the held loop could bring: "Timed out waiting for gateway.ready." (the banner as reported). Here the hook drops its
     /// pipe and then waits on the socket as a chat's re-attach does, for up to 3 s.
     @Test func aSocketLostWhileTheChatsReattachReconnectsBeforeTheyFinish() async throws {
         let pipes = Pipes(), reattaches = Tally(), firstOpens = Tally(), box = SocketBox(), waited = Outcome()

@@ -1,6 +1,6 @@
 import XCTest
 
-/// A bot's menu on Bots is behind press and hold only (Matt on 1.5 (21): "Remove 3 dots so it's
+/// A bot's menu on Bots is behind press and hold only (feedback on 1.5 (21): "Remove 3 dots so it's
 /// just press and hold"). The default bot's menu has no Rename or Delete; another bot's ends with
 /// Delete bot…, which asks first. The lift shows the bot and its pill only: frames of it are kept
 /// in light and dark.

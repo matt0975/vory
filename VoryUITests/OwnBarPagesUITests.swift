@@ -1,6 +1,6 @@
 import XCTest
 
-/// J (Matt on 1.5 (18): "the formatting is off in the add a gateway"): a pushed page with its own
+/// J (feedback on 1.5 (18): "the formatting is off in the add a gateway"): a pushed page with its own
 /// Cancel, Done or Save keeps the system bar (its items, its title, and the system back where it
 /// has no leading item) and the morph bar steps aside while it is up: no Back circle over its
 /// Cancel ("<ancel"), nothing of the bar over its items. Each page is pushed and popped; its push

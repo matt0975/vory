@@ -1,7 +1,7 @@
 import XCTest
 
 /// #346: a Bot Chat opened from a "Messaged <bot>" notice sits over the chat it came from, and
-/// its Back goes back to that chat, not to the list (Matt on 1.5 (23)). Skipped unless
+/// its Back goes back to that chat, not to the list (feedback on 1.5 (23)). Skipped unless
 /// HERMES_E2E_URL / HERMES_E2E_TOKEN / HERMES_E2E_BUNDLE are set: the mock gateway's scripted turn
 /// messages the "work" bot, and that bot's Bot Chat is on the gateway.
 @MainActor

@@ -59,6 +59,8 @@ struct ProjectSectionHeader: View {
     var waiting: Int
     /// The bot's face beside the name, when several bots' projects are listed.
     var showBot = false
+    /// Drawn as a row of the list, not as a section's header (the closed Duo, #697): it says it is a header itself.
+    var asRow = false
     var onToggle: () -> Void
     var onNewChat: (() -> Void)?
 
@@ -90,6 +92,7 @@ struct ProjectSectionHeader: View {
             .accessibilityLabel("\(name), \(group.sessions.count) \(group.sessions.count == 1 ? "chat" : "chats")\(working > 0 ? ", working" : "")\(waiting > 0 ? ", needs you" : "")")
             .accessibilityHint(collapsed ? "Shows its chats" : "Hides its chats")
             .accessibilityIdentifier("chats.project.\(group.project?.slug ?? group.project?.id ?? "none")")
+            .accessibilityAddTraits(asRow ? .isHeader : [])
             if let onNewChat {
                 Button(action: onNewChat) { Image(systemName: "plus").font(.footnote.weight(.semibold)).frame(width: 28, height: 24).contentShape(.rect) }
                     .buttonStyle(.plain).foregroundStyle(.tint)

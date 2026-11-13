@@ -1,6 +1,6 @@
 import XCTest
 
-/// #372 (Matt on 24: "the pinned chats at the top has poor animations and stutters"): pinning a
+/// #372 (feedback on 24: "the pinned chats at the top has poor animations and stutters"): pinning a
 /// chat moves its row up into the pinned rows once its swipe or its menu has closed, with nothing
 /// left behind in its old place; unpinning moves it back down the same way; and the swipe on a
 /// pinned row opens as any other. The marks are wall-clock, to line up with a recording of the run.

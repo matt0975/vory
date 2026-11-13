@@ -41,7 +41,7 @@ import Testing
         {"task": {"id": "t-001", "title": "Clear old logs", "body": "Under /var/log", "assignee": "work", "status": "review", "priority": 0, "created_by": "agent",
                   "created_at": 1759490000, "started_at": 1759503000, "completed_at": null, "workspace_kind": "scratch", "workspace_path": null, "claim_lock": null,
                   "claim_expires": null, "tenant": null, "current_run_id": 8, "latest_summary": "34 files removed, 4.2 GB freed", "current_run_started_at": null},
-         "comments": [{"id": 1, "task_id": "t-001", "author": "matt", "body": "Keep today's log", "created_at": 1759491000}],
+         "comments": [{"id": 1, "task_id": "t-001", "author": "sam", "body": "Keep today's log", "created_at": 1759491000}],
          "events": [{"id": 40, "task_id": "t-001", "run_id": 7, "kind": "status", "payload": {"from": "ready", "to": "running"}, "created_at": 1759503000},
                     {"id": 41, "task_id": "t-001", "run_id": 8, "kind": "review_requested", "payload": null, "created_at": 1759503500}],
          "attachments": [], "links": {"parents": [], "children": ["t-003"]}, "link_tasks": {}, "child_results": [{"id": "t-003", "title": "Child", "status": "done", "latest_summary": null, "result": "ok"}],
@@ -52,7 +52,7 @@ import Testing
                    "max_runtime_seconds": 3600, "last_heartbeat_at": 1759503500, "started_at": 1759503300, "ended_at": null, "outcome": null, "summary": null, "metadata": {"k": 1}, "error": null}]}
         """
         let d = try JSONCoding.decoder.decode(KanbanTaskDetail.self, from: Data(json.utf8))
-        #expect(d.task.column == .review && d.comments.count == 1 && d.comments[0].author == "matt")
+        #expect(d.task.column == .review && d.comments.count == 1 && d.comments[0].author == "sam")
         #expect(d.runs.count == 2 && d.runs[0].stateText == "crashed" && d.runs[0].durationSeconds == 250 && d.runs[1].isOpen)
         #expect(d.currentRun?.id == 8)
         #expect(d.events.map(\.line) == ["Moved to Running", "Review requested"])
@@ -76,7 +76,7 @@ import Testing
         #expect(log.exists && log.content.hasSuffix("world"))
         let made = try JSONCoding.decoder.decode(KanbanTaskEnvelope.self, from: Data(#"{"task": {"id": "t-009", "title": "New", "status": "ready", "assignee": "default", "created_at": 1}, "warning": "No gateway is running for this profile; the task will sit in 'ready'."}"#.utf8))
         #expect(made.task?.id == "t-009" && made.warning?.hasPrefix("No gateway") == true)
-        let frame = try JSONCoding.decoder.decode(KanbanEventsFrame.self, from: Data(#"{"events": [{"id": 42, "task_id": "t-001", "run_id": null, "kind": "commented", "payload": {"author": "matt"}, "created_at": 1759503700}], "cursor": 42}"#.utf8))
+        let frame = try JSONCoding.decoder.decode(KanbanEventsFrame.self, from: Data(#"{"events": [{"id": 42, "task_id": "t-001", "run_id": null, "kind": "commented", "payload": {"author": "sam"}, "created_at": 1759503700}], "cursor": 42}"#.utf8))
         #expect(frame.cursor == 42 && frame.events[0].line == "Comment")
     }
 }

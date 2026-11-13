@@ -3,8 +3,8 @@ import Testing
 @testable import Vory
 
 /// The open Duo upright's top bar up in the status band (#516): keyed on the window (a fold reported across it, active or
-/// not; taller than wide; a top safe area deep enough for the row), never on a status region. The fixtures are Matt's 38
-/// readouts of his Duo (iOS 27.2), the simulator's, and an iPhone 18 Pro, which must leave the bar where it is.
+/// not; taller than wide; a top safe area deep enough for the row), never on a status region. The fixtures are the build 38
+/// readouts of a Duo (iOS 27.2), the simulator's, and an iPhone 18 Pro, which must leave the bar where it is.
 @Suite struct BarUpTests {
     private typealias Reported = ReservedRegions.Reported
     /// Every pose of the device reports this, inactive (the readouts' "Covered area").
@@ -61,7 +61,7 @@ import Testing
     }
 
     @Test func everythingElseLeavesTheBarWhereItIs() {
-        // Matt's iPhone 18 Pro: no regions, safe top 62. The bar stays put and nothing moves.
+        // An iPhone 18 Pro: no regions, safe top 62. The bar stays put and nothing moves.
         #expect(!barUp([], CGSize(width: 402, height: 874), safeTop: 62))
         #expect(TopBarRoom.lift(barUp: false, safeTop: 62) == 0)
         #expect(!TopBarRoom.keepsBarWhileSearching(statusInCorner: false, barUp: false), "without the floating bar, a phone's search keeps the system's own way")

@@ -21,8 +21,8 @@ struct VoryMacApp: App {
         // The 1.5 motion: painted bots run on the model (#304), the same rule as the iPhone's
         // VoryApp; `-vory-motion-engine NO` leaves the 1.4 drawing on for a comparison. Until
         // 2026-10-11 nothing on the Mac set this, so every Mac face kept the 1.4 yaw turn and
-        // the Style picker scaled nothing (Matt: "make sure all bots are using the new animation
-        // on both iOS and MacOS").
+        // the Style picker scaled nothing. The rule since: every bot uses the new motion, on iOS
+        // and on macOS alike.
         BotFace.motionEngine = UserDefaults.standard.object(forKey: "vory-motion-engine") == nil || UserDefaults.standard.bool(forKey: "vory-motion-engine")
         // Settings › Bots › Style, as the iPhone applies it at launch (the Mac has no gyroscope
         // part); the 1.4 "Animate bots" switch folds into it first.

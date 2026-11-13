@@ -132,6 +132,16 @@ struct RootView: View {
                 #endif
             }
         }
+        // DEBUG only, never in a release build (#637, `ColumnStandIn`): the stand-in's status block in the side strip
+        // (`-vory-standin-status`) and the column's readout (`-vory-standin-readout`). Only in a launch that carries an
+        // argument beginning `-vory-standin-`: without one no view is added here.
+        .overlay {
+            #if os(iOS)
+            if ColumnStandIn.isOn(ProcessInfo.processInfo.arguments) {
+                ColumnStandInOverlay(g: windowGeometry).ignoresSafeArea().allowsHitTesting(false)
+            }
+            #endif
+        }
         #if os(iOS)
         // `-vory-hinge-probe`: every hinge change the window reports (Duo stage 4, the blink as it opens).
         .modifier(HingeProbe.IfOn())
@@ -144,7 +154,7 @@ struct RootView: View {
         .environment(\.windowGeometry, windowGeometry)
         // Wide on a regular-width window that is wider than tall or at least 700 pt wide (any
         // iPad, the open Duo in landscape); the phone layout otherwise, which includes the open
-        // Duo upright (669 pt: Matt chose one column there, 2026-10-10) and a narrow Stage
+        // Duo upright (669 pt: one column was chosen there, 2026-10-10) and a narrow Stage
         // Manager or Split View window. The window's shape decides, never the device or a pose.
         .environment(\.wideLayout, wide)
         .onChange(of: liveWide, initial: true) { _, w in if scenePhase != .background { shownWide = w } }
@@ -366,7 +376,7 @@ struct MainTabView: View {
                             // The overlay already ends above the home-indicator area; the stack
                             // keeps one group gap over it, no more. Padding it by the inset again
                             // pushed the stack up until its first tab touched the page's own
-                            // strip items (the list's filter met Home, Matt).
+                            // strip items (the list's filter met Home, as reported).
                             .padding(.bottom, VoryTabBar.stripGroupGap)
                             // On the closed Duo the foot slot is left to Chats' search, on every tab (`stripSearchSlot`).
                             .padding(.bottom, TopBarRoom.closedStrip(barsVertical: vertical, size: windowGeometry.bounds.size) ? VoryTabBar.stripSearchSlot : 0)
@@ -399,7 +409,7 @@ struct MainTabView: View {
                 } else {
                     var t = Transaction(); t.disablesAnimations = true
                     withTransaction(t) { model.popProgress = fraction }
-                    // The morph prototype's controls follow the finger (Matt, 2026-10-12).
+                    // The morph prototype's controls follow the finger (2026-10-12).
                     if MorphTopBar.on { MorphState.shared.scrub(fraction) }
                 }
             }
@@ -541,6 +551,58 @@ struct HingeOpenBlink: ViewModifier {
 #endif
 
 #if DEBUG && os(iOS)
+/// DEBUG only, never in a release build (#637, `ColumnStandIn`). Two things, in window space:
+/// the status block (`standin.status`), with `-vory-standin-status <y>` and a side strip: a plain grey block over the strip
+/// from the window's top to y, standing for a status and Live Activities the simulator doesn't draw, so a still shows a
+/// control drawn over them and a test has a frame to judge against; it takes no touch.
+/// The column's readout (`standin.column`), with `-vory-standin-readout`: the stand-in's numbers, the markers as the reader
+/// settled them for this shape, and where the closed column's two controls stand by the rule in force (their middles;
+/// "none" for one merged away), with the keyboard's top as the app has it. The markers are asked for at the default
+/// text sizes (`xxxl: false`): closed, the measured places are the same at XXXL, and the stand-in's runs are at large.
+/// Mounted only in a launch with a stand-in argument (`ColumnStandIn.isOn`).
+private struct ColumnStandInOverlay: View {
+    var g: WindowGeometry
+
+    private func n(_ v: CGFloat?) -> String { v.map { String(format: "%.1f", $0) } ?? "none" }
+    private func r(_ f: CGRect?) -> String { f.map { String(format: "%.1f,%.1f,%.1f,%.1f", $0.minX, $0.minY, $0.width, $0.height) } ?? "none" }
+
+    private var readout: String {
+        let markers = StripMarkers.shared, standIn = markers.standIn
+        let key = StripMarkers.key(shape: SystemBarItems.shapeKey(size: g.bounds.size, safeTop: g.safeArea.top, safeTrailing: g.safeArea.trailing), withBack: true)
+        let back = markers.centre(.back, in: g, withBack: true, closed: true, xxxl: false).y
+        let top: CGFloat? = g.keyboardHighOverlap > 0 ? g.bounds.height - g.safeArea.bottom - g.keyboardHighOverlap : nil
+        // The rule in force (#637, `TopBarRoom.columnFit`): the pair, or one More where it doesn't fit over the keyboard.
+        var stands: (back: CGFloat?, more: CGFloat), fit: String
+        switch TopBarRoom.columnFit(back: back, keyboardTop: top) {
+        case .pair(let b, let m): stands = (b, m); fit = "pair"
+        case .merged(let m): stands = (nil, m); fit = "merged"
+        }
+        if let pick = standIn.pick, let top {
+            stands = ColumnStandIn.stand(pick: pick, back: back, keyboardTop: top, side: TopBarRoom.columnSide, pitch: TopBarRoom.stripPitch)
+        }
+        return "standin marker \(n(standIn.markerDown)) kb \(n(standIn.markerUp)) status \(n(standIn.status)) pick \(standIn.pick?.rawValue ?? "none")"
+            + "\nsettled back \(r(markers.frame(.back, for: key))) more \(r(markers.frame(.more, for: key)))"
+            + "\nstands back \(n(stands.back)) more \(n(stands.more)) side \(n(TopBarRoom.columnSide)) kbtop \(n(top)) fit \(fit)"
+    }
+
+    var body: some View {
+        let strip = max(g.safeArea.leading, g.safeArea.trailing), onRight = g.safeArea.trailing >= g.safeArea.leading
+        ZStack {
+            Color.clear
+            if let y = StripMarkers.shared.standIn.status, strip >= VoryTabBar.stripItemWidth {
+                Rectangle().fill(.gray.opacity(0.35)).frame(width: strip, height: y)
+                    .accessibilityElement().accessibilityIdentifier("standin.status")
+                    .position(x: onRight ? g.bounds.width - strip / 2 : strip / 2, y: y / 2)
+            }
+            if StripMarkers.shared.standIn.readout {
+                Text(readout).font(.caption2.monospaced()).padding(4).background(.cyan.opacity(0.9)).foregroundStyle(.black)
+                    .accessibilityIdentifier("standin.column")
+                    .position(x: min(g.bounds.width - 130, 160), y: 200)
+            }
+        }
+    }
+}
+
 /// DEBUG, `-vory-geometry-probe`: the window's reserved regions as the system reports them (stage 2 of the Duo work):
 /// division (the fold) and occlusion (a camera), each with its frame in window space, its margins and whether it is
 /// active, included inactive ones; printed in a band the fold doesn't cover.

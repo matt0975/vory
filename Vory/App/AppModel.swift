@@ -244,7 +244,7 @@ final class AppModel {
     var chatsPathOpen = false
     /// How far an interactive back swipe has pulled the chat away (0 to 1): while the bar is
     /// hidden for that chat, it slides in by this much, so it tracks the finger like the
-    /// system's bars and goes back out when the swipe is cancelled (Matt, 2026-10-11).
+    /// system's bars and goes back out when the swipe is cancelled (2026-10-11).
     var popProgress: CGFloat = 0
     /// The morph prototype's bar (drawn outside the stacks) asks the open chat for one of its
     /// actions, or the Chats list for one of its own; each carries an id so repeats are seen.
@@ -277,7 +277,7 @@ final class AppModel {
     /// The bot the Chats list's chip shows. Opening a chat selects that chat's bot, and the
     /// list goes back to the default bot once the chat is gone: while the chat covers the list
     /// the chip shows the bot it will come back to, not the drifted one (the chip read one
-    /// colour through the swipe back and switched after it, Matt 2026-10-12). With the chat
+    /// colour through the swipe back and switched after it, 2026-10-12). With the chat
     /// beside the list (two columns, the Mac) the list in view is the chat's bot's, so the chip
     /// is too: it showed the default bot over another bot's chats there.
     var listChipProfile: String? {
@@ -312,7 +312,7 @@ final class AppModel {
     /// Chats and rooms pushed on the Chats tab's one-column stack, counted while on screen.
     /// A pop empties the path the moment the swipe is let go (or Back is tapped), half a
     /// second before the chat has slid away; the bar's reserved size snapping back right then
-    /// re-laid out the chat under the finger (the thread bounced, Matt, 2026-10-11). The bar's
+    /// re-laid out the chat under the finger (the thread bounced, 2026-10-11). The bar's
     /// slide still starts with the path; the room it takes waits for the chat to be gone.
     var chatsOnScreen = 0
     /// Of those, group chats: they keep their own header, and the morph bar steps aside.
@@ -351,7 +351,7 @@ final class AppModel {
                 await self.push.syncRegistration(runtime: rt)
             }
         }
-        // The demo asks for notifications on its first message (#501, Matt's call): its replies and approvals are local
+        // The demo asks for notifications on its first message (#501, a product call): its replies and approvals are local
         // notifications, and nothing else in it asks. The system's question only, while it has not been answered; nothing
         // is registered anywhere (`PushRegistrar` refuses the demo).
         NotificationCenter.default.addObserver(forName: .hermesMessageSent, object: nil, queue: .main) { [weak self] n in

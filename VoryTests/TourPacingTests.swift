@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import Vory
 
-/// Onboarding's motion and pacing (#489, Matt: Vory's motion was too big and sometimes overlapped his bubble, and on a
+/// Onboarding's motion and pacing (#489: Vory's motion was too big and sometimes overlapped his bubble, and on a
 /// beat with more than one line they changed too fast).
 @Suite @MainActor struct TourPacingTests {
     /// A line stays up for its typing, then a second, then 0.3 s a word; under Reduce Motion (no typing) the rest only.
