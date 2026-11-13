@@ -862,7 +862,7 @@ struct ComposerView: View {
             // An edit on its way is sent once (#556).
             let disabled = (text.trimmingCharacters(in: .whitespaces).isEmpty && chat.staged.isEmpty) || chat.resending
             Button { Task { await send() } } label: {
-                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(disabled ? .white : AppTheme.currentForeground)
                     .frame(width: 28, height: 28).background(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.vory), in: .circle)
             }
             .buttonStyle(.plain)
@@ -967,7 +967,7 @@ struct ComposerView: View {
             .accessibilityIdentifier("newchat.voice")
         } else {
             Button { Task { await send() } } label: {
-                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(.white)
+                Image(systemName: "arrow.up").font(.body.weight(.bold)).foregroundStyle(n.enabled ? AppTheme.currentForeground : .white)
                     .frame(width: 28, height: 28).background(n.enabled ? AnyShapeStyle(Color.vory) : AnyShapeStyle(.tertiary), in: .circle)
             }
             .buttonStyle(.plain)
