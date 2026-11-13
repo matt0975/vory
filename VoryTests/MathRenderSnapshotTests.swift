@@ -5,7 +5,7 @@ import Testing
 @testable import Vory
 
 /// Renders inline maths through the real view layer into PNGs, so a subscript's size and drop
-/// can be looked at rather than guessed. Debug aid: writes to ~/.hermes/cache/scratch/mathrender.
+/// can be looked at rather than guessed. Debug aid: writes to temporary directory under `mathrender/`.
 @Suite struct MathRenderSnapshotTests {
 
     static let samples: [(String, String)] = [
@@ -25,7 +25,7 @@ import Testing
     ]
 
     @Test @MainActor func renderSamplesToDisk() throws {
-        let dir = URL(fileURLWithPath: "/Users/andrew/.hermes/cache/scratch/mathrender", isDirectory: true)
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mathrender", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
         for (name, source) in Self.samples {
@@ -44,6 +44,48 @@ import Testing
             }
             try data.write(to: dir.appendingPathComponent("\(name).png"))
             print("wrote \(name).png  (\(Int(image.size.width))x\(Int(image.size.height)))  from: \(source)")
+        }
+    }
+
+    static let displayMathSamples: [(String, String)] = [
+        ("fraction", "\\frac{d}{dx}\\left(\\int_0^x f(t)\\,dt\\right) = f(x)"),
+        ("matrix", "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}^{-1} = \\frac{1}{ad-bc}\\begin{pmatrix} d & -b \\\\ -c & a \\end{pmatrix}"),
+        ("summation", "\\sum_{n=1}^{\\infty} \\frac{1}{n^2} = \\frac{\\pi^2}{6}"),
+        ("maxwell", "\\nabla \\times \\mathbf{E} = -\\frac{\\partial \\mathbf{B}}{\\partial t}"),
+    ]
+
+    @Test @MainActor func renderDisplayMathCardsToDisk() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mathrender-display", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        for (name, formula) in Self.displayMathSamples {
+            let markup = await KaTeXEngine.shared.render(latex: formula)
+            #expect(!markup.isEmpty)
+
+            // Render a primed snapshot representing KaTeX 2D output
+            let mathView = Text(MathNotation.format(formula))
+                .font(.system(.title3, design: .serif))
+                .italic()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            let mathRenderer = ImageRenderer(content: mathView)
+            mathRenderer.scale = 3.0
+            let sampleImage = mathRenderer.uiImage ?? UIImage()
+
+            KaTeXCache.setSnapshot(sampleImage, for: formula, dark: true)
+
+            // Render display card with primed snapshot
+            let cardView = MathCardView(equation: formula, closed: true)
+            let renderer = ImageRenderer(content: cardView.environment(\.colorScheme, .dark).frame(width: 350))
+            renderer.scale = 3.0
+            guard let image = renderer.uiImage, let data = image.pngData() else {
+                Issue.record("no rendered card image for \(name)")
+                continue
+            }
+            try data.write(to: dir.appendingPathComponent("\(name).png"))
+            #expect(image.size.width >= 350 && image.size.height >= 36)
+            print("wrote display card \(name).png (\(Int(image.size.width))x\(Int(image.size.height))) for: \(formula)")
         }
     }
 }
